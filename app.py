@@ -10,6 +10,19 @@ from pathlib import Path
 
 from pdd_auto.paths import CONFIG_PATH, LOG_DIR
 from pdd_auto.ui.delist_tab import render_delist_tab
+from pdd_auto.products.assets import (
+    DEFAULT_VARIANT,
+    build_product_relative_path,
+    list_categories,
+    list_product_codes,
+    list_sku_images,
+    list_variants,
+    migrate_account_product_fields,
+    resolve_account_product_abs_path,
+    resolve_account_product_path,
+    validate_product_images,
+    load_asset_rules,
+)
 
 st.set_page_config(
     page_title="PDD 上架管理系统",
@@ -26,7 +39,10 @@ DELIST_LOG = LOG_DIR / "delist_run.txt"
 
 def load_config() -> dict:
     with open(CONFIG_PATH, encoding="utf-8") as f:
-        return json.load(f)
+        cfg = json.load(f)
+    for acc in cfg.get("accounts", []):
+        acc["product"] = migrate_account_product_fields(acc, cfg)
+    return cfg
 
 
 def save_config(cfg: dict):
@@ -213,10 +229,14 @@ def sync_sku_draft_from_session(acc_idx: int, draft: list):
                     draft[j][field] = val
 
 
-def sku_image_path(account: dict, filename: str) -> Path | None:
+def sku_image_path(account: dict, filename: str, cfg: dict | None = None) -> Path | None:
     if not filename:
         return None
-    path = Path(account.get("product_path", "")) / filename.strip()
+    try:
+        folder = resolve_account_product_abs_path(account, cfg or st.session_state.get("cfg"))
+    except ValueError:
+        return None
+    path = folder / filename.strip()
     return path if path.is_file() else None
 
 
@@ -232,6 +252,7 @@ def validate_image_for_sku(
     draft: list,
     row_idx: int,
     strict: bool,
+    cfg: dict | None = None,
 ) -> tuple[bool, str]:
     """
     校验预览图是否可用。
@@ -242,10 +263,12 @@ def validate_image_for_sku(
     if not name:
         return False, "未填写预览图文件"
 
-    product_path = account.get("product_path", "")
-    folder = Path(product_path)
+    try:
+        folder = resolve_account_product_abs_path(account, cfg or st.session_state.get("cfg"))
+    except ValueError as e:
+        return False, str(e)
     if not folder.is_dir():
-        return False, f"素材目录不存在：`{product_path}`"
+        return False, f"素材目录不存在"
     if not (folder / name).is_file():
         return False, f"图片不在当前素材目录：`{name}`"
 
@@ -267,6 +290,7 @@ def validate_sku_preview_images(
     account: dict,
     skus: list | None = None,
     strict: bool = False,
+    cfg: dict | None = None,
 ) -> tuple[bool, list[str]]:
     """校验每条 SKU 的预览图。"""
     errors = []
@@ -275,7 +299,7 @@ def validate_sku_preview_images(
     for i, sku in enumerate(rows):
         spec = (sku.get("spec_name") or "").strip() or f"第 {i + 1} 行"
         filename = (sku.get("sku_image") or "").strip()
-        ok, msg = validate_image_for_sku(filename, account, rows, i, strict)
+        ok, msg = validate_image_for_sku(filename, account, rows, i, strict, cfg=cfg)
         if not ok:
             errors.append(f"{spec}：{msg}")
     return len(errors) == 0, errors
@@ -292,25 +316,124 @@ def _natural_sort_key(name: str):
     return [int(p) if p.isdigit() else p for p in parts]
 
 
-def list_product_images(product_path: str) -> dict[str, list[str]]:
-    """扫描素材目录，按 cover / detail / sku / 其他 分组。"""
-    folder = Path(product_path)
-    groups = {"sku_": [], "cover_": [], "detail_": [], "其他": []}
-    if not folder.is_dir():
+def list_product_images(product_abs: Path, cfg: dict | None = None) -> dict[str, list[str]]:
+    """扫描款式文件夹：轮播 1-5、详情 6-8、sku_ 预览图。"""
+    rules = load_asset_rules(cfg or st.session_state.get("cfg"))
+    ext = rules["ext"]
+    groups: dict[str, list[str]] = {"carousel": [], "detail": [], "sku_": [], "其他": []}
+    if not product_abs.is_dir():
         return groups
+    for i in rules["carousel"]:
+        name = f"{i}{ext}"
+        if (product_abs / name).is_file():
+            groups["carousel"].append(name)
+    for i in rules["detail"]:
+        name = f"{i}{ext}"
+        if (product_abs / name).is_file():
+            groups["detail"].append(name)
+    groups["sku_"] = list_sku_images(product_abs)
     exts = {".png", ".jpg", ".jpeg"}
-    names = [f.name for f in folder.iterdir() if f.is_file() and f.suffix.lower() in exts]
-    names.sort(key=_natural_sort_key)
-    for name in names:
-        if name.startswith("sku_"):
-            groups["sku_"].append(name)
-        elif name.startswith("cover_"):
-            groups["cover_"].append(name)
-        elif name.startswith("detail_"):
-            groups["detail_"].append(name)
-        else:
-            groups["其他"].append(name)
+    known = set(groups["carousel"] + groups["detail"] + groups["sku_"])
+    for f in product_abs.iterdir():
+        if f.is_file() and f.suffix.lower() in exts and f.name not in known:
+            groups["其他"].append(f.name)
+    groups["其他"].sort(key=_natural_sort_key)
     return groups
+
+
+def render_account_product_config(cfg: dict, acc_idx: int, acc: dict):
+    """店铺素材：品类 / 商品编码 / 款式。"""
+    product = cfg["accounts"][acc_idx].setdefault(
+        "product", migrate_account_product_fields(acc, cfg)
+    )
+
+    st.markdown("**商品素材**")
+    col_cat, col_code = st.columns(2)
+    with col_cat:
+        existing_cats = list_categories()
+        cat_val = product.get("category", "")
+        if existing_cats:
+            options = existing_cats if cat_val in existing_cats else existing_cats + [cat_val]
+            idx = options.index(cat_val) if cat_val in options else 0
+            product["category"] = st.selectbox(
+                "品类",
+                options=options,
+                index=idx,
+                key=f"prod_cat_{acc_idx}",
+            )
+        else:
+            product["category"] = st.text_input(
+                "品类",
+                value=cat_val,
+                placeholder="挂件",
+                key=f"prod_cat_{acc_idx}",
+            )
+    with col_code:
+        codes = list_product_codes(product.get("category", ""))
+        code_val = product.get("code", "")
+        if codes:
+            options = codes if code_val in codes else codes + [code_val]
+            idx = options.index(code_val) if code_val in options else 0
+            product["code"] = st.selectbox(
+                "商品编码",
+                options=options,
+                index=idx,
+                key=f"prod_code_{acc_idx}",
+            )
+        else:
+            product["code"] = st.text_input(
+                "商品编码",
+                value=code_val,
+                placeholder="BCP001",
+                key=f"prod_code_{acc_idx}",
+            )
+
+    variants = list_variants(product.get("category", ""), product.get("code", ""))
+    var_val = product.get("variant") or DEFAULT_VARIANT
+    col_var, col_custom = st.columns([1, 1])
+    with col_var:
+        if variants:
+            if var_val not in variants:
+                variants = variants + [var_val]
+            product["variant"] = st.selectbox(
+                "款式",
+                options=variants,
+                index=variants.index(var_val),
+                key=f"prod_var_{acc_idx}",
+                help="对应 products/品类/编码/款式 文件夹；单款用 default",
+            )
+        else:
+            product["variant"] = st.text_input(
+                "款式",
+                value=var_val,
+                placeholder=DEFAULT_VARIANT,
+                key=f"prod_var_{acc_idx}",
+                help="单款固定填 default；多色如 blue、black",
+            )
+    with col_custom:
+        st.caption("路径规则")
+        try:
+            rel = build_product_relative_path(
+                product["category"], product["code"], product["variant"]
+            )
+            st.code(rel, language=None)
+        except ValueError:
+            st.caption("请填写品类与编码")
+
+    try:
+        rel_path = resolve_account_product_path(acc, cfg)
+        abs_path = resolve_account_product_abs_path(acc, cfg)
+        ok, errors = validate_product_images(abs_path, cfg)
+        if ok:
+            st.success(f"素材齐全（1.jpg～8.jpg）· `{rel_path}`")
+        elif abs_path.is_dir():
+            st.warning(f"素材待补齐 · `{rel_path}`")
+            for err in errors[:4]:
+                st.caption(f"· {err}")
+        else:
+            st.info(f"文件夹尚未创建 · `{rel_path}`（设计交付后放置 1.jpg～8.jpg）")
+    except ValueError as e:
+        st.error(str(e))
 
 
 @st.dialog("选择预览图", width="large")
@@ -318,7 +441,10 @@ def sku_image_picker_dialog(acc_idx: int, row_idx: int):
     cfg = st.session_state.cfg
     acc = cfg["accounts"][acc_idx]
     draft = st.session_state.sku_draft
-    folder = Path(acc.get("product_path", ""))
+    try:
+        folder = resolve_account_product_abs_path(acc, cfg)
+    except ValueError:
+        folder = Path(acc.get("product_path", ""))
     spec_name = draft[row_idx].get("spec_name") or f"第 {row_idx + 1} 行"
     prefix = sku_widget_prefix(acc_idx)
 
@@ -331,12 +457,12 @@ def sku_image_picker_dialog(acc_idx: int, row_idx: int):
         st.caption("🔓 宽松模式：素材目录内任意图片均可选用")
 
     if not folder.is_dir():
-        st.error("素材目录不存在，请先在控制台配置正确的 product_path。")
+        st.error("素材目录不存在，请先在控制台配置品类/编码/款式。")
         if st.button("关闭", key=f"pick_close_{acc_idx}_{row_idx}"):
             st.rerun()
         return
 
-    groups = list_product_images(str(folder))
+    groups = list_product_images(folder, cfg)
 
     def render_grid(filenames: list[str], tab_key: str):
         if not filenames:
@@ -361,7 +487,7 @@ def sku_image_picker_dialog(acc_idx: int, row_idx: int):
                     elif used_elsewhere:
                         st.caption("❌ 已被占用")
                     elif st.button("选用", key=btn_key, use_container_width=True):
-                        ok, msg = validate_image_for_sku(fname, acc, draft, row_idx, strict)
+                        ok, msg = validate_image_for_sku(fname, acc, draft, row_idx, strict, cfg=cfg)
                         if not ok:
                             st.error(msg)
                         else:
@@ -372,23 +498,30 @@ def sku_image_picker_dialog(acc_idx: int, row_idx: int):
     if strict:
         render_grid(groups["sku_"], "sku")
     else:
-        tab_sku, tab_cover, tab_detail, tab_all = st.tabs(
+        tab_sku, tab_carousel, tab_detail, tab_all = st.tabs(
             [
                 f"sku_ ({len(groups['sku_'])})",
-                f"cover_ ({len(groups['cover_'])})",
-                f"detail_ ({len(groups['detail_'])})",
+                f"轮播 1-5 ({len(groups['carousel'])})",
+                f"详情 6-8 ({len(groups['detail'])})",
                 f"全部 ({sum(len(v) for v in groups.values())})",
             ]
         )
         with tab_sku:
             st.caption("推荐：SKU 预览图通常使用 sku_ 开头的文件")
             render_grid(groups["sku_"], "sku")
-        with tab_cover:
-            render_grid(groups["cover_"], "cover")
+        with tab_carousel:
+            st.caption("轮播主图 1.jpg～5.jpg（上架时自动上传，此处仅浏览）")
+            render_grid(groups["carousel"], "carousel")
         with tab_detail:
-            render_grid(groups["detail_"], "detail")
+            st.caption("详情图 6.jpg～8.jpg（上架时自动上传，此处仅浏览）")
+            render_grid(groups["detail"], "detail")
         with tab_all:
-            all_files = groups["sku_"] + groups["cover_"] + groups["detail_"] + groups["其他"]
+            all_files = (
+                groups["carousel"]
+                + groups["detail"]
+                + groups["sku_"]
+                + groups["其他"]
+            )
             render_grid(all_files, "all")
 
     if st.button("取消", key=f"pick_cancel_{acc_idx}_{row_idx}"):
@@ -409,10 +542,15 @@ def render_sku_manager(cfg: dict, acc_idx: int):
             st.rerun()
     with top2:
         st.subheader(f"SKU 配置 · {acc_id}")
+    try:
+        asset_path = resolve_account_product_path(acc, cfg)
+        asset_caption = f"素材目录：`{asset_path}`"
+    except ValueError:
+        asset_caption = "素材目录：未配置"
     with top3:
         path_col, toggle_col = st.columns([3, 2])
         with path_col:
-            st.caption(f"素材目录：`{acc.get('product_path', '未设置')}`")
+            st.caption(asset_caption)
         with toggle_col:
             st.session_state.sku_strict_image = st.toggle(
                 "SKU 图严格模式",
@@ -453,7 +591,7 @@ def render_sku_manager(cfg: dict, acc_idx: int):
         cols = st.columns([1, 2, 1.5, 1, 1, 1, 1.5, 0.8])
 
         with cols[0]:
-            img_path = sku_image_path(acc, sku.get("sku_image", ""))
+            img_path = sku_image_path(acc, sku.get("sku_image", ""), cfg)
             if img_path:
                 st.image(str(img_path), width=72)
             else:
@@ -487,7 +625,7 @@ def render_sku_manager(cfg: dict, acc_idx: int):
             )
             img_name = (draft[j].get("sku_image") or "").strip()
             if img_name:
-                ok, msg = validate_image_for_sku(img_name, acc, draft, j, strict)
+                ok, msg = validate_image_for_sku(img_name, acc, draft, j, strict, cfg=cfg)
                 if not ok:
                     st.caption(f"⚠️ {msg}")
 
@@ -551,7 +689,7 @@ def render_sku_manager(cfg: dict, acc_idx: int):
     sync_sku_draft_from_session(acc_idx, draft)
 
     if add_clicked:
-        ok, errors = validate_sku_preview_images(acc, draft, strict=strict)
+        ok, errors = validate_sku_preview_images(acc, draft, strict=strict, cfg=cfg)
         if not ok:
             _show_sku_validation_errors(
                 errors,
@@ -563,7 +701,7 @@ def render_sku_manager(cfg: dict, acc_idx: int):
             st.rerun()
 
     if save_clicked:
-        ok, errors = validate_sku_preview_images(acc, draft, strict=strict)
+        ok, errors = validate_sku_preview_images(acc, draft, strict=strict, cfg=cfg)
         if not ok:
             _show_sku_validation_errors(errors, "无法保存：以下 SKU 预览图校验未通过")
         else:
@@ -632,6 +770,7 @@ with tab_ctrl:
                     cfg["accounts"][i]["password"] = st.text_input(
                         "登录密码", value=acc.get("password", ""), type="password", key=f"pwd_{i}"
                     )
+                    render_account_product_config(cfg, i, acc)
 
         with c_right:
             st.subheader("商品信息")
@@ -668,7 +807,7 @@ with tab_ctrl:
                 )
             else:
                 st.info(
-                    "已选择 **AI 生成**：点击「开始上架」时，将用 **GLM-5V-Turbo** 分析该店首张 cover + 首张 detail 图并生成标题；"
+                    "已选择 **AI 生成**：点击「开始上架」时，将用 **GLM-5V-Turbo** 分析该店 **1.jpg + 6.jpg** 并生成标题；"
                     "此处无需填写。"
                 )
 

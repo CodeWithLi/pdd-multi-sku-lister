@@ -1,5 +1,21 @@
 # 拼多多多店铺 SKU 自动上架 / 下架
 
+## 商品素材规则
+
+```
+products/
+└── 挂件/                    # 品类
+    └── BCP001/              # 商品编码
+        ├── default/         # 单款式（固定名）
+        │   ├── 1.jpg … 5.jpg   # 轮播主图
+        │   ├── 6.jpg … 8.jpg   # 详情图
+        │   └── sku_1.png …     # SKU 预览图（手动配置）
+        └── blue/              # 多款式示例
+            └── 1.jpg … 8.jpg
+```
+
+config 中每个店铺配置 `product.category / product.code / product.variant`。
+
 ## 项目结构
 
 ```

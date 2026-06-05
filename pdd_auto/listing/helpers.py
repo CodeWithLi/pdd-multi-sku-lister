@@ -1,20 +1,5 @@
 """上架流程：SKU 表格、图片路径等辅助函数。"""
-import glob
-import os
 import time
-
-
-def get_images_from_folder(folder_path, prefix):
-    abs_folder_path = os.path.abspath(folder_path)
-    patterns = (
-        os.path.join(abs_folder_path, f"{prefix}_*.png"),
-        os.path.join(abs_folder_path, f"{prefix}_*.jpg"),
-        os.path.join(abs_folder_path, f"{prefix}_*.jpeg"),
-    )
-    files = []
-    for p in patterns:
-        files.extend(glob.glob(p))
-    return files
 
 
 def _xpath_literal(text):

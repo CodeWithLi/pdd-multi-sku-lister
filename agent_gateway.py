@@ -52,8 +52,7 @@ def ask_ai_agent(user_instruction):
         # 依次为开启的店铺执行上架
         for account in accounts_list:
             if account.get('enabled'):
-                # 完美复用之前写好的浏览器自动化函数！
-                process_single_account(account, product_info)
+                process_single_account(account, product_info, config=config_data)
 
     else:
         # 如果用户只是和 AI 聊天，没有触发上架指令

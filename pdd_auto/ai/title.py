@@ -4,13 +4,15 @@
 API Key 优先级：参数传入 > 环境变量 GLM_API_KEY > config.json 的 ai.api_key
 """
 import base64
-import glob
 import json
 import os
 import re
+from pathlib import Path
+
 from openai import OpenAI
 
 from pdd_auto.paths import CONFIG_PATH
+from pdd_auto.products.assets import get_first_carousel_path, get_first_detail_path
 GLM_BASE_URL = "https://open.bigmodel.cn/api/paas/v4"
 GLM_MODEL = "glm-5v-turbo"
 PDD_TITLE_MAX_CHARS = 60
@@ -41,34 +43,6 @@ def get_glm_client(api_key: str | None = None) -> OpenAI:
     ai_cfg = load_ai_config()
     base_url = ai_cfg.get("base_url") or GLM_BASE_URL
     return OpenAI(api_key=resolve_api_key(api_key), base_url=base_url)
-
-
-def _natural_sort_key(path: str):
-    name = os.path.basename(path).lower()
-    parts = re.split(r"(\d+)", name)
-    return [int(p) if p.isdigit() else p for p in parts]
-
-
-def get_first_image_by_prefix(product_path: str, prefix: str) -> str | None:
-    """取素材目录下第一张 {prefix}_* 图片（自然排序）。"""
-    folder = Path(product_path)
-    if not folder.is_dir():
-        return None
-    files = []
-    for ext in ("png", "jpg", "jpeg"):
-        files.extend(glob.glob(str(folder / f"{prefix}_*.{ext}")))
-    if not files:
-        return None
-    files.sort(key=_natural_sort_key)
-    return files[0]
-
-
-def get_first_cover_path(product_path: str) -> str | None:
-    return get_first_image_by_prefix(product_path, "cover")
-
-
-def get_first_detail_path(product_path: str) -> str | None:
-    return get_first_image_by_prefix(product_path, "detail")
 
 
 def image_path_to_data_url(image_path: str) -> str:
@@ -214,22 +188,23 @@ def generate_pdd_product_title(
     log=print,
     account_id: str = "",
     max_retries: int = AI_TITLE_MAX_RETRIES,
+    config: dict | None = None,
 ) -> str:
-    """调用 GLM-5V-Turbo 生成标题；若有 product_path 则附带首张 cover + 首张 detail 图分析。"""
+    """调用 GLM-5V-Turbo 生成标题；若有 product_path 则附带 1.jpg + 6.jpg 图分析。"""
     if not (category_keyword or "").strip():
         raise ValueError("请先填写类目关键词，再使用 AI 生成标题")
 
     prefix = f"[{account_id}] " if account_id else ""
-    cover_path = get_first_cover_path(product_path) if product_path else None
-    detail_path = get_first_detail_path(product_path) if product_path else None
+    cover_path = get_first_carousel_path(product_path, config) if product_path else None
+    detail_path = get_first_detail_path(product_path, config) if product_path else None
     if cover_path:
-        log(f"{prefix}已加载主图：{os.path.basename(cover_path)}")
+        log(f"{prefix}已加载轮播主图：{os.path.basename(cover_path)}")
     elif product_path:
-        log(f"{prefix}[警告] 素材目录未找到 cover_* 主图")
+        log(f"{prefix}[警告] 素材目录未找到 1.jpg 轮播主图")
     if detail_path:
         log(f"{prefix}已加载详情图：{os.path.basename(detail_path)}")
     elif product_path:
-        log(f"{prefix}[警告] 素材目录未找到 detail_* 详情图")
+        log(f"{prefix}[警告] 素材目录未找到 6.jpg 详情图")
     if product_path and not cover_path and not detail_path:
         log(f"{prefix}[警告] 无可用图片，将仅按文字生成标题")
 
@@ -279,6 +254,7 @@ def resolve_listing_title(
     account_id: str = "",
     log=print,
     product_path: str | None = None,
+    config: dict | None = None,
 ) -> str:
     mode = (product_info.get("title_mode") or "custom").strip().lower()
     prefix = f"[{account_id}] " if account_id else ""
@@ -296,7 +272,7 @@ def resolve_listing_title(
 
     ai_cfg = load_ai_config()
     model_name = ai_cfg.get("model") or GLM_MODEL
-    log(f"{prefix}标题模式：AI 生成（{model_name} + cover/detail 主图分析，最多重试 {AI_TITLE_MAX_RETRIES} 次）")
+    log(f"{prefix}标题模式：AI 生成（{model_name} + 1.jpg/6.jpg 图分析，最多重试 {AI_TITLE_MAX_RETRIES} 次）")
     return generate_pdd_product_title(
         category_keyword=product_info.get("category_keyword", ""),
         product_code=product_info.get("product_code", ""),
@@ -306,6 +282,7 @@ def resolve_listing_title(
         log=log,
         account_id=account_id,
         max_retries=AI_TITLE_MAX_RETRIES,
+        config=config,
     )
 
 
@@ -313,5 +290,5 @@ if __name__ == "__main__":
     import sys
 
     cat = sys.argv[1] if len(sys.argv) > 1 else "玩偶"
-    ppath = sys.argv[2] if len(sys.argv) > 2 else "products/挂件/BCP001"
+    ppath = sys.argv[2] if len(sys.argv) > 2 else "products/挂件/BCP001/default"
     print(generate_pdd_product_title(cat, product_path=ppath))

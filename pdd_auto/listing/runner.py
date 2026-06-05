@@ -5,26 +5,50 @@ import time
 
 from pdd_auto.ai.title import resolve_listing_title
 from pdd_auto.browser.session import ensure_login
+from pdd_auto.config import load_config
 from pdd_auto.listing.helpers import (
     add_spec_names_one_by_one,
     fill_sku_row_inputs,
-    get_images_from_folder,
     get_sku_row_by_spec,
     wait_sku_price_rows,
 )
 from pdd_auto.listing.page_ai_title import apply_title_after_cover_upload
 from pdd_auto.paths import chrome_profile_path, error_screenshot_path
+from pdd_auto.products.assets import (
+    get_carousel_images,
+    get_detail_images,
+    resolve_account_product_abs_path,
+    resolve_account_product_path,
+    validate_product_images,
+)
 
 
-def process_single_account(account_config, product_info):
+def process_single_account(account_config, product_info, config=None):
     account_id = account_config.get("account_id")
-    product_path = account_config.get("product_path")
+    if config is None:
+        config = load_config()
 
-    covers = get_images_from_folder(product_path, "cover")
-    details = get_images_from_folder(product_path, "detail")
-    if not covers:
-        print(f"[{account_id}] 未找到主图资源，跳过此账号。")
+    try:
+        product_path = resolve_account_product_path(account_config, config)
+        product_abs = resolve_account_product_abs_path(account_config, config)
+    except ValueError as e:
+        print(f"[{account_id}] {e}")
         return
+
+    ok, errors = validate_product_images(product_abs, config)
+    if not ok:
+        print(f"[{account_id}] 素材目录：{product_path}")
+        for err in errors:
+            print(f"[{account_id}] {err}")
+        print(f"[{account_id}] 轮播/详情图不完整（需 1.jpg～8.jpg），跳过此账号。")
+        return
+
+    covers = get_carousel_images(product_abs, config)
+    details = get_detail_images(product_abs, config)
+    print(
+        f"[{account_id}] 素材目录：{product_path} "
+        f"（轮播 {len(covers)} 张，详情 {len(details)} 张）"
+    )
 
     username = account_config.get("username", "")
     password = account_config.get("password", "")
@@ -33,11 +57,13 @@ def process_single_account(account_config, product_info):
     if not page:
         return
 
+    asset_dir = str(product_abs)
+
     print(f"\n--- [{account_id}] 开始执行商品上架任务 ---")
     try:
         listing_info = dict(product_info)
         listing_info["title"] = resolve_listing_title(
-            product_info, account_id, product_path=product_path
+            product_info, account_id, product_path=asset_dir, config=config
         )
         time.sleep(random.uniform(1.0, 2.0))
 
@@ -170,7 +196,7 @@ def process_single_account(account_config, product_info):
                 try:
                     upload_input = row.ele("xpath:.//input[@type=\"file\"]", timeout=3)
                     if upload_input:
-                        sku_img_path = os.path.abspath(os.path.join(product_path, sku_img_name))
+                        sku_img_path = os.path.abspath(os.path.join(asset_dir, sku_img_name))
                         if os.path.exists(sku_img_path):
                             upload_input.input(sku_img_path)
                             print(f"[{account_id}] 成功上传预览图: {sku_img_name}")
@@ -222,6 +248,6 @@ def run_listing_job(config: dict):
 
     for account in accounts_list:
         if account.get("enabled"):
-            process_single_account(account, global_info)
+            process_single_account(account, global_info, config=config)
             print("\n等待 5 秒后切换下一个店铺任务...\n")
             time.sleep(5)
