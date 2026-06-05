@@ -16,6 +16,29 @@ products/
 
 config 中每个店铺配置 `product.category / product.code / product.variant`。
 
+## 多规格测试模式（款式 + 型号 + 多套图）
+
+每个商品编码（如 `BD046A/`）下可有 **第一套图、第二套图 …**，**每套图 = 一个独立上架商品**：
+
+```
+BD046A/
+├── 第一套图/
+│   ├── 主图/、详情页/
+│   ├── BD046A/              # 款式
+│   │   └── BD046A+YKL2005A/预览图.png
+│   └── BD046B/ …
+├── 第二套图/                # 另一套 = 另一个商品
+└── …
+```
+
+无「第x套图」时兼容旧结构（商品根目录直接含 主图/详情页/款式）。
+
+SKU 中文名仅从 `sku+名称.xlsx` 检索；查不到则打日志并跳过。
+
+```bash
+python multi_spec_main.py --dry-run BD046A   # 解析所有套图
+python multi_spec_main.py BD046A             # 按顺序上架每一套图
+```
 ## 项目结构
 
 ```

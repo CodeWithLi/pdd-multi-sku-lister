@@ -6,6 +6,7 @@ CONFIG_PATH = PROJECT_ROOT / "config.json"
 LOG_DIR = PROJECT_ROOT / "logs"
 CHROME_PROFILES_DIR = PROJECT_ROOT / "ChromeProfiles"
 PRODUCTS_DIR = PROJECT_ROOT / "products"
+MULTI_SPEC_DIR = PROJECT_ROOT / "多规格测试"
 
 
 def chrome_profile_path(account_id: str) -> str:

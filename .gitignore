@@ -7,6 +7,10 @@ __pycache__/
 .pytest_cache/
 .mypy_cache/
 
+多规格测试/
+
+products/
+
 # IDE
 .idea/
 *.iml
