@@ -10,6 +10,10 @@ from pathlib import Path
 
 from pdd_auto.paths import CONFIG_PATH, LOG_DIR
 from pdd_auto.ui.delist_tab import render_delist_tab
+from pdd_auto.products.multi_spec.catalog import (
+    list_image_sets,
+    list_products as list_multi_spec_products,
+)
 from pdd_auto.products.assets import (
     DEFAULT_VARIANT,
     build_product_relative_path,
@@ -339,6 +343,59 @@ def list_product_images(product_abs: Path, cfg: dict | None = None) -> dict[str,
             groups["其他"].append(f.name)
     groups["其他"].sort(key=_natural_sort_key)
     return groups
+
+
+def _default_multi_spec_codes(ms: dict, products: list[str]) -> list[str]:
+    saved = ms.get("product_codes")
+    if isinstance(saved, list):
+        return [c for c in saved if c in products]
+    legacy = (ms.get("product_code") or "").strip()
+    return [legacy] if legacy and legacy in products else []
+
+
+def render_account_multi_spec_config(cfg: dict, acc_idx: int, acc: dict):
+    """多规格测试：商品编码多选（SKU 由目录 + Excel 自动解析）。"""
+    acc_cfg = cfg["accounts"][acc_idx]
+    acc_cfg.setdefault("listing_mode", "multi_spec")
+    ms = acc_cfg.setdefault("multi_spec", {})
+
+    st.markdown("**多规格商品**")
+    st.caption("素材目录 `多规格测试/` · 可多选商品编码 · 每套图单独上架 · **不选则不发布**")
+
+    products = list_multi_spec_products(cfg)
+    if products:
+        ms["product_codes"] = st.multiselect(
+            "商品编码（可多选）",
+            options=products,
+            default=_default_multi_spec_codes(ms, products),
+            key=f"ms_codes_{acc_idx}",
+            help="选哪个上传哪个；每个编码下有几套图就上架几个",
+        )
+    else:
+        raw = st.text_input(
+            "商品编码（逗号分隔）",
+            value=",".join(ms.get("product_codes") or []),
+            key=f"ms_codes_text_{acc_idx}",
+            placeholder="BD046A,BD199A",
+        )
+        ms["product_codes"] = [c.strip() for c in raw.split(",") if c.strip()]
+
+    selected = ms.get("product_codes") or []
+    if not selected:
+        st.warning("未选择商品编码，该店铺不会发布新商品")
+        return
+
+    total_sets = 0
+    lines = []
+    for pcode in selected:
+        sets = [s for s in list_image_sets(pcode, cfg) if s]
+        count = len(sets) if sets else 1
+        total_sets += count
+        if sets:
+            lines.append(f"**{pcode}**：{count} 套（{', '.join(sets)}）")
+        else:
+            lines.append(f"**{pcode}**：1 套（根目录）")
+    st.info(f"已选 {len(selected)} 个商品，合计上架 **{total_sets}** 个链接\n\n" + "\n\n".join(lines))
 
 
 def render_account_product_config(cfg: dict, acc_idx: int, acc: dict):
@@ -741,111 +798,103 @@ tab_ctrl, tab_delist, tab_logs, tab_stats, tab_ai = st.tabs(
 # ═══════════════════════════════════════════════════════════════════════
 with tab_ctrl:
     cfg = st.session_state.cfg
-
+    # SKU 手动编辑器已停用，统一走多规格测试目录
     if st.session_state.sku_editor_idx is not None:
-        render_sku_manager(cfg, st.session_state.sku_editor_idx)
-    else:
-        c_left, c_right = st.columns(2)
+        st.session_state.sku_editor_idx = None
+        st.session_state.sku_draft = None
+        st.session_state.sku_draft_acc_idx = None
 
-        with c_left:
-            st.subheader("店铺账号")
-            for i, acc in enumerate(cfg["accounts"]):
-                with st.expander(f"🏪 {acc['account_id']}", expanded=False):
-                    col_toggle, col_sku_btn = st.columns([2, 3])
-                    with col_toggle:
-                        cfg["accounts"][i]["enabled"] = st.toggle(
-                            "启用", value=acc["enabled"], key=f"acc_{i}"
-                        )
-                    with col_sku_btn:
-                        if st.button(
-                            "查看当前 SKU 配置",
-                            key=f"sku_open_{i}",
-                            use_container_width=True,
-                        ):
-                            open_sku_editor(i)
-                            st.rerun()
-                    cfg["accounts"][i]["username"] = st.text_input(
-                        "登录手机号/账号", value=acc.get("username", ""), key=f"user_{i}"
-                    )
-                    cfg["accounts"][i]["password"] = st.text_input(
-                        "登录密码", value=acc.get("password", ""), type="password", key=f"pwd_{i}"
-                    )
-                    render_account_product_config(cfg, i, acc)
+    c_left, c_right = st.columns(2)
 
-        with c_right:
-            st.subheader("商品信息")
-            pi = cfg["global_product_info"]
-            pi["category_keyword"] = st.text_input(
-                "类目关键词", value=pi.get("category_keyword", ""), key="pi_cat"
+    with c_left:
+        st.subheader("店铺账号")
+        for i, acc in enumerate(cfg["accounts"]):
+            with st.expander(f"🏪 {acc['account_id']}", expanded=False):
+                cfg["accounts"][i]["enabled"] = st.toggle(
+                    "启用", value=acc["enabled"], key=f"acc_{i}"
+                )
+                cfg["accounts"][i]["username"] = st.text_input(
+                    "登录手机号/账号", value=acc.get("username", ""), key=f"user_{i}"
+                )
+                cfg["accounts"][i]["password"] = st.text_input(
+                    "登录密码", value=acc.get("password", ""), type="password", key=f"pwd_{i}"
+                )
+                render_account_multi_spec_config(cfg, i, acc)
+
+    with c_right:
+        st.subheader("商品信息")
+        pi = cfg["global_product_info"]
+        pi["category_keyword"] = st.text_input(
+            "类目关键词", value=pi.get("category_keyword", ""), key="pi_cat"
+        )
+
+        title_mode = pi.get("title_mode", "custom")
+        mode_options = ["自定义", "AI 生成", "页面AI生成"]
+        mode_index = {"custom": 0, "ai": 1, "page_ai": 2}.get(title_mode, 0)
+        mode_label = st.radio(
+            "商品标题来源",
+            mode_options,
+            index=mode_index,
+            horizontal=True,
+            key="pi_title_mode_radio",
+        )
+        mode_map = {"自定义": "custom", "AI 生成": "ai", "页面AI生成": "page_ai"}
+        pi["title_mode"] = mode_map.get(mode_label, "custom")
+
+        if pi["title_mode"] == "custom":
+            pi["title"] = st.text_input(
+                "商品标题",
+                value=pi.get("title", ""),
+                key="pi_title",
+                placeholder="手动输入标题",
+            )
+        elif pi["title_mode"] == "page_ai":
+            st.info(
+                "已选择 **页面AI生成**：上架时上传主图后，将等待拼多多页面出现 "
+                "「AI智能推荐标题 … **立即使用**」，并自动点击填充标题（约 5–35 秒）。"
+                "此处无需填写。"
+            )
+        else:
+            st.info(
+                "已选择 **AI 生成**：点击「开始上架」时，将用 **GLM-5V-Turbo** 分析该店 **1.jpg + 6.jpg** 并生成标题；"
+                "此处无需填写。"
             )
 
-            title_mode = pi.get("title_mode", "custom")
-            mode_options = ["自定义", "AI 生成", "页面AI生成"]
-            mode_index = {"custom": 0, "ai": 1, "page_ai": 2}.get(title_mode, 0)
-            mode_label = st.radio(
-                "商品标题来源",
-                mode_options,
-                index=mode_index,
-                horizontal=True,
-                key="pi_title_mode_radio",
-            )
-            mode_map = {"自定义": "custom", "AI 生成": "ai", "页面AI生成": "page_ai"}
-            pi["title_mode"] = mode_map.get(mode_label, "custom")
+        pi["product_code"] = st.text_input(
+            "商品编码", value=pi.get("product_code", ""), key="pi_pcode"
+        )
 
-            if pi["title_mode"] == "custom":
-                pi["title"] = st.text_input(
-                    "商品标题",
-                    value=pi.get("title", ""),
-                    key="pi_title",
-                    placeholder="手动输入标题",
-                )
-            elif pi["title_mode"] == "page_ai":
-                st.info(
-                    "已选择 **页面AI生成**：上架时上传主图后，将等待拼多多页面出现 "
-                    "「AI智能推荐标题 … **立即使用**」，并自动点击填充标题（约 5–35 秒）。"
-                    "此处无需填写。"
-                )
-            else:
-                st.info(
-                    "已选择 **AI 生成**：点击「开始上架」时，将用 **GLM-5V-Turbo** 分析该店 **1.jpg + 6.jpg** 并生成标题；"
-                    "此处无需填写。"
-                )
+    st.divider()
+    b1, b2, b3 = st.columns([1, 1, 2])
 
-            pi["product_code"] = st.text_input(
-                "商品编码", value=pi.get("product_code", ""), key="pi_pcode"
-            )
+    with b1:
+        if st.button("💾 保存配置", use_container_width=True):
+            save_config(cfg)
+            st.success("配置已保存！")
 
-        st.divider()
-        b1, b2, b3 = st.columns([1, 1, 2])
-
-        with b1:
-            if st.button("💾 保存配置", use_container_width=True):
+    with b2:
+        if not is_proc_running("main_proc"):
+            if st.button("🚀 开始上架", type="primary", use_container_width=True):
                 save_config(cfg)
-                st.success("配置已保存！")
+                st.session_state["main_proc"] = run_subprocess("multi_spec_main.py", MAIN_LOG)
+                st.rerun()
+        else:
+            if st.button("⏹ 停止任务", type="secondary", use_container_width=True):
+                st.session_state["main_proc"].terminate()
+                st.session_state["main_proc"] = None
+                st.rerun()
 
-        with b2:
-            if not is_proc_running("main_proc"):
-                if st.button("🚀 开始上架", type="primary", use_container_width=True):
-                    save_config(cfg)
-                    st.session_state["main_proc"] = run_subprocess("main.py", MAIN_LOG)
-                    st.rerun()
-            else:
-                if st.button("⏹ 停止任务", type="secondary", use_container_width=True):
-                    st.session_state["main_proc"].terminate()
-                    st.session_state["main_proc"] = None
-                    st.rerun()
-
-        with b3:
-            if is_proc_running("main_proc"):
-                st.info("⏳ 任务运行中，切换到「实时日志」查看进度")
-            else:
-                p = st.session_state.get("main_proc")
-                if p is not None:
-                    code = p.poll()
-                    if code == 0:
-                        st.success("✅ 上次任务正常完成")
-                    elif code is not None:
-                        st.error(f"❌ 上次任务异常退出（返回码: {code}）")
+    with b3:
+        if is_proc_running("main_proc"):
+            st.info("⏳ 多规格上架任务运行中，切换到「实时日志」查看进度")
+        else:
+            p = st.session_state.get("main_proc")
+            if p is not None:
+                code = p.poll()
+                if code == 0:
+                    st.success("✅ 上次任务正常完成")
+                elif code is not None:
+                    st.error(f"❌ 上次任务异常退出（返回码: {code}）")
 
 
 # ═══════════════════════════════════════════════════════════════════════

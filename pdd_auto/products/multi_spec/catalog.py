@@ -167,6 +167,16 @@ def _parse_combo_folder(folder_name: str) -> tuple[str, str] | None:
     return left, right
 
 
+def resolve_account_product_codes(account_config: dict) -> list[str]:
+    """读取店铺待上架商品编码列表；未选则返回空列表。"""
+    ms = account_config.get("multi_spec") or {}
+    raw = ms.get("product_codes")
+    if isinstance(raw, list):
+        return list(dict.fromkeys(str(c).strip() for c in raw if str(c).strip()))
+    legacy = (ms.get("product_code") or account_config.get("product_code") or "").strip()
+    return [legacy] if legacy else []
+
+
 def list_products(config: dict | None = None) -> list[str]:
     root = multi_spec_root(config)
     if not root.is_dir():

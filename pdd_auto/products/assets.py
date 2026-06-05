@@ -62,7 +62,7 @@ def resolve_account_product_path(account: dict, config: dict | None = None) -> s
 
     raise ValueError(
         f"[{account.get('account_id', '?')}] 未配置商品素材："
-        "请在 product.category / product.code / product.variant 中填写"
+        "请进行填写"
     )
 
 

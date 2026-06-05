@@ -7,6 +7,7 @@ from pdd_auto.products.multi_spec.catalog import (
     parse_all_listings,
     list_image_sets,
     list_products,
+    resolve_account_product_codes,
 )
 
 __all__ = [
@@ -17,4 +18,5 @@ __all__ = [
     "parse_all_listings",
     "list_image_sets",
     "list_products",
+    "resolve_account_product_codes",
 ]
