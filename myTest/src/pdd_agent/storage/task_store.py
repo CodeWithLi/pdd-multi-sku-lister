@@ -6,6 +6,7 @@ import json
 import uuid
 from datetime import datetime
 from pathlib import Path
+from typing import Any
 
 from pdd_agent.core.config import load_yaml_settings
 from pdd_agent.domain.enums import AgentKind, RunStatus, TaskPhase
@@ -45,7 +46,32 @@ class TaskRunStore:
             return None
         return RunRecord.model_validate(json.loads(path.read_text(encoding="utf-8")))
 
-    def finish(self, run_id: str, status: RunStatus, message: str = "") -> None:
+    def list_runs(self, limit: int = 50) -> list[RunRecord]:
+        """按 run_id 倒序返回最近任务（run_id 含时间前缀）。"""
+        files = sorted(self._root.glob("*.json"), reverse=True)
+        records: list[RunRecord] = []
+        for path in files[:limit]:
+            try:
+                records.append(RunRecord.model_validate(json.loads(path.read_text(encoding="utf-8"))))
+            except (json.JSONDecodeError, ValueError):
+                continue
+        return records
+
+    def update_phase(self, run_id: str, phase: TaskPhase) -> None:
+        record = self.load(run_id)
+        if not record:
+            return
+        record.phase = phase
+        self.save(record)
+
+    def finish(
+        self,
+        run_id: str,
+        status: RunStatus,
+        message: str = "",
+        result: dict[str, Any] | None = None,
+        listing_labels: list[str] | None = None,
+    ) -> None:
         """标记任务结束并写入终态。"""
         record = self.load(run_id)
         if not record:
@@ -54,4 +80,8 @@ class TaskRunStore:
         record.message = message
         record.finished_at = datetime.now()
         record.phase = TaskPhase.REPORT
+        if result is not None:
+            record.result = result
+        if listing_labels is not None:
+            record.listing_labels = listing_labels
         self.save(record)

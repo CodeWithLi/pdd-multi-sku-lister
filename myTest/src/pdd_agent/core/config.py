@@ -31,6 +31,8 @@ class BrowserConfig(BaseModel):
     slow_mo: int = 0  # 每步延迟(ms)，调试时可加大
     default_timeout_ms: int = 30_000
     base_url: str = "https://mms.pinduoduo.com"
+    # 留空 = Playwright 自带 Chromium（服务器部署）；填 chrome = 本机 Google Chrome
+    channel: str = ""
 
 
 class PathsConfig(BaseModel):
@@ -57,6 +59,23 @@ class MultiSpecConfig(BaseModel):
         return (PROJECT_ROOT / self.excel).resolve()
 
 
+class ListingConfig(BaseModel):
+    """上架页默认参数。"""
+
+    category_keyword: str = "玩偶"
+    title_mode: str = "page_ai"
+
+
+class DelistConfig(BaseModel):
+    """下架任务默认参数。"""
+
+    min_created_after: str = ""
+    dry_run: bool = True
+    merchant_code_contains: str = ""
+    max_delist_per_run: int = 50
+    account_ids: list[str] = Field(default_factory=list)
+
+
 class YamlSettings(BaseModel):
     """config/settings.yaml 的完整结构。"""
 
@@ -64,13 +83,20 @@ class YamlSettings(BaseModel):
     paths: PathsConfig = Field(default_factory=PathsConfig)
     browser: BrowserConfig = Field(default_factory=BrowserConfig)
     multi_spec: MultiSpecConfig = Field(default_factory=MultiSpecConfig)
+    listing: ListingConfig = Field(default_factory=ListingConfig)
+    delist: DelistConfig = Field(default_factory=DelistConfig)
     accounts: list[AccountConfig] = Field(default_factory=list)
 
 
 class EnvSettings(BaseSettings):
     """从 .env 读取的环境变量（API Key、Playwright 开关等）。"""
 
-    model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
+    model_config = SettingsConfigDict(
+        # 固定读 myTest/.env，避免从其他工作目录启动时找不到配置
+        env_file=str(PROJECT_ROOT / ".env"),
+        env_file_encoding="utf-8",
+        extra="ignore",
+    )
 
     llm_api_key: str = ""
     llm_base_url: str = "https://open.bigmodel.cn/api/paas/v4"
@@ -78,6 +104,7 @@ class EnvSettings(BaseSettings):
     orchestrator_model: str = ""  # 为空则与 llm_model 相同
     playwright_headless: bool = False
     playwright_slow_mo: int = 0
+    playwright_channel: str = ""  # 非空时覆盖 settings.yaml 的 browser.channel
     pdd_data_dir: str = "data"
     pdd_config_path: str = str(DEFAULT_SETTINGS_PATH)
 
@@ -104,3 +131,12 @@ def get_account(settings: YamlSettings, account_id: str) -> AccountConfig | None
         if acc.account_id == account_id:
             return acc
     return None
+
+
+def save_yaml_settings(settings: YamlSettings, path: Path | None = None) -> None:
+    """将配置写回 settings.yaml。"""
+    cfg_path = path or Path(os.getenv("PDD_CONFIG_PATH", DEFAULT_SETTINGS_PATH))
+    cfg_path.parent.mkdir(parents=True, exist_ok=True)
+    data = settings.model_dump(mode="python")
+    with open(cfg_path, "w", encoding="utf-8") as f:
+        yaml.dump(data, f, allow_unicode=True, default_flow_style=False, sort_keys=False)

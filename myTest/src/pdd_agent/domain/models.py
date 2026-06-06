@@ -102,3 +102,4 @@ class RunRecord(BaseModel):
     message: str = ""
     listing_labels: list[str] = Field(default_factory=list)
     artifacts: dict[str, str] = Field(default_factory=dict)  # 截图路径等
+    result: dict[str, Any] = Field(default_factory=dict)  # API/CLI 执行结果摘要

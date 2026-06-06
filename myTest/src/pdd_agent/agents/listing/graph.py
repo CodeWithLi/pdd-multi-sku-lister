@@ -4,8 +4,6 @@ Listing Agent — LangGraph 上架子图。
     preflight ──(校验失败/dry_run)──→ report → END
          │
          └──(校验通过且非 dry_run)──→ browser → END
-
-browser 节点当前仅完成登录；页面上传/填规格见 agents/listing/nodes.py。
 """
 
 from __future__ import annotations
@@ -13,16 +11,16 @@ from __future__ import annotations
 from langgraph.graph import END, StateGraph
 
 from pdd_agent.agents.state import ListingState
-from pdd_agent.browser import BrowserManager, BrowserSession
+from pdd_agent.browser.sync_job import run_browser_job_async
 from pdd_agent.core.config import get_account, load_yaml_settings
 from pdd_agent.core.logging import get_logger
 from pdd_agent.skills.listing.preflight import run_preflight
+from pdd_agent.skills.listing.upload import run_listing_uploads
 
 logger = get_logger(__name__)
 
 
 async def preflight_node(state: ListingState) -> dict:
-    """调用 preflight Skill，填充 units 与 preflight 报告。"""
     settings = load_yaml_settings()
     codes = state.get("product_codes") or []
     report = run_preflight(codes, settings)
@@ -39,8 +37,8 @@ async def preflight_node(state: ListingState) -> dict:
     }
 
 
-async def browser_login_node(state: ListingState) -> dict:
-    """启动 Playwright，登录店铺；实际上传步骤待 nodes.py 实现。"""
+async def browser_listing_node(state: ListingState) -> dict:
+    """登录 + 多规格上架（Playwright 同步线程）。"""
     if state.get("dry_run"):
         return {"phase": "dry_run_skip_browser", "finished": True}
 
@@ -50,27 +48,38 @@ async def browser_login_node(state: ListingState) -> dict:
     if not account:
         return {"errors": [f"unknown account: {account_id}"], "finished": True}
 
-    manager = BrowserManager(settings)
-    await manager.start()
+    units = state.get("units") or []
+    if not units:
+        return {"errors": ["no valid listing units"], "finished": True}
+
+    category = state.get("category_keyword") or settings.listing.category_keyword
+    defaults = settings.multi_spec.defaults
+
+    def _job(dp):
+        return run_listing_uploads(
+            dp,
+            account_id,
+            units,
+            category_keyword=category,
+            title_mode=settings.listing.title_mode,
+            defaults=defaults,
+        )
+
     try:
-        async with manager.open_context(account_id) as context:
-            session = await BrowserSession.open(account, context)
-            await session.ensure_login(settings)
-            logger.info("[%s] browser ready, upload steps TBD", account_id)
-            return {
-                "phase": "browser_ready",
-                "results": [{"account_id": account_id, "status": "browser_ready"}],
-                "finished": True,
-            }
+        results = await run_browser_job_async(settings, account, _job)
+        listed = sum(1 for r in results if r.get("status") == "listed")
+        logger.info("[%s] listing done: %s/%s listed", account_id, listed, len(results))
+        return {
+            "phase": "listing_done",
+            "results": results,
+            "finished": True,
+        }
     except Exception as exc:
-        logger.exception("browser login failed")
+        logger.exception("browser listing failed")
         return {"errors": [str(exc)], "finished": True}
-    finally:
-        await manager.stop()
 
 
 def should_continue_after_preflight(state: ListingState) -> str:
-    """条件边：决定走 browser 还是直接 report。"""
     preflight = state.get("preflight")
     if not preflight or not preflight.ok:
         return "report"
@@ -80,7 +89,6 @@ def should_continue_after_preflight(state: ListingState) -> str:
 
 
 async def report_node(state: ListingState) -> dict:
-    """输出可上架单元摘要（dry-run 或校验失败时也会进入）。"""
     units = state.get("units") or []
     lines = [f"- {u.listing_label}: {len(u.skus)} SKU" for u in units]
     msg = "\n".join(lines) if lines else "no valid units"
@@ -89,10 +97,9 @@ async def report_node(state: ListingState) -> dict:
 
 
 def build_listing_graph():
-    """编译 Listing 状态图。"""
     graph = StateGraph(ListingState)
     graph.add_node("preflight", preflight_node)
-    graph.add_node("browser", browser_login_node)
+    graph.add_node("browser", browser_listing_node)
     graph.add_node("report", report_node)
 
     graph.set_entry_point("preflight")

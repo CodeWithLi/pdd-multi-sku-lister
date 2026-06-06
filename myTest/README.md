@@ -93,7 +93,7 @@ pip install -e ".[dev]"
 playwright install chromium
 
 # 3. 复制配置
-copy .env.example .env
+copy .env .env
 copy config\settings.example.yaml config\settings.yaml
 
 # 4. Dry-run（不打开浏览器，只跑 LangGraph 规划 + 素材校验）

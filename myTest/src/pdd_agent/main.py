@@ -13,6 +13,7 @@ import argparse
 import asyncio
 import sys
 
+from pdd_agent.agents.delist import build_delist_graph
 from pdd_agent.agents.listing import build_listing_graph
 from pdd_agent.agents.orchestrator import build_orchestrator_graph
 from pdd_agent.core.config import get_account, load_yaml_settings
@@ -60,6 +61,16 @@ def _cmd_plan(message: str) -> None:
         print(" ", task.model_dump())
 
 
+def _json_safe(value):
+    if hasattr(value, "model_dump"):
+        return value.model_dump(mode="json")
+    if isinstance(value, list):
+        return [_json_safe(v) for v in value]
+    if isinstance(value, dict):
+        return {k: _json_safe(v) for k, v in value.items()}
+    return value
+
+
 async def _cmd_run(args) -> None:
     """执行 listing 子图，并将结果写入 TaskRunStore。"""
     settings = load_yaml_settings()
@@ -83,10 +94,36 @@ async def _cmd_run(args) -> None:
             }
         )
         status = RunStatus.SUCCESS if not result.get("errors") else RunStatus.FAILED
-        store.finish(run.run_id, status, str(result.get("results")))
+        store.finish(
+            run.run_id,
+            status,
+            str(result.get("results")),
+            result=_json_safe(result),
+        )
         print(result)
-    else:
-        print("delist graph: use API or extend CLI")
+    elif args.agent == "delist":
+        graph = build_delist_graph()
+        settings = load_yaml_settings()
+        result = await graph.ainvoke(
+            {
+                "account_id": args.account,
+                "dry_run": args.dry_run,
+                "delist_params": {
+                    "min_created_after": settings.delist.min_created_after,
+                    "dry_run": args.dry_run,
+                    "max_delist_per_run": settings.delist.max_delist_per_run,
+                    "merchant_code_contains": settings.delist.merchant_code_contains,
+                },
+            }
+        )
+        status = RunStatus.SUCCESS if not result.get("errors") else RunStatus.FAILED
+        store.finish(
+            run.run_id,
+            status,
+            str(result.get("results")),
+            result=_json_safe(result),
+        )
+        print(result)
 
 
 def _cmd_api(host: str, port: int) -> None:

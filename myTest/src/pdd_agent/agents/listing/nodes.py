@@ -1,8 +1,7 @@
 """
-Listing 节点 — Playwright 页面操作（待从旧项目 multi_spec_helpers 迁移）。
+Listing 页面操作已迁移至：
 
-建议拆分模块：
-  upload_carousel.py  — 上传主图、详情图
-  fill_specs.py       — 录入款式/型号、价格表
-  submit_listing.py   — 填写货号、点击「提交并上架」
+  skills/listing/multi_spec_page.py  — 规格/价格表/预览图（自 pdd_auto 迁移）
+  skills/listing/upload.py           — 上架编排（分类→传图→填表→提交）
+  browser/dp_compat_sync.py          — DrissionPage 兼容层（底层 Playwright）
 """

@@ -1,0 +1,225 @@
+"""多规格上架页面操作（Playwright + DrissionPage 兼容层）。"""
+
+from __future__ import annotations
+
+import random
+import time
+from typing import Any
+
+from pdd_agent.browser.dp_compat_sync import DpPage
+from pdd_agent.domain.models import ListingUnit
+from pdd_agent.paths import PROJECT_ROOT
+from pdd_agent.skills.listing.multi_spec_page import (
+    _safe_exc,
+    add_style_and_model_specs,
+    fill_multi_spec_rows,
+    wait_multi_sku_rows,
+)
+from pdd_agent.skills.listing.page_ai_title import apply_title_after_cover_upload
+from pdd_agent.skills.listing.title import resolve_listing_title
+
+
+def _error_screenshot_path(filename: str) -> str:
+    d = PROJECT_ROOT / "data" / "runs" / "screenshots"
+    d.mkdir(parents=True, exist_ok=True)
+    return str(d / filename)
+
+
+def _clear_beforeunload(page: DpPage) -> None:
+    try:
+        page.run_js("window.onbeforeunload = null;")
+    except Exception:
+        pass
+
+
+def _click_submit(page: DpPage, account_id: str, label: str) -> bool:
+    print(f"[{account_id}] [{label}] 点击提交并上架...", flush=True)
+    try:
+        submit_btn = page.ele("text:提交并上架", timeout=3)
+        if not submit_btn:
+            print(f"[{account_id}] [{label}] 未找到「提交并上架」按钮", flush=True)
+            return False
+        submit_btn.click(by_js=True)
+        time.sleep(2)
+        if page.ele("css:.success-title", timeout=8):
+            print(f"[{account_id}] [{label}] 成功：多规格商品上架完毕", flush=True)
+            return True
+        if page.ele("text:请上传预览图", timeout=1):
+            print(f"[{account_id}] [{label}] 提交被拦截：仍有预览图未上传", flush=True)
+            return False
+        print(f"[{account_id}] [{label}] 未检测到成功标志，请手动核查", flush=True)
+        return False
+    except Exception as exc:
+        print(f"[{account_id}] [{label}] 提交异常：{_safe_exc(exc)}", flush=True)
+        return False
+
+
+def upload_one_listing(
+    page: DpPage,
+    account_id: str,
+    unit: ListingUnit,
+    product_info: dict[str, Any],
+    defaults: dict[str, str],
+) -> dict[str, Any]:
+    """对单个上架单元执行完整发布流程。"""
+    label = unit.listing_label
+    covers = [str(p.resolve()) for p in unit.carousel_images]
+    details = [str(p.resolve()) for p in unit.detail_images]
+    style_names = list(dict.fromkeys(sku.style_name for sku in unit.skus))
+    model_names = list(dict.fromkeys(sku.model_name for sku in unit.skus))
+
+    listing_info = dict(product_info)
+    listing_info["title"] = resolve_listing_title(product_info, account_id)
+    time.sleep(random.uniform(1.0, 2.0))
+
+    print(f"[{account_id}] [{label}] 正在跳转商品分类界面...")
+    page.get("https://mms.pinduoduo.com/goods/category")
+    time.sleep(5)
+
+    ui_type = "A"
+    if page.ele("css:.goodsCarousel_btns__22KMn", timeout=1) or page.ele(
+        'css:input[data-tracking-click-viewid="local_upload"]', timeout=1
+    ):
+        ui_type = "C"
+    elif page.ele('css:[data-tracking-click-viewid="cate_tree_tab"]', timeout=1):
+        ui_type = "B"
+    print(f"[{account_id}] [{label}] 路由判定：分支 {ui_type}")
+
+    if ui_type == "C":
+        section_ele = page.ele("css:.goodsCarousel_btns__22KMn")
+        if section_ele:
+            page.run_js('arguments[0].style.display = "flex";', section_ele)
+        time.sleep(1)
+        cover_input = page.ele('css:input[data-tracking-click-viewid="local_upload"]')
+        if cover_input:
+            cover_input.input(covers)
+        time.sleep(random.uniform(1.5, 2.5))
+        listing_info["title"] = apply_title_after_cover_upload(
+            page, account_id, product_info, listing_info.get("title", "")
+        )
+        time.sleep(2)
+        next_btn = page.ele("#bottomSubmitBtnId")
+        if next_btn:
+            next_btn.click()
+        time.sleep(5)
+        page.wait.load_start()
+    else:
+        if ui_type == "B":
+            tab = page.ele('css:[data-tracking-click-viewid="cate_tree_tab"]')
+            if tab:
+                page.run_js("arguments[0].click();", tab)
+                time.sleep(3)
+
+        search_input = page.ele('css:input[placeholder="请输入关键词搜索分类"]')
+        if search_input:
+            search_input.click()
+            time.sleep(0.5)
+            search_input.input(listing_info.get("category_keyword", "玩偶"), clear=True)
+        time.sleep(2)
+        first_cat = page.ele("css:li.SPP_searchItem_5-188-0")
+        if first_cat:
+            first_cat.click()
+        time.sleep(1)
+        confirm = page.ele("text:下一步, 完善商品信息") if ui_type == "B" else page.ele(
+            "text:确认发布该类商品"
+        )
+        if confirm:
+            confirm.click()
+        time.sleep(5)
+        page.wait.load_start()
+
+        section_ele = page.ele("css:.uploadImgEnter.uploadImgEnterNew")
+        if section_ele:
+            page.run_js('arguments[0].style.display = "flex";', section_ele)
+        time.sleep(1)
+        cover_input = page.ele(
+            'css:input[type="file"]:not([data-tracking-click-viewid="detail_img_localfile_upload"])'
+        )
+        if cover_input:
+            cover_input.input(covers)
+        time.sleep(random.uniform(1.5, 2.5))
+        listing_info["title"] = apply_title_after_cover_upload(
+            page, account_id, product_info, listing_info.get("title", "")
+        )
+        time.sleep(1)
+
+    print(f"[{account_id}] [{label}] 正在上传详情图...")
+    detail_input = page.ele('css:input[data-tracking-click-viewid="detail_img_localfile_upload"]')
+    if detail_input and details:
+        detail_input.input(details)
+    time.sleep(2)
+
+    print(f"[{account_id}] [{label}] 正在录入多规格（款式 + 型号）...")
+    add_style_and_model_specs(page, account_id, style_names, model_names)
+    time.sleep(1)
+    sku_rows = wait_multi_sku_rows(page, account_id, unit.skus)
+
+    print(f"[{account_id}] [{label}] 开始填写价格表...")
+    previews_ok = fill_multi_spec_rows(page, account_id, unit.skus, defaults, rows=sku_rows)
+
+    pcode = unit.merchant_code
+    global_code = page.ele(
+        'xpath://span[contains(text(),"商品编码") or contains(text(),"货号")]/following::input[1]'
+    )
+    if global_code:
+        global_code.input(pcode, clear=True)
+
+    time.sleep(random.uniform(1.0, 2.0))
+    if not previews_ok:
+        print(f"[{account_id}] [{label}] 预览图未全部就绪，跳过提交", flush=True)
+        _clear_beforeunload(page)
+        return {"listing_label": label, "status": "skipped", "reason": "preview_not_ready"}
+
+    ok = _click_submit(page, account_id, label)
+    _clear_beforeunload(page)
+    return {
+        "listing_label": label,
+        "status": "listed" if ok else "submit_uncertain",
+        "title": listing_info.get("title", ""),
+    }
+
+
+def run_listing_uploads(
+    page: DpPage,
+    account_id: str,
+    units: list[ListingUnit],
+    *,
+    category_keyword: str = "玩偶",
+    title_mode: str = "page_ai",
+    defaults: dict[str, str] | None = None,
+) -> list[dict[str, Any]]:
+    """顺序上架多个单元。"""
+    product_info = {
+        "category_keyword": category_keyword,
+        "title_mode": title_mode,
+        "title": "",
+    }
+    defaults = defaults or {}
+    results: list[dict[str, Any]] = []
+
+    for idx, unit in enumerate(units):
+        if idx > 0:
+            print(f"\n[{account_id}] 等待 5 秒后上架下一单元 [{unit.listing_label}]...\n")
+            time.sleep(5)
+        try:
+            results.append(
+                upload_one_listing(page, account_id, unit, product_info, defaults)
+            )
+        except Exception as e:
+            err = _safe_exc(e)
+            print(f"[{account_id}] [{unit.listing_label}] 业务运行报错: {err}")
+            results.append(
+                {"listing_label": unit.listing_label, "status": "failed", "error": err}
+            )
+            if "连接已断开" in err or "disconnect" in err.lower():
+                break
+            try:
+                safe_set = (unit.image_set or "default").replace("/", "_")
+                shot = _error_screenshot_path(
+                    f"error_listing_{account_id}_{unit.product_code}_{safe_set}.png"
+                )
+                page.get_screenshot(path=shot)
+                print(f"[{account_id}] 已保存报错截图：{shot}", flush=True)
+            except Exception:
+                pass
+    return results

@@ -35,3 +35,16 @@ class ListingState(TypedDict, total=False):
     errors: Annotated[list[str], operator.add]
     phase: str
     finished: bool
+
+
+class DelistState(TypedDict, total=False):
+    """下架子图状态。"""
+
+    account_id: str
+    dry_run: bool
+    skip_browser: bool
+    delist_params: dict[str, Any]
+    results: Annotated[list[dict[str, Any]], operator.add]
+    errors: Annotated[list[str], operator.add]
+    phase: str
+    finished: bool
