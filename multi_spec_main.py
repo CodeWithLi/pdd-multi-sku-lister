@@ -9,8 +9,13 @@ import sys
 
 from pdd_auto.config import load_config
 from pdd_auto.listing.multi_spec_runner import run_multi_spec_job
+from pdd_auto.log_utils import install_safe_stdout
 
-sys.stdout.reconfigure(encoding="utf-8")
+try:
+    sys.stdout.reconfigure(encoding="utf-8")
+except Exception:
+    pass
+install_safe_stdout()
 
 
 def main():

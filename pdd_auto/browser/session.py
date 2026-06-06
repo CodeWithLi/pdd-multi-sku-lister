@@ -4,14 +4,24 @@ import time
 from DrissionPage import ChromiumOptions, ChromiumPage
 
 
+def _configure_chrome_options(profile_path: str) -> ChromiumOptions:
+    co = ChromiumOptions()
+    co.set_user_data_path(profile_path)
+    # 抑制 Chrome / chromedriver 向控制台倾倒二进制或调试日志（上传图片时常见）
+    co.set_argument("--disable-logging")
+    co.set_argument("--log-level=3")
+    co.set_argument("--silent")
+    co.set_argument("--disable-dev-shm-usage")
+    return co
+
+
 def ensure_login(account_id, profile_path, username=None, password=None):
     """
     负责接管浏览器的启动、Session 读取与账号密码登录。
     成功返回 ChromiumPage，失败返回 None。
     """
     print(f"\n--- [{account_id}] 正在检查登录状态 ---")
-    co = ChromiumOptions()
-    co.set_user_data_path(profile_path)
+    co = _configure_chrome_options(profile_path)
 
     page = ChromiumPage(co)
     page.set.window.max()

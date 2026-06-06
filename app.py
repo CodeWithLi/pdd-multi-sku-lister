@@ -6,8 +6,10 @@ import re
 import copy
 import time
 import os
+import threading
 from pathlib import Path
 
+from pdd_auto.log_utils import decode_subprocess_chunk, sanitize_log_text
 from pdd_auto.paths import CONFIG_PATH, LOG_DIR
 from pdd_auto.ui.delist_tab import render_delist_tab
 from pdd_auto.products.multi_spec.catalog import (
@@ -56,23 +58,55 @@ def save_config(cfg: dict):
 
 def read_log(path: Path) -> str:
     try:
-        return path.read_text(encoding="utf-8", errors="replace")
+        raw = path.read_bytes()
     except FileNotFoundError:
         return ""
+    text = raw.decode("utf-8", errors="ignore")
+    if not text.strip():
+        text = raw.decode("gbk", errors="ignore")
+    return sanitize_log_text(text)
+
+
+def _drain_subprocess_output(proc: subprocess.Popen, log_file: Path):
+    """后台读取子进程输出，过滤二进制乱码后写入日志文件。"""
+    try:
+        with open(log_file, "wb") as f:
+            assert proc.stdout is not None
+            while True:
+                chunk = proc.stdout.read(8192)
+                if not chunk:
+                    break
+                cleaned = decode_subprocess_chunk(chunk)
+                if cleaned:
+                    f.write(cleaned.encode("utf-8"))
+                    f.flush()
+    except Exception:
+        pass
 
 
 def run_subprocess(script: str, log_file: Path, extra_args: list = None) -> subprocess.Popen:
     LOG_DIR.mkdir(exist_ok=True)
     env = os.environ.copy()
     env["PYTHONIOENCODING"] = "utf-8"
+    env["PYTHONUTF8"] = "1"
+    if os.name == "nt":
+        env["CHROME_LOG_FILE"] = "NUL"
+    else:
+        env["CHROME_LOG_FILE"] = "/dev/null"
     args = [sys.executable, "-u", script] + (extra_args or [])
-    return subprocess.Popen(
+    proc = subprocess.Popen(
         args,
-        stdout=open(log_file, "w", encoding="utf-8"),
+        stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
         env=env,
         cwd=str(Path(__file__).parent),
     )
+    threading.Thread(
+        target=_drain_subprocess_output,
+        args=(proc, log_file),
+        daemon=True,
+    ).start()
+    return proc
 
 
 def is_proc_running(key: str) -> bool:
