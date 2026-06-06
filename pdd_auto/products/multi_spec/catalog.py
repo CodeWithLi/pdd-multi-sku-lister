@@ -39,6 +39,14 @@ PREVIEW_NAMES = ("预览图.png", "预览图.jpg", "预览图.jpeg")
 IMAGE_SET_PATTERN = re.compile(r"^第.+套图$")
 
 
+@dataclass(frozen=True)
+class SkuExcelInfo:
+    code: str
+    name: str
+    inventory: int
+    price: float
+
+
 @dataclass
 class SkuCombo:
     style_code: str
@@ -47,6 +55,9 @@ class SkuCombo:
     model_name: str
     combo_folder: str
     preview_image: Path
+    inventory: str = "10"
+    group_price: str = "199.9"
+    single_price: str = "299.9"
 
 
 @dataclass
@@ -112,31 +123,121 @@ def excel_path(config: dict | None = None) -> Path:
     return (PROJECT_ROOT / rel).resolve()
 
 
-def load_sku_name_map(config: dict | None = None) -> dict[str, str]:
-    """读取 sku+名称.xlsx → {SKU编码: 中文名}。"""
+def _parse_excel_int(value, default: int = 0) -> int:
+    if value is None or value == "":
+        return default
+    if isinstance(value, bool):
+        return int(value)
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float):
+        return int(value)
+    try:
+        return int(float(str(value).strip()))
+    except (TypeError, ValueError):
+        return default
+
+
+def _parse_excel_float(value, default: float = 0.0) -> float:
+    if value is None or value == "":
+        return default
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        return float(value)
+    try:
+        return float(str(value).strip())
+    except (TypeError, ValueError):
+        return default
+
+
+def _format_price(value: float) -> str:
+    rounded = round(value, 2)
+    if rounded == int(rounded):
+        return str(int(rounded))
+    return f"{rounded:.2f}".rstrip("0").rstrip(".")
+
+
+def load_sku_excel_map(config: dict | None = None) -> dict[str, SkuExcelInfo]:
+    """读取 sku+名称.xlsx → {SKU编码: SkuExcelInfo}（含名称、库存、价格）。"""
     path = excel_path(config)
     if not path.is_file():
         raise FileNotFoundError(f"未找到 SKU 名称表：{path}")
 
     wb = load_workbook(path, read_only=True, data_only=True)
     ws = wb.active
-    mapping: dict[str, str] = {}
+    mapping: dict[str, SkuExcelInfo] = {}
     for row in ws.iter_rows(min_row=2, values_only=True):
         if not row or not row[0]:
             continue
         code = str(row[0]).strip()
-        name = str(row[1]).strip() if row[1] else ""
-        if name:
-            mapping[code] = name
+        name = str(row[1]).strip() if len(row) > 1 and row[1] else ""
+        inventory = _parse_excel_int(row[2] if len(row) > 2 else None, 0)
+        price = _parse_excel_float(row[3] if len(row) > 3 else None, 0.0)
+        if not name:
+            continue
+        mapping[code] = SkuExcelInfo(
+            code=code,
+            name=name,
+            inventory=inventory,
+            price=price,
+        )
     wb.close()
     return mapping
 
 
-def lookup_sku_name(code: str, name_map: dict[str, str]) -> str | None:
+def load_sku_name_map(config: dict | None = None) -> dict[str, str]:
+    """兼容旧接口：{SKU编码: 中文名}。"""
+    return {code: info.name for code, info in load_sku_excel_map(config).items()}
+
+
+def lookup_sku_excel(code: str, excel_map: dict[str, SkuExcelInfo]) -> SkuExcelInfo | None:
     code = (code or "").strip()
     if not code:
         return None
-    return name_map.get(code)
+    return excel_map.get(code)
+
+
+def lookup_sku_name(code: str, excel_map: dict[str, SkuExcelInfo] | dict[str, str]) -> str | None:
+    code = (code or "").strip()
+    if not code:
+        return None
+    info = excel_map.get(code)
+    if isinstance(info, SkuExcelInfo):
+        return info.name or None
+    if isinstance(info, str):
+        return info or None
+    return None
+
+
+def resolve_combo_pricing(
+    style_code: str,
+    model_code: str,
+    excel_map: dict[str, SkuExcelInfo],
+    defaults: dict | None = None,
+) -> tuple[str, str, str]:
+    """
+    组合 SKU 定价规则：
+    - 拼单价 = 款式价格 + 型号价格
+    - 单买价 = 拼单价 + 100
+    - 库存 = min(款式库存, 型号库存)
+    """
+    defaults = defaults or {}
+    fallback_inv = str(defaults.get("inventory", "10"))
+    fallback_gp = str(defaults.get("group_price", "199.9"))
+    fallback_sp = str(defaults.get("single_price", "299.9"))
+
+    style = lookup_sku_excel(style_code, excel_map)
+    model = lookup_sku_excel(model_code, excel_map)
+    if not style or not model:
+        return fallback_inv, fallback_gp, fallback_sp
+
+    inventory = min(style.inventory, model.inventory)
+    group_price = style.price + model.price
+    single_price = group_price + 100
+    return (
+        str(inventory),
+        _format_price(group_price),
+        _format_price(single_price),
+    )
 
 
 def _list_images(folder: Path) -> list[Path]:
@@ -219,8 +320,9 @@ def _parse_listing_dir(
     listing_dir: Path,
     product_code: str,
     image_set: str,
-    name_map: dict[str, str],
+    excel_map: dict[str, SkuExcelInfo],
     _log: Callable[[str], None],
+    defaults: dict | None = None,
 ) -> MultiSpecProduct:
     warnings: list[str] = []
     label = f"{product_code}/{image_set}" if image_set else product_code
@@ -250,7 +352,7 @@ def _parse_listing_dir(
             continue
 
         style_code = style_dir.name
-        style_name = lookup_sku_name(style_code, name_map)
+        style_name = lookup_sku_name(style_code, excel_map)
         if style_name is None:
             msg = (
                 f"[{label}] Excel 中无此商品编码（款式）[{style_code}]，"
@@ -278,7 +380,7 @@ def _parse_listing_dir(
                 continue
 
             _, model_code = parsed
-            model_name = lookup_sku_name(model_code, name_map)
+            model_name = lookup_sku_name(model_code, excel_map)
             if model_name is None:
                 msg = (
                     f"[{label}] Excel 中无此商品编码（型号）[{model_code}]，"
@@ -295,6 +397,10 @@ def _parse_listing_dir(
                 _log(f"[警告] {msg}")
                 continue
 
+            inventory, group_price, single_price = resolve_combo_pricing(
+                style_code, model_code, excel_map, defaults
+            )
+
             if model_code not in model_codes:
                 model_codes.append(model_code)
             skus.append(
@@ -305,6 +411,9 @@ def _parse_listing_dir(
                     model_name=model_name,
                     combo_folder=combo_dir.name,
                     preview_image=preview,
+                    inventory=inventory,
+                    group_price=group_price,
+                    single_price=single_price,
                 )
             )
 
@@ -329,7 +438,7 @@ def _parse_listing_dir(
 def parse_all_listings(
     product_code: str,
     config: dict | None = None,
-    name_map: dict[str, str] | None = None,
+    excel_map: dict[str, SkuExcelInfo] | None = None,
     log: Callable[[str], None] | None = None,
 ) -> list[MultiSpecProduct]:
     """
@@ -343,8 +452,11 @@ def parse_all_listings(
         _log(f"[警告] 商品目录不存在：{product_dir}，跳过商品 [{product_code}]")
         return []
 
-    if name_map is None:
-        name_map = load_sku_name_map(config)
+    if excel_map is None:
+        excel_map = load_sku_excel_map(config)
+
+    defaults = (config or {}).get("multi_spec") or {}
+    defaults = defaults.get("defaults") or {}
 
     listing_dirs = resolve_listing_dirs(product_dir)
     if len(listing_dirs) > 1:
@@ -355,7 +467,7 @@ def parse_all_listings(
         if image_set:
             _log(f"--- 解析套图：{product_code}/{image_set} ---")
         product = _parse_listing_dir(
-            listing_dir, product_code, image_set, name_map, _log
+            listing_dir, product_code, image_set, excel_map, _log, defaults
         )
         results.append(product)
     return results
@@ -364,7 +476,7 @@ def parse_all_listings(
 def parse_product(
     product_code: str,
     config: dict | None = None,
-    name_map: dict[str, str] | None = None,
+    excel_map: dict[str, SkuExcelInfo] | None = None,
     log: Callable[[str], None] | None = None,
     image_set: str | None = None,
 ) -> MultiSpecProduct | None:
@@ -372,7 +484,7 @@ def parse_product(
     解析单个上架单元。
     image_set 为空则解析第一套（或唯一一套）；指定则解析该套图。
     """
-    listings = parse_all_listings(product_code, config, name_map, log)
+    listings = parse_all_listings(product_code, config, excel_map, log)
     if not listings:
         return None
     if image_set:

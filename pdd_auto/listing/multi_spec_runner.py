@@ -32,6 +32,7 @@ def _print_product_summary(account_id: str, product):
     for sku in product.skus:
         print(
             f"  · 款式={sku.style_name}  型号={sku.model_name}  "
+            f"库存={sku.inventory}  拼单价={sku.group_price}  单买价={sku.single_price}  "
             f"规格编码={sku.combo_folder}  预览={sku.preview_image.name}"
         )
 
@@ -279,11 +280,11 @@ def process_multi_spec_account(account_config, product_info, config=None, dry_ru
                     break
                 try:
                     safe_set = (product.image_set or "default").replace("/", "_")
-                    page.get_screenshot(
-                        path=error_screenshot_path(
-                            f"error_multi_spec_{account_id}_{product.product_code}_{safe_set}.png"
-                        )
+                    shot_path = error_screenshot_path(
+                        f"error_multi_spec_{account_id}_{product.product_code}_{safe_set}.png"
                     )
+                    page.get_screenshot(path=shot_path)
+                    print(f"[{account_id}] 已保存报错截图：{shot_path}", flush=True)
                 except Exception:
                     pass
     finally:

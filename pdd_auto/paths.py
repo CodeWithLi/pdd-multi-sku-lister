@@ -4,8 +4,12 @@ from pathlib import Path
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 CONFIG_PATH = PROJECT_ROOT / "config.json"
 LOG_DIR = PROJECT_ROOT / "logs"
+ERROR_SCREENSHOT_DIR = LOG_DIR / "errors"
 CHROME_PROFILES_DIR = PROJECT_ROOT / "ChromeProfiles"
-PRODUCTS_DIR = PROJECT_ROOT / "products"
+ARCHIVE_DIR = PROJECT_ROOT / "archive"
+PRODUCTS_DIR = ARCHIVE_DIR / "products"
+PICTURE_DIR = ARCHIVE_DIR / "picture"
+LEGACY_PRODUCTS_REL = "archive/products"
 MULTI_SPEC_DIR = PROJECT_ROOT / "多规格测试"
 
 
@@ -14,4 +18,6 @@ def chrome_profile_path(account_id: str) -> str:
 
 
 def error_screenshot_path(filename: str) -> str:
-    return str(PROJECT_ROOT / filename)
+    """报错截图统一保存到 logs/errors/ 目录。"""
+    ERROR_SCREENSHOT_DIR.mkdir(parents=True, exist_ok=True)
+    return str(ERROR_SCREENSHOT_DIR / filename)

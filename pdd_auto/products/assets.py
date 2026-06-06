@@ -5,7 +5,7 @@ import os
 import re
 from pathlib import Path
 
-from pdd_auto.paths import PRODUCTS_DIR
+from pdd_auto.paths import LEGACY_PRODUCTS_REL, PRODUCTS_DIR, PROJECT_ROOT
 
 DEFAULT_VARIANT = "default"
 CAROUSEL_START = 1
@@ -29,13 +29,13 @@ def load_asset_rules(config: dict | None) -> dict:
 
 
 def build_product_relative_path(category: str, code: str, variant: str) -> str:
-    """组装相对路径：products/品类/编码/款式。"""
+    """组装相对路径：archive/products/品类/编码/款式。"""
     cat = (category or "").strip()
     prod_code = (code or "").strip()
     var = (variant or DEFAULT_VARIANT).strip() or DEFAULT_VARIANT
     if not cat or not prod_code:
         raise ValueError("商品素材配置缺少 category 或 code")
-    return f"products/{cat}/{prod_code}/{var}"
+    return f"{LEGACY_PRODUCTS_REL}/{cat}/{prod_code}/{var}"
 
 
 def resolve_account_product_path(account: dict, config: dict | None = None) -> str:
@@ -68,7 +68,7 @@ def resolve_account_product_path(account: dict, config: dict | None = None) -> s
 
 def resolve_account_product_abs_path(account: dict, config: dict | None = None) -> Path:
     rel = resolve_account_product_path(account, config)
-    return (PRODUCTS_DIR.parent / rel).resolve()
+    return (PROJECT_ROOT / rel).resolve()
 
 
 def _image_filename(index: int, ext: str = IMAGE_EXT) -> str:
@@ -148,7 +148,7 @@ def validate_product_images(
 
 
 def list_variants(category: str, code: str) -> list[str]:
-    """列出 products/品类/编码/ 下所有款式子文件夹名。"""
+    """列出 archive/products/品类/编码/ 下所有款式子文件夹名。"""
     base = PRODUCTS_DIR / category / code
     if not base.is_dir():
         return []
@@ -172,7 +172,7 @@ def list_product_codes(category: str) -> list[str]:
 
 
 def list_categories() -> list[str]:
-    """列出 products 下所有品类文件夹。"""
+    """列出 archive/products 下所有品类文件夹。"""
     if not PRODUCTS_DIR.is_dir():
         return []
     return sorted(
@@ -216,13 +216,18 @@ def migrate_account_product_fields(account: dict, config: dict | None = None) ->
         return product
 
     if legacy:
-        # products/挂件/BCP001/default 或 products/挂件/BCP001
+        # archive/products/挂件/BCP001/default 或旧路径 products/挂件/BCP001
         parts = Path(legacy.replace("\\", "/")).parts
-        try:
+        rest: tuple[str, ...]
+        if "archive" in parts and "products" in parts:
             idx = parts.index("products")
             rest = parts[idx + 1 :]
-        except ValueError:
-            rest = parts
+        else:
+            try:
+                idx = parts.index("products")
+                rest = parts[idx + 1 :]
+            except ValueError:
+                rest = parts
 
         if len(rest) >= 2:
             product.setdefault("category", rest[0])

@@ -658,7 +658,9 @@ def process_account_delist(account_config: dict, settings: DelistSettings) -> di
         stats["error"] = str(e)
         _log(account_id, f"业务运行报错: {e}")
         try:
-            page.get_screenshot(path=error_screenshot_path(f"error_delist_{account_id}.png"))
+            shot_path = error_screenshot_path(f"error_delist_{account_id}.png")
+            page.get_screenshot(path=shot_path)
+            _log(account_id, f"已保存报错截图：{shot_path}")
         except Exception:
             pass
     finally:

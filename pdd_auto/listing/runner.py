@@ -233,7 +233,9 @@ def process_single_account(account_config, product_info, config=None):
     except Exception as e:
         print(f"[{account_id}] 业务运行报错: {e}")
         try:
-            page.get_screenshot(path=error_screenshot_path(f"error_trace_{account_id}.png"))
+            shot_path = error_screenshot_path(f"error_trace_{account_id}.png")
+            page.get_screenshot(path=shot_path)
+            print(f"[{account_id}] 已保存报错截图：{shot_path}")
         except Exception:
             pass
 

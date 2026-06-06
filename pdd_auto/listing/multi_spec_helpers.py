@@ -872,9 +872,9 @@ return JSON.stringify({
 def _sku_row_values(skus: list, defaults: dict) -> list[list[str]]:
     return [
         [
-            str(defaults.get("inventory", "10")),
-            str(defaults.get("group_price", "199.9")),
-            str(defaults.get("single_price", "299.9")),
+            str(getattr(sku, "inventory", None) or defaults.get("inventory", "10")),
+            str(getattr(sku, "group_price", None) or defaults.get("group_price", "199.9")),
+            str(getattr(sku, "single_price", None) or defaults.get("single_price", "299.9")),
             sku.combo_folder,
         ]
         for sku in skus
@@ -950,9 +950,9 @@ def fill_multi_spec_rows(
         for i, sku in enumerate(skus):
             label = f"{sku.style_name} / {sku.model_name}"
             row_data = {
-                "inventory": defaults.get("inventory", "10"),
-                "group_price": defaults.get("group_price", "199.9"),
-                "single_price": defaults.get("single_price", "299.9"),
+                "inventory": getattr(sku, "inventory", None) or defaults.get("inventory", "10"),
+                "group_price": getattr(sku, "group_price", None) or defaults.get("group_price", "199.9"),
+                "single_price": getattr(sku, "single_price", None) or defaults.get("single_price", "299.9"),
                 "sku_code": sku.combo_folder,
             }
             try:
