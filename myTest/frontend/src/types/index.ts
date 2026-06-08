@@ -109,6 +109,8 @@ export interface ListingUnit {
   listing_label: string
   merchant_code: string
   root: string
+  carousel_images: string[]
+  detail_images: string[]
   carousel_count: number
   detail_count: number
   sku_count: number

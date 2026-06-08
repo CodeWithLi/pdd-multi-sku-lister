@@ -21,6 +21,8 @@ class ListingUnitOut(BaseModel):
     listing_label: str
     merchant_code: str
     root: str
+    carousel_images: list[str] = Field(default_factory=list)
+    detail_images: list[str] = Field(default_factory=list)
     carousel_count: int
     detail_count: int
     sku_count: int

@@ -1,6 +1,9 @@
 """素材目录与 preflight 接口。"""
 
-from fastapi import APIRouter, HTTPException
+from pathlib import Path
+
+from fastapi import APIRouter, HTTPException, Query
+from fastapi.responses import FileResponse
 
 from pdd_agent.api.schemas.catalog import (
     PreflightRequest,
@@ -13,6 +16,29 @@ from pdd_agent.core.config import load_yaml_settings
 from pdd_agent.skills.listing.catalog import list_image_sets
 
 router = APIRouter(prefix="/catalog", tags=["catalog"])
+
+IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".webp"}
+
+
+def _safe_asset_image_path(raw_path: str) -> Path:
+    settings = load_yaml_settings()
+    assets_root = settings.paths.resolve("assets_root")
+    target = Path(raw_path)
+    if not target.is_absolute():
+        target = (assets_root / target).resolve()
+    else:
+        target = target.resolve()
+
+    try:
+        target.relative_to(assets_root)
+    except ValueError:
+        raise HTTPException(status_code=403, detail="asset path is outside assets_root")
+
+    if target.suffix.lower() not in IMAGE_EXTS:
+        raise HTTPException(status_code=400, detail="only image assets can be viewed")
+    if not target.is_file():
+        raise HTTPException(status_code=404, detail=f"asset not found: {raw_path}")
+    return target
 
 
 @router.get("/products", response_model=list[ProductSummaryOut])
@@ -38,6 +64,12 @@ def catalog_image_sets(product_code: str):
     if not (assets_root / product_code).is_dir():
         raise HTTPException(status_code=404, detail=f"product not found: {product_code}")
     return list_image_sets(product_code, assets_root)
+
+
+@router.get("/asset")
+def catalog_asset(path: str = Query(..., min_length=1)):
+    """安全读取素材目录内的图片，用于前端预览。"""
+    return FileResponse(_safe_asset_image_path(path))
 
 
 @router.post("/preflight", response_model=PreflightResponse)

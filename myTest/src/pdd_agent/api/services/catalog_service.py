@@ -14,7 +14,16 @@ from pdd_agent.skills.listing.catalog import list_image_sets, list_product_codes
 from pdd_agent.skills.listing.preflight import run_preflight
 
 
+def _asset_path(path, assets_root) -> str:
+    try:
+        return str(path.resolve().relative_to(assets_root))
+    except ValueError:
+        return str(path)
+
+
 def _unit_to_out(unit: ListingUnit, *, include_skus: bool = False) -> ListingUnitOut:
+    settings = load_yaml_settings()
+    assets_root = settings.paths.resolve("assets_root")
     skus: list[SkuComboOut] = []
     if include_skus:
         skus = [
@@ -24,7 +33,7 @@ def _unit_to_out(unit: ListingUnit, *, include_skus: bool = False) -> ListingUni
                 model_code=s.model_code,
                 model_name=s.model_name,
                 combo_folder=s.combo_folder,
-                preview_image=str(s.preview_image),
+                preview_image=_asset_path(s.preview_image, assets_root),
                 inventory=s.inventory,
                 group_price=s.group_price,
                 single_price=s.single_price,
@@ -37,6 +46,8 @@ def _unit_to_out(unit: ListingUnit, *, include_skus: bool = False) -> ListingUni
         listing_label=unit.listing_label,
         merchant_code=unit.merchant_code,
         root=str(unit.root),
+        carousel_images=[_asset_path(p, assets_root) for p in unit.carousel_images],
+        detail_images=[_asset_path(p, assets_root) for p in unit.detail_images],
         carousel_count=len(unit.carousel_images),
         detail_count=len(unit.detail_images),
         sku_count=len(unit.skus),
