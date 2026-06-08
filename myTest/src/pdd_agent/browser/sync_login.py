@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import time
 
-from playwright.sync_api import BrowserContext, Page
+from playwright.sync_api import Page
 
 from pdd_agent.browser.dp_compat_sync import DpPage
 from pdd_agent.core.config import AccountConfig
@@ -46,9 +46,23 @@ def ensure_login_sync(account: AccountConfig, page: Page) -> DpPage:
         pwd_input.input(account.password, clear=True)
     time.sleep(1)
 
-    login_btn = dp.ele("t:span@text()=登录", timeout=5)
-    if login_btn:
-        login_btn.click()
+    if not _click_login_button(dp):
+        raise RuntimeError(f"[{account_id}] 未找到登录按钮")
+    time.sleep(1)
+    if _is_qr_login_page(dp):
+        print(f"[{account_id}] 检测到误入扫码登录，切回账号登录后重试...")
+        tab = dp.ele("text:账号登录", timeout=3)
+        if tab:
+            tab.click()
+            time.sleep(1)
+        if user_input:
+            user_input.input(account.username, clear=True)
+        if pwd_input:
+            pwd_input.input(account.password, clear=True)
+        time.sleep(0.5)
+        if not _click_login_button(dp):
+            raise RuntimeError(f"[{account_id}] 重试后仍未找到登录按钮")
+        time.sleep(1)
 
     wait_sec = 180 if _needs_manual_verify(dp) else 30
     if wait_sec == 180:
@@ -71,3 +85,93 @@ def _needs_manual_verify(dp: DpPage) -> bool:
         if dp.ele(f"text:{hint}", timeout=1):
             return True
     return False
+
+
+def _is_qr_login_page(dp: DpPage) -> bool:
+    try:
+        return bool(
+            dp.run_js(
+                """
+                const text = document.body?.innerText || '';
+                const hasQr = document.querySelector('canvas, img[src*="qr"], img[src*="QRCode"]');
+                return (text.includes('扫码登录') || text.includes('扫码')) && Boolean(hasQr);
+                """
+            )
+        )
+    except Exception:
+        return False
+
+
+def _click_login_button(dp: DpPage) -> bool:
+    """Click the password-login submit button, not the QR/account tab."""
+    try:
+        return bool(
+            dp.run_js(
+                """
+                function isVisible(el) {
+                    if (!el || !el.getBoundingClientRect) return false;
+                    const r = el.getBoundingClientRect();
+                    const s = window.getComputedStyle(el);
+                    return r.width > 20 && r.height > 20
+                        && s.display !== 'none'
+                        && s.visibility !== 'hidden'
+                        && Number(s.opacity || '1') > 0.05;
+                }
+
+                const password = document.querySelector('#passwordId, input[type="password"]');
+                if (!password) return false;
+                const pwdRect = password.getBoundingClientRect();
+                const pwdCenterX = pwdRect.left + pwdRect.width / 2;
+
+                function clickableParent(el) {
+                    let cur = el;
+                    for (let i = 0; i < 5 && cur && cur !== document.body; i++) {
+                        const tag = (cur.tagName || '').toLowerCase();
+                        const role = cur.getAttribute?.('role') || '';
+                        const cursor = window.getComputedStyle(cur).cursor;
+                        if (tag === 'button' || tag === 'a' || role === 'button' || cursor === 'pointer') {
+                            return cur;
+                        }
+                        cur = cur.parentElement;
+                    }
+                    return el;
+                }
+
+                const candidates = [];
+                for (const el of document.querySelectorAll('button, [role="button"], input[type="submit"], div, span, a')) {
+                    if (!isVisible(el)) continue;
+                    const text = (el.innerText || el.textContent || '').trim();
+                    const r = el.getBoundingClientRect();
+                    if (text !== '登录') continue;
+                    if (r.top < pwdRect.bottom - 5) continue;
+                    if (r.width < 100 || r.height < 30) continue;
+                    const centerX = r.left + r.width / 2;
+                    const distance = Math.abs(centerX - pwdCenterX) + Math.max(0, r.top - pwdRect.bottom);
+                    candidates.push({ el: clickableParent(el), distance, area: r.width * r.height });
+                }
+                candidates.sort((a, b) => a.distance - b.distance || b.area - a.area);
+                if (candidates.length) {
+                    candidates[0].el.click();
+                    return true;
+                }
+
+                const fallbackPoints = [
+                    [pwdCenterX, pwdRect.bottom + 60],
+                    [pwdCenterX, pwdRect.bottom + 80],
+                    [pwdCenterX, pwdRect.bottom + 100],
+                ];
+                for (const [x, y] of fallbackPoints) {
+                    const el = document.elementFromPoint(x, y);
+                    if (!isVisible(el)) continue;
+                    const text = (el.innerText || el.textContent || '').trim();
+                    if (text === '登录') {
+                        clickableParent(el).click();
+                        return true;
+                    }
+                }
+                return false;
+                """
+            )
+        )
+    except Exception:
+        return False

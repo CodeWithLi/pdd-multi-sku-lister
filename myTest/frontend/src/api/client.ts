@@ -4,14 +4,18 @@ import type {
   AccountCreatePayload,
   AccountDetail,
   AccountUpdatePayload,
+  BatchTaskResponse,
   ConfigSummary,
   HealthResponse,
   DelistTaskResponse,
   ListingTaskResponse,
+  LoginBatchCheckResponse,
+  LoginStatus,
   PlanResponse,
   PreflightResponse,
   ProductSummary,
   RunRecord,
+  RunListResponse,
   RunInterpretResponse,
   RuntimeConfig,
 } from '@/types'
@@ -76,6 +80,23 @@ export const api = {
     background: boolean
   }) => http.post<ListingTaskResponse>('/tasks/listing', body).then((r) => r.data),
 
+  listingBatch: (body: {
+    account_ids: string[]
+    product_codes: string[]
+    dry_run: boolean
+    category_keyword: string
+    max_concurrent_stores?: number
+    store_start_delay_min_seconds?: number
+    store_start_delay_max_seconds?: number
+  }) => http.post<BatchTaskResponse>('/tasks/listing/batch', body).then((r) => r.data),
+
+  retryListingItem: (sourceRunId: string, body: {
+    listing_label: string
+    product_code?: string
+    image_set?: string
+    category_keyword?: string
+  }) => http.post<ListingTaskResponse>(`/tasks/listing/retry-item/${sourceRunId}`, body).then((r) => r.data),
+
   delist: (body: {
     account_id: string
     dry_run?: boolean
@@ -85,13 +106,47 @@ export const api = {
     background?: boolean
   }) => http.post<DelistTaskResponse>('/tasks/delist', body).then((r) => r.data),
 
-  runs: (limit = 30) =>
-    http.get<RunRecord[]>('/runs', { params: { limit } }).then((r) => r.data),
+  delistBatch: (body: {
+    account_ids: string[]
+    dry_run?: boolean
+    min_created_after?: string
+    merchant_code_contains?: string
+    max_delist_per_run?: number
+    max_concurrent_stores?: number
+    store_start_delay_min_seconds?: number
+    store_start_delay_max_seconds?: number
+  }) => http.post<BatchTaskResponse>('/tasks/delist/batch', body).then((r) => r.data),
+
+  runs: (params: {
+    page?: number
+    page_size?: number
+    account_id?: string
+    agent?: string
+    status?: string
+    started_from?: string
+    started_to?: string
+    product_code?: string
+  } = {}) => http.get<RunListResponse>('/runs', { params }).then((r) => r.data),
 
   run: (runId: string) => http.get<RunRecord>(`/runs/${runId}`).then((r) => r.data),
 
   interpretRun: (runId: string) =>
     http.post<RunInterpretResponse>(`/runs/${runId}/interpret`).then((r) => r.data),
+
+  loginStatuses: () =>
+    http.get<LoginStatus[]>('/login/statuses').then((r) => r.data),
+
+  checkLogin: (accountId: string) =>
+    http.post<LoginStatus>(`/login/check/${accountId}`).then((r) => r.data),
+
+  checkLoginBatch: (body: {
+    account_ids?: string[]
+    delay_min_seconds?: number
+    delay_max_seconds?: number
+  }) => http.post<LoginBatchCheckResponse>('/login/check-batch', body).then((r) => r.data),
+
+  openLoginWindow: (accountId: string, keep_open_seconds = 300) =>
+    http.post<LoginStatus>(`/login/open/${accountId}`, { keep_open_seconds }).then((r) => r.data),
 
   agents: () =>
     http.get<{ agents: { id: string; enabled: boolean; description: string }[] }>('/agents').then((r) => r.data),

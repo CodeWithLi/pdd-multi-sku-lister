@@ -1,8 +1,10 @@
 """任务运行记录查询与 AI 解读。"""
 
+from datetime import datetime
+
 from fastapi import APIRouter, HTTPException, Query
 
-from pdd_agent.api.schemas.tasks import RunInterpretResponse, RunRecordOut
+from pdd_agent.api.schemas.tasks import RunInterpretResponse, RunListResponse, RunRecordOut
 from pdd_agent.core.config import get_env_settings
 from pdd_agent.core.logging import get_logger
 from pdd_agent.skills.interpret import interpret_run
@@ -12,11 +14,39 @@ logger = get_logger(__name__)
 router = APIRouter(prefix="/runs", tags=["runs"])
 
 
-@router.get("", response_model=list[RunRecordOut])
-def list_runs(limit: int = Query(50, ge=1, le=200)):
-    """最近任务列表。"""
+@router.get("", response_model=RunListResponse)
+def list_runs(
+    page: int = Query(1, ge=1),
+    page_size: int = Query(50, ge=1, le=200),
+    limit: int | None = Query(None, ge=1, le=200),
+    account_id: str = "",
+    agent: str = "",
+    status: str = "",
+    started_from: datetime | None = None,
+    started_to: datetime | None = None,
+    product_code: str = "",
+):
+    """分页查询任务记录。"""
     store = TaskRunStore()
-    return [RunRecordOut.from_record(r) for r in store.list_runs(limit=limit)]
+    if limit is not None:
+        page = 1
+        page_size = limit
+    items, total = store.search_runs(
+        page=page,
+        page_size=page_size,
+        account_id=account_id.strip(),
+        agent=agent.strip(),
+        status=status.strip(),
+        started_from=started_from,
+        started_to=started_to,
+        product_code=product_code.strip(),
+    )
+    return RunListResponse(
+        items=[RunRecordOut.from_record(r) for r in items],
+        total=total,
+        page=page,
+        page_size=page_size,
+    )
 
 
 @router.get("/{run_id}", response_model=RunRecordOut)

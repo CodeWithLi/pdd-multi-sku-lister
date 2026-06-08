@@ -7,6 +7,7 @@ from typing import Any, AsyncIterator
 
 from playwright.async_api import BrowserContext, Playwright, async_playwright
 
+from pdd_agent.browser.profile_lock import account_profile_lock
 from pdd_agent.browser.stealth import STEALTH_INIT_SCRIPT, STEALTH_LAUNCH_ARGS
 from pdd_agent.core.config import YamlSettings, get_env_settings
 from pdd_agent.core.logging import get_logger
@@ -81,15 +82,16 @@ class BrowserManager:
         if slow_mo:
             launch_kwargs["slow_mo"] = slow_mo
 
-        context = await self._playwright.chromium.launch_persistent_context(
-            str(user_data_dir),
-            **launch_kwargs,
-        )
-        await context.add_init_script(STEALTH_INIT_SCRIPT)
-        context.set_default_timeout(self._settings.browser.default_timeout_ms)
-        logger.info("[%s] persistent profile: %s", account_id, user_data_dir)
+        with account_profile_lock(self._settings, account_id, reason="browser_manager"):
+            context = await self._playwright.chromium.launch_persistent_context(
+                str(user_data_dir),
+                **launch_kwargs,
+            )
+            await context.add_init_script(STEALTH_INIT_SCRIPT)
+            context.set_default_timeout(self._settings.browser.default_timeout_ms)
+            logger.info("[%s] persistent profile: %s", account_id, user_data_dir)
 
-        try:
-            yield context
-        finally:
-            await context.close()
+            try:
+                yield context
+            finally:
+                await context.close()

@@ -8,6 +8,9 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+from sqlalchemy import cast, or_
+from sqlalchemy import String as SqlString
+
 from pdd_agent.core.config import load_yaml_settings
 from pdd_agent.db.models import RunRecordORM
 from pdd_agent.db.session import is_database_available, session_scope
@@ -86,11 +89,81 @@ class TaskRunStore:
                 continue
         return records
 
+    def search_runs(
+        self,
+        *,
+        page: int = 1,
+        page_size: int = 50,
+        account_id: str = "",
+        agent: str = "",
+        status: str = "",
+        started_from: datetime | None = None,
+        started_to: datetime | None = None,
+        product_code: str = "",
+    ) -> tuple[list[RunRecord], int]:
+        page = max(1, page)
+        page_size = max(1, min(200, page_size))
+
+        if is_database_available():
+            with session_scope() as session:
+                query = session.query(RunRecordORM)
+                if account_id:
+                    query = query.filter(RunRecordORM.account_id == account_id)
+                if agent:
+                    query = query.filter(RunRecordORM.agent == agent)
+                if status:
+                    query = query.filter(RunRecordORM.status == status)
+                if started_from:
+                    query = query.filter(RunRecordORM.started_at >= started_from)
+                if started_to:
+                    query = query.filter(RunRecordORM.started_at <= started_to)
+                if product_code:
+                    pattern = f"%{product_code}%"
+                    query = query.filter(
+                        or_(
+                            cast(RunRecordORM.listing_labels, SqlString).like(pattern),
+                            cast(RunRecordORM.result, SqlString).like(pattern),
+                            RunRecordORM.message.like(pattern),
+                        )
+                    )
+                total = int(query.order_by(None).count())
+                rows = (
+                    query.order_by(RunRecordORM.started_at.desc(), RunRecordORM.run_id.desc())
+                    .offset((page - 1) * page_size)
+                    .limit(page_size)
+                    .all()
+                )
+                return [_orm_to_record(row) for row in rows], total
+
+        records = self.list_runs(limit=10_000)
+        filtered = [
+            r
+            for r in records
+            if (not account_id or r.account_id == account_id)
+            and (not agent or r.agent.value == agent)
+            and (not status or r.status.value == status)
+            and (not started_from or r.started_at >= started_from)
+            and (not started_to or r.started_at <= started_to)
+            and (not product_code or _record_contains_product(r, product_code))
+        ]
+        total = len(filtered)
+        start = (page - 1) * page_size
+        return filtered[start : start + page_size], total
+
     def update_phase(self, run_id: str, phase: TaskPhase) -> None:
         record = self.load(run_id)
         if not record:
             return
         record.phase = phase
+        self.save(record)
+
+    def update_status(self, run_id: str, status: RunStatus, message: str = "") -> None:
+        record = self.load(run_id)
+        if not record:
+            return
+        record.status = status
+        if message:
+            record.message = message
         self.save(record)
 
     def finish(
@@ -146,3 +219,15 @@ def _orm_to_record(row: RunRecordORM) -> RunRecord:
         artifacts=dict(row.artifacts or {}),
         result=dict(row.result or {}),
     )
+
+
+def _record_contains_product(record: RunRecord, product_code: str) -> bool:
+    needle = product_code.lower()
+    if any(needle in label.lower() for label in record.listing_labels):
+        return True
+    if needle in (record.message or "").lower():
+        return True
+    try:
+        return needle in json.dumps(record.result, ensure_ascii=False).lower()
+    except TypeError:
+        return False

@@ -33,6 +33,41 @@ class ListingTaskResponse(BaseModel):
     result: dict[str, Any] = Field(default_factory=dict)
 
 
+class RetryListingItemRequest(BaseModel):
+    listing_label: str = Field(..., min_length=1)
+    product_code: str = ""
+    image_set: str = ""
+    category_keyword: str = "玩偶"
+
+
+class ListingBatchTaskRequest(BaseModel):
+    account_ids: list[str] = Field(..., min_length=1)
+    product_codes: list[str] = Field(default_factory=list)
+    dry_run: bool = False
+    category_keyword: str = "玩偶"
+    max_concurrent_stores: int | None = Field(default=None, ge=1, le=5)
+    store_start_delay_min_seconds: int | None = Field(default=None, ge=0, le=3600)
+    store_start_delay_max_seconds: int | None = Field(default=None, ge=0, le=3600)
+
+
+class BatchRunItem(BaseModel):
+    account_id: str
+    run_id: str
+    status: RunStatus
+    message: str = ""
+
+
+class BatchTaskResponse(BaseModel):
+    batch_id: str
+    status: RunStatus
+    total: int
+    max_concurrent_stores: int
+    store_start_delay_min_seconds: int = 0
+    store_start_delay_max_seconds: int = 0
+    runs: list[BatchRunItem] = Field(default_factory=list)
+    message: str = ""
+
+
 class DelistTaskRequest(BaseModel):
     account_id: str
     dry_run: bool | None = None
@@ -47,6 +82,17 @@ class DelistTaskResponse(BaseModel):
     status: RunStatus
     message: str = ""
     result: dict[str, Any] = Field(default_factory=dict)
+
+
+class DelistBatchTaskRequest(BaseModel):
+    account_ids: list[str] = Field(..., min_length=1)
+    dry_run: bool | None = None
+    min_created_after: str = ""
+    merchant_code_contains: str = ""
+    max_delist_per_run: int = 50
+    max_concurrent_stores: int | None = Field(default=None, ge=1, le=5)
+    store_start_delay_min_seconds: int | None = Field(default=None, ge=0, le=3600)
+    store_start_delay_max_seconds: int | None = Field(default=None, ge=0, le=3600)
 
 
 class RunInterpretResponse(BaseModel):
@@ -81,3 +127,10 @@ class RunRecordOut(BaseModel):
             listing_labels=record.listing_labels,
             result=record.result,
         )
+
+
+class RunListResponse(BaseModel):
+    items: list[RunRecordOut] = Field(default_factory=list)
+    total: int
+    page: int
+    page_size: int

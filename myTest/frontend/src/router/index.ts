@@ -7,6 +7,7 @@ const router = createRouter({
     { path: '/tasks', name: 'tasks', component: () => import('@/views/TasksView.vue'), meta: { title: '上架 / 下架' } },
     { path: '/catalog', name: 'catalog', component: () => import('@/views/CatalogView.vue'), meta: { title: '素材检查' } },
     { path: '/accounts', name: 'accounts', component: () => import('@/views/AccountsView.vue'), meta: { title: '店铺设置' } },
+    { path: '/login-health', name: 'login-health', component: () => import('@/views/LoginHealthView.vue'), meta: { title: '登录体检' } },
     { path: '/settings', name: 'settings', component: () => import('@/views/SystemSettingsView.vue'), meta: { title: '系统设置' } },
     { path: '/runs', name: 'runs', component: () => import('@/views/RunsView.vue'), meta: { title: '操作记录' } },
   ],

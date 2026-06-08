@@ -1,4 +1,4 @@
-export type RunStatus = 'pending' | 'running' | 'success' | 'failed' | 'needs_human' | 'skipped'
+export type RunStatus = 'pending' | 'running' | 'success' | 'failed' | 'canceled' | 'needs_human' | 'skipped'
 
 export interface HealthResponse {
   status: string
@@ -50,6 +50,11 @@ export interface RuntimeConfig {
     merchant_code_contains: string
     max_delist_per_run: number
     account_ids: string[]
+  }
+  batch: {
+    max_concurrent_stores: number
+    store_start_delay_min_seconds: number
+    store_start_delay_max_seconds: number
   }
 }
 
@@ -147,6 +152,24 @@ export interface DelistTaskResponse {
   result?: Record<string, unknown>
 }
 
+export interface BatchRunItem {
+  account_id: string
+  run_id: string
+  status: RunStatus
+  message?: string
+}
+
+export interface BatchTaskResponse {
+  batch_id: string
+  status: RunStatus
+  total: number
+  max_concurrent_stores: number
+  store_start_delay_min_seconds: number
+  store_start_delay_max_seconds: number
+  runs: BatchRunItem[]
+  message?: string
+}
+
 export interface RunRecord {
   run_id: string
   agent: string
@@ -160,10 +183,33 @@ export interface RunRecord {
   result: Record<string, unknown>
 }
 
+export interface RunListResponse {
+  items: RunRecord[]
+  total: number
+  page: number
+  page_size: number
+}
+
 export interface RunInterpretResponse {
   run_id: string
   interpretation: string
   llm_model: string
+}
+
+export interface LoginStatus {
+  account_id: string
+  status: string
+  reason: string
+  current_url: string
+  checked_at: string | null
+}
+
+export interface LoginBatchCheckResponse {
+  status: string
+  total: number
+  delay_min_seconds: number
+  delay_max_seconds: number
+  message: string
 }
 
 export interface AgentInfo {

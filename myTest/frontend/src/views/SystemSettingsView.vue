@@ -45,6 +45,11 @@ const form = reactive<RuntimeConfig>({
     max_delist_per_run: 50,
     account_ids: [],
   },
+  batch: {
+    max_concurrent_stores: 3,
+    store_start_delay_min_seconds: 30,
+    store_start_delay_max_seconds: 180,
+  },
 })
 
 function applyConfig(cfg: RuntimeConfig) {
@@ -61,6 +66,7 @@ function applyConfig(cfg: RuntimeConfig) {
   }
   form.listing = { ...cfg.listing }
   form.delist = { ...cfg.delist, account_ids: [...cfg.delist.account_ids] }
+  form.batch = { ...cfg.batch }
 }
 
 async function load() {
@@ -231,6 +237,38 @@ onMounted(load)
             <el-form-item label="单店最多下架数量">
               <el-input-number v-model="form.delist.max_delist_per_run" :min="1" :max="500" style="width: 100%" />
             </el-form-item>
+            <el-form-item label="批量任务并发店铺数">
+              <el-input-number
+                v-model="form.batch.max_concurrent_stores"
+                :min="1"
+                :max="5"
+                style="width: 100%"
+              />
+              <div class="form-tip">正式跑浏览器时建议 3-5 家，机器配置低时用 1-2 家。</div>
+            </el-form-item>
+            <el-row :gutter="12">
+              <el-col :span="12">
+                <el-form-item label="店铺启动间隔最小秒数">
+                  <el-input-number
+                    v-model="form.batch.store_start_delay_min_seconds"
+                    :min="0"
+                    :max="3600"
+                    style="width: 100%"
+                  />
+                </el-form-item>
+              </el-col>
+              <el-col :span="12">
+                <el-form-item label="店铺启动间隔最大秒数">
+                  <el-input-number
+                    v-model="form.batch.store_start_delay_max_seconds"
+                    :min="form.batch.store_start_delay_min_seconds"
+                    :max="3600"
+                    style="width: 100%"
+                  />
+                </el-form-item>
+              </el-col>
+            </el-row>
+            <div class="form-tip">批量任务会先启动一家店，再随机等待这个区间后启动下一家。</div>
           </el-form>
         </el-card>
       </el-col>

@@ -32,6 +32,42 @@ def _clear_beforeunload(page: DpPage) -> None:
         pass
 
 
+def _listing_result(
+    *,
+    unit: ListingUnit,
+    status: str,
+    reason: str = "",
+    error: str = "",
+    title: str = "",
+    retryable: bool = False,
+    legacy_status: str = "",
+) -> dict[str, Any]:
+    return {
+        "listing_label": unit.listing_label,
+        "product_code": unit.product_code,
+        "image_set": unit.image_set,
+        "merchant_code": unit.merchant_code,
+        "status": status,
+        "retryable": retryable,
+        "reason": reason,
+        "error": error,
+        "title": title,
+        "legacy_status": legacy_status or status,
+    }
+
+
+def _classify_exception(exc: Exception) -> tuple[str, bool]:
+    err = _safe_exc(exc)
+    low = err.lower()
+    if any(k in err for k in ("验证码", "滑块", "登录", "扫码", "短信")):
+        return "needs_manual_login_or_captcha", True
+    if any(k in err for k in ("分类", "类目", "SKU", "规格", "预览图", "上传")):
+        return "page_or_material_changed", True
+    if "timeout" in low or "超时" in err or "disconnect" in low or "连接已断开" in err:
+        return "browser_transient_error", True
+    return "unexpected_error", False
+
+
 def _dismiss_address_required_page(page: DpPage, account_id: str, label: str) -> bool:
     """
     拼多多偶尔会在发布页弹出「请尽快填写真实有效联系/经营地址」遮罩。
@@ -202,11 +238,7 @@ def upload_one_listing(
     time.sleep(5)
     if _dismiss_address_required_page(page, account_id, label):
         _clear_beforeunload(page)
-        return {
-            "listing_label": label,
-            "status": "skipped",
-            "reason": "address_required",
-        }
+        return _listing_result(unit=unit, status="skipped", reason="address_required")
 
     ui_type = "A"
     if page.ele("css:.goodsCarousel_btns__22KMn", timeout=1) or page.ele(
@@ -300,15 +332,32 @@ def upload_one_listing(
     if not previews_ok:
         print(f"[{account_id}] [{label}] 预览图未全部就绪，跳过提交", flush=True)
         _clear_beforeunload(page)
-        return {"listing_label": label, "status": "skipped", "reason": "preview_not_ready"}
+        return _listing_result(
+            unit=unit,
+            status="retryable",
+            reason="preview_not_ready",
+            retryable=True,
+            legacy_status="skipped",
+        )
 
     ok = _click_submit(page, account_id, label)
     _clear_beforeunload(page)
-    return {
-        "listing_label": label,
-        "status": "listed" if ok else "submit_uncertain",
-        "title": listing_info.get("title", ""),
-    }
+    if ok:
+        return _listing_result(
+            unit=unit,
+            status="success",
+            reason="listed",
+            title=listing_info.get("title", ""),
+            legacy_status="listed",
+        )
+    return _listing_result(
+        unit=unit,
+        status="retryable",
+        reason="submit_uncertain",
+        title=listing_info.get("title", ""),
+        retryable=True,
+        legacy_status="submit_uncertain",
+    )
 
 
 def run_listing_uploads(
@@ -339,9 +388,17 @@ def run_listing_uploads(
             )
         except Exception as e:
             err = _safe_exc(e)
+            reason, retryable = _classify_exception(e)
             print(f"[{account_id}] [{unit.listing_label}] 业务运行报错: {err}")
             results.append(
-                {"listing_label": unit.listing_label, "status": "failed", "error": err}
+                _listing_result(
+                    unit=unit,
+                    status="retryable" if retryable else "failed",
+                    reason=reason,
+                    error=err,
+                    retryable=retryable,
+                    legacy_status="failed",
+                )
             )
             if "连接已断开" in err or "disconnect" in err.lower():
                 break

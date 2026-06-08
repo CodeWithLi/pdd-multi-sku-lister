@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Any
 
 import yaml
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from pdd_agent.paths import DEFAULT_SETTINGS_PATH, PROJECT_ROOT
@@ -76,6 +76,20 @@ class DelistConfig(BaseModel):
     account_ids: list[str] = Field(default_factory=list)
 
 
+class BatchConfig(BaseModel):
+    """Batch task defaults."""
+
+    max_concurrent_stores: int = Field(default=3, ge=1, le=5)
+    store_start_delay_min_seconds: int = Field(default=30, ge=0, le=3600)
+    store_start_delay_max_seconds: int = Field(default=180, ge=0, le=3600)
+
+    @model_validator(mode="after")
+    def validate_delay_range(self) -> "BatchConfig":
+        if self.store_start_delay_max_seconds < self.store_start_delay_min_seconds:
+            self.store_start_delay_max_seconds = self.store_start_delay_min_seconds
+        return self
+
+
 class YamlSettings(BaseModel):
     """config/settings.yaml 的完整结构。"""
 
@@ -85,6 +99,7 @@ class YamlSettings(BaseModel):
     multi_spec: MultiSpecConfig = Field(default_factory=MultiSpecConfig)
     listing: ListingConfig = Field(default_factory=ListingConfig)
     delist: DelistConfig = Field(default_factory=DelistConfig)
+    batch: BatchConfig = Field(default_factory=BatchConfig)
     accounts: list[AccountConfig] = Field(default_factory=list)
 
 

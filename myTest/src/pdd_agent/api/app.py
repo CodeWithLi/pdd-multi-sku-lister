@@ -9,13 +9,16 @@ from pdd_agent.api.routes.agents import router as agents_router
 from pdd_agent.api.routes.catalog import router as catalog_router
 from pdd_agent.api.routes.config import router as config_router
 from pdd_agent.api.routes.health import router as health_router
+from pdd_agent.api.routes.login import router as login_router
 from pdd_agent.api.routes.runs import router as runs_router
 from pdd_agent.api.routes.tasks import router as tasks_router
 from pdd_agent.core.config import load_yaml_settings
 from pdd_agent.core.logging import get_logger, setup_logging
 from pdd_agent.db import database_status, init_database
+from pdd_agent.api.services.task_queue import TaskQueueWorker
 
 logger = get_logger(__name__)
+worker = TaskQueueWorker()
 
 
 @asynccontextmanager
@@ -26,8 +29,10 @@ async def lifespan(app: FastAPI):
     db = database_status()
     if db["configured"] and not db["available"]:
         logger.warning("Database unavailable: %s", db["error"])
+    worker.start()
     logger.info("PDD Agent API started")
     yield
+    await worker.stop()
     logger.info("PDD Agent API stopped")
 
 
@@ -61,6 +66,7 @@ def create_app() -> FastAPI:
     app.include_router(config_router, prefix="/api")
     app.include_router(catalog_router, prefix="/api")
     app.include_router(tasks_router, prefix="/api")
+    app.include_router(login_router, prefix="/api")
     app.include_router(runs_router, prefix="/api")
     app.include_router(agents_router, prefix="/api")
     return app

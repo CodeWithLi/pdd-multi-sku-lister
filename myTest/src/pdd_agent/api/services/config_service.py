@@ -10,6 +10,7 @@ from pdd_agent.api.schemas.config import (
     AccountOut,
     AccountUpdateIn,
     AppConfigIn,
+    BatchConfigIn,
     BrowserConfigIn,
     ConfigSummaryOut,
     DelistConfigIn,
@@ -22,6 +23,7 @@ from pdd_agent.api.schemas.config import (
 from pdd_agent.core.config import (
     AccountConfig,
     BrowserConfig,
+    BatchConfig,
     DelistConfig,
     ListingConfig,
     MultiSpecConfig,
@@ -185,6 +187,7 @@ def get_runtime_config() -> RuntimeConfigOut:
         multi_spec=MultiSpecConfigIn(**settings.multi_spec.model_dump()),
         listing=ListingConfigIn(**settings.listing.model_dump()),
         delist=DelistConfigIn(**settings.delist.model_dump()),
+        batch=BatchConfigIn(**settings.batch.model_dump()),
     )
 
 
@@ -196,5 +199,6 @@ def update_runtime_config(body: RuntimeConfigUpdateIn) -> RuntimeConfigOut:
     settings.multi_spec = MultiSpecConfig(**body.multi_spec.model_dump())
     settings.listing = ListingConfig(**body.listing.model_dump())
     settings.delist = DelistConfig(**body.delist.model_dump())
+    settings.batch = BatchConfig(**body.batch.model_dump())
     save_yaml_settings(settings)
     return get_runtime_config()

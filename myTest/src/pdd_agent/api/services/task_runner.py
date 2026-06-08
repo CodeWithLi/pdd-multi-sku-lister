@@ -48,6 +48,7 @@ async def execute_listing(
     product_codes: list[str],
     dry_run: bool,
     category_keyword: str,
+    retry_item: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """执行 listing 子图，更新 RunRecord。"""
     store = TaskRunStore()
@@ -58,6 +59,7 @@ async def execute_listing(
         return {"error": f"unknown account: {account_id}"}
 
     codes = product_codes or account.product_codes
+    store.update_status(run_id, RunStatus.RUNNING)
     store.update_phase(run_id, TaskPhase.PREFLIGHT)
 
     try:
@@ -68,6 +70,7 @@ async def execute_listing(
                 "product_codes": codes,
                 "dry_run": dry_run,
                 "category_keyword": category_keyword,
+                "retry_item": retry_item or {},
             }
         )
         result = _json_safe(raw)
@@ -79,7 +82,9 @@ async def execute_listing(
             if isinstance(r, dict) and r.get("listing_label"):
                 labels.append(r["listing_label"])
 
-        status = RunStatus.SUCCESS if not result.get("errors") else RunStatus.FAILED
+        item_results = [r for r in result.get("results") or [] if isinstance(r, dict)]
+        item_failed = any(r.get("status") in {"failed", "retryable"} for r in item_results)
+        status = RunStatus.SUCCESS if not result.get("errors") and not item_failed else RunStatus.FAILED
         store.finish(
             run_id,
             status,
@@ -116,6 +121,7 @@ async def execute_delist(
     if dry_run is not None:
         params["dry_run"] = dry_run
 
+    store.update_status(run_id, RunStatus.RUNNING)
     store.update_phase(run_id, TaskPhase.BROWSER)
     try:
         graph = build_delist_graph()

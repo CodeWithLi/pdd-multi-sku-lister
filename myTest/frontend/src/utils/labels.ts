@@ -3,6 +3,7 @@
 export const runStatusLabel: Record<string, string> = {
   success: '成功',
   failed: '失败',
+  canceled: '已取消',
   running: '进行中',
   pending: '等待中',
   needs_human: '需人工处理',
@@ -12,6 +13,7 @@ export const runStatusLabel: Record<string, string> = {
 export const runStatusType: Record<string, string> = {
   success: 'success',
   failed: 'danger',
+  canceled: 'info',
   running: 'warning',
   pending: 'info',
   needs_human: 'warning',
@@ -25,6 +27,8 @@ export const agentLabel: Record<string, string> = {
 }
 
 export const listingStatusLabel: Record<string, string> = {
+  success: '成功',
+  retryable: '可重试',
   listed: '上架成功',
   failed: '失败',
   skipped: '已跳过',

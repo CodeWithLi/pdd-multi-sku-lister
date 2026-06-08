@@ -42,7 +42,7 @@ const delistStats = computed(() => {
       <el-table-column label="状态" width="100">
         <template #default="{ row }">
           <el-tag
-            :type="row.status === 'listed' ? 'success' : row.status === 'failed' ? 'danger' : 'warning'"
+            :type="row.status === 'success' || row.status === 'listed' ? 'success' : row.status === 'failed' ? 'danger' : row.status === 'retryable' ? 'warning' : 'info'"
             size="small"
           >
             {{ listingStatusLabel[row.status as string] || row.status }}

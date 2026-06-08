@@ -28,6 +28,7 @@ class ListingState(TypedDict, total=False):
     product_codes: list[str]
     dry_run: bool  # True 时只做校验，不启动浏览器
     category_keyword: str
+    retry_item: dict[str, Any]
     preflight: PreflightReport
     units: list[ListingUnit]
     current_index: int  # 多单元顺序上架时的游标（预留）

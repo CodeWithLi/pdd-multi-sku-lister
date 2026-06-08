@@ -20,6 +20,7 @@ class RunStatus(StrEnum):
     RUNNING = "running"
     SUCCESS = "success"
     FAILED = "failed"
+    CANCELED = "canceled"
     NEEDS_HUMAN = "needs_human"  # 需人工介入（验证码等）
     SKIPPED = "skipped"
 

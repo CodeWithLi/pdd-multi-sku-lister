@@ -50,6 +50,15 @@ async def browser_listing_node(state: ListingState) -> dict:
         return {"errors": [f"unknown account: {account_id}"], "finished": True}
 
     units = state.get("units") or []
+    retry_image_set = (state.get("retry_item") or {}).get("image_set", "")
+    retry_product_code = (state.get("retry_item") or {}).get("product_code", "")
+    if retry_product_code:
+        units = [
+            unit
+            for unit in units
+            if unit.product_code == retry_product_code
+            and (not retry_image_set or unit.image_set == retry_image_set)
+        ]
     if not units:
         return {"errors": ["no valid listing units"], "finished": True}
 
@@ -68,7 +77,7 @@ async def browser_listing_node(state: ListingState) -> dict:
 
     try:
         results = await run_browser_job_async(settings, account, _job)
-        listed = sum(1 for r in results if r.get("status") == "listed")
+        listed = sum(1 for r in results if r.get("status") in {"success", "listed"})
         logger.info("[%s] listing done: %s/%s listed", account_id, listed, len(results))
         return {
             "phase": "listing_done",

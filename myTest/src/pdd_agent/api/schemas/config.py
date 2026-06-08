@@ -2,7 +2,7 @@
 
 import re
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 _ACCOUNT_ID_PATTERN = re.compile(r"^[a-zA-Z][a-zA-Z0-9_]*$")
 
@@ -98,6 +98,18 @@ class DelistConfigIn(BaseModel):
     account_ids: list[str] = Field(default_factory=list)
 
 
+class BatchConfigIn(BaseModel):
+    max_concurrent_stores: int = Field(default=3, ge=1, le=5)
+    store_start_delay_min_seconds: int = Field(default=30, ge=0, le=3600)
+    store_start_delay_max_seconds: int = Field(default=180, ge=0, le=3600)
+
+    @model_validator(mode="after")
+    def validate_delay_range(self) -> "BatchConfigIn":
+        if self.store_start_delay_max_seconds < self.store_start_delay_min_seconds:
+            self.store_start_delay_max_seconds = self.store_start_delay_min_seconds
+        return self
+
+
 class RuntimeConfigOut(BaseModel):
     app: AppConfigIn
     paths: PathsConfigIn
@@ -105,6 +117,7 @@ class RuntimeConfigOut(BaseModel):
     multi_spec: MultiSpecConfigIn
     listing: ListingConfigIn
     delist: DelistConfigIn
+    batch: BatchConfigIn
 
 
 class RuntimeConfigUpdateIn(RuntimeConfigOut):
