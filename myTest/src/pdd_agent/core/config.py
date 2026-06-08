@@ -107,6 +107,8 @@ class EnvSettings(BaseSettings):
     playwright_channel: str = ""  # 非空时覆盖 settings.yaml 的 browser.channel
     pdd_data_dir: str = "data"
     pdd_config_path: str = str(DEFAULT_SETTINGS_PATH)
+    database_url: str = ""
+    database_echo: bool = False
 
 
 def load_yaml_settings(path: Path | None = None) -> YamlSettings:

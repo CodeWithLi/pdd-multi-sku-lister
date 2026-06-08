@@ -35,8 +35,13 @@ const enabledAccounts = computed(() => accounts.value.filter((a) => a.enabled))
 async function loadMeta() {
   try {
     const [accs, products] = await Promise.all([api.accounts(true), api.products()])
+    const cfg = await api.runtimeConfig()
     accounts.value = accs
     productOptions.value = products.map((p) => p.product_code)
+    categoryKeyword.value = cfg.listing.category_keyword || '玩偶'
+    delistMinCreated.value = cfg.delist.min_created_after || delistMinCreated.value
+    delistMaxPerRun.value = cfg.delist.max_delist_per_run || delistMaxPerRun.value
+    delistMode.value = cfg.delist.dry_run ? 'scan' : 'run'
     if (accs.length && !accountId.value) {
       accountId.value = accs[0].account_id
       productCodes.value = [...accs[0].product_codes]

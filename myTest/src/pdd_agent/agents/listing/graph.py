@@ -12,8 +12,9 @@ from langgraph.graph import END, StateGraph
 
 from pdd_agent.agents.state import ListingState
 from pdd_agent.browser.sync_job import run_browser_job_async
-from pdd_agent.core.config import get_account, load_yaml_settings
+from pdd_agent.core.config import load_yaml_settings
 from pdd_agent.core.logging import get_logger
+from pdd_agent.db.repositories import get_account_config
 from pdd_agent.skills.listing.preflight import run_preflight
 from pdd_agent.skills.listing.upload import run_listing_uploads
 
@@ -44,7 +45,7 @@ async def browser_listing_node(state: ListingState) -> dict:
 
     settings = load_yaml_settings()
     account_id = state["account_id"]
-    account = get_account(settings, account_id)
+    account = get_account_config(settings, account_id)
     if not account:
         return {"errors": [f"unknown account: {account_id}"], "finished": True}
 

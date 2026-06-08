@@ -32,6 +32,131 @@ def _clear_beforeunload(page: DpPage) -> None:
         pass
 
 
+def _dismiss_address_required_page(page: DpPage, account_id: str, label: str) -> bool:
+    """
+    拼多多偶尔会在发布页弹出「请尽快填写真实有效联系/经营地址」遮罩。
+    这个弹窗没有明显弹窗关闭按钮，会挡住后续分类/上传操作；按页面左上角
+    「发布新商品」前的关闭 X 退出当前发布页。
+    """
+    try:
+        result = page.run_js(
+            """
+            const bodyText = document.body?.innerText || '';
+            const present = bodyText.includes('真实有效')
+                && (bodyText.includes('联系/经营地址') || bodyText.includes('经营地址'))
+                && bodyText.includes('确认补充');
+            if (!present) return { present: false, clicked: false };
+
+            function isVisible(el) {
+                if (!el || !el.getBoundingClientRect) return false;
+                const r = el.getBoundingClientRect();
+                const s = window.getComputedStyle(el);
+                return r.width > 2 && r.height > 2
+                    && s.display !== 'none'
+                    && s.visibility !== 'hidden'
+                    && parseFloat(s.opacity || '1') > 0.05;
+            }
+
+            function clickableParent(el) {
+                let cur = el;
+                for (let i = 0; i < 5 && cur && cur !== document.body; i++) {
+                    const tag = (cur.tagName || '').toLowerCase();
+                    const role = cur.getAttribute?.('role') || '';
+                    const cls = cur.className ? String(cur.className) : '';
+                    const cursor = window.getComputedStyle(cur).cursor;
+                    if (tag === 'button' || tag === 'a' || role === 'button'
+                        || cursor === 'pointer' || cls.toLowerCase().includes('close')) {
+                        return cur;
+                    }
+                    cur = cur.parentElement;
+                }
+                return el;
+            }
+
+            const candidates = [];
+            for (const el of document.querySelectorAll('button,a,span,i,svg,div')) {
+                if (!isVisible(el)) continue;
+                const r = el.getBoundingClientRect();
+                if (r.left > 130 || r.top > 190 || r.top < 20) continue;
+                const text = (el.innerText || el.textContent || '').trim();
+                const aria = el.getAttribute?.('aria-label') || '';
+                const cls = el.className ? String(el.className) : '';
+                if (
+                    text === '×'
+                    || text === '✕'
+                    || text.includes('发布新商品')
+                    || aria.toLowerCase().includes('close')
+                    || cls.toLowerCase().includes('close')
+                ) {
+                    candidates.push({ el, score: r.left + r.top });
+                }
+            }
+            candidates.sort((a, b) => a.score - b.score);
+            if (candidates.length) {
+                clickableParent(candidates[0].el).click();
+                return { present: true, clicked: true, method: 'candidate' };
+            }
+
+            for (const [x, y] of [[50, 80], [50, 110], [50, 140], [65, 80], [65, 110]]) {
+                const el = document.elementFromPoint(x, y);
+                if (el && isVisible(el)) {
+                    clickableParent(el).click();
+                    return { present: true, clicked: true, method: 'point' };
+                }
+            }
+            return { present: true, clicked: false };
+            """
+        )
+        if not isinstance(result, dict) or not result.get("present"):
+            return False
+
+        if result.get("clicked"):
+            print(
+                f"[{account_id}] [{label}] 检测到经营地址补充弹窗，已点击左上角关闭发布页",
+                flush=True,
+            )
+            time.sleep(1)
+            _confirm_leave_publish_page(page)
+        else:
+            print(
+                f"[{account_id}] [{label}] 检测到经营地址补充弹窗，但未定位到左上角关闭按钮",
+                flush=True,
+            )
+        return True
+    except Exception as exc:
+        print(f"[{account_id}] [{label}] 地址弹窗处理异常：{_safe_exc(exc)}", flush=True)
+        return False
+
+
+def _confirm_leave_publish_page(page: DpPage) -> None:
+    """关闭发布页时如出现离开确认，自动确认。"""
+    try:
+        page.run_js(
+            """
+            function isVisible(el) {
+                if (!el || !el.getBoundingClientRect) return false;
+                const r = el.getBoundingClientRect();
+                const s = window.getComputedStyle(el);
+                return r.width > 2 && r.height > 2
+                    && s.display !== 'none' && s.visibility !== 'hidden';
+            }
+            const keywords = ['确定', '确认', '离开', '放弃', '继续退出'];
+            for (const el of document.querySelectorAll('button,a,span,div')) {
+                if (!isVisible(el)) continue;
+                const text = (el.innerText || el.textContent || '').trim();
+                if (keywords.includes(text)) {
+                    el.click();
+                    return true;
+                }
+            }
+            return false;
+            """
+        )
+        time.sleep(0.5)
+    except Exception:
+        pass
+
+
 def _click_submit(page: DpPage, account_id: str, label: str) -> bool:
     print(f"[{account_id}] [{label}] 点击提交并上架...", flush=True)
     try:
@@ -75,6 +200,13 @@ def upload_one_listing(
     print(f"[{account_id}] [{label}] 正在跳转商品分类界面...")
     page.get("https://mms.pinduoduo.com/goods/category")
     time.sleep(5)
+    if _dismiss_address_required_page(page, account_id, label):
+        _clear_beforeunload(page)
+        return {
+            "listing_label": label,
+            "status": "skipped",
+            "reason": "address_required",
+        }
 
     ui_type = "A"
     if page.ele("css:.goodsCarousel_btns__22KMn", timeout=1) or page.ele(

@@ -18,6 +18,7 @@ const menus = [
   { path: '/tasks', label: '上架 / 下架', desc: '执行操作', icon: Goods },
   { path: '/catalog', label: '素材检查', desc: '上架前检查', icon: FolderOpened },
   { path: '/accounts', label: '店铺设置', desc: '账号管理', icon: Shop },
+  { path: '/settings', label: '系统设置', desc: '运行参数', icon: Setting },
   { path: '/runs', label: '操作记录', desc: '历史结果', icon: Document },
 ]
 
@@ -75,6 +76,8 @@ function go(path: string) {
 <style scoped>
 .layout {
   min-height: 100vh;
+  width: 100%;
+  background: var(--app-bg);
 }
 
 .sidebar {
@@ -182,7 +185,40 @@ function go(path: string) {
 }
 
 .main {
+  flex: 1;
+  width: 100%;
+  min-width: 0;
   padding: 28px 32px 48px;
-  max-width: 1200px;
+  overflow-x: hidden;
+  background:
+    radial-gradient(circle at 78% 12%, rgba(255, 107, 53, 0.08), transparent 28%),
+    linear-gradient(180deg, #f8fafc 0%, var(--app-bg) 42%, #eef3f9 100%);
+}
+
+@media (max-width: 768px) {
+  .sidebar {
+    width: 78px !important;
+    padding: 16px 10px;
+  }
+
+  .brand {
+    justify-content: center;
+    padding: 4px 0 20px;
+  }
+
+  .brand > div:not(.brand-icon),
+  .nav-text,
+  .sidebar-foot span {
+    display: none;
+  }
+
+  .nav-item {
+    justify-content: center;
+    padding: 12px;
+  }
+
+  .main {
+    padding: 20px 16px 32px;
+  }
 }
 </style>

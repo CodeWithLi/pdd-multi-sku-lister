@@ -8,8 +8,9 @@ from pdd_agent.agents.delist import build_delist_graph
 from pdd_agent.agents.listing import build_listing_graph
 from pdd_agent.agents.orchestrator import build_orchestrator_graph
 from pdd_agent.api.schemas.tasks import PlanResponse
-from pdd_agent.core.config import get_account, load_yaml_settings
+from pdd_agent.core.config import load_yaml_settings
 from pdd_agent.core.logging import get_logger
+from pdd_agent.db.repositories import get_account_config
 from pdd_agent.domain.enums import AgentKind, RunStatus, TaskPhase
 from pdd_agent.domain.models import PlannedTask
 from pdd_agent.storage import TaskRunStore
@@ -51,7 +52,7 @@ async def execute_listing(
     """执行 listing 子图，更新 RunRecord。"""
     store = TaskRunStore()
     settings = load_yaml_settings()
-    account = get_account(settings, account_id)
+    account = get_account_config(settings, account_id)
     if not account:
         store.finish(run_id, RunStatus.FAILED, f"unknown account: {account_id}")
         return {"error": f"unknown account: {account_id}"}
@@ -107,7 +108,7 @@ async def execute_delist(
 ) -> dict[str, Any]:
     store = TaskRunStore()
     settings = load_yaml_settings()
-    if not get_account(settings, account_id):
+    if not get_account_config(settings, account_id):
         store.finish(run_id, RunStatus.FAILED, f"unknown account: {account_id}")
         return {"error": f"unknown account: {account_id}"}
 

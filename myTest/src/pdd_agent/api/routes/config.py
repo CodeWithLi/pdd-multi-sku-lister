@@ -8,6 +8,8 @@ from pdd_agent.api.schemas.config import (
     AccountOut,
     AccountUpdateIn,
     ConfigSummaryOut,
+    RuntimeConfigOut,
+    RuntimeConfigUpdateIn,
 )
 from pdd_agent.api.services import config_service
 
@@ -18,6 +20,18 @@ router = APIRouter(prefix="/config", tags=["config"])
 def config_summary():
     """系统配置摘要（不含密钥）。"""
     return config_service.get_config_summary()
+
+
+@router.get("/runtime", response_model=RuntimeConfigOut)
+def config_runtime():
+    """运行参数配置：路径、浏览器、默认上下架规则。"""
+    return config_service.get_runtime_config()
+
+
+@router.put("/runtime", response_model=RuntimeConfigOut)
+def config_runtime_update(body: RuntimeConfigUpdateIn):
+    """保存运行参数配置到 settings.yaml。"""
+    return config_service.update_runtime_config(body)
 
 
 @router.get("/accounts", response_model=list[AccountOut])

@@ -16,8 +16,9 @@ import sys
 from pdd_agent.agents.delist import build_delist_graph
 from pdd_agent.agents.listing import build_listing_graph
 from pdd_agent.agents.orchestrator import build_orchestrator_graph
-from pdd_agent.core.config import get_account, load_yaml_settings
+from pdd_agent.core.config import load_yaml_settings
 from pdd_agent.core.logging import setup_logging
+from pdd_agent.db.repositories import get_account_config
 from pdd_agent.domain.enums import AgentKind, RunStatus
 from pdd_agent.storage import TaskRunStore
 
@@ -74,7 +75,7 @@ def _json_safe(value):
 async def _cmd_run(args) -> None:
     """执行 listing 子图，并将结果写入 TaskRunStore。"""
     settings = load_yaml_settings()
-    account = get_account(settings, args.account)
+    account = get_account_config(settings, args.account)
     if not account:
         print(f"unknown account: {args.account}")
         sys.exit(1)

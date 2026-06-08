@@ -103,6 +103,19 @@ python -m pdd_agent.main plan --message "店铺A上架商品BD046A"
 python -m pdd_agent.main run listing --account store_A --product-code BD046A --dry-run
 ```
 
+## MySQL 存储
+
+项目支持通过 SQLAlchemy 使用 MySQL 保存店铺账号与任务运行记录。配置 `myTest/.env`：
+
+```env
+DATABASE_URL=mysql+pymysql://root:password@192.168.23.128:3306/pdd_agent_platform?charset=utf8mb4
+DATABASE_ECHO=false
+```
+
+启动后会自动创建数据库与表；若 `DATABASE_URL` 为空或数据库不可用，系统会回退到 `settings.yaml` 与 `data/runs/*.json`。
+
+前端「系统设置」可维护素材路径、浏览器参数、多规格默认价格/库存、上架默认类目、下架默认规则等运行参数。
+
 ## 扩展新模块（活动 / 推流）
 
 1. 在 `skills/campaign/` 写 Playwright 操作与 `@tool`

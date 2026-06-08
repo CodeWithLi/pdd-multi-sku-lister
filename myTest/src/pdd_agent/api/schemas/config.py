@@ -54,5 +54,58 @@ class ConfigSummaryOut(BaseModel):
     assets_root: str
     excel_path: str
     llm_configured: bool
+    database_configured: bool = False
+    database_available: bool = False
+    database_error: str = ""
     account_count: int
     enabled_account_count: int
+
+
+class AppConfigIn(BaseModel):
+    name: str = "pdd-agent-platform"
+    log_level: str = "INFO"
+
+
+class PathsConfigIn(BaseModel):
+    assets_root: str = "data/assets"
+    profiles_root: str = "data/profiles"
+    runs_root: str = "data/runs"
+
+
+class BrowserConfigIn(BaseModel):
+    headless: bool = False
+    slow_mo: int = 0
+    default_timeout_ms: int = 30_000
+    base_url: str = "https://mms.pinduoduo.com"
+    channel: str = ""
+
+
+class MultiSpecConfigIn(BaseModel):
+    excel: str = "data/assets/sku+名称.xlsx"
+    defaults: dict[str, str] = Field(default_factory=dict)
+
+
+class ListingConfigIn(BaseModel):
+    category_keyword: str = "玩偶"
+    title_mode: str = "page_ai"
+
+
+class DelistConfigIn(BaseModel):
+    min_created_after: str = ""
+    dry_run: bool = True
+    merchant_code_contains: str = ""
+    max_delist_per_run: int = 50
+    account_ids: list[str] = Field(default_factory=list)
+
+
+class RuntimeConfigOut(BaseModel):
+    app: AppConfigIn
+    paths: PathsConfigIn
+    browser: BrowserConfigIn
+    multi_spec: MultiSpecConfigIn
+    listing: ListingConfigIn
+    delist: DelistConfigIn
+
+
+class RuntimeConfigUpdateIn(RuntimeConfigOut):
+    pass

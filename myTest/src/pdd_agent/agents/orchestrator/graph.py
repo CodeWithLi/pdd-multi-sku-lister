@@ -15,6 +15,7 @@ from langgraph.graph import END, StateGraph
 from pdd_agent.agents.state import OrchestratorState
 from pdd_agent.core.config import load_yaml_settings
 from pdd_agent.core.logging import get_logger
+from pdd_agent.db.repositories import list_account_configs
 from pdd_agent.domain.enums import AgentKind
 from pdd_agent.domain.models import PlannedTask
 from pdd_agent.llm import create_orchestrator_model
@@ -88,12 +89,13 @@ def _rule_based_plan(message: str, settings) -> list[PlannedTask]:
     dry_run = any(k in message for k in ("检查", "校验", "dry", "看看"))
     codes = re.findall(r"BD\d+[A-Z]?", message.upper())
     account_id = ""
-    for acc in settings.accounts:
+    accounts = list_account_configs(settings)
+    for acc in accounts:
         if acc.account_id in message:
             account_id = acc.account_id
             break
     if not account_id:
-        enabled = [a for a in settings.accounts if a.enabled]
+        enabled = [a for a in accounts if a.enabled]
         if len(enabled) == 1:
             account_id = enabled[0].account_id
             codes = codes or enabled[0].product_codes

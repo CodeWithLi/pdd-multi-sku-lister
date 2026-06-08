@@ -21,6 +21,8 @@ playwright>=1.49.0
 pydantic>=2.0
 pydantic-settings>=2.0
 pyyaml>=6.0
+SQLAlchemy>=2.0.0
+PyMySQL>=1.1.0
 
 # ── 多规格 Excel 解析 ──
 openpyxl>=3.1.0

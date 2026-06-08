@@ -13,6 +13,7 @@ from pdd_agent.api.routes.runs import router as runs_router
 from pdd_agent.api.routes.tasks import router as tasks_router
 from pdd_agent.core.config import load_yaml_settings
 from pdd_agent.core.logging import get_logger, setup_logging
+from pdd_agent.db import database_status, init_database
 
 logger = get_logger(__name__)
 
@@ -21,6 +22,10 @@ logger = get_logger(__name__)
 async def lifespan(app: FastAPI):
     settings = load_yaml_settings()
     setup_logging(settings.app.get("log_level", "INFO"))
+    init_database()
+    db = database_status()
+    if db["configured"] and not db["available"]:
+        logger.warning("Database unavailable: %s", db["error"])
     logger.info("PDD Agent API started")
     yield
     logger.info("PDD Agent API stopped")

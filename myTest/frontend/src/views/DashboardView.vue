@@ -48,6 +48,13 @@ const actions = [
     desc: '管理店铺账号、密码、默认商品',
     path: '/accounts',
   },
+  {
+    icon: '⚙️',
+    bg: '#eef2ff',
+    title: '系统设置',
+    desc: '维护路径、浏览器和默认规则',
+    path: '/settings',
+  },
 ]
 
 async function load() {
@@ -69,7 +76,7 @@ onMounted(load)
 </script>
 
 <template>
-  <div v-loading="loading">
+  <div class="dashboard-page" v-loading="loading">
     <PageHeader
       title="工作台"
       desc="按下面步骤操作即可：先配店铺 → 查素材 → 上架或下架 → 看记录"
@@ -93,6 +100,9 @@ onMounted(load)
       <template #title>系统运行正常</template>
       <template #default>
         已启用 {{ summary?.enabled_account_count ?? 0 }} 个店铺，可以直接开始操作
+        <span v-if="summary?.database_configured">
+          · MySQL {{ summary.database_available ? '已连接' : '未连接' }}
+        </span>
       </template>
     </el-alert>
 
@@ -111,15 +121,18 @@ onMounted(load)
     </div>
 
     <div class="section-label">快捷入口</div>
-    <el-row :gutter="16" style="margin-bottom: 24px">
-      <el-col v-for="a in actions" :key="a.title" :span="6">
-        <div class="action-card" @click="router.push(a.path)">
-          <div class="icon" :style="{ background: a.bg }">{{ a.icon }}</div>
-          <h3>{{ a.title }}</h3>
-          <p>{{ a.desc }}</p>
-        </div>
-      </el-col>
-    </el-row>
+    <div class="action-grid">
+      <div
+        v-for="a in actions"
+        :key="a.title"
+        class="action-card"
+        @click="router.push(a.path)"
+      >
+        <div class="icon" :style="{ background: a.bg }">{{ a.icon }}</div>
+        <h3>{{ a.title }}</h3>
+        <p>{{ a.desc }}</p>
+      </div>
+    </div>
 
     <el-card shadow="never" class="stat-card">
       <template #header>
@@ -135,32 +148,39 @@ onMounted(load)
         <el-button type="primary" @click="router.push('/accounts')">去添加第一个店铺</el-button>
       </el-empty>
 
-      <el-row v-else :gutter="12">
-        <el-col v-for="acc in accounts" :key="acc.account_id" :span="8">
-          <div class="shop-card" :class="{ off: !acc.enabled }">
-            <div class="shop-head">
-              <span class="shop-name">{{ acc.account_id }}</span>
-              <el-tag size="small" :type="acc.enabled ? 'success' : 'info'">
-                {{ acc.enabled ? '使用中' : '已停用' }}
-              </el-tag>
-            </div>
-            <div class="shop-line">登录账号：{{ acc.username || '未填写' }}</div>
-            <div class="shop-line">
-              默认商品：
-              <template v-if="acc.product_codes.length">
-                {{ acc.product_codes.slice(0, 3).join('、') }}
-                <span v-if="acc.product_codes.length > 3">等{{ acc.product_codes.length }}个</span>
-              </template>
-              <span v-else class="muted">未设置</span>
-            </div>
+      <div v-else class="shop-grid">
+        <div
+          v-for="acc in accounts"
+          :key="acc.account_id"
+          class="shop-card"
+          :class="{ off: !acc.enabled }"
+        >
+          <div class="shop-head">
+            <span class="shop-name">{{ acc.account_id }}</span>
+            <el-tag size="small" :type="acc.enabled ? 'success' : 'info'">
+              {{ acc.enabled ? '使用中' : '已停用' }}
+            </el-tag>
           </div>
-        </el-col>
-      </el-row>
+          <div class="shop-line">登录账号：{{ acc.username || '未填写' }}</div>
+          <div class="shop-line">
+            默认商品：
+            <template v-if="acc.product_codes.length">
+              {{ acc.product_codes.slice(0, 3).join('、') }}
+              <span v-if="acc.product_codes.length > 3">等{{ acc.product_codes.length }}个</span>
+            </template>
+            <span v-else class="muted">未设置</span>
+          </div>
+        </div>
+      </div>
     </el-card>
   </div>
 </template>
 
 <style scoped>
+.dashboard-page {
+  width: 100%;
+}
+
 .section-label {
   font-size: 13px;
   font-weight: 600;
@@ -176,11 +196,31 @@ onMounted(load)
 
 .workflow-step {
   cursor: pointer;
-  transition: border-color 0.15s;
+  min-height: 102px;
+  transition: border-color 0.15s, box-shadow 0.15s, transform 0.15s;
 }
 
 .workflow-step:hover {
   border-color: #ffb899;
+  box-shadow: 0 10px 22px rgba(255, 107, 53, 0.08);
+  transform: translateY(-1px);
+}
+
+.action-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 16px;
+  margin-bottom: 24px;
+}
+
+.action-card {
+  min-height: 160px;
+}
+
+.shop-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 12px;
 }
 
 .shop-card {
@@ -188,7 +228,7 @@ onMounted(load)
   border-radius: 12px;
   padding: 14px;
   background: #fafbfc;
-  margin-bottom: 12px;
+  min-width: 0;
 }
 
 .shop-card.off {

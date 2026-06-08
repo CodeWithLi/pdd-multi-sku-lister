@@ -13,6 +13,7 @@ import type {
   ProductSummary,
   RunRecord,
   RunInterpretResponse,
+  RuntimeConfig,
 } from '@/types'
 
 const http = axios.create({
@@ -36,6 +37,11 @@ export const api = {
   health: () => http.get<HealthResponse>('/health').then((r) => r.data),
 
   configSummary: () => http.get<ConfigSummary>('/config/summary').then((r) => r.data),
+
+  runtimeConfig: () => http.get<RuntimeConfig>('/config/runtime').then((r) => r.data),
+
+  updateRuntimeConfig: (body: RuntimeConfig) =>
+    http.put<RuntimeConfig>('/config/runtime', body).then((r) => r.data),
 
   accounts: (enabledOnly = false) =>
     http

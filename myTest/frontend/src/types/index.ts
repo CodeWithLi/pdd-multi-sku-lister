@@ -12,8 +12,45 @@ export interface ConfigSummary {
   assets_root: string
   excel_path: string
   llm_configured: boolean
+  database_configured: boolean
+  database_available: boolean
+  database_error: string
   account_count: number
   enabled_account_count: number
+}
+
+export interface RuntimeConfig {
+  app: {
+    name: string
+    log_level: string
+  }
+  paths: {
+    assets_root: string
+    profiles_root: string
+    runs_root: string
+  }
+  browser: {
+    headless: boolean
+    slow_mo: number
+    default_timeout_ms: number
+    base_url: string
+    channel: string
+  }
+  multi_spec: {
+    excel: string
+    defaults: Record<string, string>
+  }
+  listing: {
+    category_keyword: string
+    title_mode: string
+  }
+  delist: {
+    min_created_after: string
+    dry_run: boolean
+    merchant_code_contains: string
+    max_delist_per_run: number
+    account_ids: string[]
+  }
 }
 
 export interface Account {
