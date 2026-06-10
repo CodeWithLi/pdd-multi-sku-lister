@@ -154,6 +154,13 @@ export interface DelistTaskResponse {
   result?: Record<string, unknown>
 }
 
+export interface CampaignTaskResponse {
+  run_id: string
+  status: RunStatus
+  message?: string
+  result?: Record<string, unknown>
+}
+
 export interface BatchRunItem {
   account_id: string
   run_id: string
@@ -302,6 +309,12 @@ export interface PublishedProductDetailResponse {
   run_result_item: Record<string, unknown>
   source_run_result: Record<string, unknown>
   unit_detail: ListingUnit | null
+}
+
+export interface PublishedProductDelistResponse {
+  run_id: string
+  status: RunStatus | string
+  message: string
 }
 
 export interface ProductDetail {

@@ -64,6 +64,12 @@ async def browser_listing_node(state: ListingState) -> dict:
 
     category = state.get("category_keyword") or settings.listing.category_keyword
     platform_listing_code = (state.get("platform_listing_code") or "").strip()
+    if platform_listing_code:
+        if len(units) > 1:
+            return {
+                "errors": ["platform_listing_code requires exactly one listing unit"],
+                "finished": True,
+            }
     defaults = settings.multi_spec.defaults
 
     def _job(dp):

@@ -4,13 +4,18 @@ from __future__ import annotations
 
 from typing import Any
 
+from pdd_agent.agents.campaign import build_campaign_graph
 from pdd_agent.agents.delist import build_delist_graph
 from pdd_agent.agents.listing import build_listing_graph
 from pdd_agent.agents.orchestrator import build_orchestrator_graph
 from pdd_agent.api.schemas.tasks import PlanResponse
 from pdd_agent.core.config import load_yaml_settings
 from pdd_agent.core.logging import get_logger
-from pdd_agent.db.repositories import get_account_config, upsert_published_product
+from pdd_agent.db.repositories import (
+    get_account_config,
+    update_published_product_status,
+    upsert_published_product,
+)
 from pdd_agent.domain.enums import AgentKind, RunStatus, TaskPhase
 from pdd_agent.domain.models import PlannedTask
 from pdd_agent.storage import TaskRunStore
@@ -135,6 +140,17 @@ def create_listing_run(account_id: str) -> str:
     return store.create_run(AgentKind.LISTING, account_id).run_id
 
 
+def _sync_single_delist_result(result: dict[str, Any]) -> None:
+    for item in result.get("results") or []:
+        if not isinstance(item, dict):
+            continue
+        mapping_id = str(item.get("mapping_id") or "").strip()
+        if not mapping_id:
+            continue
+        if item.get("status") == "delisted" and not item.get("error"):
+            update_published_product_status(mapping_id, "delisted")
+
+
 async def execute_delist(
     *,
     run_id: str,
@@ -165,6 +181,8 @@ async def execute_delist(
         )
         result = _json_safe(raw)
         status = RunStatus.SUCCESS if not result.get("errors") else RunStatus.FAILED
+        if status == RunStatus.SUCCESS:
+            _sync_single_delist_result(result)
         store.finish(run_id, status, message=str(result.get("results") or ""), result=result)
         return result
     except Exception as exc:
@@ -176,3 +194,41 @@ async def execute_delist(
 def create_delist_run(account_id: str) -> str:
     store = TaskRunStore()
     return store.create_run(AgentKind.DELIST, account_id).run_id
+
+
+async def execute_campaign_limited_time_setup(
+    *,
+    run_id: str,
+    account_id: str,
+) -> dict[str, Any]:
+    store = TaskRunStore()
+    settings = load_yaml_settings()
+    if not get_account_config(settings, account_id):
+        store.finish(run_id, RunStatus.FAILED, f"unknown account: {account_id}")
+        return {"error": f"unknown account: {account_id}"}
+
+    store.update_status(run_id, RunStatus.RUNNING)
+    store.update_phase(run_id, TaskPhase.BROWSER)
+    try:
+        graph = build_campaign_graph()
+        raw = await graph.ainvoke(
+            {
+                "account_id": account_id,
+                "campaign_type": "limited_time_setup",
+            }
+        )
+        result = _json_safe(raw)
+        item_results = [r for r in result.get("results") or [] if isinstance(r, dict)]
+        item_failed = any(str(r.get("status") or "") != "success" for r in item_results)
+        status = RunStatus.SUCCESS if not result.get("errors") and not item_failed else RunStatus.FAILED
+        store.finish(run_id, status, message=str(result.get("results") or ""), result=result)
+        return result
+    except Exception as exc:
+        logger.exception("campaign job failed run_id=%s", run_id)
+        store.finish(run_id, RunStatus.FAILED, str(exc), result={"error": str(exc)})
+        return {"error": str(exc)}
+
+
+def create_campaign_run(account_id: str) -> str:
+    store = TaskRunStore()
+    return store.create_run(AgentKind.CAMPAIGN, account_id).run_id

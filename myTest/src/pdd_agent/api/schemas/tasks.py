@@ -87,6 +87,17 @@ class DelistTaskResponse(BaseModel):
     result: dict[str, Any] = Field(default_factory=dict)
 
 
+class CampaignLimitedTimeSetupRequest(BaseModel):
+    account_id: str
+
+
+class CampaignTaskResponse(BaseModel):
+    run_id: str
+    status: RunStatus
+    message: str = ""
+    result: dict[str, Any] = Field(default_factory=dict)
+
+
 class DelistBatchTaskRequest(BaseModel):
     account_ids: list[str] = Field(..., min_length=1)
     dry_run: bool | None = None

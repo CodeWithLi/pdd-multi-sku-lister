@@ -5,6 +5,7 @@ import type {
   AccountDetail,
   AccountUpdatePayload,
   BatchTaskResponse,
+  CampaignTaskResponse,
   ConfigSummary,
   HealthResponse,
   DelistTaskResponse,
@@ -18,6 +19,7 @@ import type {
   PreflightResponse,
   PublishedProductListResponse,
   PublishedProductDetailResponse,
+  PublishedProductDelistResponse,
   ProductDetail,
   ProductSummary,
   QueueCancelResponse,
@@ -130,6 +132,9 @@ export const api = {
     store_start_delay_max_seconds?: number
   }) => http.post<BatchTaskResponse>('/tasks/delist/batch', body).then((r) => r.data),
 
+  campaignLimitedTimeSetup: (body: { account_id: string }) =>
+    http.post<CampaignTaskResponse>('/tasks/campaign/limited-time-setup', body).then((r) => r.data),
+
   runs: (params: {
     page?: number
     page_size?: number
@@ -198,6 +203,9 @@ export const api = {
 
   publishedProductDetail: (mappingId: string) =>
     http.get<PublishedProductDetailResponse>(`/published-products/${mappingId}`).then((r) => r.data),
+
+  delistPublishedProduct: (mappingId: string) =>
+    http.post<PublishedProductDelistResponse>(`/published-products/${mappingId}/delist`).then((r) => r.data),
 
   loginStatuses: () =>
     http.get<LoginStatus[]>('/login/statuses').then((r) => r.data),

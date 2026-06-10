@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref } from 'vue'
 import { useRouter } from 'vue-router'
-import { ElMessage } from 'element-plus'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import { api } from '@/api/client'
 import PageHeader from '@/components/PageHeader.vue'
 import type {
@@ -21,6 +21,7 @@ interface PreviewImage {
 const router = useRouter()
 const loading = ref(false)
 const detailLoading = ref(false)
+const delistingId = ref('')
 const items = ref<PublishedProduct[]>([])
 const accounts = ref<Account[]>([])
 const total = ref(0)
@@ -110,6 +111,34 @@ function onPageSizeChange(next: number) {
 function openRun(row: PublishedProduct) {
   if (!row.source_run_id) return
   router.push({ path: '/runs', query: { id: row.source_run_id } })
+}
+
+async function delistPublished(row: PublishedProduct) {
+  if (!row.mapping_id || !row.pdd_product_id) return
+  try {
+    await ElMessageBox.confirm(
+      `确认下架店铺 ${row.account_id} 的拼多多商品ID：${row.pdd_product_id}？系统会按商品ID精准检索，ID不一致不会下架。`,
+      '精准下架确认',
+      {
+        confirmButtonText: '确认下架',
+        cancelButtonText: '取消',
+        type: 'warning',
+      },
+    )
+  } catch {
+    return
+  }
+
+  delistingId.value = row.mapping_id
+  try {
+    const resp = await api.delistPublishedProduct(row.mapping_id)
+    ElMessage.success(`精准下架任务已提交：${resp.run_id}`)
+    router.push({ path: '/runs', query: { id: resp.run_id } })
+  } catch (e) {
+    ElMessage.error(e instanceof Error ? e.message : '提交下架任务失败')
+  } finally {
+    delistingId.value = ''
+  }
 }
 
 function unitAllImages(unit: ListingUnit) {
@@ -251,10 +280,19 @@ onMounted(async () => {
         <el-table-column label="来源任务" min-width="170" show-overflow-tooltip>
           <template #default="{ row }">{{ row.source_run_id || '-' }}</template>
         </el-table-column>
-        <el-table-column label="操作" width="180" fixed="right">
+        <el-table-column label="操作" width="230" fixed="right">
           <template #default="{ row }">
             <el-button link type="primary" @click="openDetail(row)">查看详情</el-button>
             <el-button link type="primary" :disabled="!row.source_run_id" @click="openRun(row)">查看记录</el-button>
+            <el-button
+              link
+              type="danger"
+              :loading="delistingId === row.mapping_id"
+              :disabled="row.status === 'delisted' || !row.pdd_product_id"
+              @click="delistPublished(row)"
+            >
+              下架
+            </el-button>
           </template>
         </el-table-column>
       </el-table>

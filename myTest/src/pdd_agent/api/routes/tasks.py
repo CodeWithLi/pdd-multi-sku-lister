@@ -6,11 +6,13 @@ import random
 import uuid
 from datetime import datetime, timedelta
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, BackgroundTasks, HTTPException
 
 from pdd_agent.api.schemas.tasks import (
     BatchRunItem,
     BatchTaskResponse,
+    CampaignLimitedTimeSetupRequest,
+    CampaignTaskResponse,
     DelistBatchTaskRequest,
     DelistTaskRequest,
     DelistTaskResponse,
@@ -24,8 +26,10 @@ from pdd_agent.api.schemas.tasks import (
 from pdd_agent.api.services.config_service import get_account_or_none
 from pdd_agent.api.services.task_queue import enqueue_delist_task, enqueue_listing_task
 from pdd_agent.api.services.task_runner import (
+    create_campaign_run,
     create_delist_run,
     create_listing_run,
+    execute_campaign_limited_time_setup,
     execute_delist,
     execute_listing,
     plan_tasks,
@@ -339,4 +343,26 @@ async def tasks_delist_batch(body: DelistBatchTaskRequest):
             f"batch delist queued: {len(runs)} stores, concurrency {max_concurrent}, "
             f"start delay {delay_range[0]}-{delay_range[1]}s"
         ),
+    )
+
+
+@router.post("/campaign/limited-time-setup", response_model=CampaignTaskResponse)
+async def campaign_limited_time_setup(
+    body: CampaignLimitedTimeSetupRequest,
+    background: BackgroundTasks,
+):
+    settings = load_yaml_settings()
+    if not get_account_or_none(body.account_id, settings):
+        raise HTTPException(status_code=404, detail=f"unknown account: {body.account_id}")
+
+    run_id = create_campaign_run(body.account_id)
+    background.add_task(
+        execute_campaign_limited_time_setup,
+        run_id=run_id,
+        account_id=body.account_id,
+    )
+    return CampaignTaskResponse(
+        run_id=run_id,
+        status=RunStatus.RUNNING,
+        message="限时限量购活动设置任务已启动；完成后在操作记录查看结果",
     )

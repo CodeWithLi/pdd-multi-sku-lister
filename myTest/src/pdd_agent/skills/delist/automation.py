@@ -544,6 +544,188 @@ def _go_next_page(page, account_id: str) -> bool:
     return False
 
 
+def _clear_goods_filters(page) -> None:
+    try:
+        reset_btn = page.ele("text:重置", timeout=1.5)
+        if reset_btn:
+            reset_btn.click()
+            time.sleep(1)
+    except Exception:
+        pass
+
+
+def _set_goods_filter(page, label: str, value: str) -> bool:
+    if not value:
+        return False
+    try:
+        ok = page.run_js(
+            """
+            const [labelText, value] = arguments;
+            function isVisible(el) {
+                if (!el || !el.getBoundingClientRect) return false;
+                const r = el.getBoundingClientRect();
+                const s = window.getComputedStyle(el);
+                return r.width > 4 && r.height > 4
+                    && s.display !== 'none'
+                    && s.visibility !== 'hidden'
+                    && parseFloat(s.opacity || '1') > 0.05;
+            }
+            const nodes = Array.from(document.querySelectorAll('label, span, div'));
+            for (const node of nodes) {
+                const text = (node.innerText || node.textContent || '').trim();
+                if (text !== labelText || !isVisible(node)) continue;
+                let cur = node;
+                for (let depth = 0; depth < 7 && cur; depth++, cur = cur.parentElement) {
+                    const inputs = Array.from(cur.querySelectorAll?.('input') || []).filter(isVisible);
+                    if (!inputs.length) continue;
+                    const labelRect = node.getBoundingClientRect();
+                    const input = inputs
+                        .map((i) => ({ input: i, rect: i.getBoundingClientRect() }))
+                        .filter((x) => x.rect.left > labelRect.left)
+                        .sort((a, b) => Math.abs(a.rect.top - labelRect.top) - Math.abs(b.rect.top - labelRect.top))[0]?.input
+                        || inputs[0];
+                    input.focus();
+                    input.value = '';
+                    input.dispatchEvent(new Event('input', { bubbles: true }));
+                    input.value = value;
+                    input.dispatchEvent(new Event('input', { bubbles: true }));
+                    input.dispatchEvent(new Event('change', { bubbles: true }));
+                    return true;
+                }
+            }
+            return false;
+            """,
+            label,
+            value,
+        )
+        return bool(ok)
+    except Exception:
+        return False
+
+
+def _click_goods_search(page) -> bool:
+    try:
+        clicked = page.run_js(
+            """
+            function isVisible(el) {
+                if (!el || !el.getBoundingClientRect) return false;
+                const r = el.getBoundingClientRect();
+                const s = window.getComputedStyle(el);
+                return r.width > 4 && r.height > 4
+                    && s.display !== 'none'
+                    && s.visibility !== 'hidden'
+                    && parseFloat(s.opacity || '1') > 0.05;
+            }
+            for (const el of document.querySelectorAll('button, span, a, div')) {
+                const text = (el.innerText || el.textContent || '').trim();
+                if (text === '查询' && isVisible(el)) {
+                    el.click();
+                    return true;
+                }
+            }
+            return false;
+            """
+        )
+        if clicked:
+            time.sleep(2)
+            return True
+    except Exception:
+        pass
+    return False
+
+
+def _find_exact_product_row(page, product_id: str):
+    rows = _get_table_rows(page)
+    for row in rows:
+        text = row.text or ""
+        pid = extract_product_id_from_text(text) or ""
+        if pid == product_id:
+            return row
+    return None
+
+
+def process_single_product_delist(
+    page,
+    account_config: dict,
+    *,
+    product_id: str,
+    mapping_id: str = "",
+    dry_run: bool = False,
+) -> dict:
+    """精准下架单个已发布商品：只按拼多多商品ID匹配，ID不一致绝不下架。"""
+    account_id = account_config.get("account_id", "")
+    product_id = (product_id or "").strip()
+    stats = {
+        "account_id": account_id,
+        "mapping_id": mapping_id,
+        "target_product_id": product_id,
+        "scanned": 0,
+        "hit": 0,
+        "dry_run": dry_run,
+    }
+    if not product_id:
+        stats["error"] = "missing_product_id"
+        return stats
+
+    try:
+        _log(account_id, f"开始精准下架商品ID={product_id}")
+        if not open_goods_list_on_sale(page, account_id):
+            stats["error"] = "open_list_failed"
+            return stats
+
+        _clear_goods_filters(page)
+        if not _set_goods_filter(page, "商品ID", product_id):
+            stats["error"] = "set_product_id_filter_failed"
+            return stats
+        _click_goods_search(page)
+
+        rows = _get_table_rows(page)
+        stats["scanned"] = len(rows)
+        row = _find_exact_product_row(page, product_id)
+        if not row:
+            stats["error"] = "product_id_not_found_on_sale"
+            _log(account_id, f"在售中未找到商品ID={product_id}")
+            return stats
+
+        text = row.text or ""
+        matched_id = extract_product_id_from_text(text) or ""
+        if matched_id != product_id:
+            stats["error"] = f"product_id_mismatch:{matched_id}"
+            return stats
+
+        if dry_run:
+            stats["hit"] = 1
+            stats["status"] = "dry_run"
+            _log(account_id, f"[试运行] 精准命中商品ID={product_id}，不会下架")
+            return stats
+
+        link = row.ele("text:下架", timeout=2)
+        if not link:
+            stats["error"] = "delist_link_not_found"
+            return stats
+        link.click()
+        time.sleep(0.8)
+        if not _confirm_delist_dialog(page, account_id, product_id):
+            _dismiss_delist_modal(page, account_id)
+            stats["error"] = "confirm_delist_failed"
+            return stats
+
+        stats["hit"] = 1
+        stats["status"] = "delisted"
+        _log(account_id, f"精准下架成功 商品ID={product_id}")
+        return stats
+    except Exception as e:
+        stats["error"] = str(e)
+        _log(account_id, f"精准下架异常: {e}")
+        try:
+            shot_path = _error_screenshot_path(f"error_delist_single_{account_id}_{product_id}.png")
+            page.get_screenshot(path=shot_path)
+            stats["screenshot"] = shot_path
+        except Exception:
+            pass
+        return stats
+
+
 def process_account_delist(page, account_config: dict, settings: DelistSettings) -> dict:
     """对已登录的 DpPage 执行下架扫描（调用方负责浏览器生命周期）。"""
     account_id = account_config.get("account_id", "")

@@ -1,18 +1,24 @@
 """Published products APIs."""
 
+from datetime import datetime
+
 from fastapi import APIRouter, HTTPException, Query
 
 from pdd_agent.api.schemas.published_products import (
+    PublishedProductDelistResponse,
     PublishedProductDetailResponse,
     PublishedProductListResponse,
     PublishedProductOut,
 )
 from pdd_agent.api.services.catalog_service import get_product_detail
+from pdd_agent.api.services.task_queue import enqueue_delist_task
+from pdd_agent.api.services.task_runner import create_delist_run
 from pdd_agent.db.repositories import (
     get_published_product_by_mapping_id,
     search_published_products,
 )
 from pdd_agent.db.session import is_database_available
+from pdd_agent.domain.enums import RunStatus
 from pdd_agent.storage import TaskRunStore
 
 router = APIRouter(prefix="/published-products", tags=["published-products"])
@@ -100,4 +106,37 @@ def published_product_detail(mapping_id: str):
         run_result_item=run_result_item,
         source_run_result=source_run_result,
         unit_detail=unit_detail,
+    )
+
+
+@router.post("/{mapping_id}/delist", response_model=PublishedProductDelistResponse)
+def delist_published_product(mapping_id: str):
+    if not is_database_available():
+        raise HTTPException(status_code=503, detail="MySQL published products unavailable")
+    row = get_published_product_by_mapping_id(mapping_id)
+    if not row:
+        raise HTTPException(status_code=404, detail=f"published product not found: {mapping_id}")
+    if not row.pdd_product_id:
+        raise HTTPException(status_code=422, detail="published product has no pdd_product_id")
+    if (row.status or "") == "delisted":
+        raise HTTPException(status_code=409, detail="published product already marked delisted")
+
+    run_id = create_delist_run(row.account_id)
+    TaskRunStore().update_status(run_id, RunStatus.PENDING, "queued precise published-product delist")
+    enqueue_delist_task(
+        run_id=run_id,
+        account_id=row.account_id,
+        dry_run=False,
+        delist_params={
+            "target_mapping_id": row.mapping_id,
+            "target_product_id": row.pdd_product_id,
+            "dry_run": False,
+            "mode": "published_product_exact",
+        },
+        scheduled_at=datetime.now(),
+    )
+    return PublishedProductDelistResponse(
+        run_id=run_id,
+        status=RunStatus.PENDING.value,
+        message=f"precise delist queued for product_id={row.pdd_product_id}",
     )

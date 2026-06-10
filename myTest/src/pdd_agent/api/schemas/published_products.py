@@ -35,3 +35,9 @@ class PublishedProductDetailResponse(BaseModel):
     run_result_item: dict[str, Any] = Field(default_factory=dict)
     source_run_result: dict[str, Any] = Field(default_factory=dict)
     unit_detail: ListingUnitOut | None = None
+
+
+class PublishedProductDelistResponse(BaseModel):
+    run_id: str
+    status: str
+    message: str = ""

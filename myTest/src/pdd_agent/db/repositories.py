@@ -555,6 +555,19 @@ def get_published_product_by_mapping_id(mapping_id: str) -> PublishedProductORM 
         return row
 
 
+def update_published_product_status(mapping_id: str, status: str) -> PublishedProductORM | None:
+    if not is_database_available():
+        return None
+    with session_scope() as session:
+        row = session.get(PublishedProductORM, mapping_id)
+        if not row:
+            return None
+        row.status = status
+        session.flush()
+        session.expunge(row)
+        return row
+
+
 def search_published_products(
     *,
     page: int = 1,

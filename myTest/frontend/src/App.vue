@@ -8,6 +8,7 @@ import {
   Goods,
   DocumentCopy,
   Document,
+  Discount,
   Key,
   Setting,
   Warning,
@@ -19,6 +20,7 @@ const router = useRouter()
 const menus = [
   { path: '/', label: '工作台', desc: '日常入口', icon: DataBoard },
   { path: '/tasks', label: '上架 / 下架', desc: '执行操作', icon: Goods },
+  { path: '/campaign', label: '活动', desc: '营销工具', icon: Discount },
   { path: '/catalog', label: '素材检查', desc: '上架前检查', icon: FolderOpened },
   { path: '/accounts', label: '店铺设置', desc: '账号管理', icon: Shop },
   { path: '/login-health', label: '登录体检', desc: '状态检查', icon: Key },

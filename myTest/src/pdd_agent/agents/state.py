@@ -50,3 +50,14 @@ class DelistState(TypedDict, total=False):
     errors: Annotated[list[str], operator.add]
     phase: str
     finished: bool
+
+
+class CampaignState(TypedDict, total=False):
+    """活动子图状态。"""
+
+    account_id: str
+    campaign_type: str
+    results: Annotated[list[dict[str, Any]], operator.add]
+    errors: Annotated[list[str], operator.add]
+    phase: str
+    finished: bool

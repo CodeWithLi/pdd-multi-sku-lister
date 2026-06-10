@@ -364,6 +364,192 @@ def _click_goods_search(page: DpPage) -> bool:
     return False
 
 
+def _fill_global_product_code(page: DpPage, account_id: str, label: str, value: str) -> bool:
+    """填写页面底部全局「商品编码」，避开规格表里的 SKU/规格编码输入。"""
+    code = (value or "").strip()
+    if not code:
+        return False
+    try:
+        result = page.run_js(
+            """
+            const code = arguments[0];
+
+            function isVisible(el) {
+                if (!el || !el.getBoundingClientRect) return false;
+                const r = el.getBoundingClientRect();
+                const s = window.getComputedStyle(el);
+                return r.width > 4 && r.height > 4
+                    && s.display !== 'none'
+                    && s.visibility !== 'hidden'
+                    && parseFloat(s.opacity || '1') > 0.05;
+            }
+
+            function fireMouse(el) {
+                const rect = el.getBoundingClientRect();
+                const opts = {
+                    bubbles: true,
+                    cancelable: true,
+                    clientX: rect.left + rect.width / 2,
+                    clientY: rect.top + rect.height / 2,
+                };
+                el.dispatchEvent(new MouseEvent('mousedown', opts));
+                el.dispatchEvent(new MouseEvent('mouseup', opts));
+                el.dispatchEvent(new MouseEvent('click', opts));
+            }
+
+            function setInput(input) {
+                input.scrollIntoView({ block: 'center', inline: 'nearest' });
+                fireMouse(input);
+                input.focus();
+                const setter = Object.getOwnPropertyDescriptor(
+                    window.HTMLInputElement.prototype,
+                    'value'
+                )?.set;
+                if (setter) setter.call(input, code);
+                else input.value = code;
+                input.dispatchEvent(new Event('input', { bubbles: true }));
+                input.dispatchEvent(new Event('change', { bubbles: true }));
+                input.dispatchEvent(new KeyboardEvent('keyup', { bubbles: true, key: code.slice(-1) || '0' }));
+                input.dispatchEvent(new Event('blur', { bubbles: true }));
+                return input.value === code;
+            }
+
+            function candidateFromLabel(node) {
+                let cur = node;
+                for (let depth = 0; depth < 8 && cur; depth++, cur = cur.parentElement) {
+                    const inputs = Array.from(cur.querySelectorAll?.('input') || [])
+                        .filter(isVisible);
+                    if (inputs.length) {
+                        const labelRect = node.getBoundingClientRect();
+                        const input = inputs
+                            .map((i) => ({ input: i, rect: i.getBoundingClientRect() }))
+                            .filter((x) => x.rect.left > labelRect.left)
+                            .sort((a, b) => Math.abs(a.rect.top - labelRect.top) - Math.abs(b.rect.top - labelRect.top))[0]?.input
+                            || inputs[0];
+                        return { input, rect: input.getBoundingClientRect(), labelRect };
+                    }
+                }
+                return null;
+            }
+
+            function findByGeometry() {
+                const labels = Array.from(document.querySelectorAll('label,span,div'))
+                    .filter(isVisible)
+                    .map((node) => ({
+                        node,
+                        text: (node.innerText || node.textContent || '').trim(),
+                        rect: node.getBoundingClientRect(),
+                    }))
+                    .filter((x) => x.text === '商品编码');
+                const inputs = Array.from(document.querySelectorAll('input'))
+                    .filter(isVisible)
+                    .map((input) => ({ input, rect: input.getBoundingClientRect() }))
+                    .filter((x) => !((x.input.closest('tr,table')?.innerText || '').includes('规格编码')));
+
+                const pairs = [];
+                for (const label of labels) {
+                    for (const input of inputs) {
+                        if (input.rect.left <= label.rect.right) continue;
+                        const dy = Math.abs((input.rect.top + input.rect.height / 2) - (label.rect.top + label.rect.height / 2));
+                        if (dy > 40) continue;
+                        pairs.push({
+                            input: input.input,
+                            rect: input.rect,
+                            score: dy - input.rect.top / 10000,
+                        });
+                    }
+                }
+                pairs.sort((a, b) => a.score - b.score);
+                return pairs.map((p) => ({ input: p.input, rect: p.rect }));
+            }
+
+            const candidates = [];
+            candidates.push(...findByGeometry());
+            for (const node of document.querySelectorAll('label,span,div')) {
+                if (!isVisible(node)) continue;
+                const text = (node.innerText || node.textContent || '').trim();
+                if (text !== '商品编码') continue;
+                const cand = candidateFromLabel(node);
+                if (!cand || !isVisible(cand.input)) continue;
+                const parentText = (cand.input.closest('tr,table')?.innerText || '');
+                if (parentText.includes('规格编码')) continue;
+                candidates.push(cand);
+            }
+
+            candidates.sort((a, b) => {
+                const bottomA = a.rect.top > window.innerHeight * 0.45 ? 0 : 1;
+                const bottomB = b.rect.top > window.innerHeight * 0.45 ? 0 : 1;
+                if (bottomA !== bottomB) return bottomA - bottomB;
+                return b.rect.top - a.rect.top;
+            });
+            for (const cand of candidates) {
+                if (setInput(cand.input)) {
+                    const visibleValue = cand.input.value;
+                    return { ok: visibleValue === code, value: visibleValue, top: cand.rect.top };
+                }
+            }
+            return { ok: false, value: '' };
+            """,
+            code,
+        )
+        if isinstance(result, dict) and result.get("ok"):
+            print(f"[{account_id}] [{label}] 已填写底部商品编码：{code}", flush=True)
+            return True
+        print(f"[{account_id}] [{label}] 底部商品编码填写失败，未提交", flush=True)
+        return False
+    except Exception as exc:
+        print(f"[{account_id}] [{label}] 填写底部商品编码异常：{_safe_exc(exc)}", flush=True)
+        return False
+
+
+def _read_global_product_code(page: DpPage) -> str:
+    try:
+        result = page.run_js(
+            """
+            function isVisible(el) {
+                if (!el || !el.getBoundingClientRect) return false;
+                const r = el.getBoundingClientRect();
+                const s = window.getComputedStyle(el);
+                return r.width > 4 && r.height > 4
+                    && s.display !== 'none'
+                    && s.visibility !== 'hidden'
+                    && parseFloat(s.opacity || '1') > 0.05;
+            }
+            const labels = Array.from(document.querySelectorAll('label,span,div'))
+                .filter(isVisible)
+                .map((node) => ({
+                    node,
+                    text: (node.innerText || node.textContent || '').trim(),
+                    rect: node.getBoundingClientRect(),
+                }))
+                .filter((x) => x.text === '商品编码');
+            const inputs = Array.from(document.querySelectorAll('input'))
+                .filter(isVisible)
+                .map((input) => ({ input, rect: input.getBoundingClientRect() }))
+                .filter((x) => !((x.input.closest('tr,table')?.innerText || '').includes('规格编码')));
+            const pairs = [];
+            for (const label of labels) {
+                for (const input of inputs) {
+                    if (input.rect.left <= label.rect.right) continue;
+                    const dy = Math.abs((input.rect.top + input.rect.height / 2) - (label.rect.top + label.rect.height / 2));
+                    if (dy <= 40) pairs.push({ input: input.input, rect: input.rect, dy });
+                }
+            }
+            pairs.sort((a, b) => {
+                const bottomA = a.rect.top > window.innerHeight * 0.45 ? 0 : 1;
+                const bottomB = b.rect.top > window.innerHeight * 0.45 ? 0 : 1;
+                if (bottomA !== bottomB) return bottomA - bottomB;
+                if (a.dy !== b.dy) return a.dy - b.dy;
+                return b.rect.top - a.rect.top;
+            });
+            return pairs[0]?.input?.value || '';
+            """
+        )
+        return str(result or "").strip()
+    except Exception:
+        return ""
+
+
 def _parse_goods_list_matches(
     page: DpPage,
     merchant_code: str,
@@ -619,13 +805,38 @@ def upload_one_listing(
     previews_ok = fill_multi_spec_rows(page, account_id, unit.skus, defaults, rows=sku_rows)
 
     pcode = (platform_listing_code or "").strip() or unit.merchant_code
-    global_code = page.ele(
-        'xpath://span[contains(text(),"商品编码") or contains(text(),"货号")]/following::input[1]'
-    )
-    if global_code:
-        global_code.input(pcode, clear=True)
+    if not _fill_global_product_code(page, account_id, label, pcode):
+        _clear_beforeunload(page)
+        result = _listing_result(
+            unit=unit,
+            status="retryable",
+            reason="platform_listing_code_not_filled",
+            title=listing_info.get("title", ""),
+            retryable=True,
+            legacy_status="skipped",
+        )
+        result["platform_listing_code"] = pcode
+        return result
 
     time.sleep(random.uniform(1.0, 2.0))
+    visible_global_code = _read_global_product_code(page)
+    if visible_global_code != pcode:
+        print(
+            f"[{account_id}] [{label}] 提交前校验失败：底部商品编码={visible_global_code or '<空>'}，期望={pcode}",
+            flush=True,
+        )
+        _clear_beforeunload(page)
+        result = _listing_result(
+            unit=unit,
+            status="retryable",
+            reason="platform_listing_code_verify_failed",
+            title=listing_info.get("title", ""),
+            retryable=True,
+            legacy_status="skipped",
+        )
+        result["platform_listing_code"] = pcode
+        return result
+
     if not previews_ok:
         print(f"[{account_id}] [{label}] 预览图未全部就绪，跳过提交", flush=True)
         _clear_beforeunload(page)

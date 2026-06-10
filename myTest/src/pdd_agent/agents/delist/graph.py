@@ -11,7 +11,11 @@ from pdd_agent.browser.sync_job import run_browser_job_async
 from pdd_agent.core.config import load_yaml_settings
 from pdd_agent.core.logging import get_logger
 from pdd_agent.db.repositories import get_account_config
-from pdd_agent.skills.delist.automation import DelistSettings, process_account_delist
+from pdd_agent.skills.delist.automation import (
+    DelistSettings,
+    process_account_delist,
+    process_single_product_delist,
+)
 
 logger = get_logger(__name__)
 
@@ -24,6 +28,8 @@ async def delist_browser_node(state: DelistState) -> dict:
         return {"errors": [f"unknown account: {account_id}"], "finished": True}
 
     raw = state.get("delist_params") or {}
+    target_product_id = str(raw.get("target_product_id") or "").strip()
+    target_mapping_id = str(raw.get("target_mapping_id") or "").strip()
     ds = DelistSettings(
         min_created_after=raw.get("min_created_after") or settings.delist.min_created_after,
         dry_run=raw.get("dry_run", settings.delist.dry_run),
@@ -39,6 +45,14 @@ async def delist_browser_node(state: DelistState) -> dict:
     account_dict = account.model_dump()
 
     def _job(dp):
+        if target_product_id:
+            return process_single_product_delist(
+                dp,
+                account_dict,
+                product_id=target_product_id,
+                mapping_id=target_mapping_id,
+                dry_run=bool(raw.get("dry_run", False)),
+            )
         return process_account_delist(dp, account_dict, ds)
 
     try:
