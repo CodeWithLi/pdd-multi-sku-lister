@@ -198,6 +198,83 @@ export interface RunInterpretResponse {
   llm_model: string
 }
 
+export interface QueueTask {
+  task_id: string
+  run_id: string
+  agent: string
+  account_id: string
+  status: string
+  scheduled_at: string
+  started_at: string | null
+  finished_at: string | null
+  attempts: number
+  max_attempts: number
+  error: string
+  payload: Record<string, unknown>
+}
+
+export interface QueueControl {
+  scope: string
+  account_id: string
+  paused: boolean
+  reason: string
+  updated_at: string | null
+}
+
+export interface QueueStatus {
+  paused: boolean
+  counts: Record<string, number>
+  controls: QueueControl[]
+  tasks: QueueTask[]
+}
+
+export interface QueueCancelResponse {
+  canceled: number
+  run_ids: string[]
+}
+
+export interface FailureItem {
+  item_id: string
+  source_run_id: string
+  account_id: string
+  listing_label: string
+  product_code: string
+  image_set: string
+  merchant_code: string
+  item_status: string
+  reason: string
+  error: string
+  retryable: boolean
+  decision_status: string
+  decision_note: string
+  retry_run_id: string
+  created_at: string | null
+  updated_at: string | null
+}
+
+export interface FailureListResponse {
+  items: FailureItem[]
+  total: number
+  page: number
+  page_size: number
+  summary: Record<string, number>
+}
+
+export interface FailureRetryResponse {
+  total: number
+  results: {
+    item_id: string
+    run_id: string
+    status: string
+    message: string
+  }[]
+}
+
+export interface FailureSyncResponse {
+  scanned_runs: number
+  upserted_items: number
+}
+
 export interface LoginStatus {
   account_id: string
   status: string

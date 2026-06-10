@@ -8,12 +8,17 @@ import type {
   ConfigSummary,
   HealthResponse,
   DelistTaskResponse,
+  FailureListResponse,
+  FailureRetryResponse,
+  FailureSyncResponse,
   ListingTaskResponse,
   LoginBatchCheckResponse,
   LoginStatus,
   PlanResponse,
   PreflightResponse,
   ProductSummary,
+  QueueCancelResponse,
+  QueueStatus,
   RunRecord,
   RunListResponse,
   RunInterpretResponse,
@@ -132,6 +137,48 @@ export const api = {
 
   interpretRun: (runId: string) =>
     http.post<RunInterpretResponse>(`/runs/${runId}/interpret`).then((r) => r.data),
+
+  queueStatus: (params: {
+    limit?: number
+    status?: string
+    account_id?: string
+  } = {}) => http.get<QueueStatus>('/queue/status', { params }).then((r) => r.data),
+
+  pauseQueue: (reason = '') =>
+    http.post<QueueStatus>('/queue/pause', { reason }).then((r) => r.data),
+
+  resumeQueue: (reason = '') =>
+    http.post<QueueStatus>('/queue/resume', { reason }).then((r) => r.data),
+
+  pauseAccountQueue: (accountId: string, reason = '') =>
+    http.post<QueueStatus>(`/queue/accounts/${accountId}/pause`, { reason }).then((r) => r.data),
+
+  resumeAccountQueue: (accountId: string, reason = '') =>
+    http.post<QueueStatus>(`/queue/accounts/${accountId}/resume`, { reason }).then((r) => r.data),
+
+  cancelQueuedTasks: (accountId = '') =>
+    http.post<QueueCancelResponse>('/queue/cancel-queued', null, { params: { account_id: accountId || undefined } }).then((r) => r.data),
+
+  failures: (params: {
+    page?: number
+    page_size?: number
+    account_id?: string
+    item_status?: string
+    decision_status?: string
+    product_code?: string
+  } = {}) => http.get<FailureListResponse>('/failures', { params }).then((r) => r.data),
+
+  syncFailures: (limitRuns = 1000) =>
+    http.post<FailureSyncResponse>('/failures/sync', null, { params: { limit_runs: limitRuns } }).then((r) => r.data),
+
+  markFailure: (itemId: string, body: { decision_status: string; decision_note?: string }) =>
+    http.post(`/failures/${itemId}/mark`, body).then((r) => r.data),
+
+  markFailuresBulk: (body: { item_ids: string[]; decision_status: string; decision_note?: string }) =>
+    http.post('/failures/mark-bulk', body).then((r) => r.data),
+
+  retryFailures: (body: { item_ids: string[]; category_keyword?: string }) =>
+    http.post<FailureRetryResponse>('/failures/retry', body).then((r) => r.data),
 
   loginStatuses: () =>
     http.get<LoginStatus[]>('/login/statuses').then((r) => r.data),

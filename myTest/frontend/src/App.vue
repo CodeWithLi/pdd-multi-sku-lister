@@ -9,6 +9,7 @@ import {
   Document,
   Key,
   Setting,
+  Warning,
 } from '@element-plus/icons-vue'
 
 const route = useRoute()
@@ -20,6 +21,7 @@ const menus = [
   { path: '/catalog', label: '素材检查', desc: '上架前检查', icon: FolderOpened },
   { path: '/accounts', label: '店铺设置', desc: '账号管理', icon: Shop },
   { path: '/login-health', label: '登录体检', desc: '状态检查', icon: Key },
+  { path: '/failures', label: '失败项工作台', desc: '人工重跑', icon: Warning },
   { path: '/settings', label: '系统设置', desc: '运行参数', icon: Setting },
   { path: '/runs', label: '操作记录', desc: '历史结果', icon: Document },
 ]

@@ -9,7 +9,14 @@ from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 
 from pdd_agent.core.config import AccountConfig, YamlSettings
-from pdd_agent.db.models import AccountLockORM, AccountORM, LoginStatusORM, TaskQueueORM
+from pdd_agent.db.models import (
+    AccountLockORM,
+    AccountORM,
+    FailureItemORM,
+    LoginStatusORM,
+    QueueControlORM,
+    TaskQueueORM,
+)
 from pdd_agent.db.session import is_database_available, session_scope
 
 
@@ -199,8 +206,81 @@ def count_running_queue_tasks() -> int:
         )
 
 
+def queue_status_counts() -> dict[str, int]:
+    if not is_database_available():
+        return {}
+    with session_scope() as session:
+        rows = session.execute(
+            select(TaskQueueORM.status, func.count()).group_by(TaskQueueORM.status)
+        ).all()
+        return {str(status): int(count) for status, count in rows}
+
+
+def list_queue_rows(*, limit: int = 100, status: str = "", account_id: str = "") -> list[TaskQueueORM]:
+    if not is_database_available():
+        return []
+    limit = max(1, min(500, limit))
+    with session_scope() as session:
+        stmt = select(TaskQueueORM)
+        if status:
+            stmt = stmt.where(TaskQueueORM.status == status)
+        if account_id:
+            stmt = stmt.where(TaskQueueORM.account_id == account_id)
+        stmt = stmt.order_by(TaskQueueORM.scheduled_at.asc(), TaskQueueORM.created_at.asc()).limit(limit)
+        rows = list(session.scalars(stmt).all())
+        for row in rows:
+            session.expunge(row)
+        return rows
+
+
+def is_queue_paused(*, account_id: str = "") -> bool:
+    if not is_database_available():
+        return False
+    with session_scope() as session:
+        global_row = session.get(QueueControlORM, ("global", ""))
+        if global_row and global_row.paused:
+            return True
+        if account_id:
+            account_row = session.get(QueueControlORM, ("account", account_id))
+            return bool(account_row and account_row.paused)
+        return False
+
+
+def get_queue_controls() -> list[QueueControlORM]:
+    if not is_database_available():
+        return []
+    with session_scope() as session:
+        rows = list(session.scalars(select(QueueControlORM).order_by(QueueControlORM.scope, QueueControlORM.account_id)).all())
+        for row in rows:
+            session.expunge(row)
+        return rows
+
+
+def set_queue_pause(*, paused: bool, reason: str = "", account_id: str = "") -> None:
+    if not is_database_available():
+        return
+    scope = "account" if account_id else "global"
+    key = account_id if account_id else ""
+    with session_scope() as session:
+        row = session.get(QueueControlORM, (scope, key))
+        if row:
+            row.paused = paused
+            row.reason = reason
+        else:
+            session.add(
+                QueueControlORM(
+                    scope=scope,
+                    account_id=key,
+                    paused=paused,
+                    reason=reason,
+                )
+            )
+
+
 def claim_due_task(max_concurrent: int) -> TaskQueueORM | None:
     if not is_database_available():
+        return None
+    if is_queue_paused():
         return None
     with session_scope() as session:
         running_count = int(
@@ -227,6 +307,9 @@ def claim_due_task(max_concurrent: int) -> TaskQueueORM | None:
         )
         for row in session.scalars(stmt).all():
             if row.account_id in running_accounts:
+                continue
+            account_control = session.get(QueueControlORM, ("account", row.account_id))
+            if account_control and account_control.paused:
                 continue
             row.status = "running"
             row.started_at = datetime.now()
@@ -266,6 +349,138 @@ def cancel_queued_task_by_run_id(run_id: str) -> bool:
         row.finished_at = datetime.now()
         row.error = "canceled by user"
         return True
+
+
+def cancel_queued_tasks(*, account_id: str = "") -> list[str]:
+    if not is_database_available():
+        return []
+    with session_scope() as session:
+        stmt = select(TaskQueueORM).where(TaskQueueORM.status == "queued")
+        if account_id:
+            stmt = stmt.where(TaskQueueORM.account_id == account_id)
+        rows = list(session.scalars(stmt).all())
+        run_ids: list[str] = []
+        now = datetime.now()
+        for row in rows:
+            row.status = "canceled"
+            row.finished_at = now
+            row.error = "canceled by user"
+            run_ids.append(row.run_id)
+        return run_ids
+
+
+def upsert_failure_item(
+    *,
+    item_id: str,
+    source_run_id: str,
+    account_id: str,
+    listing_label: str,
+    product_code: str,
+    image_set: str,
+    merchant_code: str,
+    item_status: str,
+    reason: str,
+    error: str,
+    retryable: bool,
+) -> FailureItemORM | None:
+    if not is_database_available():
+        return None
+    with session_scope() as session:
+        row = session.get(FailureItemORM, item_id)
+        data = {
+            "source_run_id": source_run_id,
+            "account_id": account_id,
+            "listing_label": listing_label,
+            "product_code": product_code,
+            "image_set": image_set,
+            "merchant_code": merchant_code,
+            "item_status": item_status,
+            "reason": reason,
+            "error": error,
+            "retryable": retryable,
+        }
+        if row:
+            for key, value in data.items():
+                setattr(row, key, value)
+        else:
+            row = FailureItemORM(item_id=item_id, **data)
+            session.add(row)
+        session.flush()
+        session.expunge(row)
+        return row
+
+
+def get_failure_item(item_id: str) -> FailureItemORM | None:
+    if not is_database_available():
+        return None
+    with session_scope() as session:
+        row = session.get(FailureItemORM, item_id)
+        if row:
+            session.expunge(row)
+        return row
+
+
+def search_failure_items(
+    *,
+    page: int = 1,
+    page_size: int = 50,
+    account_id: str = "",
+    item_status: str = "",
+    decision_status: str = "",
+    product_code: str = "",
+) -> tuple[list[FailureItemORM], int]:
+    if not is_database_available():
+        return [], 0
+    page = max(1, page)
+    page_size = max(1, min(200, page_size))
+    with session_scope() as session:
+        query = session.query(FailureItemORM)
+        if account_id:
+            query = query.filter(FailureItemORM.account_id == account_id)
+        if item_status:
+            query = query.filter(FailureItemORM.item_status == item_status)
+        if decision_status:
+            query = query.filter(FailureItemORM.decision_status == decision_status)
+        if product_code:
+            pattern = f"%{product_code}%"
+            query = query.filter(
+                (FailureItemORM.product_code.like(pattern))
+                | (FailureItemORM.listing_label.like(pattern))
+                | (FailureItemORM.merchant_code.like(pattern))
+            )
+        total = int(query.order_by(None).count())
+        rows = (
+            query.order_by(FailureItemORM.updated_at.desc(), FailureItemORM.created_at.desc())
+            .offset((page - 1) * page_size)
+            .limit(page_size)
+            .all()
+        )
+        for row in rows:
+            session.expunge(row)
+        return rows, total
+
+
+def update_failure_decision(
+    *,
+    item_id: str,
+    decision_status: str,
+    decision_note: str = "",
+    retry_run_id: str = "",
+) -> FailureItemORM | None:
+    if not is_database_available():
+        return None
+    with session_scope() as session:
+        row = session.get(FailureItemORM, item_id)
+        if not row:
+            return None
+        row.decision_status = decision_status
+        if decision_note:
+            row.decision_note = decision_note
+        if retry_run_id:
+            row.retry_run_id = retry_run_id
+        session.flush()
+        session.expunge(row)
+        return row
 
 
 def acquire_account_lock(

@@ -96,6 +96,47 @@ class TaskQueueORM(Base):
     )
 
 
+class QueueControlORM(Base):
+    """Task queue global/account pause controls."""
+
+    __tablename__ = "queue_controls"
+
+    scope: Mapped[str] = mapped_column(String(32), primary_key=True)
+    account_id: Mapped[str] = mapped_column(String(64), primary_key=True, default="")
+    paused: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    reason: Mapped[str] = mapped_column(Text, default="", nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, server_default=func.now(), onupdate=func.now(), nullable=False
+    )
+
+
+class FailureItemORM(Base):
+    """Manual workflow state for failed listing items."""
+
+    __tablename__ = "failure_items"
+
+    item_id: Mapped[str] = mapped_column(String(96), primary_key=True)
+    source_run_id: Mapped[str] = mapped_column(String(64), index=True, nullable=False)
+    account_id: Mapped[str] = mapped_column(String(64), index=True, nullable=False)
+    listing_label: Mapped[str] = mapped_column(String(255), index=True, nullable=False)
+    product_code: Mapped[str] = mapped_column(String(64), index=True, nullable=False)
+    image_set: Mapped[str] = mapped_column(String(255), default="", nullable=False)
+    merchant_code: Mapped[str] = mapped_column(String(255), default="", nullable=False)
+    item_status: Mapped[str] = mapped_column(String(32), index=True, nullable=False)
+    reason: Mapped[str] = mapped_column(Text, default="", nullable=False)
+    error: Mapped[str] = mapped_column(Text, default="", nullable=False)
+    retryable: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    decision_status: Mapped[str] = mapped_column(String(32), index=True, default="open", nullable=False)
+    decision_note: Mapped[str] = mapped_column(Text, default="", nullable=False)
+    retry_run_id: Mapped[str] = mapped_column(String(64), default="", nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, server_default=func.now(), nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, server_default=func.now(), onupdate=func.now(), nullable=False
+    )
+
+
 class AccountLockORM(Base):
     """店铺 Profile 运行锁。"""
 

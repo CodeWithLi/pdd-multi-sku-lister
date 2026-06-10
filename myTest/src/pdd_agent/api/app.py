@@ -8,8 +8,10 @@ from fastapi.middleware.cors import CORSMiddleware
 from pdd_agent.api.routes.agents import router as agents_router
 from pdd_agent.api.routes.catalog import router as catalog_router
 from pdd_agent.api.routes.config import router as config_router
+from pdd_agent.api.routes.failures import router as failures_router
 from pdd_agent.api.routes.health import router as health_router
 from pdd_agent.api.routes.login import router as login_router
+from pdd_agent.api.routes.queue import router as queue_router
 from pdd_agent.api.routes.runs import router as runs_router
 from pdd_agent.api.routes.tasks import router as tasks_router
 from pdd_agent.core.config import load_yaml_settings
@@ -66,6 +68,8 @@ def create_app() -> FastAPI:
     app.include_router(config_router, prefix="/api")
     app.include_router(catalog_router, prefix="/api")
     app.include_router(tasks_router, prefix="/api")
+    app.include_router(queue_router, prefix="/api")
+    app.include_router(failures_router, prefix="/api")
     app.include_router(login_router, prefix="/api")
     app.include_router(runs_router, prefix="/api")
     app.include_router(agents_router, prefix="/api")

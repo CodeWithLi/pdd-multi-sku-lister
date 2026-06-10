@@ -1,5 +1,3 @@
-/** 运营可读文案映射 */
-
 export const runStatusLabel: Record<string, string> = {
   success: '成功',
   failed: '失败',
@@ -36,6 +34,18 @@ export const listingStatusLabel: Record<string, string> = {
   delist: '已下架',
   dry_run: '试运行命中',
   delisted: '已下架',
+}
+
+export const listingStatusType: Record<string, string> = {
+  success: 'success',
+  listed: 'success',
+  retryable: 'warning',
+  submit_uncertain: 'warning',
+  failed: 'danger',
+  skipped: 'info',
+  dry_run: 'info',
+  delist: 'success',
+  delisted: 'success',
 }
 
 export const issueLevelLabel: Record<string, string> = {
