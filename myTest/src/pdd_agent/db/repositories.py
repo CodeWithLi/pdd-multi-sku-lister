@@ -545,6 +545,16 @@ def get_published_product(
         return row
 
 
+def get_published_product_by_mapping_id(mapping_id: str) -> PublishedProductORM | None:
+    if not is_database_available():
+        return None
+    with session_scope() as session:
+        row = session.get(PublishedProductORM, mapping_id)
+        if row:
+            session.expunge(row)
+        return row
+
+
 def search_published_products(
     *,
     page: int = 1,

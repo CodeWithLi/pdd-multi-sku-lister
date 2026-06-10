@@ -16,6 +16,9 @@ import type {
   LoginStatus,
   PlanResponse,
   PreflightResponse,
+  PublishedProductListResponse,
+  PublishedProductDetailResponse,
+  ProductDetail,
   ProductSummary,
   QueueCancelResponse,
   QueueStatus,
@@ -70,6 +73,9 @@ export const api = {
     http.delete(`/config/accounts/${accountId}`).then(() => undefined),
 
   products: () => http.get<ProductSummary[]>('/catalog/products').then((r) => r.data),
+
+  productDetail: (productCode: string) =>
+    http.get<ProductDetail>(`/catalog/products/${productCode}`).then((r) => r.data),
 
   preflight: (product_codes: string[]) =>
     http.post<PreflightResponse>('/catalog/preflight', { product_codes }).then((r) => r.data),
@@ -179,6 +185,17 @@ export const api = {
 
   retryFailures: (body: { item_ids: string[]; category_keyword?: string }) =>
     http.post<FailureRetryResponse>('/failures/retry', body).then((r) => r.data),
+
+  publishedProducts: (params: {
+    page?: number
+    page_size?: number
+    account_id?: string
+    product_code?: string
+    pdd_product_id?: string
+  } = {}) => http.get<PublishedProductListResponse>('/published-products', { params }).then((r) => r.data),
+
+  publishedProductDetail: (mappingId: string) =>
+    http.get<PublishedProductDetailResponse>(`/published-products/${mappingId}`).then((r) => r.data),
 
   loginStatuses: () =>
     http.get<LoginStatus[]>('/login/statuses').then((r) => r.data),

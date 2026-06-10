@@ -275,6 +275,41 @@ export interface FailureSyncResponse {
   upserted_items: number
 }
 
+export interface PublishedProduct {
+  mapping_id: string
+  account_id: string
+  source_run_id: string
+  product_code: string
+  image_set: string
+  listing_label: string
+  merchant_code: string
+  pdd_product_id: string
+  status: string
+  published_at: string | null
+  created_at: string | null
+  updated_at: string | null
+}
+
+export interface PublishedProductListResponse {
+  items: PublishedProduct[]
+  total: number
+  page: number
+  page_size: number
+}
+
+export interface PublishedProductDetailResponse {
+  published: PublishedProduct
+  run_result_item: Record<string, unknown>
+  source_run_result: Record<string, unknown>
+  unit_detail: ListingUnit | null
+}
+
+export interface ProductDetail {
+  product_code: string
+  image_sets: string[]
+  units: ListingUnit[]
+}
+
 export interface LoginStatus {
   account_id: string
   status: string
