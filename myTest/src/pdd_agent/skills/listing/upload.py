@@ -9,6 +9,7 @@ from typing import Any
 from pdd_agent.browser.dp_compat_sync import DpPage
 from pdd_agent.domain.models import ListingUnit
 from pdd_agent.paths import PROJECT_ROOT
+from pdd_agent.skills.delist.time_utils import extract_product_id_from_text
 from pdd_agent.skills.listing.multi_spec_page import (
     _safe_exc,
     add_style_and_model_specs,
@@ -23,6 +24,13 @@ def _error_screenshot_path(filename: str) -> str:
     d = PROJECT_ROOT / "data" / "runs" / "screenshots"
     d.mkdir(parents=True, exist_ok=True)
     return str(d / filename)
+
+
+GOODS_LIST_URLS = (
+    "https://mms.pinduoduo.com/goods/goods_list",
+    "https://mms.pinduoduo.com/goods/goods-list",
+    "https://mms.pinduoduo.com/goods/list",
+)
 
 
 def _clear_beforeunload(page: DpPage) -> None:
@@ -47,6 +55,8 @@ def _listing_result(
         "product_code": unit.product_code,
         "image_set": unit.image_set,
         "merchant_code": unit.merchant_code,
+        "pdd_product_id": "",
+        "pdd_product_id_capture_status": "",
         "status": status,
         "retryable": retryable,
         "reason": reason,
@@ -215,6 +225,149 @@ def _click_submit(page: DpPage, account_id: str, label: str) -> bool:
         return False
 
 
+def _open_goods_list(page: DpPage, account_id: str) -> bool:
+    for url in GOODS_LIST_URLS:
+        try:
+            page.get(url)
+            time.sleep(3)
+            if "login" in page.url:
+                return False
+            if page.ele("text:商品列表", timeout=2) or page.ele("text:商品ID", timeout=2):
+                break
+        except Exception:
+            continue
+
+    try:
+        tab = page.ele("text:在售中", timeout=3)
+        if tab:
+            tab.click()
+            time.sleep(1.5)
+    except Exception:
+        pass
+    return True
+
+
+def _reset_goods_list_filters(page: DpPage) -> None:
+    try:
+        reset_btn = page.ele("text:重置", timeout=1.5)
+        if reset_btn:
+            reset_btn.click()
+            time.sleep(1)
+    except Exception:
+        pass
+
+
+def _set_goods_filter(page: DpPage, label: str, value: str) -> bool:
+    if not value:
+        return False
+    try:
+        ok = page.run_js(
+            """
+            const [labelText, value] = arguments;
+            function isVisible(el) {
+                if (!el || !el.getBoundingClientRect) return false;
+                const r = el.getBoundingClientRect();
+                const s = window.getComputedStyle(el);
+                return r.width > 4 && r.height > 4
+                    && s.display !== 'none'
+                    && s.visibility !== 'hidden'
+                    && parseFloat(s.opacity || '1') > 0.05;
+            }
+            const nodes = Array.from(document.querySelectorAll('label, span, div'));
+            for (const node of nodes) {
+                const text = (node.innerText || node.textContent || '').trim();
+                if (text !== labelText || !isVisible(node)) continue;
+                let cur = node;
+                for (let depth = 0; depth < 6 && cur; depth++, cur = cur.parentElement) {
+                    const input = cur.querySelector?.('input');
+                    if (input && isVisible(input)) {
+                        input.focus();
+                        input.value = '';
+                        input.dispatchEvent(new Event('input', { bubbles: true }));
+                        input.value = value;
+                        input.dispatchEvent(new Event('input', { bubbles: true }));
+                        input.dispatchEvent(new Event('change', { bubbles: true }));
+                        return true;
+                    }
+                }
+            }
+            return false;
+            """,
+            label,
+            value,
+        )
+        return bool(ok)
+    except Exception:
+        return False
+
+
+def _click_goods_search(page: DpPage) -> bool:
+    try:
+        clicked = page.run_js(
+            """
+            function isVisible(el) {
+                if (!el || !el.getBoundingClientRect) return false;
+                const r = el.getBoundingClientRect();
+                const s = window.getComputedStyle(el);
+                return r.width > 4 && r.height > 4
+                    && s.display !== 'none'
+                    && s.visibility !== 'hidden'
+                    && parseFloat(s.opacity || '1') > 0.05;
+            }
+            for (const el of document.querySelectorAll('button, span, a, div')) {
+                const text = (el.innerText || el.textContent || '').trim();
+                if (text === '查询' && isVisible(el)) {
+                    el.click();
+                    return true;
+                }
+            }
+            return false;
+            """
+        )
+        if clicked:
+            time.sleep(2)
+            return True
+    except Exception:
+        pass
+    return False
+
+
+def _find_product_id_in_goods_list(page: DpPage, merchant_code: str) -> str:
+    try:
+        rows = page.eles("css:tbody tr", timeout=3)
+    except Exception:
+        rows = []
+    for row in rows:
+        text = row.text or ""
+        if merchant_code and merchant_code not in text:
+            continue
+        product_id = extract_product_id_from_text(text)
+        if product_id:
+            return product_id
+    return ""
+
+
+def _capture_published_product_id(page: DpPage, account_id: str, unit: ListingUnit) -> tuple[str, str]:
+    try:
+        if not _open_goods_list(page, account_id):
+            return "", "open_goods_list_failed"
+        _reset_goods_list_filters(page)
+        merchant_code = unit.merchant_code.strip()
+        filter_ok = _set_goods_filter(page, "商品编码", merchant_code)
+        if filter_ok:
+            _click_goods_search(page)
+        product_id = _find_product_id_in_goods_list(page, merchant_code)
+        if product_id:
+            print(f"[{account_id}] [{unit.listing_label}] 已抓取商品ID={product_id}", flush=True)
+            return product_id, "captured"
+        print(f"[{account_id}] [{unit.listing_label}] 上架成功，但未在商品列表匹配到商品ID", flush=True)
+        return "", "not_found"
+    except Exception as exc:
+        err = _safe_exc(exc)
+        print(f"[{account_id}] [{unit.listing_label}] 抓取商品ID异常：{err}", flush=True)
+        return "", "capture_error"
+
+
 def upload_one_listing(
     page: DpPage,
     account_id: str,
@@ -343,13 +496,17 @@ def upload_one_listing(
     ok = _click_submit(page, account_id, label)
     _clear_beforeunload(page)
     if ok:
-        return _listing_result(
+        pdd_product_id, capture_status = _capture_published_product_id(page, account_id, unit)
+        result = _listing_result(
             unit=unit,
             status="success",
             reason="listed",
             title=listing_info.get("title", ""),
             legacy_status="listed",
         )
+        result["pdd_product_id"] = pdd_product_id
+        result["pdd_product_id_capture_status"] = capture_status
+        return result
     return _listing_result(
         unit=unit,
         status="retryable",

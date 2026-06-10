@@ -13,6 +13,7 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from pdd_agent.core.config import get_env_settings
 from pdd_agent.db.base import Base
+import pdd_agent.db.models  # noqa: F401
 
 _engine: Engine | None = None
 _sessionmaker: sessionmaker[Session] | None = None

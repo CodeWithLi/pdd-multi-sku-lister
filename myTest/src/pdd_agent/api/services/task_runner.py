@@ -10,7 +10,7 @@ from pdd_agent.agents.orchestrator import build_orchestrator_graph
 from pdd_agent.api.schemas.tasks import PlanResponse
 from pdd_agent.core.config import load_yaml_settings
 from pdd_agent.core.logging import get_logger
-from pdd_agent.db.repositories import get_account_config
+from pdd_agent.db.repositories import get_account_config, upsert_published_product
 from pdd_agent.domain.enums import AgentKind, RunStatus, TaskPhase
 from pdd_agent.domain.models import PlannedTask
 from pdd_agent.storage import TaskRunStore
@@ -39,6 +39,32 @@ def plan_tasks(message: str) -> PlanResponse:
         plan_summary=result.get("plan_summary") or "",
         planned_tasks=[t.model_dump(mode="json") for t in tasks],
     )
+
+
+def _persist_published_products(run_id: str, account_id: str, result: dict[str, Any]) -> None:
+    for item in result.get("results") or []:
+        if not isinstance(item, dict):
+            continue
+        if str(item.get("status") or "") not in {"success", "listed"}:
+            continue
+        pdd_product_id = str(item.get("pdd_product_id") or "").strip()
+        if not pdd_product_id:
+            continue
+        product_code = str(item.get("product_code") or "").strip()
+        image_set = str(item.get("image_set") or "").strip()
+        listing_label = str(item.get("listing_label") or "").strip()
+        merchant_code = str(item.get("merchant_code") or "").strip()
+        if not product_code or not listing_label:
+            continue
+        upsert_published_product(
+            account_id=account_id,
+            source_run_id=run_id,
+            product_code=product_code,
+            image_set=image_set,
+            listing_label=listing_label,
+            merchant_code=merchant_code,
+            pdd_product_id=pdd_product_id,
+        )
 
 
 async def execute_listing(
@@ -85,6 +111,7 @@ async def execute_listing(
         item_results = [r for r in result.get("results") or [] if isinstance(r, dict)]
         item_failed = any(r.get("status") in {"failed", "retryable"} for r in item_results)
         status = RunStatus.SUCCESS if not result.get("errors") and not item_failed else RunStatus.FAILED
+        _persist_published_products(run_id, account_id, result)
         store.finish(
             run_id,
             status,

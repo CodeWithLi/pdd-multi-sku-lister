@@ -137,6 +137,29 @@ class FailureItemORM(Base):
     )
 
 
+class PublishedProductORM(Base):
+    """店铺上架成功后的拼多多商品映射。"""
+
+    __tablename__ = "published_products"
+
+    mapping_id: Mapped[str] = mapped_column(String(96), primary_key=True)
+    account_id: Mapped[str] = mapped_column(String(64), index=True, nullable=False)
+    source_run_id: Mapped[str] = mapped_column(String(64), index=True, default="", nullable=False)
+    product_code: Mapped[str] = mapped_column(String(64), index=True, nullable=False)
+    image_set: Mapped[str] = mapped_column(String(255), default="", nullable=False)
+    listing_label: Mapped[str] = mapped_column(String(255), index=True, nullable=False)
+    merchant_code: Mapped[str] = mapped_column(String(255), index=True, default="", nullable=False)
+    pdd_product_id: Mapped[str] = mapped_column(String(64), index=True, nullable=False)
+    status: Mapped[str] = mapped_column(String(32), default="on_sale", nullable=False)
+    published_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, server_default=func.now(), nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, server_default=func.now(), onupdate=func.now(), nullable=False
+    )
+
+
 class AccountLockORM(Base):
     """店铺 Profile 运行锁。"""
 

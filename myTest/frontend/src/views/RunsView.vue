@@ -343,6 +343,7 @@ onMounted(() => {
                 </el-tag>
               </template>
             </el-table-column>
+            <el-table-column v-if="resultRows(selected)[0]?.pdd_product_id !== undefined" prop="pdd_product_id" label="商品ID" width="130" />
             <el-table-column v-if="resultRows(selected)[0]?.reason" prop="reason" label="原因" show-overflow-tooltip />
             <el-table-column v-if="resultRows(selected)[0]?.error" prop="error" label="报错" show-overflow-tooltip />
             <el-table-column v-if="resultRows(selected)[0]?.hit !== undefined" prop="hit" label="命中" width="60" />

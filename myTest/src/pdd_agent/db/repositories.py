@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import uuid
 from datetime import datetime, timedelta
 
@@ -14,6 +15,7 @@ from pdd_agent.db.models import (
     AccountORM,
     FailureItemORM,
     LoginStatusORM,
+    PublishedProductORM,
     QueueControlORM,
     TaskQueueORM,
 )
@@ -481,6 +483,103 @@ def update_failure_decision(
         session.flush()
         session.expunge(row)
         return row
+
+
+def _published_mapping_id(account_id: str, product_code: str, image_set: str) -> str:
+    raw = "|".join([account_id.strip(), product_code.strip(), image_set.strip()])
+    return hashlib.sha1(raw.encode("utf-8")).hexdigest()[:32]
+
+
+def upsert_published_product(
+    *,
+    account_id: str,
+    source_run_id: str,
+    product_code: str,
+    image_set: str,
+    listing_label: str,
+    merchant_code: str,
+    pdd_product_id: str,
+    status: str = "on_sale",
+    published_at: datetime | None = None,
+) -> PublishedProductORM | None:
+    if not is_database_available():
+        return None
+    mapping_id = _published_mapping_id(account_id, product_code, image_set)
+    with session_scope() as session:
+        row = session.get(PublishedProductORM, mapping_id)
+        data = {
+            "account_id": account_id,
+            "source_run_id": source_run_id,
+            "product_code": product_code,
+            "image_set": image_set,
+            "listing_label": listing_label,
+            "merchant_code": merchant_code,
+            "pdd_product_id": pdd_product_id,
+            "status": status,
+            "published_at": published_at or datetime.now(),
+        }
+        if row:
+            for key, value in data.items():
+                setattr(row, key, value)
+        else:
+            row = PublishedProductORM(mapping_id=mapping_id, **data)
+            session.add(row)
+        session.flush()
+        session.expunge(row)
+        return row
+
+
+def get_published_product(
+    *,
+    account_id: str,
+    product_code: str,
+    image_set: str = "",
+) -> PublishedProductORM | None:
+    if not is_database_available():
+        return None
+    mapping_id = _published_mapping_id(account_id, product_code, image_set)
+    with session_scope() as session:
+        row = session.get(PublishedProductORM, mapping_id)
+        if row:
+            session.expunge(row)
+        return row
+
+
+def search_published_products(
+    *,
+    page: int = 1,
+    page_size: int = 50,
+    account_id: str = "",
+    product_code: str = "",
+    pdd_product_id: str = "",
+) -> tuple[list[PublishedProductORM], int]:
+    if not is_database_available():
+        return [], 0
+    page = max(1, page)
+    page_size = max(1, min(200, page_size))
+    with session_scope() as session:
+        query = session.query(PublishedProductORM)
+        if account_id:
+            query = query.filter(PublishedProductORM.account_id == account_id)
+        if product_code:
+            pattern = f"%{product_code}%"
+            query = query.filter(
+                (PublishedProductORM.product_code.like(pattern))
+                | (PublishedProductORM.listing_label.like(pattern))
+                | (PublishedProductORM.merchant_code.like(pattern))
+            )
+        if pdd_product_id:
+            query = query.filter(PublishedProductORM.pdd_product_id.like(f"%{pdd_product_id}%"))
+        total = int(query.order_by(None).count())
+        rows = (
+            query.order_by(PublishedProductORM.updated_at.desc(), PublishedProductORM.created_at.desc())
+            .offset((page - 1) * page_size)
+            .limit(page_size)
+            .all()
+        )
+        for row in rows:
+            session.expunge(row)
+        return rows, total
 
 
 def acquire_account_lock(
