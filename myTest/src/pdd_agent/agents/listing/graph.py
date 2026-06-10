@@ -63,6 +63,7 @@ async def browser_listing_node(state: ListingState) -> dict:
         return {"errors": ["no valid listing units"], "finished": True}
 
     category = state.get("category_keyword") or settings.listing.category_keyword
+    platform_listing_code = (state.get("platform_listing_code") or "").strip()
     defaults = settings.multi_spec.defaults
 
     def _job(dp):
@@ -72,6 +73,7 @@ async def browser_listing_node(state: ListingState) -> dict:
             units,
             category_keyword=category,
             title_mode=settings.listing.title_mode,
+            platform_listing_code=platform_listing_code,
             defaults=defaults,
         )
 

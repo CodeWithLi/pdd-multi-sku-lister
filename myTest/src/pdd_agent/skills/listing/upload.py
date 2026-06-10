@@ -2,14 +2,19 @@
 
 from __future__ import annotations
 
+import re
 import random
 import time
+from datetime import datetime
 from typing import Any
 
 from pdd_agent.browser.dp_compat_sync import DpPage
 from pdd_agent.domain.models import ListingUnit
 from pdd_agent.paths import PROJECT_ROOT
-from pdd_agent.skills.delist.time_utils import extract_product_id_from_text
+from pdd_agent.skills.delist.time_utils import (
+    extract_product_id_from_text,
+    format_datetime,
+)
 from pdd_agent.skills.listing.multi_spec_page import (
     _safe_exc,
     add_style_and_model_specs,
@@ -55,6 +60,7 @@ def _listing_result(
         "product_code": unit.product_code,
         "image_set": unit.image_set,
         "merchant_code": unit.merchant_code,
+        "platform_listing_code": "",
         "pdd_product_id": "",
         "pdd_product_id_capture_status": "",
         "status": status,
@@ -64,6 +70,28 @@ def _listing_result(
         "title": title,
         "legacy_status": legacy_status or status,
     }
+
+
+def _normalize_match_text(value: str) -> str:
+    return re.sub(r"\s+", "", (value or "")).lower()
+
+
+def _row_matches_title(row_text: str, title: str) -> bool:
+    title_norm = _normalize_match_text(title)
+    if not title_norm:
+        return True
+    row_norm = _normalize_match_text(row_text)
+    if title_norm in row_norm:
+        return True
+    title_parts = [
+        part
+        for part in re.split(r"[\s,，、/|｜()（）【】\[\]_-]+", title)
+        if len(part.strip()) >= 2
+    ]
+    if not title_parts:
+        return False
+    matched = sum(1 for part in title_parts if _normalize_match_text(part) in row_norm)
+    return matched >= max(1, min(3, len(title_parts)))
 
 
 def _classify_exception(exc: Exception) -> tuple[str, bool]:
@@ -203,29 +231,33 @@ def _confirm_leave_publish_page(page: DpPage) -> None:
         pass
 
 
-def _click_submit(page: DpPage, account_id: str, label: str) -> bool:
+def _click_submit(page: DpPage, account_id: str, label: str) -> tuple[bool, datetime | None]:
     print(f"[{account_id}] [{label}] 点击提交并上架...", flush=True)
     try:
         submit_btn = page.ele("text:提交并上架", timeout=3)
         if not submit_btn:
             print(f"[{account_id}] [{label}] 未找到「提交并上架」按钮", flush=True)
-            return False
+            return False, None
+        submitted_at = datetime.now()
         submit_btn.click(by_js=True)
         time.sleep(2)
         if page.ele("css:.success-title", timeout=8):
-            print(f"[{account_id}] [{label}] 成功：多规格商品上架完毕", flush=True)
-            return True
+            print(
+                f"[{account_id}] [{label}] 提交成功，开始回到商品列表核验最终状态",
+                flush=True,
+            )
+            return True, submitted_at
         if page.ele("text:请上传预览图", timeout=1):
             print(f"[{account_id}] [{label}] 提交被拦截：仍有预览图未上传", flush=True)
-            return False
+            return False, submitted_at
         print(f"[{account_id}] [{label}] 未检测到成功标志，请手动核查", flush=True)
-        return False
+        return False, submitted_at
     except Exception as exc:
         print(f"[{account_id}] [{label}] 提交异常：{_safe_exc(exc)}", flush=True)
-        return False
+        return False, None
 
 
-def _open_goods_list(page: DpPage, account_id: str) -> bool:
+def _open_goods_list(page: DpPage, account_id: str, tab_text: str = "在售中") -> bool:
     for url in GOODS_LIST_URLS:
         try:
             page.get(url)
@@ -238,7 +270,7 @@ def _open_goods_list(page: DpPage, account_id: str) -> bool:
             continue
 
     try:
-        tab = page.ele("text:在售中", timeout=3)
+        tab = page.ele(f"text:{tab_text}", timeout=3)
         if tab:
             tab.click()
             time.sleep(1.5)
@@ -332,40 +364,151 @@ def _click_goods_search(page: DpPage) -> bool:
     return False
 
 
-def _find_product_id_in_goods_list(page: DpPage, merchant_code: str) -> str:
+def _parse_goods_list_matches(
+    page: DpPage,
+    merchant_code: str,
+    title: str,
+) -> list[dict[str, Any]]:
     try:
         rows = page.eles("css:tbody tr", timeout=3)
     except Exception:
         rows = []
+    matches: list[dict[str, Any]] = []
     for row in rows:
         text = row.text or ""
         if merchant_code and merchant_code not in text:
             continue
+        if not _row_matches_title(text, title):
+            continue
         product_id = extract_product_id_from_text(text)
-        if product_id:
-            return product_id
-    return ""
+        if not product_id:
+            continue
+        matches.append(
+            {
+                "pdd_product_id": product_id or "",
+                "row_text": text.strip(),
+                "title_matched": True,
+            }
+        )
+    return matches
 
 
-def _capture_published_product_id(page: DpPage, account_id: str, unit: ListingUnit) -> tuple[str, str]:
+def _capture_result(
+    *,
+    status: str,
+    tab: str = "",
+    pdd_product_id: str = "",
+    matched_created_at: str = "",
+    matched_row_text: str = "",
+    message: str = "",
+) -> dict[str, Any]:
+    return {
+        "status": status,
+        "tab": tab,
+        "pdd_product_id": pdd_product_id,
+        "matched_created_at": matched_created_at,
+        "matched_row_text": matched_row_text,
+        "message": message,
+    }
+
+
+def _search_goods_tab(
+    page: DpPage,
+    account_id: str,
+    unit: ListingUnit,
+    *,
+    tab_text: str,
+    tab_key: str,
+    merchant_code: str,
+    title: str,
+) -> dict[str, Any]:
+    if not _open_goods_list(page, account_id, tab_text):
+        return _capture_result(status="open_goods_list_failed", tab=tab_key)
+    _reset_goods_list_filters(page)
+    filter_ok = _set_goods_filter(page, "商品编码", merchant_code)
+    if filter_ok:
+        _click_goods_search(page)
+
+    matches = _parse_goods_list_matches(page, merchant_code, title)
+    if not matches:
+        return _capture_result(status="not_found", tab=tab_key)
+
+    selected = matches[0]
+    return _capture_result(
+        status="captured",
+        tab=tab_key,
+        pdd_product_id=str(selected.get("pdd_product_id") or ""),
+        matched_row_text=str(selected.get("row_text") or ""),
+    )
+
+
+def _capture_publish_outcome(
+    page: DpPage,
+    account_id: str,
+    unit: ListingUnit,
+    merchant_code: str,
+    title: str,
+) -> dict[str, Any]:
     try:
-        if not _open_goods_list(page, account_id):
-            return "", "open_goods_list_failed"
-        _reset_goods_list_filters(page)
-        merchant_code = unit.merchant_code.strip()
-        filter_ok = _set_goods_filter(page, "商品编码", merchant_code)
-        if filter_ok:
-            _click_goods_search(page)
-        product_id = _find_product_id_in_goods_list(page, merchant_code)
-        if product_id:
-            print(f"[{account_id}] [{unit.listing_label}] 已抓取商品ID={product_id}", flush=True)
-            return product_id, "captured"
-        print(f"[{account_id}] [{unit.listing_label}] 上架成功，但未在商品列表匹配到商品ID", flush=True)
-        return "", "not_found"
+        on_sale = _search_goods_tab(
+            page,
+            account_id,
+            unit,
+            tab_text="在售中",
+            tab_key="on_sale",
+            merchant_code=merchant_code,
+            title=title,
+        )
+        if on_sale["status"] == "captured" and on_sale.get("pdd_product_id"):
+            print(
+                f"[{account_id}] [{unit.listing_label}] 已在在售中抓取商品ID={on_sale['pdd_product_id']}",
+                flush=True,
+            )
+            return on_sale
+
+        rejected = _search_goods_tab(
+            page,
+            account_id,
+            unit,
+            tab_text="已驳回",
+            tab_key="rejected",
+            merchant_code=merchant_code,
+            title=title,
+        )
+        if rejected["status"] == "captured":
+            rejected["status"] = "rejected"
+            print(
+                f"[{account_id}] [{unit.listing_label}] 商品发布后进入已驳回，按失败处理",
+                flush=True,
+            )
+            return rejected
+
+        status = "not_found"
+        if on_sale["status"] == "open_goods_list_failed" or rejected["status"] == "open_goods_list_failed":
+            status = "open_goods_list_failed"
+        print(
+            f"[{account_id}] [{unit.listing_label}] 提交后未在在售中/已驳回匹配到本次商品",
+            flush=True,
+        )
+        return _capture_result(
+            status=status,
+            message="提交成功页已出现，但商品列表未匹配到本次发布记录",
+        )
     except Exception as exc:
         err = _safe_exc(exc)
         print(f"[{account_id}] [{unit.listing_label}] 抓取商品ID异常：{err}", flush=True)
-        return "", "capture_error"
+        return _capture_result(status="capture_error", message=err)
+
+
+def _attach_capture_fields(result: dict[str, Any], capture: dict[str, Any]) -> dict[str, Any]:
+    result["pdd_product_id"] = capture.get("pdd_product_id") or ""
+    result["pdd_product_id_capture_status"] = capture.get("status") or ""
+    result["pdd_product_matched_tab"] = capture.get("tab") or ""
+    result["pdd_product_matched_created_at"] = capture.get("matched_created_at") or ""
+    result["pdd_product_matched_row_text"] = capture.get("matched_row_text") or ""
+    if capture.get("message"):
+        result["pdd_product_capture_message"] = capture["message"]
+    return result
 
 
 def upload_one_listing(
@@ -374,6 +517,7 @@ def upload_one_listing(
     unit: ListingUnit,
     product_info: dict[str, Any],
     defaults: dict[str, str],
+    platform_listing_code: str = "",
 ) -> dict[str, Any]:
     """对单个上架单元执行完整发布流程。"""
     label = unit.listing_label
@@ -474,7 +618,7 @@ def upload_one_listing(
     print(f"[{account_id}] [{label}] 开始填写价格表...")
     previews_ok = fill_multi_spec_rows(page, account_id, unit.skus, defaults, rows=sku_rows)
 
-    pcode = unit.merchant_code
+    pcode = (platform_listing_code or "").strip() or unit.merchant_code
     global_code = page.ele(
         'xpath://span[contains(text(),"商品编码") or contains(text(),"货号")]/following::input[1]'
     )
@@ -493,20 +637,53 @@ def upload_one_listing(
             legacy_status="skipped",
         )
 
-    ok = _click_submit(page, account_id, label)
+    ok, submitted_at = _click_submit(page, account_id, label)
     _clear_beforeunload(page)
     if ok:
-        pdd_product_id, capture_status = _capture_published_product_id(page, account_id, unit)
+        print(f"[{account_id}] [{label}] 等待 30 秒后核验在售/驳回状态", flush=True)
+        time.sleep(30)
+        capture = _capture_publish_outcome(
+            page,
+            account_id,
+            unit,
+            pcode,
+            listing_info.get("title", ""),
+        )
+        if capture["status"] == "captured" and capture.get("pdd_product_id"):
+            result = _listing_result(
+                unit=unit,
+                status="success",
+                reason="listed",
+                title=listing_info.get("title", ""),
+                legacy_status="listed",
+            )
+            result["platform_listing_code"] = pcode
+            result["publish_submitted_at"] = format_datetime(submitted_at) if submitted_at else ""
+            return _attach_capture_fields(result, capture)
+        if capture["status"] == "rejected":
+            result = _listing_result(
+                unit=unit,
+                status="failed",
+                reason="rejected_after_publish",
+                title=listing_info.get("title", ""),
+                retryable=False,
+                legacy_status="failed",
+            )
+            result["platform_listing_code"] = pcode
+            result["publish_submitted_at"] = format_datetime(submitted_at) if submitted_at else ""
+            return _attach_capture_fields(result, capture)
+
         result = _listing_result(
             unit=unit,
-            status="success",
-            reason="listed",
+            status="retryable",
+            reason="published_but_not_found_in_on_sale_or_rejected",
             title=listing_info.get("title", ""),
-            legacy_status="listed",
+            retryable=True,
+            legacy_status="submit_uncertain",
         )
-        result["pdd_product_id"] = pdd_product_id
-        result["pdd_product_id_capture_status"] = capture_status
-        return result
+        result["platform_listing_code"] = pcode
+        result["publish_submitted_at"] = format_datetime(submitted_at) if submitted_at else ""
+        return _attach_capture_fields(result, capture)
     return _listing_result(
         unit=unit,
         status="retryable",
@@ -524,6 +701,7 @@ def run_listing_uploads(
     *,
     category_keyword: str = "玩偶",
     title_mode: str = "page_ai",
+    platform_listing_code: str = "",
     defaults: dict[str, str] | None = None,
 ) -> list[dict[str, Any]]:
     """顺序上架多个单元。"""
@@ -541,7 +719,14 @@ def run_listing_uploads(
             time.sleep(5)
         try:
             results.append(
-                upload_one_listing(page, account_id, unit, product_info, defaults)
+                upload_one_listing(
+                    page,
+                    account_id,
+                    unit,
+                    product_info,
+                    defaults,
+                    platform_listing_code=platform_listing_code,
+                )
             )
         except Exception as e:
             err = _safe_exc(e)

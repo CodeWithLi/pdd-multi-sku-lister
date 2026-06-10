@@ -21,6 +21,7 @@ class PlanResponse(BaseModel):
 class ListingTaskRequest(BaseModel):
     account_id: str
     product_codes: list[str] = Field(default_factory=list)
+    platform_listing_code: str = ""
     dry_run: bool = False
     category_keyword: str = "玩偶"
     background: bool = True  # False 时同步等待（仅建议 dry_run 使用）
@@ -37,12 +38,14 @@ class RetryListingItemRequest(BaseModel):
     listing_label: str = Field(..., min_length=1)
     product_code: str = ""
     image_set: str = ""
+    platform_listing_code: str = ""
     category_keyword: str = "玩偶"
 
 
 class ListingBatchTaskRequest(BaseModel):
     account_ids: list[str] = Field(..., min_length=1)
     product_codes: list[str] = Field(default_factory=list)
+    platform_listing_code: str = ""
     dry_run: bool = False
     category_keyword: str = "玩偶"
     max_concurrent_stores: int | None = Field(default=None, ge=1, le=5)

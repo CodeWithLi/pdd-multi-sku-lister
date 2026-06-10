@@ -86,6 +86,7 @@ export const api = {
   listing: (body: {
     account_id: string
     product_codes: string[]
+    platform_listing_code?: string
     dry_run: boolean
     category_keyword: string
     background: boolean
@@ -94,6 +95,7 @@ export const api = {
   listingBatch: (body: {
     account_ids: string[]
     product_codes: string[]
+    platform_listing_code?: string
     dry_run: boolean
     category_keyword: string
     max_concurrent_stores?: number

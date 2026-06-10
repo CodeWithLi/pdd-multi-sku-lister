@@ -22,6 +22,7 @@ const defaultStartDelayMax = ref(180)
 const accountId = ref('')
 const batchAccountIds = ref<string[]>([])
 const productCodes = ref<string[]>([])
+const platformListingCode = ref('')
 const listingMode = ref<'check' | 'run'>('check')
 const categoryKeyword = ref('玩偶')
 const listingResult = ref<ListingTaskResponse | null>(null)
@@ -107,8 +108,17 @@ function validateAccounts(ids: string[]) {
 async function runListing() {
   const accountIds = validateAccounts(selectedListingAccounts())
   if (!accountIds.length) return
+  const isCheck = listingMode.value === 'check'
   if (!productCodes.value.length) {
-    error.value = '请至少选择一个商品编码'
+    error.value = '请至少选择一个素材商品编码'
+    return
+  }
+  if (!isCheck && !platformListingCode.value.trim()) {
+    error.value = '正式上架请填写上架商品编码'
+    return
+  }
+  if (!isCheck && productCodes.value.length > 1) {
+    error.value = '填写上架商品编码后，一次只能选择一个素材商品编码，避免发布后匹配错误'
     return
   }
 
@@ -117,13 +127,13 @@ async function runListing() {
   success.value = ''
   listingResult.value = null
   listingBatchResult.value = null
-  const isCheck = listingMode.value === 'check'
 
   try {
     if (listingBatchEnabled.value) {
       listingBatchResult.value = await api.listingBatch({
         account_ids: accountIds,
         product_codes: productCodes.value,
+        platform_listing_code: platformListingCode.value.trim(),
         dry_run: isCheck,
         category_keyword: categoryKeyword.value,
         max_concurrent_stores: listingConcurrentStores.value,
@@ -137,6 +147,7 @@ async function runListing() {
     listingResult.value = await api.listing({
       account_id: accountIds[0],
       product_codes: productCodes.value,
+      platform_listing_code: platformListingCode.value.trim(),
       dry_run: isCheck,
       category_keyword: categoryKeyword.value,
       background: !isCheck,
@@ -268,10 +279,14 @@ onMounted(() => {
               批量任务会先打开一家店，随机等待该区间后再打开下一家。
             </div>
 
-            <el-form-item label="商品编码" required>
+            <el-form-item label="素材商品编码" required>
               <el-select v-model="productCodes" multiple filterable style="width: 100%" placeholder="选择商品编码">
                 <el-option v-for="c in productOptions" :key="c" :label="c" :value="c" />
               </el-select>
+            </el-form-item>
+
+            <el-form-item v-if="listingMode === 'run'" label="上架商品编码" required>
+              <el-input v-model.trim="platformListingCode" placeholder="例如：YKL004" clearable />
             </el-form-item>
 
             <el-form-item label="执行方式">

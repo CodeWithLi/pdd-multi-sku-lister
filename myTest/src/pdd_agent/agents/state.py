@@ -26,6 +26,7 @@ class ListingState(TypedDict, total=False):
 
     account_id: str
     product_codes: list[str]
+    platform_listing_code: str
     dry_run: bool  # True 时只做校验，不启动浏览器
     category_keyword: str
     retry_item: dict[str, Any]

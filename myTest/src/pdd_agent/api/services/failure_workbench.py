@@ -77,7 +77,7 @@ def extract_failure_candidates(limit_runs: int = 1000) -> list[FailureCandidate]
                     listing_label=listing_label,
                     product_code=product_code,
                     image_set=image_set,
-                    merchant_code=str(item.get("merchant_code") or ""),
+                    merchant_code=str(item.get("platform_listing_code") or item.get("merchant_code") or ""),
                     item_status=status or "failed",
                     reason=str(item.get("reason") or ""),
                     error=str(item.get("error") or ""),
@@ -167,6 +167,7 @@ def retry_failure_item(item_id: str, *, category_keyword: str = "") -> tuple[str
         product_codes=[item.product_code],
         dry_run=False,
         category_keyword=category_keyword or settings.listing.category_keyword,
+        platform_listing_code=item.merchant_code,
         scheduled_at=datetime.now(),
         retry_item={
             "source_run_id": item.source_run_id,

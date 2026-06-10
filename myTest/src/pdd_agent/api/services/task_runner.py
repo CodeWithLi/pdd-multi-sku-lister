@@ -53,7 +53,9 @@ def _persist_published_products(run_id: str, account_id: str, result: dict[str, 
         product_code = str(item.get("product_code") or "").strip()
         image_set = str(item.get("image_set") or "").strip()
         listing_label = str(item.get("listing_label") or "").strip()
-        merchant_code = str(item.get("merchant_code") or "").strip()
+        merchant_code = str(
+            item.get("platform_listing_code") or item.get("merchant_code") or ""
+        ).strip()
         if not product_code or not listing_label:
             continue
         upsert_published_product(
@@ -74,6 +76,7 @@ async def execute_listing(
     product_codes: list[str],
     dry_run: bool,
     category_keyword: str,
+    platform_listing_code: str = "",
     retry_item: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """执行 listing 子图，更新 RunRecord。"""
@@ -94,6 +97,7 @@ async def execute_listing(
             {
                 "account_id": account_id,
                 "product_codes": codes,
+                "platform_listing_code": platform_listing_code,
                 "dry_run": dry_run,
                 "category_keyword": category_keyword,
                 "retry_item": retry_item or {},

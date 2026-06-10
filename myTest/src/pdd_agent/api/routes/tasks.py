@@ -110,6 +110,7 @@ async def tasks_listing(body: ListingTaskRequest):
             product_codes=codes,
             dry_run=body.dry_run,
             category_keyword=body.category_keyword,
+            platform_listing_code=body.platform_listing_code,
         )
         record = TaskRunStore().load(run_id)
         status = record.status if record else RunStatus.SUCCESS
@@ -123,6 +124,7 @@ async def tasks_listing(body: ListingTaskRequest):
         product_codes=codes,
         dry_run=body.dry_run,
         category_keyword=body.category_keyword,
+        platform_listing_code=body.platform_listing_code,
         scheduled_at=datetime.now(),
     )
     return ListingTaskResponse(
@@ -162,6 +164,7 @@ async def retry_listing_item(source_run_id: str, body: RetryListingItemRequest):
         product_codes=[product_code],
         dry_run=False,
         category_keyword=body.category_keyword or settings.listing.category_keyword,
+        platform_listing_code=body.platform_listing_code or str(item.get("merchant_code") or ""),
         scheduled_at=datetime.now(),
         retry_item={
             "source_run_id": source_run_id,
@@ -208,6 +211,7 @@ async def tasks_listing_batch(body: ListingBatchTaskRequest):
             product_codes=body.product_codes,
             dry_run=body.dry_run,
             category_keyword=body.category_keyword,
+            platform_listing_code=body.platform_listing_code,
             scheduled_at=scheduled_at,
         )
         runs.append(BatchRunItem(account_id=account_id, run_id=run_id, status=RunStatus.PENDING))

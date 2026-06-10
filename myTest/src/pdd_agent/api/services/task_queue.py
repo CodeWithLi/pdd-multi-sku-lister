@@ -86,6 +86,7 @@ class TaskQueueWorker:
                     product_codes=list(payload.get("product_codes") or []),
                     dry_run=bool(payload.get("dry_run", False)),
                     category_keyword=str(payload.get("category_keyword") or "玩偶"),
+                    platform_listing_code=str(payload.get("platform_listing_code") or ""),
                     retry_item=dict(payload.get("retry_item") or {}),
                 )
             elif row.agent == AgentKind.DELIST.value:
@@ -115,6 +116,7 @@ def enqueue_listing_task(
     dry_run: bool,
     category_keyword: str,
     scheduled_at,
+    platform_listing_code: str = "",
     retry_item: dict | None = None,
 ):
     return enqueue_task(
@@ -125,6 +127,7 @@ def enqueue_listing_task(
             "product_codes": list(product_codes),
             "dry_run": dry_run,
             "category_keyword": category_keyword,
+            "platform_listing_code": platform_listing_code,
             "retry_item": dict(retry_item or {}),
         },
         scheduled_at=scheduled_at,
