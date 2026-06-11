@@ -200,6 +200,8 @@ async def execute_campaign_limited_time_setup(
     *,
     run_id: str,
     account_id: str,
+    pdd_product_ids: list[str] | None = None,
+    published_mapping_ids: list[str] | None = None,
 ) -> dict[str, Any]:
     store = TaskRunStore()
     settings = load_yaml_settings()
@@ -209,12 +211,16 @@ async def execute_campaign_limited_time_setup(
 
     store.update_status(run_id, RunStatus.RUNNING)
     store.update_phase(run_id, TaskPhase.BROWSER)
+    selected_product_ids = list(dict.fromkeys((pdd_product_ids or [])))
+    selected_mapping_ids = list(dict.fromkeys((published_mapping_ids or [])))
     try:
         graph = build_campaign_graph()
         raw = await graph.ainvoke(
             {
                 "account_id": account_id,
                 "campaign_type": "limited_time_setup",
+                "pdd_product_ids": selected_product_ids,
+                "published_mapping_ids": selected_mapping_ids,
             }
         )
         result = _json_safe(raw)

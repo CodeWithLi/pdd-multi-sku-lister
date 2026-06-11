@@ -89,6 +89,8 @@ class DelistTaskResponse(BaseModel):
 
 class CampaignLimitedTimeSetupRequest(BaseModel):
     account_id: str
+    pdd_product_ids: list[str] = Field(default_factory=list)
+    published_mapping_ids: list[str] = Field(default_factory=list)
 
 
 class CampaignTaskResponse(BaseModel):

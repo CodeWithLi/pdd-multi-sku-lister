@@ -18,12 +18,19 @@ async def limited_time_setup_node(state: CampaignState) -> dict:
     """打开限时限量购创建页，并取消同步设置惊喜优惠。"""
     settings = load_yaml_settings()
     account_id = state["account_id"]
+    pdd_product_ids = state.get("pdd_product_ids") or []
+    published_mapping_ids = state.get("published_mapping_ids") or []
     account = get_account_config(settings, account_id)
     if not account:
         return {"errors": [f"unknown account: {account_id}"], "finished": True}
 
     def _job(dp):
-        return setup_limited_time_campaign(dp, account_id)
+        return setup_limited_time_campaign(
+            dp,
+            account_id,
+            pdd_product_ids=pdd_product_ids,
+            published_mapping_ids=published_mapping_ids,
+        )
 
     try:
         result = await run_browser_job_async(settings, account, _job)

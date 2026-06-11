@@ -57,6 +57,8 @@ class CampaignState(TypedDict, total=False):
 
     account_id: str
     campaign_type: str
+    pdd_product_ids: list[str]
+    published_mapping_ids: list[str]
     results: Annotated[list[dict[str, Any]], operator.add]
     errors: Annotated[list[str], operator.add]
     phase: str

@@ -132,7 +132,11 @@ export const api = {
     store_start_delay_max_seconds?: number
   }) => http.post<BatchTaskResponse>('/tasks/delist/batch', body).then((r) => r.data),
 
-  campaignLimitedTimeSetup: (body: { account_id: string }) =>
+  campaignLimitedTimeSetup: (body: {
+    account_id: string
+    pdd_product_ids?: string[]
+    published_mapping_ids?: string[]
+  }) =>
     http.post<CampaignTaskResponse>('/tasks/campaign/limited-time-setup', body).then((r) => r.data),
 
   runs: (params: {

@@ -37,14 +37,19 @@ from pdd_agent.api.services.task_runner import (
 from pdd_agent.core.config import load_yaml_settings
 from pdd_agent.db.session import is_database_available
 from pdd_agent.db.repositories import cancel_queued_task_by_run_id
-from pdd_agent.domain.enums import RunStatus
+from pdd_agent.domain.enums import AgentKind, RunStatus
 from pdd_agent.storage import TaskRunStore
 
 router = APIRouter(prefix="/tasks", tags=["tasks"])
+_ACTIVE_CAMPAIGN_RUNS: dict[str, str] = {}
 
 
 def _dedupe_account_ids(account_ids: list[str]) -> list[str]:
     return list(dict.fromkeys(a.strip() for a in account_ids if a and a.strip()))
+
+
+def _dedupe_strings(values: list[str]) -> list[str]:
+    return list(dict.fromkeys(v.strip() for v in values if v and v.strip()))
 
 
 def _batch_id() -> str:
@@ -79,6 +84,36 @@ def _require_queue_available() -> None:
 
 def _mark_queued(run_id: str) -> None:
     TaskRunStore().update_status(run_id, RunStatus.PENDING, "queued")
+
+
+def _find_running_campaign_run(account_id: str) -> str:
+    active_run_id = _ACTIVE_CAMPAIGN_RUNS.get(account_id)
+    if active_run_id:
+        return active_run_id
+
+    store = TaskRunStore()
+    started_from = datetime.now() - timedelta(minutes=30)
+    records, _ = store.search_runs(
+        page=1,
+        page_size=20,
+        account_id=account_id,
+        agent=AgentKind.CAMPAIGN.value,
+        started_from=started_from,
+    )
+    for record in records:
+        if record.status in {RunStatus.PENDING, RunStatus.RUNNING}:
+            return record.run_id
+    return ""
+
+
+async def _execute_campaign_limited_time_setup_guarded(**kwargs):
+    account_id = str(kwargs.get("account_id") or "")
+    run_id = str(kwargs.get("run_id") or "")
+    try:
+        return await execute_campaign_limited_time_setup(**kwargs)
+    finally:
+        if account_id and _ACTIVE_CAMPAIGN_RUNS.get(account_id) == run_id:
+            _ACTIVE_CAMPAIGN_RUNS.pop(account_id, None)
 
 
 @router.post("/plan", response_model=PlanResponse)
@@ -354,12 +389,27 @@ async def campaign_limited_time_setup(
     settings = load_yaml_settings()
     if not get_account_or_none(body.account_id, settings):
         raise HTTPException(status_code=404, detail=f"unknown account: {body.account_id}")
+    pdd_product_ids = _dedupe_strings(body.pdd_product_ids)
+    published_mapping_ids = _dedupe_strings(body.published_mapping_ids)
+    if not pdd_product_ids:
+        raise HTTPException(status_code=422, detail="pdd_product_ids cannot be empty")
+
+    running_run_id = _find_running_campaign_run(body.account_id)
+    if running_run_id:
+        return CampaignTaskResponse(
+            run_id=running_run_id,
+            status=RunStatus.RUNNING,
+            message="该店铺已有活动任务正在执行，已复用当前运行记录；请等待完成后再启动新的活动任务。",
+        )
 
     run_id = create_campaign_run(body.account_id)
+    _ACTIVE_CAMPAIGN_RUNS[body.account_id] = run_id
     background.add_task(
-        execute_campaign_limited_time_setup,
+        _execute_campaign_limited_time_setup_guarded,
         run_id=run_id,
         account_id=body.account_id,
+        pdd_product_ids=pdd_product_ids,
+        published_mapping_ids=published_mapping_ids,
     )
     return CampaignTaskResponse(
         run_id=run_id,
