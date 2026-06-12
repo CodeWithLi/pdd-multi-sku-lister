@@ -117,6 +117,7 @@ class EnvSettings(BaseSettings):
     llm_base_url: str = "https://open.bigmodel.cn/api/paas/v4"
     llm_model: str = "glm-4-flash"
     orchestrator_model: str = ""  # 为空则与 llm_model 相同
+    vision_model: str = ""  # 视觉识别（款式颜色），默认 glm-4v-flash
     playwright_headless: bool = False
     playwright_slow_mo: int = 0
     playwright_channel: str = ""  # 非空时覆盖 settings.yaml 的 browser.channel

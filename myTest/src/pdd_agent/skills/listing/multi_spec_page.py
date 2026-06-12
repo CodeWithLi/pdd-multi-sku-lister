@@ -100,10 +100,10 @@ def _ensure_second_spec_box(page, account_id: str):
     return boxes
 
 
-def _select_spec_type(box, type_name: str, page, account_id: str):
-    """在规格组下拉框中选择「款式」或「型号」。"""
+def _select_spec_type(box, type_name: str, page, account_id: str) -> bool:
+    """在规格组下拉框中选择「款式」或「尺寸」。"""
     if not box:
-        return
+        return False
     trigger = box.ele("css:.ant-select-selector", timeout=1) or box.ele("tag:select", timeout=1)
     if trigger:
         trigger.click()
@@ -113,6 +113,8 @@ def _select_spec_type(box, type_name: str, page, account_id: str):
             option.click()
             time.sleep(0.5)
             print(f"[{account_id}] 已选择规格类型：{type_name}")
+            return True
+    return False
 
 
 def add_style_and_model_specs(
@@ -122,8 +124,8 @@ def add_style_and_model_specs(
     model_names: list[str],
 ):
     """
-    图三：录入两个规格维度。
-    第 1 组 → 款式；第 2 组 → 型号。
+    录入两个规格维度。
+    第 1 组 → 款式（AI 颜色）；第 2 组 → 尺寸（商品类型分组）。
     """
     _, boxes = _spec_row_boxes(page)
     if not boxes:
@@ -134,16 +136,18 @@ def add_style_and_model_specs(
     _add_values_to_spec_box(page, boxes[0], account_id, "款式", style_names)
 
     boxes = _ensure_second_spec_box(page, account_id)
+    second_label = "尺寸"
     if len(boxes) < 2:
-        print(f"[{account_id}] 未能创建第二个规格组（型号），仍将尝试继续")
+        print(f"[{account_id}] 未能创建第二个规格组（尺寸），仍将尝试继续")
         if boxes:
-            _add_values_to_spec_box(page, boxes[0], account_id, "型号", model_names)
+            _add_values_to_spec_box(page, boxes[0], account_id, second_label, model_names)
         return False
 
-    _select_spec_type(boxes[1], "型号", page, account_id)
-    _add_values_to_spec_box(page, boxes[1], account_id, "型号", model_names)
+    if not _select_spec_type(boxes[1], second_label, page, account_id):
+        _select_spec_type(boxes[1], "型号", page, account_id)
+    _add_values_to_spec_box(page, boxes[1], account_id, second_label, model_names)
     _click_blank_area(page)
-    print(f"[{account_id}] 款式、型号已全部录入，准备填写下方价格表...", flush=True)
+    print(f"[{account_id}] 款式、尺寸已全部录入，准备填写下方价格表...", flush=True)
     page.run_js("document.querySelector('.sku-table,.sku-list')?.scrollIntoView({block:'center'});")
     time.sleep(0.8)
     return True
@@ -920,6 +924,27 @@ def _fill_row_by_index(page, index: int, row_data: dict) -> bool:
         return False
 
 
+def _resolve_sku_row_index(page, skus: list, index: int, rows: list | None = None) -> int:
+    """按款式+尺寸匹配价格表行；匹配失败时回退到顺序索引。"""
+    if index >= len(skus):
+        return index
+    sku = skus[index]
+    style_name = getattr(sku, "style_name", "") or ""
+    size_name = getattr(sku, "model_name", "") or ""
+    if style_name and size_name:
+        row_map = _sku_row_index_from_rows(rows or _sku_price_table_rows(page, scroll=False))
+        row = row_map.get((style_name, size_name))
+        if row is not None:
+            marked = row.attr(_SKU_ROW_ATTR)
+            if marked is not None and str(marked).isdigit():
+                return int(marked)
+            active_rows = rows or _sku_price_table_rows(page, scroll=False)
+            for row_idx, candidate in enumerate(active_rows):
+                if candidate == row:
+                    return row_idx
+    return index
+
+
 def fill_multi_spec_rows(
     page,
     account_id: str,
@@ -938,12 +963,24 @@ def fill_multi_spec_rows(
     print(f"[{account_id}] 开始填写 {len(skus)} 个 SKU（已定位 {len(rows)} 行）", flush=True)
 
     t = _now()
-    _sku_price_table_rows(page, scroll=False)
+    marked_rows = _sku_price_table_rows(page, scroll=False)
     _log_step(account_id, "重新标记价格表行", t)
 
     t = _now()
-    filled = _fill_all_rows_batch(page, skus, defaults)
-    _log_step(account_id, f"批量填写库存/价格/编码 {filled}/{len(skus)} 行", t)
+    filled = 0
+    row_indices: list[int] = []
+    for i, sku in enumerate(skus):
+        row_idx = _resolve_sku_row_index(page, skus, i, marked_rows)
+        row_indices.append(row_idx)
+        row_data = {
+            "inventory": getattr(sku, "inventory", None) or defaults.get("inventory", "10"),
+            "group_price": getattr(sku, "group_price", None) or defaults.get("group_price", "199.9"),
+            "single_price": getattr(sku, "single_price", None) or defaults.get("single_price", "299.9"),
+            "sku_code": sku.combo_folder,
+        }
+        if _fill_row_by_index(page, row_idx, row_data):
+            filled += 1
+    _log_step(account_id, f"按款式+尺寸填写库存/价格/编码 {filled}/{len(skus)} 行", t)
 
     if filled < len(skus):
         _diagnose_fill_state(page, account_id)
@@ -957,7 +994,7 @@ def fill_multi_spec_rows(
             }
             try:
                 t = _now()
-                ok = _fill_row_by_index(page, i, row_data)
+                ok = _fill_row_by_index(page, row_indices[i], row_data)
                 if ok:
                     _log_step(account_id, f"JS补填第 {i + 1} 行 {label}", t)
                 else:
@@ -974,6 +1011,7 @@ def fill_multi_spec_rows(
     need_upload = sum(1 for sku in skus if sku.preview_image)
     for i, sku in enumerate(skus):
         label = f"{sku.style_name} / {sku.model_name}"
+        row_idx = row_indices[i] if i < len(row_indices) else i
         if not sku.preview_image:
             continue
         sku_start = _now()
@@ -981,7 +1019,7 @@ def fill_multi_spec_rows(
         try:
             if upload_row_preview(
                 page,
-                i,
+                row_idx,
                 str(sku.preview_image.resolve()),
                 account_id,
                 label,
@@ -995,8 +1033,10 @@ def fill_multi_spec_rows(
         _log_step(account_id, f"SKU {i + 1} 整行合计（含预览图）", sku_start)
 
     verified = sum(
-        1 for i, sku in enumerate(skus)
-        if sku.preview_image and _preview_is_uploaded(page, i)
+        1
+        for i, sku in enumerate(skus)
+        if sku.preview_image
+        and _preview_is_uploaded(page, row_indices[i] if i < len(row_indices) else i)
     )
     print(
         f"[{account_id}] 预览图结果：上传成功 {uploaded}/{need_upload}，"

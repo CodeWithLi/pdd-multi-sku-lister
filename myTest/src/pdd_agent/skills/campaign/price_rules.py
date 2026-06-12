@@ -18,6 +18,14 @@ class CampaignPriceRange:
     max_price: float
 
 
+@dataclass(frozen=True)
+class CodePriceEntry:
+    raw_code: str
+    norm_code: str
+    label: str
+    price: float
+
+
 def _to_float(value, default: float = 0.0) -> float:
     if value is None or value == "":
         return default
@@ -89,3 +97,133 @@ def find_pdd_price_range(
             if rule:
                 return rule
     return None
+
+
+def _load_code_price_map(
+    excel_path: Path,
+    *,
+    price_header: str,
+) -> dict[str, float]:
+    if not excel_path.is_file():
+        return {}
+    book = xlrd.open_workbook(str(excel_path))
+    if book.nsheets <= 0:
+        return {}
+    sheet = book.sheet_by_index(0)
+    if sheet.nrows <= 1:
+        return {}
+
+    headers = [str(sheet.cell_value(0, col)).strip() for col in range(sheet.ncols)]
+    code_col = headers.index("商品编码") if "商品编码" in headers else 0
+    price_col = headers.index(price_header) if price_header in headers else 1
+
+    prices: dict[str, float] = {}
+    for row_idx in range(1, sheet.nrows):
+        raw_code = str(sheet.cell_value(row_idx, code_col)).strip()
+        code = normalize_price_code(raw_code)
+        if not code:
+            continue
+        price = _to_float(sheet.cell_value(row_idx, price_col), 0.0)
+        if price <= 0:
+            continue
+        for key in price_rule_candidates(raw_code):
+            prices[key] = price
+    return prices
+
+
+def load_pdd_pricing(path: Path | None = None) -> dict[str, float]:
+    """母商品定价表：商品编码 -> 拼多多定价。"""
+    excel_path = path or (PROJECT_ROOT / "data" / "assets" / "拼多多定价.xls")
+    return _load_code_price_map(excel_path, price_header="拼多多定价")
+
+
+def load_pdd_control_prices(path: Path | None = None) -> dict[str, float]:
+    """子商品控价表：商品编码 -> PDD控价。"""
+    excel_path = path or (PROJECT_ROOT / "data" / "assets" / "拼多多控价.xls")
+    return _load_code_price_map(excel_path, price_header="PDD控价")
+
+
+def find_code_price(prices: dict[str, float], code: str) -> float | None:
+    for key in price_rule_candidates(code):
+        value = prices.get(key)
+        if value is not None and value > 0:
+            return value
+    return None
+
+
+def _label_from_raw_code(raw_code: str) -> str:
+    norm = normalize_price_code(raw_code)
+    upper = str(raw_code or "").strip().upper()
+    if norm and upper.startswith(norm):
+        return str(raw_code)[len(norm) :].strip()
+    return str(raw_code or "").strip()
+
+
+def _load_code_price_entries(
+    excel_path: Path,
+    *,
+    price_header: str,
+) -> list[CodePriceEntry]:
+    if not excel_path.is_file():
+        return []
+    book = xlrd.open_workbook(str(excel_path))
+    if book.nsheets <= 0:
+        return []
+    sheet = book.sheet_by_index(0)
+    if sheet.nrows <= 1:
+        return []
+
+    headers = [str(sheet.cell_value(0, col)).strip() for col in range(sheet.ncols)]
+    code_col = headers.index("商品编码") if "商品编码" in headers else 0
+    price_col = headers.index(price_header) if price_header in headers else 1
+
+    entries: list[CodePriceEntry] = []
+    for row_idx in range(1, sheet.nrows):
+        raw_code = str(sheet.cell_value(row_idx, code_col)).strip()
+        norm_code = normalize_price_code(raw_code)
+        if not norm_code:
+            continue
+        price = _to_float(sheet.cell_value(row_idx, price_col), 0.0)
+        entries.append(
+            CodePriceEntry(
+                raw_code=raw_code,
+                norm_code=norm_code,
+                label=_label_from_raw_code(raw_code),
+                price=price,
+            )
+        )
+    return entries
+
+
+def load_pdd_control_entries(path: Path | None = None) -> list[CodePriceEntry]:
+    excel_path = path or (PROJECT_ROOT / "data" / "assets" / "拼多多控价.xls")
+    return _load_code_price_entries(excel_path, price_header="PDD控价")
+
+
+def load_pdd_pricing_entries(path: Path | None = None) -> list[CodePriceEntry]:
+    excel_path = path or (PROJECT_ROOT / "data" / "assets" / "拼多多定价.xls")
+    return _load_code_price_entries(excel_path, price_header="拼多多定价")
+
+
+def find_code_by_label(entries: list[CodePriceEntry], text: str) -> str:
+    """按名称片段在 Excel 商品编码列反查编码（如「灰鲨鱼头套」→ YKLxxx）。"""
+    query = str(text or "").strip()
+    if not query:
+        return ""
+
+    best_code = ""
+    best_score = 0
+    for entry in entries:
+        if entry.price <= 0:
+            continue
+        for label in (entry.label, entry.raw_code):
+            if not label:
+                continue
+            if query == label:
+                return entry.norm_code
+            if label in query or query in label:
+                score = min(len(label), len(query))
+                if score > best_score:
+                    best_score = score
+                    best_code = entry.norm_code
+    return best_code

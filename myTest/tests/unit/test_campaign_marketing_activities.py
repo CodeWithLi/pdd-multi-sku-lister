@@ -4,6 +4,7 @@ from pdd_agent.skills.campaign.marketing_activities import (
     KNOWN_MARKETING_ACTIVITIES,
     _collect_blank_click_points,
     _dismiss_marketing_phone_popup,
+    _get_activity_profile,
     _read_marketing_phone_popup,
     _reject_multi_quick_channel,
     _is_activity_detail_ready,
@@ -149,6 +150,21 @@ def test_read_marketing_phone_popup_not_visible():
 def test_known_marketing_activities_contains_20981():
     ids = {item["activity_id"] for item in KNOWN_MARKETING_ACTIVITIES}
     assert "20981" in ids
+    assert "21365" in ids
+
+
+def test_activity_profile_21365_uses_go_register_and_stops_after_confirm_selection():
+    profile = _get_activity_profile("21365")
+    assert profile["entry"] == "go_register"
+    assert profile["stop_after"] == "confirm_selection"
+
+
+def test_activity_detail_ready_on_index_modal():
+    page = FakeDpPage(
+        url="https://mms.pinduoduo.com/act/index?actHomeActivityType=canEnroll",
+        body_text="活动详情 21365 立即报名 大促搜索池 报名进行中",
+    )
+    assert _is_activity_detail_ready(page, "21365") is True
 
 
 def test_search_marketing_activity_requires_activity_id():

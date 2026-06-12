@@ -559,6 +559,31 @@ def get_published_product_by_mapping_id(mapping_id: str) -> PublishedProductORM 
         return row
 
 
+def get_published_products_by_pdd_product_ids(
+    *,
+    account_id: str,
+    pdd_product_ids: list[str],
+) -> list[PublishedProductORM]:
+    if not is_database_available():
+        return []
+    ids = list(dict.fromkeys(str(item).strip() for item in pdd_product_ids if str(item).strip()))
+    if not ids:
+        return []
+    with session_scope() as session:
+        rows = list(
+            session.scalars(
+                select(PublishedProductORM).where(
+                    PublishedProductORM.account_id == account_id,
+                    PublishedProductORM.pdd_product_id.in_(ids),
+                )
+            ).all()
+        )
+        for row in rows:
+            session.expunge(row)
+        order = {product_id: idx for idx, product_id in enumerate(ids)}
+        return sorted(rows, key=lambda row: order.get(row.pdd_product_id, len(order)))
+
+
 def get_published_products_by_mapping_ids(mapping_ids: list[str]) -> list[PublishedProductORM]:
     if not is_database_available():
         return []

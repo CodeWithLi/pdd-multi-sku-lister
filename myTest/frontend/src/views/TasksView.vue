@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { api } from '@/api/client'
 import PageHeader from '@/components/PageHeader.vue'
@@ -22,6 +22,7 @@ const defaultStartDelayMax = ref(180)
 const accountId = ref('')
 const batchAccountIds = ref<string[]>([])
 const productCodes = ref<string[]>([])
+const checkedProductsBySet = ref<Record<string, string[]>>({})
 const platformListingCode = ref('')
 const listingMode = ref<'check' | 'run'>('check')
 const categoryKeyword = ref('玩偶')
@@ -47,10 +48,50 @@ const delistStartDelayMax = ref(180)
 const enabledAccounts = computed(() => accounts.value.filter((a) => a.enabled))
 const validProductSelectors = computed(() => new Set(productOptions.value.map((item) => item.selector)))
 
+const selectedSetGroups = computed(() =>
+  productCodes.value
+    .map((sel) => productOptions.value.find((item) => item.selector === sel))
+    .filter((item): item is ListingTargetOption => !!item),
+)
+
+const resolvedListingSelectors = computed(() => {
+  const result: string[] = []
+  for (const group of selectedSetGroups.value) {
+    const checked = checkedProductsBySet.value[group.selector] || []
+    for (const code of checked) {
+      if (group.product_codes.includes(code)) {
+        result.push(`${group.selector}/${code}`)
+      }
+    }
+  }
+  return result
+})
+
 function filterValidProductCodes(codes: string[]) {
   const valid = validProductSelectors.value
   return (codes || []).filter((code) => valid.has(code))
 }
+
+function syncCheckedProductsForSets(setSelectors: string[]) {
+  const next: Record<string, string[]> = { ...checkedProductsBySet.value }
+  for (const sel of setSelectors) {
+    const opt = productOptions.value.find((item) => item.selector === sel)
+    if (!opt) continue
+    const prev = next[sel] || []
+    const valid = prev.filter((code) => opt.product_codes.includes(code))
+    next[sel] = valid.length ? valid : [...opt.product_codes]
+  }
+  for (const key of Object.keys(next)) {
+    if (!setSelectors.includes(key)) delete next[key]
+  }
+  checkedProductsBySet.value = next
+}
+
+function updateCheckedProducts(selector: string, codes: string[]) {
+  checkedProductsBySet.value = { ...checkedProductsBySet.value, [selector]: codes }
+}
+
+watch(productCodes, (sets) => syncCheckedProductsForSets(sets))
 
 async function loadMeta() {
   try {
@@ -78,6 +119,7 @@ async function loadMeta() {
     if (accs.length && !accountId.value) {
       accountId.value = accs[0].account_id
       productCodes.value = filterValidProductCodes(accs[0].product_codes)
+      syncCheckedProductsForSets(productCodes.value)
       delistAccountId.value = accs[0].account_id
       batchAccountIds.value = accs.map((a) => a.account_id)
       delistBatchAccountIds.value = accs.map((a) => a.account_id)
@@ -90,6 +132,7 @@ async function loadMeta() {
 function onAccountChange(id: string) {
   const acc = accounts.value.find((a) => a.account_id === id)
   productCodes.value = acc ? filterValidProductCodes(acc.product_codes) : []
+  syncCheckedProductsForSets(productCodes.value)
 }
 
 function selectedListingAccounts() {
@@ -117,8 +160,12 @@ async function runListing() {
     error.value = '请至少选择一个素材分组'
     return
   }
-  if (!isCheck && platformListingCode.value.trim() && productCodes.value.length > 1) {
-    error.value = '填写上架商品编码后，一次只能选择一个素材分组，避免多个商品共用同一编码'
+  if (!resolvedListingSelectors.value.length) {
+    error.value = '请至少勾选一个要上架的商品'
+    return
+  }
+  if (!isCheck && platformListingCode.value.trim() && resolvedListingSelectors.value.length > 1) {
+    error.value = '填写上架商品编码后，一次只能上架一个商品'
     return
   }
 
@@ -132,7 +179,7 @@ async function runListing() {
     if (listingBatchEnabled.value) {
       listingBatchResult.value = await api.listingBatch({
         account_ids: accountIds,
-        product_codes: productCodes.value,
+        product_codes: resolvedListingSelectors.value,
         platform_listing_code: platformListingCode.value.trim(),
         dry_run: isCheck,
         category_keyword: categoryKeyword.value,
@@ -146,7 +193,7 @@ async function runListing() {
 
     listingResult.value = await api.listing({
       account_id: accountIds[0],
-      product_codes: productCodes.value,
+      product_codes: resolvedListingSelectors.value,
       platform_listing_code: platformListingCode.value.trim(),
       dry_run: isCheck,
       category_keyword: categoryKeyword.value,
@@ -288,6 +335,25 @@ onMounted(() => {
                   :value="item.selector"
                 />
               </el-select>
+            </el-form-item>
+
+            <el-form-item v-if="selectedSetGroups.length" label="上架商品" required>
+              <div class="product-pick-panel">
+                <div v-for="group in selectedSetGroups" :key="group.selector" class="product-pick-group">
+                  <div class="product-pick-group-title">{{ group.selector }}</div>
+                  <el-checkbox-group
+                    :model-value="checkedProductsBySet[group.selector] || []"
+                    @update:model-value="(val) => updateCheckedProducts(group.selector, val as string[])"
+                  >
+                    <el-checkbox
+                      v-for="code in group.product_codes"
+                      :key="code"
+                      :value="code"
+                      :label="code"
+                    />
+                  </el-checkbox-group>
+                </div>
+              </div>
             </el-form-item>
 
             <el-form-item v-if="listingMode === 'run'" label="上架商品编码">
@@ -435,5 +501,30 @@ onMounted(() => {
 
 .batch-table {
   margin-top: 16px;
+}
+
+.product-pick-panel {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.product-pick-group {
+  padding: 12px 14px;
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  background: #fafbfd;
+}
+
+.product-pick-group-title {
+  margin-bottom: 8px;
+  font-size: 13px;
+  font-weight: 600;
+  color: #334155;
+}
+
+.product-pick-group :deep(.el-checkbox) {
+  margin-right: 18px;
 }
 </style>

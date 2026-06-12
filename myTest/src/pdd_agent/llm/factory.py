@@ -20,3 +20,9 @@ def create_orchestrator_model() -> ChatOpenAI:
     """Orchestrator 可用独立模型；未配置时回退到 llm_model。"""
     env = get_env_settings()
     return create_chat_model(model=env.orchestrator_model or env.llm_model)
+
+
+def create_vision_model() -> ChatOpenAI:
+    """视觉识别模型（款式颜色）；未配置 vision_model 时用 glm-4v-flash。"""
+    env = get_env_settings()
+    return create_chat_model(model=env.vision_model or "glm-4v-flash")

@@ -48,9 +48,7 @@ class ListingUnit(BaseModel):
 
     @property
     def merchant_code(self) -> str:
-        """写入拼多多「商品编码/货号」字段。"""
-        if self.image_set:
-            return f"{self.product_code}-{self.image_set}"
+        """写入拼多多「商品编码/货号」字段（文件夹名，如 BD046A）。"""
         return self.product_code
 
 

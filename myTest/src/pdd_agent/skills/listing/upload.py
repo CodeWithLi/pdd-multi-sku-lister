@@ -22,6 +22,7 @@ from pdd_agent.skills.listing.multi_spec_page import (
     wait_multi_sku_rows,
 )
 from pdd_agent.skills.listing.page_ai_title import apply_title_after_cover_upload
+from pdd_agent.skills.listing.spec_labels import enrich_listing_unit_specs
 from pdd_agent.skills.listing.title import resolve_listing_title
 
 
@@ -744,10 +745,11 @@ def upload_one_listing(
 ) -> dict[str, Any]:
     """对单个上架单元执行完整发布流程。"""
     label = unit.listing_label
+    enrich_listing_unit_specs(unit, account_id=account_id)
     covers = [str(p.resolve()) for p in unit.carousel_images]
     details = [str(p.resolve()) for p in unit.detail_images]
     style_names = list(dict.fromkeys(sku.style_name for sku in unit.skus))
-    model_names = list(dict.fromkeys(sku.model_name for sku in unit.skus))
+    size_names = list(dict.fromkeys(sku.model_name for sku in unit.skus))
 
     listing_info = dict(product_info)
     listing_info["title"] = resolve_listing_title(product_info, account_id)
@@ -835,7 +837,7 @@ def upload_one_listing(
     time.sleep(2)
 
     print(f"[{account_id}] [{label}] 正在录入多规格（款式 + 型号）...")
-    add_style_and_model_specs(page, account_id, style_names, model_names)
+    add_style_and_model_specs(page, account_id, style_names, size_names)
     time.sleep(1)
     sku_rows = wait_multi_sku_rows(page, account_id, unit.skus)
 
