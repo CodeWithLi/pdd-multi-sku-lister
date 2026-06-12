@@ -2118,20 +2118,298 @@ def _click_modal_confirm_button(modal) -> dict[str, Any]:
     return {"clicked": False, "reason": "modal_confirm_button_not_found"}
 
 
-def _wait_product_pick_page_ready(page: DpPage, timeout: int = 15) -> bool:
+def _is_price_confirm_page(page: DpPage) -> bool:
+    url = str(page.url or "")
+    if "goods_price/confirm" in url or "goods/price" in url:
+        return True
+    text = _body_text(page)
+    return any(marker in text for marker in ("确认商品价格信息", "填写报名信息"))
+
+
+def _scroll_page_to_bottom(page: DpPage) -> None:
+    raw_page = getattr(page, "_page", None)
+    try:
+        if raw_page is not None:
+            raw_page.evaluate(
+                """
+                () => {
+                    window.scrollTo(0, document.body.scrollHeight);
+                    const nodes = Array.from(document.querySelectorAll('div, main, section'))
+                        .filter((el) => el.scrollHeight > el.clientHeight + 40);
+                    nodes.forEach((el) => { el.scrollTop = el.scrollHeight; });
+                }
+                """
+            )
+        else:
+            page.run_js(
+                "window.scrollTo(0, document.body.scrollHeight);"
+            )
+    except Exception:
+        pass
+    time.sleep(0.8)
+
+
+def _wait_price_confirm_page(page: DpPage, timeout: int = 25) -> bool:
     for _ in range(timeout):
-        _dismiss_message_popup(page)
-        text = _body_text(page)
-        if "选择活动商品" in text and "确认选择" in text:
+        if _is_price_confirm_page(page):
             return True
         time.sleep(1)
     return False
 
 
-def _wait_price_confirm_page(page: DpPage, timeout: int = 18) -> bool:
+def _wait_traffic_protection_visible(page: DpPage, timeout: int = 20) -> bool:
     for _ in range(timeout):
+        _scroll_page_to_bottom(page)
+        state = _read_traffic_protection_checked(page)
+        if state.get("found"):
+            return True
         text = _body_text(page)
-        if any(marker in text for marker in ("确认商品价格信息", "填写报名信息", "确认提交")):
+        if "开启流量保护" in text:
+            return True
+        time.sleep(1)
+    return False
+
+
+def _traffic_protection_find_js() -> str:
+    return """
+        function beastChecked(input) {
+            if (!input) return false;
+            return input.checked || input.getAttribute('data-checked') === 'true';
+        }
+        function norm(text) {
+            return (text || '').replace(/\\s+/g, ' ').trim();
+        }
+        function isTrafficText(text) {
+            const value = norm(text);
+            if (!value.includes('开启流量保护')) return false;
+            if (value.includes('我已阅读并同意')) return false;
+            if (value.includes('降价补差')) return false;
+            return true;
+        }
+        function findTrafficBlock() {
+            const labels = Array.from(document.querySelectorAll(
+                'label[class*="CBX"], label[class*="ICE"], [data-testid="beast-core-checkbox"], div[class*="traffic_protect"]'
+            ));
+            for (const label of labels) {
+                const text = norm(label.innerText || label.textContent || '');
+                if (isTrafficText(text)) {
+                    return label;
+                }
+            }
+            const blocks = Array.from(document.querySelectorAll('div, section, label, span'))
+                .filter((el) => isTrafficText(el.innerText || el.textContent || ''));
+            if (blocks.length) {
+                blocks.sort((a, b) => {
+                    const ta = norm(a.innerText || a.textContent || '').length;
+                    const tb = norm(b.innerText || b.textContent || '').length;
+                    return ta - tb;
+                });
+                return blocks[0];
+            }
+            const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+            let node;
+            while ((node = walker.nextNode())) {
+                if (!node.textContent || !node.textContent.includes('开启流量保护')) continue;
+                let el = node.parentElement;
+                for (let depth = 0; depth < 10 && el; depth += 1) {
+                    const input = el.querySelector && el.querySelector('input[type="checkbox"]');
+                    if (input) return el;
+                    el = el.parentElement;
+                }
+            }
+            return null;
+        }
+    """
+
+
+def _read_traffic_protection_checked(page: DpPage) -> dict[str, Any]:
+    script = (
+        _traffic_protection_find_js()
+        + """
+        const block = findTrafficBlock();
+        if (!block) {
+            return { found: false, reason: 'traffic_protection_block_not_found' };
+        }
+        const input = block.querySelector('input[type="checkbox"]')
+            || block.closest('label')?.querySelector('input[type="checkbox"]')
+            || block.parentElement?.querySelector('input[type="checkbox"]');
+        const label = block.querySelector('label[class*="CBX"], label[class*="ICE"]')
+            || (block.tagName === 'LABEL' ? block : null);
+        return {
+            found: true,
+            checked: beastChecked(input),
+            has_label: Boolean(label),
+            text: norm(block.innerText || block.textContent || '').slice(0, 160),
+        };
+        """
+    )
+    return page.run_js(script) or {"found": False, "reason": "traffic_protection_state_js_failed"}
+
+
+def _uncheck_traffic_protection(page: DpPage, account_id: str) -> dict[str, Any]:
+    """确认商品价格信息页取消勾选「开启流量保护」（图四红框）。"""
+    if not _wait_price_confirm_page(page, timeout=25):
+        return {"unchecked": False, "reason": "price_confirm_page_not_ready", "url": page.url}
+
+    if not _wait_traffic_protection_visible(page, timeout=20):
+        return {
+            "unchecked": False,
+            "reason": "traffic_protection_not_found",
+            "url": page.url,
+            "body_sample": _body_text(page)[:300],
+        }
+
+    _scroll_page_to_bottom(page)
+    before = _read_traffic_protection_checked(page)
+    if not before.get("found"):
+        return {"unchecked": False, "reason": "traffic_protection_not_found", "before": before}
+    if not before.get("checked"):
+        print(f"[{account_id}] 流量保护已是未勾选状态", flush=True)
+        return {"unchecked": True, "method": "already_unchecked", "before": before}
+
+    raw_page = getattr(page, "_page", None)
+    if raw_page is not None:
+        playwright_selectors = (
+            'div[class*="traffic_protect"] label[class*="CBX"]',
+            'div[class*="traffic_protect"]',
+            '[data-testid="beast-core-checkbox"]:has-text("开启流量保护")',
+            'label:has-text("开启流量保护")',
+        )
+        for selector in playwright_selectors:
+            try:
+                target = raw_page.locator(selector).first
+                if not target.count() or not target.is_visible():
+                    continue
+                target.scroll_into_view_if_needed(timeout=3_000)
+                label = target.locator('label[class*="CBX"], label[class*="ICE"]').first
+                click_target = label if label.count() and label.is_visible() else target
+                click_target.click(timeout=5_000)
+                time.sleep(0.6)
+                after = _read_traffic_protection_checked(page)
+                if not after.get("checked"):
+                    print(f"[{account_id}] 已取消勾选开启流量保护", flush=True)
+                    return {
+                        "unchecked": True,
+                        "method": f"playwright_{selector}",
+                        "before": before,
+                        "after": after,
+                    }
+            except Exception:
+                continue
+
+    js_result = page.run_js(
+        _traffic_protection_find_js()
+        + """
+        const block = findTrafficBlock();
+        if (!block) {
+            return { unchecked: false, reason: 'traffic_protection_block_not_found' };
+        }
+        const input = block.querySelector('input[type="checkbox"]')
+            || block.closest('label')?.querySelector('input[type="checkbox"]')
+            || block.parentElement?.querySelector('input[type="checkbox"]');
+        if (!beastChecked(input)) {
+            return { unchecked: true, method: 'js_already_unchecked' };
+        }
+        const label = block.querySelector('label[class*="CBX"], label[class*="ICE"]')
+            || (block.tagName === 'LABEL' ? block : null);
+        if (label) {
+            label.click();
+        } else if (input) {
+            input.click();
+        } else {
+            block.click();
+        }
+        const afterInput = block.querySelector('input[type="checkbox"]') || input;
+        return {
+            unchecked: !beastChecked(afterInput),
+            method: label ? 'js_label_click' : 'js_input_click',
+            checked_after: beastChecked(afterInput),
+        };
+        """
+    ) or {"unchecked": False, "reason": "traffic_protection_js_failed"}
+
+    after = _read_traffic_protection_checked(page)
+    if js_result.get("unchecked") or not after.get("checked"):
+        print(f"[{account_id}] 已取消勾选开启流量保护", flush=True)
+        return {
+            "unchecked": True,
+            "method": js_result.get("method", "js_uncheck"),
+            "before": before,
+            "after": after,
+            "js_result": js_result,
+        }
+    return {
+        "unchecked": False,
+        "reason": "traffic_protection_still_checked",
+        "before": before,
+        "after": after,
+        "js_result": js_result,
+    }
+
+
+def _click_confirm_submit(page: DpPage, account_id: str) -> dict[str, Any]:
+    """价格确认页点击「确认提交」。"""
+    _scroll_page_to_bottom(page)
+    raw_page = getattr(page, "_page", None)
+    if raw_page is not None:
+        selectors = (
+            'button[data-testid="beast-core-button"]:has-text("确认提交")',
+            'button:has-text("确认提交")',
+        )
+        for selector in selectors:
+            try:
+                buttons = raw_page.locator(selector)
+                count = buttons.count()
+                for index in range(count - 1, -1, -1):
+                    btn = buttons.nth(index)
+                    if not btn.is_visible():
+                        continue
+                    text = str(btn.inner_text(timeout=1_000) or "").strip()
+                    if text != "确认提交":
+                        continue
+                    btn.scroll_into_view_if_needed(timeout=3_000)
+                    btn.click(timeout=8_000)
+                    print(f"[{account_id}] 已点击确认提交", flush=True)
+                    return {"clicked": True, "text": "确认提交", "method": selector, "index": index}
+            except Exception:
+                continue
+
+    js_result = page.run_js(
+        """
+        function norm(text) {
+            return (text || '').replace(/\\s+/g, '').trim();
+        }
+        function isVisible(el) {
+            if (!el || !el.getBoundingClientRect) return false;
+            const r = el.getBoundingClientRect();
+            const s = window.getComputedStyle(el);
+            return r.width > 20 && r.height > 16
+                && s.display !== 'none'
+                && s.visibility !== 'hidden'
+                && parseFloat(s.opacity || '1') > 0.05;
+        }
+        const buttons = Array.from(document.querySelectorAll('button'))
+            .filter(isVisible)
+            .filter((el) => norm(el.innerText || el.textContent || '') === '确认提交');
+        if (!buttons.length) {
+            return { clicked: false, reason: 'confirm_submit_button_not_found' };
+        }
+        const target = buttons[buttons.length - 1];
+        target.scrollIntoView({ block: 'center', inline: 'nearest' });
+        target.click();
+        return { clicked: true, text: '确认提交', method: 'js_confirm_submit' };
+        """
+    ) or {"clicked": False, "reason": "confirm_submit_js_failed"}
+    if js_result.get("clicked"):
+        print(f"[{account_id}] 已点击确认提交（JS）", flush=True)
+    return js_result
+
+
+def _wait_product_pick_page_ready(page: DpPage, timeout: int = 15) -> bool:
+    for _ in range(timeout):
+        _dismiss_message_popup(page)
+        text = _body_text(page)
+        if "选择活动商品" in text and "确认选择" in text:
             return True
         time.sleep(1)
     return False
@@ -2201,159 +2479,12 @@ def _click_confirm_product_selection(page: DpPage, account_id: str, activity_id:
     return js_result
 
 
-def _read_traffic_protection_checked(page: DpPage) -> dict[str, Any]:
-    return page.run_js(
-        """
-        function beastChecked(input) {
-            if (!input) return false;
-            return input.checked || input.getAttribute('data-checked') === 'true';
-        }
-        function findTrafficBlock() {
-            const blocks = Array.from(document.querySelectorAll('div, section, label'))
-                .filter((el) => {
-                    const text = (el.innerText || el.textContent || '').replace(/\\s+/g, ' ');
-                    return text.includes('开启流量保护') && !text.includes('我已阅读并同意');
-                });
-            if (!blocks.length) return null;
-            blocks.sort((a, b) => {
-                const ta = (a.innerText || a.textContent || '').length;
-                const tb = (b.innerText || b.textContent || '').length;
-                return ta - tb;
-            });
-            return blocks[0];
-        }
-        const block = findTrafficBlock();
-        if (!block) {
-            return { found: false, reason: 'traffic_protection_block_not_found' };
-        }
-        const input = block.querySelector('input[type="checkbox"]');
-        const label = block.querySelector('label[class*="CBX"], label[class*="ICE"], [data-testid="beast-core-checkbox"] label');
-        return {
-            found: true,
-            checked: beastChecked(input),
-            has_label: Boolean(label),
-            text: (block.innerText || block.textContent || '').slice(0, 120),
-        };
-        """
-    ) or {"found": False, "reason": "traffic_protection_state_js_failed"}
-
-
-def _uncheck_traffic_protection(page: DpPage, account_id: str) -> dict[str, Any]:
-    """确认商品价格信息页取消勾选「开启流量保护」（图四红框）。"""
-    if not _wait_price_confirm_page(page, timeout=18):
-        return {"unchecked": False, "reason": "price_confirm_page_not_ready", "url": page.url}
-
-    before = _read_traffic_protection_checked(page)
-    if not before.get("found"):
-        return {"unchecked": False, "reason": "traffic_protection_not_found", "before": before}
-    if not before.get("checked"):
-        print(f"[{account_id}] 流量保护已是未勾选状态", flush=True)
-        return {"unchecked": True, "method": "already_unchecked", "before": before}
-
-    raw_page = getattr(page, "_page", None)
-    if raw_page is not None:
-        scoped_selectors = (
-            'div[class*="traffic_protect"]:has-text("开启流量保护")',
-            'label:has-text("开启流量保护")',
-            '[data-testid="beast-core-checkbox"]:has-text("开启流量保护")',
-        )
-        for selector in scoped_selectors:
-            try:
-                block = raw_page.locator(selector).first
-                if not block.count():
-                    continue
-                for label_selector in (
-                    'label[class*="CBX_checkbox"]',
-                    'label[class*="CBX"]',
-                    'label[class*="ICE"]',
-                ):
-                    label = block.locator(label_selector).first
-                    if label.count() and label.is_visible():
-                        label.scroll_into_view_if_needed(timeout=3_000)
-                        label.click(timeout=5_000)
-                        time.sleep(0.5)
-                        after = _read_traffic_protection_checked(page)
-                        if not after.get("checked"):
-                            print(f"[{account_id}] 已取消勾选开启流量保护", flush=True)
-                            return {
-                                "unchecked": True,
-                                "method": f"playwright_{label_selector}",
-                                "before": before,
-                                "after": after,
-                            }
-            except Exception:
-                continue
-
-    js_result = page.run_js(
-        """
-        function beastChecked(input) {
-            if (!input) return false;
-            return input.checked || input.getAttribute('data-checked') === 'true';
-        }
-        function findTrafficBlock() {
-            const blocks = Array.from(document.querySelectorAll('div, section, label'))
-                .filter((el) => {
-                    const text = (el.innerText || el.textContent || '').replace(/\\s+/g, ' ');
-                    return text.includes('开启流量保护') && !text.includes('我已阅读并同意');
-                });
-            if (!blocks.length) return null;
-            blocks.sort((a, b) => {
-                const ta = (a.innerText || a.textContent || '').length;
-                const tb = (b.innerText || b.textContent || '').length;
-                return ta - tb;
-            });
-            return blocks[0];
-        }
-        const block = findTrafficBlock();
-        if (!block) {
-            return { unchecked: false, reason: 'traffic_protection_block_not_found' };
-        }
-        const input = block.querySelector('input[type="checkbox"]');
-        if (!beastChecked(input)) {
-            return { unchecked: true, method: 'js_already_unchecked' };
-        }
-        const label = block.querySelector('label[class*="CBX"], label[class*="ICE"]');
-        if (label) {
-            label.click();
-        } else if (input) {
-            input.click();
-        } else {
-            block.click();
-        }
-        const afterInput = block.querySelector('input[type="checkbox"]') || input;
-        return {
-            unchecked: !beastChecked(afterInput),
-            method: label ? 'js_label_click' : 'js_input_click',
-            checked_after: beastChecked(afterInput),
-        };
-        """
-    ) or {"unchecked": False, "reason": "traffic_protection_js_failed"}
-
-    after = _read_traffic_protection_checked(page)
-    if js_result.get("unchecked") or not after.get("checked"):
-        print(f"[{account_id}] 已取消勾选开启流量保护", flush=True)
-        return {
-            "unchecked": True,
-            "method": js_result.get("method", "js_uncheck"),
-            "before": before,
-            "after": after,
-            "js_result": js_result,
-        }
-    return {
-        "unchecked": False,
-        "reason": "traffic_protection_still_checked",
-        "before": before,
-        "after": after,
-        "js_result": js_result,
-    }
-
-
 def _finalize_standard_registration(
     page: DpPage,
     account_id: str,
     activity_id: str,
 ) -> dict[str, Any]:
-    """弹窗确认后：点击确认选择 → 进入价格确认页 → 取消勾选流量保护。"""
+    """弹窗确认后：点击确认选择 → 进入价格确认页 → 取消流量保护 → 确认提交。"""
     time.sleep(1.5)
     _dismiss_wrong_tabs_and_focus_product_pick(page, activity_id, account_id)
 
@@ -2361,18 +2492,23 @@ def _finalize_standard_registration(
     if not confirm_selection.get("clicked"):
         return {"status": "failed", "step": "click_confirm_selection", **confirm_selection}
 
-    time.sleep(2)
+    time.sleep(2.5)
     _dismiss_wrong_tabs_and_focus_product_pick(page, activity_id, account_id)
 
     traffic_result = _uncheck_traffic_protection(page, account_id)
     if not traffic_result.get("unchecked"):
         return {"status": "failed", "step": "uncheck_traffic_protection", **traffic_result}
 
+    submit_result = _click_confirm_submit(page, account_id)
+    if not submit_result.get("clicked"):
+        return {"status": "failed", "step": "click_confirm_submit", **submit_result}
+
     return {
         "status": "success",
-        "step": "price_confirm_prepared",
+        "step": "register_submitted",
         "confirm_selection": confirm_selection,
         "traffic_protection": traffic_result,
+        "confirm_submit": submit_result,
         "current_url": page.url,
     }
 
