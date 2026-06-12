@@ -6,6 +6,12 @@ import time
 from typing import Any
 
 from pdd_agent.browser.dp_compat_sync import DpPage
+from pdd_agent.db.repositories import get_published_products_by_mapping_ids
+from pdd_agent.skills.campaign.price_rules import (
+    find_pdd_price_range,
+    load_pdd_price_ranges,
+    price_rule_candidates,
+)
 
 MARKETING_TOOL_URLS = (
     "https://mms.pinduoduo.com/marketing/tools",
@@ -2765,6 +2771,403 @@ def _set_batch_reduction_discount(page: DpPage, account_id: str, value: str = "5
     }
 
 
+def _campaign_price_candidates(row: Any) -> dict[str, Any]:
+    meta = row.spec_metadata or {}
+    skus = meta.get("skus") if isinstance(meta, dict) else []
+    first_sku = skus[0] if isinstance(skus, list) and skus else {}
+    if not isinstance(first_sku, dict):
+        first_sku = {}
+    raw_candidates: list[str] = []
+    if isinstance(skus, list):
+        for sku in skus:
+            if not isinstance(sku, dict):
+                continue
+            raw_candidates.extend(
+                [
+                    str(sku.get("combo_folder") or ""),
+                    str(sku.get("model_code") or ""),
+                    str(sku.get("style_code") or ""),
+                ]
+            )
+    raw_candidates.extend([str(row.product_code or ""), str(row.family_code or "")])
+    candidates: list[str] = []
+    for item in raw_candidates:
+        candidates.extend(price_rule_candidates(item))
+    return {
+        "mapping_id": row.mapping_id,
+        "pdd_product_id": str(row.pdd_product_id or "").strip(),
+        "product_code": str(row.product_code or "").strip(),
+        "family_code": str(row.family_code or "").strip(),
+        "image_set": str(row.image_set or "").strip(),
+        "first_sku": first_sku,
+        "price_rule_candidates": list(dict.fromkeys(candidates)),
+    }
+
+
+def _load_campaign_price_targets(mapping_ids: list[str]) -> dict[str, Any]:
+    ids = [str(item).strip() for item in mapping_ids if str(item).strip()]
+    if not ids:
+        return {"status": "skipped", "reason": "no_published_mapping_ids", "targets": []}
+    rows = get_published_products_by_mapping_ids(ids)
+    price_ranges = load_pdd_price_ranges()
+    targets: list[dict[str, Any]] = []
+    for row in rows:
+        target = _campaign_price_candidates(row)
+        rule = find_pdd_price_range(price_ranges, target["price_rule_candidates"])
+        target["price_rule"] = (
+            {
+                "code": rule.code,
+                "min_price": rule.min_price,
+                "max_price": rule.max_price,
+            }
+            if rule
+            else None
+        )
+        targets.append(target)
+    missing_ids = [item for item in ids if item not in {target["mapping_id"] for target in targets}]
+    return {
+        "status": "success",
+        "targets": targets,
+        "missing_mapping_ids": missing_ids,
+        "price_rule_count": len(price_ranges),
+    }
+
+
+def _read_activity_discount_price_rows(page: DpPage) -> dict[str, Any]:
+    try:
+        result = page.run_js(
+            """
+            function isVisible(el) {
+                if (!el || !el.getBoundingClientRect) return false;
+                const r = el.getBoundingClientRect();
+                const s = window.getComputedStyle(el);
+                return r.width > 2 && r.height > 2
+                    && s.display !== 'none'
+                    && s.visibility !== 'hidden'
+                    && parseFloat(s.opacity || '1') > 0.05;
+            }
+            function textOf(el) {
+                return (el.innerText || el.textContent || '').trim();
+            }
+            const roots = Array.from(document.querySelectorAll(
+                '[data-testid="beast-core-table"], table, [class*="TB_outerWrapper"], [class*="TB_table"]'
+            ))
+                .filter((el) => isVisible(el))
+                .filter((el) => {
+                    const text = textOf(el);
+                    return text.includes('活动库存')
+                        && text.includes('促销维度')
+                        && (text.includes('折后价') || text.includes('拼单价') || text.includes('立减'));
+                });
+            const rows = [];
+            for (const root of roots) {
+                const tableRows = Array.from(root.querySelectorAll(
+                    'tbody tr,[data-testid="beast-core-table-body"] tr'
+                )).filter(isVisible);
+                for (const row of tableRows) {
+                    const text = textOf(row);
+                    if (!text.includes('ID:') && !text.includes('拼单价')) continue;
+                    const ids = Array.from(text.matchAll(/ID[:：]?\\s*(\\d{6,})/g)).map((m) => m[1]);
+                    const prices = Array.from(text.matchAll(/¥\\s*([0-9]+(?:\\.[0-9]+)?)/g))
+                        .map((m) => Number(m[1]))
+                        .filter((n) => Number.isFinite(n) && n > 0);
+                    const cells = Array.from(row.querySelectorAll('td,[role="cell"],[data-testid="beast-core-table-td"]'))
+                        .filter(isVisible)
+                        .map((cell) => textOf(cell));
+                    rows.push({
+                        ids,
+                        prices,
+                        check_price: prices.length ? Math.min(...prices) : null,
+                        text: text.slice(0, 500),
+                        cells: cells.slice(0, 16),
+                    });
+                }
+            }
+            return { rows, row_count: rows.length };
+            """
+        )
+    except Exception as exc:
+        return {"rows": [], "row_count": 0, "error": _safe_exc(exc)}
+    if isinstance(result, dict):
+        return result
+    return {"rows": [], "row_count": 0, "raw": result}
+
+
+def _collect_activity_discount_price_rows(page: DpPage, max_scrolls: int = 10) -> dict[str, Any]:
+    collected: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    snapshots: list[dict[str, Any]] = []
+    try:
+        page.run_js("window.scrollTo(0, 0);")
+        time.sleep(0.5)
+    except Exception:
+        pass
+    for _ in range(max_scrolls):
+        state = _read_activity_discount_price_rows(page)
+        snapshots.append(
+            {
+                "row_count": state.get("row_count"),
+                "error": state.get("error"),
+                "raw": state.get("raw"),
+            }
+        )
+        for row in state.get("rows") or []:
+            ids = ",".join(str(item) for item in row.get("ids") or [])
+            key = ids or str(row.get("text") or "")[:120]
+            if not key or key in seen:
+                continue
+            seen.add(key)
+            collected.append(row)
+        try:
+            scroll_state = page.run_js(
+                """
+                const before = window.scrollY || document.documentElement.scrollTop || 0;
+                const step = Math.max(500, Math.floor(window.innerHeight * 0.75));
+                window.scrollBy(0, step);
+                const after = window.scrollY || document.documentElement.scrollTop || 0;
+                const maxY = Math.max(
+                    document.body.scrollHeight,
+                    document.documentElement.scrollHeight
+                ) - window.innerHeight;
+                return { before, after, maxY };
+                """
+            )
+            if isinstance(scroll_state, dict) and (
+                float(scroll_state.get("after") or 0) >= float(scroll_state.get("maxY") or 0) - 5
+                or float(scroll_state.get("after") or 0) == float(scroll_state.get("before") or 0)
+            ):
+                break
+            time.sleep(0.5)
+        except Exception:
+            break
+    return {"rows": collected, "row_count": len(collected), "snapshots": snapshots}
+
+
+def _delete_activity_product_by_id(page: DpPage, product_id: str) -> dict[str, Any]:
+    try:
+        page.run_js("window.scrollTo(0, 0);")
+        time.sleep(0.3)
+    except Exception:
+        pass
+
+    last_result: dict[str, Any] = {"deleted": False, "reason": "not_attempted", "product_id": product_id}
+    for _ in range(10):
+        try:
+            result = page.run_js(
+                """
+                const productId = String(arguments[0] || '');
+                function isVisible(el) {
+                    if (!el || !el.getBoundingClientRect) return false;
+                    const r = el.getBoundingClientRect();
+                    const s = window.getComputedStyle(el);
+                    return r.width > 2 && r.height > 2
+                        && s.display !== 'none'
+                        && s.visibility !== 'hidden'
+                        && parseFloat(s.opacity || '1') > 0.05;
+                }
+                function textOf(el) {
+                    return (el.innerText || el.textContent || '').trim();
+                }
+                function clickLikeUser(el) {
+                    el.scrollIntoView({ block: 'center', inline: 'nearest' });
+                    const r = el.getBoundingClientRect();
+                    const x = r.left + r.width / 2;
+                    const y = r.top + r.height / 2;
+                    const target = document.elementFromPoint(x, y) || el;
+                    for (const ev of ['pointerdown', 'mousedown', 'pointerup', 'mouseup', 'click']) {
+                        target.dispatchEvent(new MouseEvent(ev, {
+                            bubbles: true,
+                            cancelable: true,
+                            view: window,
+                            clientX: x,
+                            clientY: y,
+                        }));
+                    }
+                    if (target !== el) el.click();
+                }
+                const rows = Array.from(document.querySelectorAll(
+                    'tbody tr,[data-testid="beast-core-table-body"] tr'
+                ))
+                    .filter(isVisible)
+                    .map((row) => ({ row, text: textOf(row) }))
+                    .filter((item) => item.text.includes(productId));
+                const rowItem = rows[0];
+                if (!rowItem) return { deleted: false, reason: 'activity_row_not_found', product_id: productId };
+                const controls = Array.from(rowItem.row.querySelectorAll(
+                    '[data-tracking-viewid="el_deleting_element"],[data-testid="beast-core-button-link"],button,a,span,div'
+                ))
+                    .filter(isVisible)
+                    .map((el) => ({ el, text: textOf(el), rect: el.getBoundingClientRect() }))
+                    .filter((item) => item.text === '删除商品' || item.text === '删除')
+                    .sort((a, b) => (a.rect.width * a.rect.height) - (b.rect.width * b.rect.height));
+                if (!controls.length) {
+                    return { deleted: false, reason: 'delete_button_not_found', product_id: productId, row_text: rowItem.text.slice(0, 300) };
+                }
+                clickLikeUser(controls[0].el);
+                return { deleted: true, product_id: productId, button_text: controls[0].text };
+                """,
+                product_id,
+            )
+        except Exception as exc:
+            result = {"deleted": False, "reason": _safe_exc(exc), "product_id": product_id}
+        if not isinstance(result, dict):
+            result = {"deleted": False, "reason": str(result), "product_id": product_id}
+        last_result = result
+        if result.get("deleted") or result.get("reason") != "activity_row_not_found":
+            break
+        try:
+            scroll_state = page.run_js(
+                """
+                const before = window.scrollY || document.documentElement.scrollTop || 0;
+                const step = Math.max(500, Math.floor(window.innerHeight * 0.75));
+                window.scrollBy(0, step);
+                const after = window.scrollY || document.documentElement.scrollTop || 0;
+                const maxY = Math.max(
+                    document.body.scrollHeight,
+                    document.documentElement.scrollHeight
+                ) - window.innerHeight;
+                return { before, after, maxY };
+                """
+            )
+            if isinstance(scroll_state, dict) and (
+                float(scroll_state.get("after") or 0) >= float(scroll_state.get("maxY") or 0) - 5
+                or float(scroll_state.get("after") or 0) == float(scroll_state.get("before") or 0)
+            ):
+                break
+            time.sleep(0.4)
+        except Exception:
+            break
+
+    result = last_result
+    if not result.get("deleted"):
+        return result
+
+    try:
+        time.sleep(0.8)
+        confirm = page.run_js(
+            """
+            function isVisible(el) {
+                if (!el || !el.getBoundingClientRect) return false;
+                const r = el.getBoundingClientRect();
+                const s = window.getComputedStyle(el);
+                return r.width > 2 && r.height > 2
+                    && s.display !== 'none'
+                    && s.visibility !== 'hidden'
+                    && parseFloat(s.opacity || '1') > 0.05;
+            }
+            function textOf(el) {
+                return (el.innerText || el.textContent || '').trim();
+            }
+            function clickLikeUser(el) {
+                const r = el.getBoundingClientRect();
+                const x = r.left + r.width / 2;
+                const y = r.top + r.height / 2;
+                const target = document.elementFromPoint(x, y) || el;
+                for (const ev of ['pointerdown', 'mousedown', 'pointerup', 'mouseup', 'click']) {
+                    target.dispatchEvent(new MouseEvent(ev, {
+                        bubbles: true,
+                        cancelable: true,
+                        view: window,
+                        clientX: x,
+                        clientY: y,
+                    }));
+                }
+                if (target !== el) el.click();
+            }
+            const modals = Array.from(document.querySelectorAll('[data-testid="beast-core-modal"], [class*="MDL_modal"]'))
+                .filter(isVisible);
+            if (!modals.length) return { clicked: false, reason: 'confirm_modal_not_found' };
+            const root = modals[modals.length - 1];
+            const buttons = Array.from(root.querySelectorAll('button,[role="button"],a,span,div'))
+                .filter(isVisible)
+                .map((el) => ({ el, text: textOf(el), rect: el.getBoundingClientRect() }))
+                .filter((item) => ['确认', '确定', '删除', '确认删除'].includes(item.text))
+                .sort((a, b) => (a.rect.width * a.rect.height) - (b.rect.width * b.rect.height));
+            if (!buttons.length) return { clicked: false, reason: 'confirm_not_found' };
+            clickLikeUser(buttons[0].el);
+            return { clicked: true, text: buttons[0].text };
+            """
+        )
+        result["confirm"] = confirm
+        time.sleep(1)
+    except Exception as exc:
+        result["confirm_error"] = _safe_exc(exc)
+    return result
+
+
+def _filter_activity_products_by_price(
+    page: DpPage,
+    account_id: str,
+    mapping_ids: list[str],
+) -> dict[str, Any]:
+    target_state = _load_campaign_price_targets(mapping_ids)
+    if target_state.get("status") == "skipped":
+        return target_state
+
+    time.sleep(2)
+    row_state = _collect_activity_discount_price_rows(page)
+    rows = row_state.get("rows") or []
+    decisions: list[dict[str, Any]] = []
+    kept: list[str] = []
+    deleted: list[str] = []
+
+    for target in target_state.get("targets") or []:
+        product_id = str(target.get("pdd_product_id") or "").strip()
+        row = next(
+            (
+                item
+                for item in rows
+                if product_id and product_id in [str(pid) for pid in item.get("ids") or []]
+            ),
+            {},
+        )
+        rule = target.get("price_rule")
+        check_price = row.get("check_price") if isinstance(row, dict) else None
+        ok = (
+            isinstance(rule, dict)
+            and isinstance(check_price, (int, float))
+            and float(rule["min_price"]) <= float(check_price) <= float(rule["max_price"])
+        )
+        decision: dict[str, Any] = {
+            "product_id": product_id,
+            "mapping_id": target.get("mapping_id"),
+            "product_code": target.get("product_code"),
+            "family_code": target.get("family_code"),
+            "first_sku": target.get("first_sku"),
+            "price_rule_candidates": target.get("price_rule_candidates"),
+            "price_rule": rule,
+            "check_price": check_price,
+            "row_found": bool(row),
+            "keep": ok,
+            "reason": "price_in_range" if ok else "price_out_of_range_or_missing_rule",
+        }
+        if ok:
+            kept.append(product_id)
+        else:
+            delete_result = _delete_activity_product_by_id(page, product_id) if product_id else {
+                "deleted": False,
+                "reason": "missing_product_id",
+            }
+            decision["delete"] = delete_result
+            if delete_result.get("deleted"):
+                deleted.append(product_id)
+        decisions.append(decision)
+
+    print(
+        f"[{account_id}] 活动价格筛选：保留 {len(kept)} 个，删除 {len(deleted)} 个",
+        flush=True,
+    )
+    return {
+        "status": "success" if kept else "no_eligible_products",
+        "step": "campaign_price_filter",
+        "kept_product_ids": kept,
+        "deleted_product_ids": deleted,
+        "decisions": decisions,
+        "targets": target_state,
+        "activity_rows": row_state,
+    }
+
+
 def _uncheck_surprise_discount(page: DpPage, account_id: str) -> dict[str, Any]:
     """
     取消底部「同步设置惊喜优惠」复选框。
@@ -3084,6 +3487,21 @@ def setup_limited_time_campaign(
                 "published_mapping_ids": selected_mapping_ids,
             }
 
+        price_filter = _filter_activity_products_by_price(page, account_id, selected_mapping_ids)
+        if price_filter.get("status") == "no_eligible_products":
+            return {
+                "status": "failed",
+                "step": "campaign_price_filter",
+                "error": "没有符合 pdd.xls 价格区间的活动商品，已删除不符合商品，不继续创建活动",
+                "price_filter": price_filter,
+                "batch_reduction": batch_reduction,
+                "promotion_dimension": promotion_dimension,
+                "product_selection": product_selection,
+                "current_url": page.url,
+                "selected_pdd_product_ids": selected_pdd_product_ids,
+                "published_mapping_ids": selected_mapping_ids,
+            }
+
         checkbox = _uncheck_surprise_discount(page, account_id)
         if not checkbox.get("found"):
             return {
@@ -3091,6 +3509,7 @@ def setup_limited_time_campaign(
                 "step": "uncheck_surprise_discount",
                 "error": "未找到同步设置惊喜优惠复选框",
                 "checkbox": checkbox,
+                "price_filter": price_filter,
                 "batch_reduction": batch_reduction,
                 "promotion_dimension": promotion_dimension,
                 "product_selection": product_selection,
@@ -3104,6 +3523,7 @@ def setup_limited_time_campaign(
                 "step": "uncheck_surprise_discount",
                 "error": "同步设置惊喜优惠仍处于勾选状态",
                 "checkbox": checkbox,
+                "price_filter": price_filter,
                 "batch_reduction": batch_reduction,
                 "promotion_dimension": promotion_dimension,
                 "product_selection": product_selection,
@@ -3117,6 +3537,7 @@ def setup_limited_time_campaign(
             "step": "ready_for_next",
             "message": "已进入限时限量购活动设置页，选择活动商品，促销维度切换为规格级，并取消勾选同步设置惊喜优惠",
             "checkbox": checkbox,
+            "price_filter": price_filter,
             "batch_reduction": batch_reduction,
             "promotion_dimension": promotion_dimension,
             "product_selection": product_selection,

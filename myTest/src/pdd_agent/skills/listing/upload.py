@@ -31,6 +31,35 @@ def _error_screenshot_path(filename: str) -> str:
     return str(d / filename)
 
 
+def _unit_spec_metadata(unit: ListingUnit) -> dict[str, Any]:
+    return {
+        "family_code": unit.family_code,
+        "product_code": unit.product_code,
+        "image_set": unit.image_set,
+        "listing_label": unit.listing_label,
+        "merchant_code": unit.merchant_code,
+        "root": str(unit.root),
+        "carousel_images": [str(path) for path in unit.carousel_images],
+        "detail_images": [str(path) for path in unit.detail_images],
+        "style_codes": list(unit.style_codes),
+        "model_codes": list(unit.model_codes),
+        "skus": [
+            {
+                "style_code": sku.style_code,
+                "style_name": sku.style_name,
+                "model_code": sku.model_code,
+                "model_name": sku.model_name,
+                "combo_folder": sku.combo_folder,
+                "preview_image": str(sku.preview_image),
+                "inventory": sku.inventory,
+                "group_price": sku.group_price,
+                "single_price": sku.single_price,
+            }
+            for sku in unit.skus
+        ],
+    }
+
+
 GOODS_LIST_URLS = (
     "https://mms.pinduoduo.com/goods/goods_list",
     "https://mms.pinduoduo.com/goods/goods-list",
@@ -58,8 +87,10 @@ def _listing_result(
     return {
         "listing_label": unit.listing_label,
         "product_code": unit.product_code,
+        "family_code": unit.family_code,
         "image_set": unit.image_set,
         "merchant_code": unit.merchant_code,
+        "spec_metadata": _unit_spec_metadata(unit),
         "platform_listing_code": "",
         "pdd_product_id": "",
         "pdd_product_id_capture_status": "",
@@ -109,8 +140,7 @@ def _classify_exception(exc: Exception) -> tuple[str, bool]:
 def _dismiss_address_required_page(page: DpPage, account_id: str, label: str) -> bool:
     """
     拼多多偶尔会在发布页弹出「请尽快填写真实有效联系/经营地址」遮罩。
-    这个弹窗没有明显弹窗关闭按钮，会挡住后续分类/上传操作；按页面左上角
-    「发布新商品」前的关闭 X 退出当前发布页。
+    这个弹窗会挡住后续分类/上传操作；优先点击弹窗左上角的关闭 X。
     """
     try:
         result = page.run_js(
@@ -147,6 +177,14 @@ def _dismiss_address_required_page(page: DpPage, account_id: str, label: str) ->
                 return el;
             }
 
+            const exactClose = Array.from(document.querySelectorAll(
+                '[data-testid="beast-core-icon-close"], [class*="PersonalShopBusinessAddressModifyModal2_closeIcon"], [class*="closeIcon"]'
+            )).find(isVisible);
+            if (exactClose) {
+                clickableParent(exactClose).click();
+                return { present: true, clicked: true, method: 'address_close_icon' };
+            }
+
             const candidates = [];
             for (const el of document.querySelectorAll('button,a,span,i,svg,div')) {
                 if (!isVisible(el)) continue;
@@ -158,7 +196,6 @@ def _dismiss_address_required_page(page: DpPage, account_id: str, label: str) ->
                 if (
                     text === '×'
                     || text === '✕'
-                    || text.includes('发布新商品')
                     || aria.toLowerCase().includes('close')
                     || cls.toLowerCase().includes('close')
                 ) {
@@ -186,17 +223,17 @@ def _dismiss_address_required_page(page: DpPage, account_id: str, label: str) ->
 
         if result.get("clicked"):
             print(
-                f"[{account_id}] [{label}] 检测到经营地址补充弹窗，已点击左上角关闭发布页",
+                f"[{account_id}] [{label}] 检测到经营地址补充弹窗，已点击左上角关闭按钮",
                 flush=True,
             )
             time.sleep(1)
-            _confirm_leave_publish_page(page)
+            return True
         else:
             print(
                 f"[{account_id}] [{label}] 检测到经营地址补充弹窗，但未定位到左上角关闭按钮",
                 flush=True,
             )
-        return True
+        return False
     except Exception as exc:
         print(f"[{account_id}] [{label}] 地址弹窗处理异常：{_safe_exc(exc)}", flush=True)
         return False
@@ -720,8 +757,7 @@ def upload_one_listing(
     page.get("https://mms.pinduoduo.com/goods/category")
     time.sleep(5)
     if _dismiss_address_required_page(page, account_id, label):
-        _clear_beforeunload(page)
-        return _listing_result(unit=unit, status="skipped", reason="address_required")
+        time.sleep(2)
 
     ui_type = "A"
     if page.ele("css:.goodsCarousel_btns__22KMn", timeout=1) or page.ele(
@@ -774,6 +810,8 @@ def upload_one_listing(
             confirm.click()
         time.sleep(5)
         page.wait.load_start()
+        if _dismiss_address_required_page(page, account_id, label):
+            time.sleep(2)
 
         section_ele = page.ele("css:.uploadImgEnter.uploadImgEnterNew")
         if section_ele:

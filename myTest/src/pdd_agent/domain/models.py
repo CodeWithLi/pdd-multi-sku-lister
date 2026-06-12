@@ -29,6 +29,7 @@ class ListingUnit(BaseModel):
     """一个可上架单元 = 商品编码 × 一套图。"""
 
     product_code: str
+    family_code: str = ""
     image_set: str = ""  # 如「第一套图」，空表示旧版单套结构
     root: Path
     carousel_images: list[Path] = Field(default_factory=list)

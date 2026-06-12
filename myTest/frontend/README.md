@@ -16,7 +16,7 @@
 ```powershell
 cd D:\job\自动上架多sku\myTest
 .\.venv\Scripts\Activate.ps1
-python -m pdd_agent.main api --port 8000
+python -m pdd_agent.main api --port 8010
 ```
 
 **2. 前端**
@@ -29,7 +29,7 @@ npm run dev
 
 浏览器打开：http://127.0.0.1:5173
 
-Vite 已将 `/api` 代理到 `http://127.0.0.1:8000`。
+Vite 已将 `/api` 代理到 `http://127.0.0.1:8010`。
 
 ## 页面
 

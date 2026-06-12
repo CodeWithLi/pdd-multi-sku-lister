@@ -111,7 +111,16 @@ async def report_node(state: ListingState) -> dict:
     lines = [f"- {u.listing_label}: {len(u.skus)} SKU" for u in units]
     msg = "\n".join(lines) if lines else "no valid units"
     logger.info("listing report:\n%s", msg)
-    return {"phase": "report", "finished": True, "results": [{"summary": msg}]}
+    preflight = state.get("preflight")
+    errors: list[str] = []
+    if preflight and not preflight.ok:
+        errors = [i.message for i in preflight.issues if i.level == "error"]
+    if not units and not errors:
+        errors = ["no valid listing units"]
+    result = {"phase": "report", "finished": True, "results": [{"summary": msg}]}
+    if errors:
+        result["errors"] = errors
+    return result
 
 
 def build_listing_graph():

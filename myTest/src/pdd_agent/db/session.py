@@ -6,7 +6,7 @@ import re
 from contextlib import contextmanager
 from typing import Iterator
 
-from sqlalchemy import create_engine, text
+from sqlalchemy import create_engine, inspect, text
 from sqlalchemy.engine import Engine, make_url
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session, sessionmaker
@@ -45,6 +45,30 @@ def _create_mysql_database_if_missing(database_url: str) -> None:
         server_engine.dispose()
 
 
+def _ensure_published_products_columns(engine: Engine) -> None:
+    try:
+        inspector = inspect(engine)
+        if "published_products" not in inspector.get_table_names():
+            return
+        existing = {col["name"] for col in inspector.get_columns("published_products")}
+        dialect = engine.dialect.name
+        statements: list[str] = []
+        if "family_code" not in existing:
+            statements.append("ALTER TABLE published_products ADD COLUMN family_code VARCHAR(64) NOT NULL DEFAULT ''")
+        if "spec_metadata" not in existing:
+            if dialect.startswith("mysql"):
+                statements.append("ALTER TABLE published_products ADD COLUMN spec_metadata JSON NULL")
+            else:
+                statements.append("ALTER TABLE published_products ADD COLUMN spec_metadata JSON NULL")
+        if not statements:
+            return
+        with engine.begin() as conn:
+            for stmt in statements:
+                conn.execute(text(stmt))
+    except Exception:
+        return
+
+
 def init_database() -> bool:
     """初始化数据库连接与表结构；未配置 DATABASE_URL 时返回 False。"""
     global _engine, _sessionmaker, _available, _last_error
@@ -69,6 +93,7 @@ def init_database() -> bool:
             future=True,
         )
         Base.metadata.create_all(engine)
+        _ensure_published_products_columns(engine)
         _engine = engine
         _sessionmaker = sessionmaker(bind=engine, expire_on_commit=False, future=True)
         _available = True

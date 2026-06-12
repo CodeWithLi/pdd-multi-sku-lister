@@ -38,7 +38,7 @@ class BrowserConfig(BaseModel):
 class PathsConfig(BaseModel):
     """运行时目录（相对 PROJECT_ROOT）。"""
 
-    assets_root: str = "data/assets"
+    assets_root: str = "data/assets/商品上架规格文件"
     profiles_root: str = "data/profiles"
     runs_root: str = "data/runs"
 

@@ -91,6 +91,14 @@ export interface ProductSummary {
   listing_unit_count: number
 }
 
+export interface ListingTargetOption {
+  selector: string
+  family_code: string
+  image_set: string
+  product_codes: string[]
+  product_count: number
+}
+
 export interface SkuCombo {
   style_code: string
   style_name: string
@@ -105,6 +113,7 @@ export interface SkuCombo {
 
 export interface ListingUnit {
   product_code: string
+  family_code: string
   image_set: string
   listing_label: string
   merchant_code: string
@@ -287,6 +296,7 @@ export interface PublishedProduct {
   account_id: string
   source_run_id: string
   product_code: string
+  family_code: string
   image_set: string
   listing_label: string
   merchant_code: string
@@ -295,6 +305,7 @@ export interface PublishedProduct {
   published_at: string | null
   created_at: string | null
   updated_at: string | null
+  spec_metadata: Record<string, unknown>
 }
 
 export interface PublishedProductListResponse {

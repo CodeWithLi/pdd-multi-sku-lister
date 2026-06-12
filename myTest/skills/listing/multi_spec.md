@@ -3,14 +3,14 @@
 ## 素材目录结构
 
 ```
-{product_code}/
-├── 第一套图/
-│   ├── 主图/1.png … 5.png
-│   ├── 详情页/6.png … 8.png
-│   └── {style_code}/
-│       └── {style}+{model}/
-│           └── 预览图.png
-└── 第二套图/ …
+data/assets/商品上架规格文件/
+└── {family_code}/              # 例如 BD046
+    └── 第一套/
+        └── {product_code}/     # 例如 BD046A
+            ├── 1.png … 5.png   # 主图
+            ├── 6.png           # 占位图，忽略
+            ├── 7.png … 9.png   # 详情图
+            └── {combo_code}.png # SKU 预览图，如 BD046A+AXBD001A.png
 ```
 
 ## 规则

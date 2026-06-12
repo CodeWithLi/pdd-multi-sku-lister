@@ -267,6 +267,7 @@ onMounted(async () => {
           <template #default="{ row }">
             <div class="strong">{{ row.listing_label }}</div>
             <div class="muted">{{ row.product_code }}<span v-if="row.image_set"> / {{ row.image_set }}</span></div>
+            <div v-if="row.family_code" class="muted">母编码：{{ row.family_code }}</div>
           </template>
         </el-table-column>
         <el-table-column prop="merchant_code" label="货号" min-width="150" show-overflow-tooltip />
@@ -320,6 +321,7 @@ onMounted(async () => {
             <el-descriptions-item label="拼多多商品ID">{{ detail.published.pdd_product_id }}</el-descriptions-item>
             <el-descriptions-item label="状态">{{ detail.published.status }}</el-descriptions-item>
             <el-descriptions-item label="商品编码">{{ detail.published.product_code }}</el-descriptions-item>
+            <el-descriptions-item label="母文件编码">{{ detail.published.family_code || '-' }}</el-descriptions-item>
             <el-descriptions-item label="套图">{{ detail.published.image_set || '默认' }}</el-descriptions-item>
             <el-descriptions-item label="货号">{{ detail.published.merchant_code || '-' }}</el-descriptions-item>
             <el-descriptions-item label="商品标签">{{ detail.published.listing_label }}</el-descriptions-item>

@@ -13,6 +13,7 @@ import type {
   FailureRetryResponse,
   FailureSyncResponse,
   ListingTaskResponse,
+  ListingTargetOption,
   LoginBatchCheckResponse,
   LoginStatus,
   PlanResponse,
@@ -75,6 +76,8 @@ export const api = {
     http.delete(`/config/accounts/${accountId}`).then(() => undefined),
 
   products: () => http.get<ProductSummary[]>('/catalog/products').then((r) => r.data),
+
+  listingTargets: () => http.get<ListingTargetOption[]>('/catalog/listing-targets').then((r) => r.data),
 
   productDetail: (productCode: string) =>
     http.get<ProductDetail>(`/catalog/products/${productCode}`).then((r) => r.data),

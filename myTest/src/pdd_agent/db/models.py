@@ -146,10 +146,12 @@ class PublishedProductORM(Base):
     account_id: Mapped[str] = mapped_column(String(64), index=True, nullable=False)
     source_run_id: Mapped[str] = mapped_column(String(64), index=True, default="", nullable=False)
     product_code: Mapped[str] = mapped_column(String(64), index=True, nullable=False)
+    family_code: Mapped[str] = mapped_column(String(64), index=True, default="", nullable=False)
     image_set: Mapped[str] = mapped_column(String(255), default="", nullable=False)
     listing_label: Mapped[str] = mapped_column(String(255), index=True, nullable=False)
     merchant_code: Mapped[str] = mapped_column(String(255), index=True, default="", nullable=False)
     pdd_product_id: Mapped[str] = mapped_column(String(64), index=True, nullable=False)
+    spec_metadata: Mapped[dict | None] = mapped_column(MySQLJSON, nullable=True)
     status: Mapped[str] = mapped_column(String(32), default="on_sale", nullable=False)
     published_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     created_at: Mapped[datetime] = mapped_column(

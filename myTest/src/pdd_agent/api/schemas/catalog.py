@@ -17,6 +17,7 @@ class SkuComboOut(BaseModel):
 
 class ListingUnitOut(BaseModel):
     product_code: str
+    family_code: str = ""
     image_set: str = ""
     listing_label: str
     merchant_code: str
@@ -36,6 +37,14 @@ class ProductSummaryOut(BaseModel):
     product_code: str
     image_sets: list[str] = Field(default_factory=list)
     listing_unit_count: int
+
+
+class ListingTargetOptionOut(BaseModel):
+    selector: str
+    family_code: str = ""
+    image_set: str = ""
+    product_codes: list[str] = Field(default_factory=list)
+    product_count: int = 0
 
 
 class ProductDetailOut(BaseModel):

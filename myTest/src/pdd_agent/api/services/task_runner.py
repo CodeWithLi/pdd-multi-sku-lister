@@ -56,6 +56,7 @@ def _persist_published_products(run_id: str, account_id: str, result: dict[str, 
         if not pdd_product_id:
             continue
         product_code = str(item.get("product_code") or "").strip()
+        family_code = str(item.get("family_code") or "").strip()
         image_set = str(item.get("image_set") or "").strip()
         listing_label = str(item.get("listing_label") or "").strip()
         merchant_code = str(
@@ -67,10 +68,12 @@ def _persist_published_products(run_id: str, account_id: str, result: dict[str, 
             account_id=account_id,
             source_run_id=run_id,
             product_code=product_code,
+            family_code=family_code,
             image_set=image_set,
             listing_label=listing_label,
             merchant_code=merchant_code,
             pdd_product_id=pdd_product_id,
+            spec_metadata=item.get("spec_metadata") if isinstance(item.get("spec_metadata"), dict) else {},
         )
 
 

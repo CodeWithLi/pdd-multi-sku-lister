@@ -67,7 +67,7 @@ class AppConfigIn(BaseModel):
 
 
 class PathsConfigIn(BaseModel):
-    assets_root: str = "data/assets"
+    assets_root: str = "data/assets/商品上架规格文件"
     profiles_root: str = "data/profiles"
     runs_root: str = "data/runs"
 

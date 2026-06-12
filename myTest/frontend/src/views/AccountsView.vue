@@ -3,7 +3,7 @@ import { onMounted, reactive, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { api } from '@/api/client'
 import PageHeader from '@/components/PageHeader.vue'
-import type { Account, AccountDetail } from '@/types'
+import type { Account, AccountDetail, ListingTargetOption } from '@/types'
 
 const loading = ref(false)
 const accounts = ref<Account[]>([])
@@ -19,14 +19,19 @@ const form = reactive({
   product_codes: [] as string[],
 })
 
-const productOptions = ref<string[]>([])
+const productOptions = ref<ListingTargetOption[]>([])
+
+function filterValidProductCodes(codes: string[]) {
+  const valid = new Set(productOptions.value.map((item) => item.selector))
+  return (codes || []).filter((code) => valid.has(code))
+}
 
 async function load() {
   loading.value = true
   try {
-    const [accs, prods] = await Promise.all([api.accounts(), api.products()])
+    const [accs, prods] = await Promise.all([api.accounts(), api.listingTargets()])
     accounts.value = accs
-    productOptions.value = prods.map((p) => p.product_code)
+    productOptions.value = prods
   } catch (e) {
     ElMessage.error(e instanceof Error ? e.message : '加载失败')
   } finally {
@@ -57,7 +62,7 @@ async function openEdit(row: Account) {
     form.enabled = detail.enabled
     form.username = detail.username
     form.password = detail.password
-    form.product_codes = [...detail.product_codes]
+    form.product_codes = filterValidProductCodes(detail.product_codes)
     dialogVisible.value = true
   } catch (e) {
     ElMessage.error(e instanceof Error ? e.message : '加载失败')
@@ -204,11 +209,15 @@ onMounted(load)
             v-model="form.product_codes"
             multiple
             filterable
-            allow-create
             style="width: 100%"
-            placeholder="选择商品编码"
+            placeholder="选择如 BD046/第一套"
           >
-            <el-option v-for="c in productOptions" :key="c" :label="c" :value="c" />
+            <el-option
+              v-for="item in productOptions"
+              :key="item.selector"
+              :label="`${item.selector}（${item.product_count}个商品）`"
+              :value="item.selector"
+            />
           </el-select>
         </el-form-item>
       </el-form>

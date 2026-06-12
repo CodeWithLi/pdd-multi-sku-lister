@@ -6,14 +6,20 @@ from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import FileResponse
 
 from pdd_agent.api.schemas.catalog import (
+    ListingTargetOptionOut,
     PreflightRequest,
     PreflightResponse,
     ProductDetailOut,
     ProductSummaryOut,
 )
-from pdd_agent.api.services.catalog_service import get_product_detail, list_products, run_preflight_api
+from pdd_agent.api.services.catalog_service import (
+    get_product_detail,
+    list_listing_target_options,
+    list_products,
+    run_preflight_api,
+)
 from pdd_agent.core.config import load_yaml_settings
-from pdd_agent.skills.listing.catalog import list_image_sets
+from pdd_agent.skills.listing.catalog import list_image_sets, parse_all_listings
 
 router = APIRouter(prefix="/catalog", tags=["catalog"])
 
@@ -47,6 +53,12 @@ def catalog_products():
     return list_products()
 
 
+@router.get("/listing-targets", response_model=list[ListingTargetOptionOut])
+def catalog_listing_targets():
+    """列出上架任务可选的素材分组，如 BD046/第一套。"""
+    return list_listing_target_options()
+
+
 @router.get("/products/{product_code}", response_model=ProductDetailOut)
 def catalog_product_detail(product_code: str):
     """解析单个商品的全部套图与 SKU。"""
@@ -61,7 +73,7 @@ def catalog_image_sets(product_code: str):
     """列出商品下的套图文件夹名。"""
     settings = load_yaml_settings()
     assets_root = settings.paths.resolve("assets_root")
-    if not (assets_root / product_code).is_dir():
+    if not parse_all_listings(product_code, settings, include_excel_missing_previews=True):
         raise HTTPException(status_code=404, detail=f"product not found: {product_code}")
     return list_image_sets(product_code, assets_root)
 

@@ -1,6 +1,7 @@
 """素材目录解析与 preflight 服务。"""
 
 from pdd_agent.api.schemas.catalog import (
+    ListingTargetOptionOut,
     ListingUnitOut,
     PreflightIssueOut,
     PreflightResponse,
@@ -10,7 +11,12 @@ from pdd_agent.api.schemas.catalog import (
 )
 from pdd_agent.core.config import load_yaml_settings
 from pdd_agent.domain.models import ListingUnit
-from pdd_agent.skills.listing.catalog import list_image_sets, list_product_codes, parse_all_listings
+from pdd_agent.skills.listing.catalog import (
+    list_image_sets,
+    list_listing_targets,
+    list_product_codes,
+    parse_all_listings,
+)
 from pdd_agent.skills.listing.preflight import run_preflight
 
 
@@ -42,6 +48,7 @@ def _unit_to_out(unit: ListingUnit, *, include_skus: bool = False) -> ListingUni
         ]
     return ListingUnitOut(
         product_code=unit.product_code,
+        family_code=unit.family_code,
         image_set=unit.image_set,
         listing_label=unit.listing_label,
         merchant_code=unit.merchant_code,
@@ -75,12 +82,26 @@ def list_products() -> list[ProductSummaryOut]:
     return summaries
 
 
+def list_listing_target_options() -> list[ListingTargetOptionOut]:
+    settings = load_yaml_settings()
+    return [
+        ListingTargetOptionOut(
+            selector=item.selector,
+            family_code=item.family_code,
+            image_set=item.image_set,
+            product_codes=list(item.product_codes),
+            product_count=len(item.product_codes),
+        )
+        for item in list_listing_targets(settings)
+    ]
+
+
 def get_product_detail(product_code: str) -> ProductDetailOut | None:
     settings = load_yaml_settings()
     assets_root = settings.paths.resolve("assets_root")
-    if not (assets_root / product_code).is_dir():
+    units = parse_all_listings(product_code, settings, include_excel_missing_previews=True)
+    if not units:
         return None
-    units = parse_all_listings(product_code, settings)
     return ProductDetailOut(
         product_code=product_code,
         image_sets=list_image_sets(product_code, assets_root),
@@ -90,7 +111,7 @@ def get_product_detail(product_code: str) -> ProductDetailOut | None:
 
 def run_preflight_api(product_codes: list[str]) -> PreflightResponse:
     settings = load_yaml_settings()
-    report = run_preflight(product_codes, settings)
+    report = run_preflight(product_codes, settings, include_excel_missing_previews=True)
     errors = sum(1 for i in report.issues if i.level == "error")
     warnings = sum(1 for i in report.issues if i.level == "warning")
     return PreflightResponse(

@@ -341,6 +341,7 @@ onBeforeUnmount(stopCampaignPolling)
             <template #default="{ row }">
               <div class="strong">{{ row.listing_label }}</div>
               <div class="muted">{{ row.product_code }}<span v-if="row.image_set"> / {{ row.image_set }}</span></div>
+              <div v-if="row.family_code" class="muted">母编码：{{ row.family_code }}</div>
             </template>
           </el-table-column>
           <el-table-column prop="merchant_code" label="货号" min-width="150" show-overflow-tooltip />

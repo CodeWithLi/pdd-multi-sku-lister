@@ -15,7 +15,7 @@ const form = reactive<RuntimeConfig>({
     log_level: 'INFO',
   },
   paths: {
-    assets_root: 'data/assets',
+    assets_root: 'data/assets/商品上架规格文件',
     profiles_root: 'data/profiles',
     runs_root: 'data/runs',
   },
@@ -146,7 +146,7 @@ onMounted(load)
           <el-form label-position="top">
             <el-form-item label="素材根目录">
               <el-input v-model="form.paths.assets_root" />
-              <div class="form-tip">相对 myTest 根目录，例如 data/assets/多规格测试</div>
+              <div class="form-tip">相对 myTest 根目录，固定使用 data/assets/商品上架规格文件</div>
             </el-form-item>
             <el-form-item label="浏览器 Profile 目录">
               <el-input v-model="form.paths.profiles_root" />

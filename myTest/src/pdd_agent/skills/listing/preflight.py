@@ -7,17 +7,26 @@ from langchain_core.tools import StructuredTool
 from pdd_agent.core.config import YamlSettings
 from pdd_agent.domain.models import PreflightIssue, PreflightReport
 from pdd_agent.skills.base import Skill
-from pdd_agent.skills.listing.catalog import parse_all_listings
+from pdd_agent.skills.listing.catalog import parse_listing_target
 
 
-def run_preflight(product_codes: list[str], settings: YamlSettings) -> PreflightReport:
+def run_preflight(
+    product_codes: list[str],
+    settings: YamlSettings,
+    *,
+    include_excel_missing_previews: bool = False,
+) -> PreflightReport:
     """
     批量校验商品编码。
     error：目录不存在、无有效 SKU；warning：缺图、Excel 缺行等。
     """
     report = PreflightReport()
     for code in product_codes:
-        units = parse_all_listings(code, settings)
+        units = parse_listing_target(
+            code,
+            settings,
+            include_excel_missing_previews=include_excel_missing_previews,
+        )
         if not units:
             report.issues.append(
                 PreflightIssue(level="error", message=f"商品目录不存在或无套图: {code}", listing_label=code)

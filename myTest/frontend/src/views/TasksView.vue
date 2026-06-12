@@ -4,7 +4,7 @@ import { useRoute, useRouter } from 'vue-router'
 import { api } from '@/api/client'
 import PageHeader from '@/components/PageHeader.vue'
 import ResultSummary from '@/components/ResultSummary.vue'
-import type { Account, BatchTaskResponse, DelistTaskResponse, ListingTaskResponse } from '@/types'
+import type { Account, BatchTaskResponse, DelistTaskResponse, ListingTargetOption, ListingTaskResponse } from '@/types'
 
 const route = useRoute()
 const router = useRouter()
@@ -14,7 +14,7 @@ const success = ref('')
 const activeTab = ref('listing')
 
 const accounts = ref<Account[]>([])
-const productOptions = ref<string[]>([])
+const productOptions = ref<ListingTargetOption[]>([])
 const defaultConcurrentStores = ref(3)
 const defaultStartDelayMin = ref(30)
 const defaultStartDelayMax = ref(180)
@@ -45,16 +45,22 @@ const delistStartDelayMin = ref(30)
 const delistStartDelayMax = ref(180)
 
 const enabledAccounts = computed(() => accounts.value.filter((a) => a.enabled))
+const validProductSelectors = computed(() => new Set(productOptions.value.map((item) => item.selector)))
+
+function filterValidProductCodes(codes: string[]) {
+  const valid = validProductSelectors.value
+  return (codes || []).filter((code) => valid.has(code))
+}
 
 async function loadMeta() {
   try {
     const [accs, products, cfg] = await Promise.all([
       api.accounts(true),
-      api.products(),
+      api.listingTargets(),
       api.runtimeConfig(),
     ])
     accounts.value = accs
-    productOptions.value = products.map((p) => p.product_code)
+    productOptions.value = products
     categoryKeyword.value = cfg.listing.category_keyword || '玩偶'
     delistMinCreated.value = cfg.delist.min_created_after || delistMinCreated.value
     delistMaxPerRun.value = cfg.delist.max_delist_per_run || delistMaxPerRun.value
@@ -71,7 +77,7 @@ async function loadMeta() {
 
     if (accs.length && !accountId.value) {
       accountId.value = accs[0].account_id
-      productCodes.value = [...accs[0].product_codes]
+      productCodes.value = filterValidProductCodes(accs[0].product_codes)
       delistAccountId.value = accs[0].account_id
       batchAccountIds.value = accs.map((a) => a.account_id)
       delistBatchAccountIds.value = accs.map((a) => a.account_id)
@@ -83,9 +89,7 @@ async function loadMeta() {
 
 function onAccountChange(id: string) {
   const acc = accounts.value.find((a) => a.account_id === id)
-  if (acc?.product_codes.length) {
-    productCodes.value = [...acc.product_codes]
-  }
+  productCodes.value = acc ? filterValidProductCodes(acc.product_codes) : []
 }
 
 function selectedListingAccounts() {
@@ -110,15 +114,11 @@ async function runListing() {
   if (!accountIds.length) return
   const isCheck = listingMode.value === 'check'
   if (!productCodes.value.length) {
-    error.value = '请至少选择一个素材商品编码'
+    error.value = '请至少选择一个素材分组'
     return
   }
-  if (!isCheck && !platformListingCode.value.trim()) {
-    error.value = '正式上架请填写上架商品编码'
-    return
-  }
-  if (!isCheck && productCodes.value.length > 1) {
-    error.value = '填写上架商品编码后，一次只能选择一个素材商品编码，避免发布后匹配错误'
+  if (!isCheck && platformListingCode.value.trim() && productCodes.value.length > 1) {
+    error.value = '填写上架商品编码后，一次只能选择一个素材分组，避免多个商品共用同一编码'
     return
   }
 
@@ -279,14 +279,19 @@ onMounted(() => {
               批量任务会先打开一家店，随机等待该区间后再打开下一家。
             </div>
 
-            <el-form-item label="素材商品编码" required>
-              <el-select v-model="productCodes" multiple filterable style="width: 100%" placeholder="选择商品编码">
-                <el-option v-for="c in productOptions" :key="c" :label="c" :value="c" />
+            <el-form-item label="素材分组" required>
+              <el-select v-model="productCodes" multiple filterable style="width: 100%" placeholder="选择如 BD046/第一套">
+                <el-option
+                  v-for="item in productOptions"
+                  :key="item.selector"
+                  :label="`${item.selector}（${item.product_count}个商品）`"
+                  :value="item.selector"
+                />
               </el-select>
             </el-form-item>
 
-            <el-form-item v-if="listingMode === 'run'" label="上架商品编码" required>
-              <el-input v-model.trim="platformListingCode" placeholder="例如：YKL004" clearable />
+            <el-form-item v-if="listingMode === 'run'" label="上架商品编码">
+              <el-input v-model.trim="platformListingCode" placeholder="可选；不填则每个商品使用各自默认编码" clearable />
             </el-form-item>
 
             <el-form-item label="执行方式">

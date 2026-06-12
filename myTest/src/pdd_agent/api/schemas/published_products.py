@@ -13,6 +13,7 @@ class PublishedProductOut(BaseModel):
     account_id: str
     source_run_id: str = ""
     product_code: str
+    family_code: str = ""
     image_set: str = ""
     listing_label: str
     merchant_code: str = ""
@@ -21,6 +22,7 @@ class PublishedProductOut(BaseModel):
     published_at: datetime | None = None
     created_at: datetime | None = None
     updated_at: datetime | None = None
+    spec_metadata: dict[str, Any] = Field(default_factory=dict)
 
 
 class PublishedProductListResponse(BaseModel):

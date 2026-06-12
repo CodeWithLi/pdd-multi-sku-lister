@@ -26,6 +26,7 @@ PyMySQL>=1.1.0
 
 # ── 多规格 Excel 解析 ──
 openpyxl>=3.1.0
+xlrd>=2.0.1
 
 # ── FastAPI（预留 Vue3 对接） ──
 fastapi>=0.115.0

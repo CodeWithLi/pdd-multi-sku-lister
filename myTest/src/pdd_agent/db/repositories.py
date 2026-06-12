@@ -495,10 +495,12 @@ def upsert_published_product(
     account_id: str,
     source_run_id: str,
     product_code: str,
+    family_code: str = "",
     image_set: str,
     listing_label: str,
     merchant_code: str,
     pdd_product_id: str,
+    spec_metadata: dict | None = None,
     status: str = "on_sale",
     published_at: datetime | None = None,
 ) -> PublishedProductORM | None:
@@ -511,10 +513,12 @@ def upsert_published_product(
             "account_id": account_id,
             "source_run_id": source_run_id,
             "product_code": product_code,
+            "family_code": family_code,
             "image_set": image_set,
             "listing_label": listing_label,
             "merchant_code": merchant_code,
             "pdd_product_id": pdd_product_id,
+            "spec_metadata": spec_metadata or {},
             "status": status,
             "published_at": published_at or datetime.now(),
         }
@@ -555,6 +559,24 @@ def get_published_product_by_mapping_id(mapping_id: str) -> PublishedProductORM 
         return row
 
 
+def get_published_products_by_mapping_ids(mapping_ids: list[str]) -> list[PublishedProductORM]:
+    if not is_database_available():
+        return []
+    ids = [str(item).strip() for item in mapping_ids if str(item).strip()]
+    if not ids:
+        return []
+    with session_scope() as session:
+        rows = list(
+            session.scalars(
+                select(PublishedProductORM).where(PublishedProductORM.mapping_id.in_(ids))
+            ).all()
+        )
+        for row in rows:
+            session.expunge(row)
+        order = {mapping_id: idx for idx, mapping_id in enumerate(ids)}
+        return sorted(rows, key=lambda row: order.get(row.mapping_id, len(order)))
+
+
 def update_published_product_status(mapping_id: str, status: str) -> PublishedProductORM | None:
     if not is_database_available():
         return None
@@ -588,6 +610,7 @@ def search_published_products(
             pattern = f"%{product_code}%"
             query = query.filter(
                 (PublishedProductORM.product_code.like(pattern))
+                | (PublishedProductORM.family_code.like(pattern))
                 | (PublishedProductORM.listing_label.like(pattern))
                 | (PublishedProductORM.merchant_code.like(pattern))
             )
