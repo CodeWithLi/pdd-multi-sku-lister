@@ -199,6 +199,92 @@ def create_delist_run(account_id: str) -> str:
     return store.create_run(AgentKind.DELIST, account_id).run_id
 
 
+async def execute_campaign_marketing_activity_register(
+    *,
+    run_id: str,
+    account_id: str,
+    activity_id: str,
+    pdd_product_ids: list[str] | None = None,
+) -> dict[str, Any]:
+    store = TaskRunStore()
+    settings = load_yaml_settings()
+    if not get_account_config(settings, account_id):
+        store.finish(run_id, RunStatus.FAILED, f"unknown account: {account_id}")
+        return {"error": f"unknown account: {account_id}"}
+
+    activity_id = str(activity_id or "").strip()
+    selected_product_ids = list(dict.fromkeys(pdd_product_ids or []))
+    if not activity_id:
+        store.finish(run_id, RunStatus.FAILED, "activity_id is required")
+        return {"error": "activity_id is required"}
+    if not selected_product_ids:
+        store.finish(run_id, RunStatus.FAILED, "pdd_product_ids is required")
+        return {"error": "pdd_product_ids is required"}
+
+    store.update_status(run_id, RunStatus.RUNNING)
+    store.update_phase(run_id, TaskPhase.BROWSER)
+    try:
+        graph = build_campaign_graph()
+        raw = await graph.ainvoke(
+            {
+                "account_id": account_id,
+                "campaign_type": "marketing_activity_register",
+                "marketing_activity_id": activity_id,
+                "pdd_product_ids": selected_product_ids,
+            }
+        )
+        result = _json_safe(raw)
+        item_results = [r for r in result.get("results") or [] if isinstance(r, dict)]
+        item_failed = any(str(r.get("status") or "") != "success" for r in item_results)
+        status = RunStatus.SUCCESS if not result.get("errors") and not item_failed else RunStatus.FAILED
+        store.finish(run_id, status, message=str(result.get("results") or ""), result=result)
+        return result
+    except Exception as exc:
+        logger.exception("campaign marketing activity register failed run_id=%s", run_id)
+        store.finish(run_id, RunStatus.FAILED, str(exc), result={"error": str(exc)})
+        return {"error": str(exc)}
+
+
+async def execute_campaign_marketing_activity_search(
+    *,
+    run_id: str,
+    account_id: str,
+    activity_id: str,
+) -> dict[str, Any]:
+    store = TaskRunStore()
+    settings = load_yaml_settings()
+    if not get_account_config(settings, account_id):
+        store.finish(run_id, RunStatus.FAILED, f"unknown account: {account_id}")
+        return {"error": f"unknown account: {account_id}"}
+
+    activity_id = str(activity_id or "").strip()
+    if not activity_id:
+        store.finish(run_id, RunStatus.FAILED, "activity_id is required")
+        return {"error": "activity_id is required"}
+
+    store.update_status(run_id, RunStatus.RUNNING)
+    store.update_phase(run_id, TaskPhase.BROWSER)
+    try:
+        graph = build_campaign_graph()
+        raw = await graph.ainvoke(
+            {
+                "account_id": account_id,
+                "campaign_type": "marketing_activity_search",
+                "marketing_activity_id": activity_id,
+            }
+        )
+        result = _json_safe(raw)
+        item_results = [r for r in result.get("results") or [] if isinstance(r, dict)]
+        item_failed = any(str(r.get("status") or "") != "success" for r in item_results)
+        status = RunStatus.SUCCESS if not result.get("errors") and not item_failed else RunStatus.FAILED
+        store.finish(run_id, status, message=str(result.get("results") or ""), result=result)
+        return result
+    except Exception as exc:
+        logger.exception("campaign marketing activity search failed run_id=%s", run_id)
+        store.finish(run_id, RunStatus.FAILED, str(exc), result={"error": str(exc)})
+        return {"error": str(exc)}
+
+
 async def execute_campaign_limited_time_setup(
     *,
     run_id: str,

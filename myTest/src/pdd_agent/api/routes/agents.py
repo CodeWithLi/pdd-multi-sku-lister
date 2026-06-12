@@ -9,7 +9,7 @@ _AGENTS = [
     {"id": "orchestrator", "enabled": True, "description": "自然语言任务编排"},
     {"id": "listing", "enabled": True, "description": "多规格商品上架"},
     {"id": "delist", "enabled": True, "description": "在售商品扫描与批量下架"},
-    {"id": "campaign", "enabled": True, "description": "限时限量购活动设置"},
+    {"id": "campaign", "enabled": True, "description": "营销活动报名与限时限量购设置"},
     {"id": "traffic", "enabled": False, "description": "推广投流（占位）"},
 ]
 

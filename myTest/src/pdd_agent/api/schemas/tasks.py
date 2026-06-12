@@ -93,6 +93,26 @@ class CampaignLimitedTimeSetupRequest(BaseModel):
     published_mapping_ids: list[str] = Field(default_factory=list)
 
 
+class CampaignMarketingActivitySearchRequest(BaseModel):
+    account_id: str
+    activity_id: str = Field(..., min_length=1, description="营销活动 ID，如 20981")
+
+
+class CampaignMarketingActivityRegisterRequest(BaseModel):
+    account_id: str
+    activity_id: str = Field(..., min_length=1, description="营销活动 ID，如 20981")
+    pdd_product_ids: list[str] = Field(..., min_length=1, description="已发布商品的拼多多商品 ID")
+
+
+class MarketingActivityOption(BaseModel):
+    activity_id: str
+    name: str
+
+
+class MarketingActivityListResponse(BaseModel):
+    items: list[MarketingActivityOption] = Field(default_factory=list)
+
+
 class CampaignTaskResponse(BaseModel):
     run_id: str
     status: RunStatus

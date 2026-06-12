@@ -4,7 +4,13 @@ import { useRouter } from 'vue-router'
 import { api } from '@/api/client'
 import PageHeader from '@/components/PageHeader.vue'
 import ResultSummary from '@/components/ResultSummary.vue'
-import type { Account, CampaignTaskResponse, PublishedProduct, RunRecord } from '@/types'
+import type {
+  Account,
+  CampaignTaskResponse,
+  MarketingActivityOption,
+  PublishedProduct,
+  RunRecord,
+} from '@/types'
 
 type ProductTableRef = {
   clearSelection: () => void
@@ -13,13 +19,18 @@ type ProductTableRef = {
 const router = useRouter()
 
 const taskLoading = ref(false)
+const marketingTaskLoading = ref(false)
 const productLoading = ref(false)
 const error = ref('')
 const success = ref('')
 const accounts = ref<Account[]>([])
 const accountId = ref('')
 const result = ref<CampaignTaskResponse | null>(null)
+const marketingResult = ref<CampaignTaskResponse | null>(null)
 const activeCampaignRun = ref<RunRecord | null>(null)
+const activeMarketingRun = ref<RunRecord | null>(null)
+const marketingActivities = ref<MarketingActivityOption[]>([])
+const marketingActivityId = ref('')
 const productTableRef = ref<ProductTableRef | null>(null)
 const publishedProducts = ref<PublishedProduct[]>([])
 const selectedProducts = ref<PublishedProduct[]>([])
@@ -47,13 +58,38 @@ const isCampaignRunning = computed(() => {
   const status = activeCampaignRun.value?.status || result.value?.status
   return status === 'pending' || status === 'running'
 })
+const isMarketingRunning = computed(() => {
+  const status = activeMarketingRun.value?.status || marketingResult.value?.status
+  return status === 'pending' || status === 'running'
+})
+const selectedMarketingActivity = computed(() =>
+  marketingActivities.value.find((item) => item.activity_id === marketingActivityId.value) || null,
+)
+const canSearchMarketingActivity = computed(
+  () => Boolean(accountId.value) && Boolean(marketingActivityId.value),
+)
+const canRegisterMarketingActivity = computed(
+  () =>
+    Boolean(accountId.value) &&
+    Boolean(marketingActivityId.value) &&
+    selectedPddProductIds.value.length > 0,
+)
 let campaignPollTimer: number | undefined
+let marketingPollTimer: number | undefined
 
 async function loadMeta() {
   try {
-    accounts.value = await api.accounts(true)
+    const [accountList, activityList] = await Promise.all([
+      api.accounts(true),
+      api.campaignMarketingActivities(),
+    ])
+    accounts.value = accountList
+    marketingActivities.value = activityList.items
     if (accounts.value.length && !accountId.value) {
       accountId.value = accounts.value[0].account_id
+    }
+    if (marketingActivities.value.length && !marketingActivityId.value) {
+      marketingActivityId.value = marketingActivities.value[0].activity_id
     }
   } catch (e) {
     error.value = e instanceof Error ? e.message : '加载店铺失败，请确认后台已启动'
@@ -137,6 +173,13 @@ function stopCampaignPolling() {
   }
 }
 
+function stopMarketingPolling() {
+  if (marketingPollTimer) {
+    window.clearInterval(marketingPollTimer)
+    marketingPollTimer = undefined
+  }
+}
+
 function syncResultFromRun(run: RunRecord) {
   activeCampaignRun.value = run
   if (!result.value || result.value.run_id !== run.run_id) return
@@ -145,6 +188,138 @@ function syncResultFromRun(run: RunRecord) {
     status: run.status,
     message: run.message || result.value.message,
     result: run.result,
+  }
+}
+
+function syncMarketingResultFromRun(run: RunRecord) {
+  activeMarketingRun.value = run
+  if (!marketingResult.value || marketingResult.value.run_id !== run.run_id) return
+  marketingResult.value = {
+    ...marketingResult.value,
+    status: run.status,
+    message: run.message || marketingResult.value.message,
+    result: run.result,
+  }
+}
+
+function startMarketingPolling(runId: string) {
+  stopMarketingPolling()
+  marketingPollTimer = window.setInterval(async () => {
+    try {
+      const run = await api.run(runId)
+      syncMarketingResultFromRun(run)
+      if (!['pending', 'running'].includes(run.status)) {
+        stopMarketingPolling()
+        marketingTaskLoading.value = false
+        success.value = run.status === 'success' ? '营销活动任务已完成' : ''
+        error.value = run.status === 'failed' ? (run.message || '营销活动搜索失败') : ''
+      }
+    } catch (e) {
+      stopMarketingPolling()
+      marketingTaskLoading.value = false
+      error.value = e instanceof Error ? e.message : '查询营销活动任务状态失败'
+    }
+  }, 2000)
+}
+
+async function startMarketingActivityRegister() {
+  if (isMarketingRunning.value || isCampaignRunning.value) {
+    error.value = '当前已有活动任务正在执行，请等待完成后再启动'
+    return
+  }
+  if (!accountId.value) {
+    error.value = '请选择店铺'
+    return
+  }
+  if (!marketingActivityId.value) {
+    error.value = '请选择营销活动'
+    return
+  }
+  if (!selectedPddProductIds.value.length) {
+    error.value = '请先选择要报名的已发布商品'
+    return
+  }
+
+  marketingTaskLoading.value = true
+  error.value = ''
+  success.value = ''
+  marketingResult.value = null
+  activeMarketingRun.value = null
+  try {
+    marketingResult.value = await api.campaignMarketingActivityRegister({
+      account_id: accountId.value,
+      activity_id: marketingActivityId.value,
+      pdd_product_ids: selectedPddProductIds.value,
+    })
+    success.value = marketingResult.value.message || '营销活动报名任务已启动'
+    activeMarketingRun.value = {
+      run_id: marketingResult.value.run_id,
+      agent: 'campaign',
+      account_id: accountId.value,
+      status: marketingResult.value.status,
+      phase: '',
+      started_at: new Date().toISOString(),
+      finished_at: null,
+      message: marketingResult.value.message || '',
+      listing_labels: [],
+      result: marketingResult.value.result || {},
+    }
+    if (['pending', 'running'].includes(marketingResult.value.status)) {
+      startMarketingPolling(marketingResult.value.run_id)
+    } else {
+      marketingTaskLoading.value = false
+    }
+  } catch (e) {
+    error.value = e instanceof Error ? e.message : '启动营销活动报名失败'
+    marketingTaskLoading.value = false
+  }
+}
+
+async function startMarketingActivitySearch() {
+  if (isMarketingRunning.value || isCampaignRunning.value) {
+    error.value = '当前已有活动任务正在执行，请等待完成后再启动'
+    return
+  }
+  if (!accountId.value) {
+    error.value = '请选择店铺'
+    return
+  }
+  if (!marketingActivityId.value) {
+    error.value = '请选择营销活动'
+    return
+  }
+
+  marketingTaskLoading.value = true
+  error.value = ''
+  success.value = ''
+  marketingResult.value = null
+  activeMarketingRun.value = null
+  try {
+    marketingResult.value = await api.campaignMarketingActivitySearch({
+      account_id: accountId.value,
+      activity_id: marketingActivityId.value,
+    })
+    success.value = marketingResult.value.message || '营销活动搜索任务已启动'
+    activeMarketingRun.value = {
+      run_id: marketingResult.value.run_id,
+      agent: 'campaign',
+      account_id: accountId.value,
+      status: marketingResult.value.status,
+      phase: '',
+      started_at: new Date().toISOString(),
+      finished_at: null,
+      message: marketingResult.value.message || '',
+      listing_labels: [],
+      result: marketingResult.value.result || {},
+    }
+    if (['pending', 'running'].includes(marketingResult.value.status)) {
+      startMarketingPolling(marketingResult.value.run_id)
+    } else {
+      marketingTaskLoading.value = false
+    }
+  } catch (e) {
+    error.value = e instanceof Error ? e.message : '启动营销活动搜索失败'
+    marketingTaskLoading.value = false
   }
 }
 
@@ -169,7 +344,7 @@ function startCampaignPolling(runId: string) {
 }
 
 async function startLimitedTimeSetup() {
-  if (isCampaignRunning.value) {
+  if (isCampaignRunning.value || isMarketingRunning.value) {
     error.value = '当前已有活动任务正在执行，请等待完成后再启动'
     return
   }
@@ -228,14 +403,17 @@ watch(accountId, () => {
 })
 
 onMounted(loadMeta)
-onBeforeUnmount(stopCampaignPolling)
+onBeforeUnmount(() => {
+  stopCampaignPolling()
+  stopMarketingPolling()
+})
 </script>
 
 <template>
-  <div v-loading="taskLoading">
+  <div v-loading="taskLoading || marketingTaskLoading">
     <PageHeader
       title="活动"
-      desc="当前先支持进入限时限量购创建页，并取消底部“同步设置惊喜优惠”。"
+      desc="支持营销活动大厅搜索报名活动，以及限时限量购创建页设置。"
     />
 
     <el-alert
@@ -257,20 +435,20 @@ onBeforeUnmount(stopCampaignPolling)
       @close="success = ''"
     />
 
-    <div class="section-tip">
-      任务会打开对应店铺的浏览器窗口，依次进入营销工具、限时限量购、立即创建。
-      到活动设置页后只处理“同步设置惊喜优惠”复选框，不会点击最终创建按钮。
-    </div>
-
-    <el-card shadow="never" class="stat-card campaign-card">
+    <el-card shadow="never" class="stat-card campaign-card marketing-card">
       <template #header>
         <div class="card-head">
-          <span>限时限量购</span>
-          <el-tag v-if="selectedPddProductIds.length" type="success" effect="plain">
-            已选 {{ selectedPddProductIds.length }} 个
+          <span>营销活动</span>
+          <el-tag v-if="marketingActivityId" type="info" effect="plain">
+            ID {{ marketingActivityId }}
           </el-tag>
         </div>
       </template>
+
+      <div class="section-tip marketing-tip">
+        流程：搜索活动 → 活动详情 → 立即报名 → 弹窗：查询 → 全选 → 确认 → 确认选择 → 取消流量保护。
+        输入下方已选商品 ID（逗号分隔）→ 查询 → 确认。
+      </div>
 
       <el-form label-position="top" class="campaign-form">
         <el-form-item label="选择店铺" required>
@@ -283,13 +461,43 @@ onBeforeUnmount(stopCampaignPolling)
             />
           </el-select>
         </el-form-item>
+
+        <el-form-item label="选择营销活动" required>
+          <el-select
+            v-model="marketingActivityId"
+            filterable
+            style="width: 100%"
+            placeholder="请选择营销活动"
+          >
+            <el-option
+              v-for="item in marketingActivities"
+              :key="item.activity_id"
+              :label="`${item.name}（ID ${item.activity_id}）`"
+              :value="item.activity_id"
+            />
+          </el-select>
+          <div v-if="selectedMarketingActivity" class="muted activity-desc">
+            将搜索活动 {{ selectedMarketingActivity.activity_id }}，并完成去报名与选品确认。
+          </div>
+        </el-form-item>
       </el-form>
+    </el-card>
+
+    <el-card shadow="never" class="stat-card campaign-card product-card">
+      <template #header>
+        <div class="card-head">
+          <span>选择报名商品</span>
+          <el-tag v-if="selectedPddProductIds.length" type="success" effect="plain">
+            已选 {{ selectedPddProductIds.length }} 个
+          </el-tag>
+        </div>
+      </template>
 
       <div class="product-section" v-loading="productLoading">
         <div class="product-head">
           <div>
-            <div class="section-label">选择商品</div>
-            <div class="muted">从当前店铺已发布商品中选择，后续会按拼多多商品ID搜索。</div>
+            <div class="section-label">已发布商品</div>
+            <div class="muted">从当前店铺选择要参加营销活动的商品，报名时会按拼多多商品 ID 搜索。</div>
           </div>
           <el-button @click="loadPublishedProducts">刷新</el-button>
         </div>
@@ -371,11 +579,60 @@ onBeforeUnmount(stopCampaignPolling)
         </div>
       </div>
 
+      <div class="marketing-actions">
+        <el-button
+          type="primary"
+          size="large"
+          class="submit-btn marketing-register-btn"
+          :disabled="!canRegisterMarketingActivity || isMarketingRunning || isCampaignRunning"
+          :loading="isMarketingRunning"
+          @click="startMarketingActivityRegister"
+        >
+          打开营销活动并报名
+        </el-button>
+        <el-button
+          size="large"
+          :disabled="!canSearchMarketingActivity || isMarketingRunning || isCampaignRunning"
+          @click="startMarketingActivitySearch"
+        >
+          仅搜索活动
+        </el-button>
+      </div>
+
+      <ResultSummary
+        v-if="marketingResult"
+        :status="marketingResult.status"
+        :message="marketingResult.message"
+        :run-id="marketingResult.run_id"
+        :result="marketingResult.result"
+        @view-detail="goRunDetail(marketingResult!.run_id)"
+      />
+    </el-card>
+
+    <div class="section-tip limited-tip">
+      限时限量购任务会依次进入营销工具、限时限量购、立即创建。
+      到活动设置页后只处理“同步设置惊喜优惠”复选框，不会点击最终创建按钮。
+    </div>
+
+    <el-card shadow="never" class="stat-card campaign-card">
+      <template #header>
+        <div class="card-head">
+          <span>限时限量购</span>
+          <el-tag v-if="selectedPddProductIds.length" type="success" effect="plain">
+            已选 {{ selectedPddProductIds.length }} 个
+          </el-tag>
+        </div>
+      </template>
+
+      <div class="muted limited-note">
+        复用上方「选择报名商品」中已选的商品 ID。
+      </div>
+
       <el-button
         type="primary"
         size="large"
         class="submit-btn"
-        :disabled="!canStart || isCampaignRunning"
+        :disabled="!canStart || isCampaignRunning || isMarketingRunning"
         :loading="isCampaignRunning"
         @click="startLimitedTimeSetup"
       >
@@ -397,6 +654,48 @@ onBeforeUnmount(stopCampaignPolling)
 <style scoped>
 .campaign-card {
   max-width: 1120px;
+}
+
+.marketing-card {
+  margin-bottom: 16px;
+}
+
+.product-card {
+  margin-bottom: 16px;
+}
+
+.marketing-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-top: 8px;
+}
+
+.marketing-register-btn {
+  flex: 1 1 320px;
+}
+
+.limited-note {
+  margin-bottom: 16px;
+}
+
+.section-tip {
+  margin-bottom: 12px;
+  padding: 10px 12px;
+  border-radius: 8px;
+  background: #f8fafc;
+  border: 1px solid var(--border-color);
+  color: #64748b;
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.limited-tip {
+  max-width: 1120px;
+}
+
+.activity-desc {
+  margin-top: 8px;
 }
 
 .campaign-form {

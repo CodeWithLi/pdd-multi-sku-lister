@@ -12,7 +12,11 @@ from pdd_agent.api.schemas.tasks import (
     BatchRunItem,
     BatchTaskResponse,
     CampaignLimitedTimeSetupRequest,
+    CampaignMarketingActivityRegisterRequest,
+    CampaignMarketingActivitySearchRequest,
     CampaignTaskResponse,
+    MarketingActivityListResponse,
+    MarketingActivityOption,
     DelistBatchTaskRequest,
     DelistTaskRequest,
     DelistTaskResponse,
@@ -30,10 +34,13 @@ from pdd_agent.api.services.task_runner import (
     create_delist_run,
     create_listing_run,
     execute_campaign_limited_time_setup,
+    execute_campaign_marketing_activity_register,
+    execute_campaign_marketing_activity_search,
     execute_delist,
     execute_listing,
     plan_tasks,
 )
+from pdd_agent.skills.campaign.marketing_activities import KNOWN_MARKETING_ACTIVITIES
 from pdd_agent.core.config import load_yaml_settings
 from pdd_agent.db.session import is_database_available
 from pdd_agent.db.repositories import cancel_queued_task_by_run_id
@@ -111,6 +118,26 @@ async def _execute_campaign_limited_time_setup_guarded(**kwargs):
     run_id = str(kwargs.get("run_id") or "")
     try:
         return await execute_campaign_limited_time_setup(**kwargs)
+    finally:
+        if account_id and _ACTIVE_CAMPAIGN_RUNS.get(account_id) == run_id:
+            _ACTIVE_CAMPAIGN_RUNS.pop(account_id, None)
+
+
+async def _execute_campaign_marketing_activity_register_guarded(**kwargs):
+    account_id = str(kwargs.get("account_id") or "")
+    run_id = str(kwargs.get("run_id") or "")
+    try:
+        return await execute_campaign_marketing_activity_register(**kwargs)
+    finally:
+        if account_id and _ACTIVE_CAMPAIGN_RUNS.get(account_id) == run_id:
+            _ACTIVE_CAMPAIGN_RUNS.pop(account_id, None)
+
+
+async def _execute_campaign_marketing_activity_search_guarded(**kwargs):
+    account_id = str(kwargs.get("account_id") or "")
+    run_id = str(kwargs.get("run_id") or "")
+    try:
+        return await execute_campaign_marketing_activity_search(**kwargs)
     finally:
         if account_id and _ACTIVE_CAMPAIGN_RUNS.get(account_id) == run_id:
             _ACTIVE_CAMPAIGN_RUNS.pop(account_id, None)
@@ -378,6 +405,95 @@ async def tasks_delist_batch(body: DelistBatchTaskRequest):
             f"batch delist queued: {len(runs)} stores, concurrency {max_concurrent}, "
             f"start delay {delay_range[0]}-{delay_range[1]}s"
         ),
+    )
+
+
+@router.get("/campaign/marketing-activities", response_model=MarketingActivityListResponse)
+def campaign_marketing_activities():
+    return MarketingActivityListResponse(
+        items=[
+            MarketingActivityOption(activity_id=item["activity_id"], name=item["name"])
+            for item in KNOWN_MARKETING_ACTIVITIES
+        ]
+    )
+
+
+@router.post("/campaign/marketing-activity-register", response_model=CampaignTaskResponse)
+async def campaign_marketing_activity_register(
+    body: CampaignMarketingActivityRegisterRequest,
+    background: BackgroundTasks,
+):
+    settings = load_yaml_settings()
+    if not get_account_or_none(body.account_id, settings):
+        raise HTTPException(status_code=404, detail=f"unknown account: {body.account_id}")
+
+    activity_id = body.activity_id.strip()
+    pdd_product_ids = _dedupe_strings(body.pdd_product_ids)
+    if not activity_id:
+        raise HTTPException(status_code=422, detail="activity_id cannot be empty")
+    if not pdd_product_ids:
+        raise HTTPException(status_code=422, detail="pdd_product_ids cannot be empty")
+
+    running_run_id = _find_running_campaign_run(body.account_id)
+    if running_run_id:
+        return CampaignTaskResponse(
+            run_id=running_run_id,
+            status=RunStatus.RUNNING,
+            message="该店铺已有活动任务正在执行，已复用当前运行记录；请等待完成后再启动新的活动任务。",
+        )
+
+    run_id = create_campaign_run(body.account_id)
+    _ACTIVE_CAMPAIGN_RUNS[body.account_id] = run_id
+    background.add_task(
+        _execute_campaign_marketing_activity_register_guarded,
+        run_id=run_id,
+        account_id=body.account_id,
+        activity_id=activity_id,
+        pdd_product_ids=pdd_product_ids,
+    )
+    return CampaignTaskResponse(
+        run_id=run_id,
+        status=RunStatus.RUNNING,
+        message=(
+            f"营销活动报名任务已启动（活动 ID {activity_id}，商品 {len(pdd_product_ids)} 个）；"
+            "完成后在操作记录查看结果"
+        ),
+    )
+
+
+@router.post("/campaign/marketing-activity-search", response_model=CampaignTaskResponse)
+async def campaign_marketing_activity_search(
+    body: CampaignMarketingActivitySearchRequest,
+    background: BackgroundTasks,
+):
+    settings = load_yaml_settings()
+    if not get_account_or_none(body.account_id, settings):
+        raise HTTPException(status_code=404, detail=f"unknown account: {body.account_id}")
+
+    activity_id = body.activity_id.strip()
+    if not activity_id:
+        raise HTTPException(status_code=422, detail="activity_id cannot be empty")
+
+    running_run_id = _find_running_campaign_run(body.account_id)
+    if running_run_id:
+        return CampaignTaskResponse(
+            run_id=running_run_id,
+            status=RunStatus.RUNNING,
+            message="该店铺已有活动任务正在执行，已复用当前运行记录；请等待完成后再启动新的活动任务。",
+        )
+
+    run_id = create_campaign_run(body.account_id)
+    _ACTIVE_CAMPAIGN_RUNS[body.account_id] = run_id
+    background.add_task(
+        _execute_campaign_marketing_activity_search_guarded,
+        run_id=run_id,
+        account_id=body.account_id,
+        activity_id=activity_id,
+    )
+    return CampaignTaskResponse(
+        run_id=run_id,
+        status=RunStatus.RUNNING,
+        message=f"营销活动搜索任务已启动（活动 ID {activity_id}）；完成后在操作记录查看结果",
     )
 
 

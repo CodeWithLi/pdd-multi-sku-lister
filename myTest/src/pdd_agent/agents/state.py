@@ -57,6 +57,7 @@ class CampaignState(TypedDict, total=False):
 
     account_id: str
     campaign_type: str
+    marketing_activity_id: str
     pdd_product_ids: list[str]
     published_mapping_ids: list[str]
     results: Annotated[list[dict[str, Any]], operator.add]

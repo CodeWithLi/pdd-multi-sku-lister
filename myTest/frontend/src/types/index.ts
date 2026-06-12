@@ -170,6 +170,15 @@ export interface CampaignTaskResponse {
   result?: Record<string, unknown>
 }
 
+export interface MarketingActivityOption {
+  activity_id: string
+  name: string
+}
+
+export interface MarketingActivityListResponse {
+  items: MarketingActivityOption[]
+}
+
 export interface BatchRunItem {
   account_id: string
   run_id: string

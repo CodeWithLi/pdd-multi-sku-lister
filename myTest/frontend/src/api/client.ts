@@ -6,6 +6,7 @@ import type {
   AccountUpdatePayload,
   BatchTaskResponse,
   CampaignTaskResponse,
+  MarketingActivityListResponse,
   ConfigSummary,
   HealthResponse,
   DelistTaskResponse,
@@ -134,6 +135,22 @@ export const api = {
     store_start_delay_min_seconds?: number
     store_start_delay_max_seconds?: number
   }) => http.post<BatchTaskResponse>('/tasks/delist/batch', body).then((r) => r.data),
+
+  campaignMarketingActivities: () =>
+    http.get<MarketingActivityListResponse>('/tasks/campaign/marketing-activities').then((r) => r.data),
+
+  campaignMarketingActivitySearch: (body: {
+    account_id: string
+    activity_id: string
+  }) =>
+    http.post<CampaignTaskResponse>('/tasks/campaign/marketing-activity-search', body).then((r) => r.data),
+
+  campaignMarketingActivityRegister: (body: {
+    account_id: string
+    activity_id: string
+    pdd_product_ids: string[]
+  }) =>
+    http.post<CampaignTaskResponse>('/tasks/campaign/marketing-activity-register', body).then((r) => r.data),
 
   campaignLimitedTimeSetup: (body: {
     account_id: string
