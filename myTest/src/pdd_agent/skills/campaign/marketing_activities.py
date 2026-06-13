@@ -3729,6 +3729,7 @@ def register_marketing_activity(
                 "activity_id": activity_id,
                 "product_ids": product_ids,
                 "current_url": page.url,
+                "error": finalize_result.get("error") or "无符合价格条件的商品，已关闭价格确认页",
                 "message": finalize_result.get("error") or "无符合价格条件的商品，已关闭价格确认页",
                 "search_result": search_result,
                 "open_detail": open_detail,
@@ -3747,6 +3748,7 @@ def register_marketing_activity(
                 register_now=register_now,
                 product_selection=product_selection,
                 finalize_result=finalize_result,
+                price_filter=finalize_result.get("price_filter"),
             )
 
         print(

@@ -120,7 +120,11 @@ async def marketing_activity_register_node(state: CampaignState) -> dict:
             return {
                 "phase": "campaign_failed",
                 "results": [result],
-                "errors": [result.get("error") or "marketing activity register failed"],
+                "errors": [
+                    result.get("message")
+                    or result.get("error")
+                    or "marketing activity register failed"
+                ],
                 "finished": True,
             }
         logger.info("[%s] marketing activity register done id=%s", account_id, activity_id)

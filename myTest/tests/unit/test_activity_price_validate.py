@@ -268,18 +268,70 @@ def test_row_matches_spec_target_uses_activity_price():
     )
 
 
-def test_delete_invalid_price_goods_deletes_each_invalid_spec(monkeypatch):
+def test_delete_invalid_price_goods_skips_when_partial_invalid(monkeypatch):
     page = SimpleNamespace(url="https://mms.pinduoduo.com/act/goods_price/confirm")
-    calls: list[dict[str, str]] = []
+    delete_calls: list[str] = []
 
     def fake_delete(_page, *, product_id="", spec_name="", activity_price=""):
-        calls.append(
+        delete_calls.append(product_id)
+        return {"deleted": True, "method": "mock"}
+
+    monkeypatch.setattr(
+        "pdd_agent.skills.campaign.activity_price_validate._delete_price_confirm_goods",
+        fake_delete,
+    )
+    monkeypatch.setattr(
+        "pdd_agent.skills.campaign.activity_price_validate._on_price_confirm_page",
+        lambda *_args, **_kwargs: True,
+    )
+    monkeypatch.setattr(
+        "pdd_agent.skills.campaign.activity_price_validate._scrape_price_confirm_specs",
+        lambda *_args, **_kwargs: {"spec_count": 12, "specs": [{}] * 12},
+    )
+    monkeypatch.setattr(
+        "pdd_agent.skills.campaign.activity_price_validate._read_price_confirm_empty_state",
+        lambda *_args, **_kwargs: {"empty": False},
+    )
+
+    validation = {
+        "passed_count": 8,
+        "results": [
             {
-                "product_id": product_id,
-                "spec_name": spec_name,
-                "activity_price": activity_price,
-            }
-        )
+                "pdd_product_id": "965180544666",
+                "spec_name": "款式: 蓝色；套餐: 两件套",
+                "activity_price": 9.8,
+                "should_remove": True,
+                "reason": "activity_price_not_above_floor",
+                "spec_code": "BD630D+YKL001A",
+                "floor_price": 10.56,
+                "parent_code": "BD630D",
+                "pricing": 8.42,
+                "child_code": "YKL001A",
+                "control_price": 2.14,
+            },
+            {
+                "pdd_product_id": "965180544666",
+                "spec_name": "款式: 蓝色；套餐: 单件",
+                "activity_price": 8.8,
+                "should_remove": False,
+                "spec_code": "BD630D",
+            },
+        ],
+    }
+    result = _delete_invalid_price_goods(page, "store_A", validation)
+    assert delete_calls == []
+    assert result["skipped_delete"] is True
+    assert result["remaining_count"] == 12
+    assert len(result["removed_specs"]) == 1
+    assert result["removed_specs"][0]["delete_error"] == "pdd_product_level_delete_skipped"
+
+
+def test_delete_invalid_price_goods_deletes_all_invalid_product(monkeypatch):
+    page = SimpleNamespace(url="https://mms.pinduoduo.com/act/goods_price/confirm")
+    calls: list[str] = []
+
+    def fake_delete(_page, *, product_id="", spec_name="", activity_price=""):
+        calls.append(product_id)
         return {"deleted": True, "method": "mock"}
 
     monkeypatch.setattr(
@@ -300,36 +352,33 @@ def test_delete_invalid_price_goods_deletes_each_invalid_spec(monkeypatch):
     )
 
     validation = {
+        "passed_count": 1,
         "results": [
             {
                 "pdd_product_id": "111",
                 "spec_name": "款式: A；套餐: 单件",
-                "activity_price": "8.8",
+                "activity_price": 8.8,
                 "should_remove": True,
-            },
-            {
-                "pdd_product_id": "111",
-                "spec_name": "款式: A；套餐: 两件套",
-                "activity_price": "9.8",
-                "should_remove": False,
+                "reason": "activity_price_not_above_floor",
+                "spec_code": "BD630D",
+                "floor_price": 9.0,
+                "parent_code": "BD630D",
+                "pricing": 8.42,
             },
             {
                 "pdd_product_id": "222",
                 "spec_name": "款式: B；套餐: 单件",
-                "activity_price": "7.8",
-                "should_remove": True,
+                "activity_price": 9.8,
+                "should_remove": False,
+                "spec_code": "BD630C",
             },
-        ]
+        ],
     }
     result = _delete_invalid_price_goods(page, "store_A", validation)
-    assert len(calls) == 2
-    assert calls[0]["activity_price"] == "8.8"
-    assert calls[1]["activity_price"] == "7.8"
-    assert result["deleted_spec_count"] == 2
+    assert calls == ["111"]
+    assert result["deleted_spec_count"] == 1
     assert result["remaining_count"] == 1
-    assert len(result["removed_specs"]) == 2
-    assert result["removed_specs"][0]["reason_text"]
-    assert result["removed_specs"][0]["deleted"] is True
+    assert result["skipped_delete"] is False
 
 
 def test_validate_spec_prices_marks_skipped_specs_for_removal():

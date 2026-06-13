@@ -13,6 +13,7 @@ const props = defineProps<{
   message?: string
   runId?: string
   result?: Record<string, unknown>
+  expanded?: boolean
 }>()
 
 const emit = defineEmits<{ viewDetail: [] }>()
@@ -31,6 +32,38 @@ const removedSpecRows = computed(() => extractActivityRemovedSpecRows(props.resu
 
 const specLookupMeta = computed(() => extractActivitySpecLookupMeta(props.result))
 
+const priceCheckSummary = computed(() => {
+  const rows = specLookupRows.value
+  if (!rows.length) return null
+  const passed = rows.filter((row) => row.valid === true && !row.should_remove).length
+  const failed = rows.filter((row) => row.should_remove || row.valid === false).length
+  const matched = rows.filter((row) => row.spec_code).length
+  return { total: rows.length, matched, passed, failed }
+})
+
+const isFailed = computed(() => props.status === 'failed' || props.status === 'cancelled')
+
+const messageLines = computed(() => {
+  const msg = String(props.message || '').trim()
+  if (!msg) return []
+  return msg.split('\n').map((line) => line.trim()).filter(Boolean)
+})
+
+const resultAlertTitle = computed(() => {
+  const lines = messageLines.value
+  if (!lines.length) return isFailed.value ? '报名未完成' : '执行说明'
+  const first = lines[0]
+  if (first.length <= 36) return first
+  return isFailed.value ? '价格校验未通过' : '执行说明'
+})
+
+const resultAlertBody = computed(() => {
+  const lines = messageLines.value
+  if (!lines.length) return ''
+  if (lines.length === 1 && lines[0].length > 36) return lines[0]
+  return lines.slice(1).join('\n') || lines[0]
+})
+
 const delistStats = computed(() => {
   const results = props.result?.results
   if (!Array.isArray(results) || !results[0]) return null
@@ -41,7 +74,10 @@ const delistStats = computed(() => {
 </script>
 
 <template>
-  <div class="result-summary">
+  <div
+    class="result-summary"
+    :class="{ 'result-summary--failed': isFailed, 'result-summary--expanded': expanded }"
+  >
     <div class="result-head">
       <span class="result-title">执行结果</span>
       <el-tag v-if="status" :type="(runStatusType[status] as any) || 'info'" size="small">
@@ -49,59 +85,27 @@ const delistStats = computed(() => {
       </el-tag>
     </div>
 
-    <p v-if="message" class="result-msg">{{ message }}</p>
-
-    <el-table v-if="campaignStepRows.length" :data="campaignStepRows" size="small" stripe class="result-table">
-      <el-table-column prop="step" label="步骤" width="220" show-overflow-tooltip />
-      <el-table-column label="状态" width="100">
-        <template #default="{ row }">
-          <el-tag
-            :type="row.status === 'success' ? 'success' : 'danger'"
-            size="small"
-          >
-            {{ row.status || row.reason || '-' }}
-          </el-tag>
-        </template>
-      </el-table-column>
-      <el-table-column label="说明" min-width="280" show-overflow-tooltip>
-        <template #default="{ row }">
-          {{ row.error || row.reason || row.action || row.url || row.current_url || '-' }}
-        </template>
-      </el-table-column>
-    </el-table>
-
-    <el-table v-if="listingRows.length" :data="listingRows" size="small" stripe class="result-table">
-      <el-table-column prop="listing_label" label="商品/套图" min-width="160" />
-      <el-table-column label="状态" width="100">
-        <template #default="{ row }">
-          <el-tag
-            :type="row.status === 'success' || row.status === 'listed' ? 'success' : row.status === 'failed' ? 'danger' : row.status === 'retryable' ? 'warning' : 'info'"
-            size="small"
-          >
-            {{ listingStatusLabel[row.status as string] || row.status }}
-          </el-tag>
-        </template>
-      </el-table-column>
-      <el-table-column prop="error" label="说明" show-overflow-tooltip />
-    </el-table>
-
-    <el-descriptions v-if="delistStats" :column="2" size="small" border class="delist-stats">
-      <el-descriptions-item label="扫描行数">{{ delistStats.scanned }}</el-descriptions-item>
-      <el-descriptions-item label="命中/下架">
-        {{ delistStats.hit }}
-      </el-descriptions-item>
-      <el-descriptions-item label="早于门槛跳过">{{ delistStats.skipped_old }}</el-descriptions-item>
-      <el-descriptions-item label="扫描页数">{{ delistStats.pages }}</el-descriptions-item>
-    </el-descriptions>
+    <el-alert
+      v-if="message && isFailed"
+      class="result-alert"
+      type="error"
+      :closable="false"
+      show-icon
+    >
+      <template #title>{{ resultAlertTitle }}</template>
+      <div class="result-alert-body">{{ resultAlertBody }}</div>
+    </el-alert>
+    <p v-else-if="message" class="result-msg">{{ message }}</p>
 
     <div v-if="removedSpecRows.length" class="spec-lookup-block removed-spec-block">
       <div class="spec-lookup-head">
         <span class="spec-lookup-title">不符合条件 / 已删除规格</span>
         <el-tag size="small" type="danger" effect="plain">
-          {{ removedSpecRows.filter((row) => row.deleted !== false).length }}/{{ removedSpecRows.length }} 已删除
+          {{ removedSpecRows.length }} 条需处理
         </el-tag>
       </div>
-      <p class="spec-lookup-hint">以下 SKU 因价格或定价数据问题被剔除，可按底价调整活动价后重新报名。</p>
+      <p class="spec-lookup-hint">以下 SKU 价格不合格或缺少控价数据。请按底价调高活动价，或补全控价表后重新报名。</p>
+      <div class="table-scroll">
       <el-table :data="removedSpecRows" size="small" stripe class="result-table spec-full-table">
         <el-table-column type="index" label="#" width="44" align="center" />
         <el-table-column prop="spec_code" label="规格编码" width="150">
@@ -150,16 +154,38 @@ const delistStats = computed(() => {
           </template>
         </el-table-column>
       </el-table>
+      </div>
     </div>
 
     <div v-if="specLookupRows.length" class="spec-lookup-block spec-lookup-block--full">
       <div class="spec-lookup-head">
         <span class="spec-lookup-title">价格确认页规格（完整名称）</span>
-        <el-tag size="small" type="success" effect="plain">
-          {{ specLookupMeta?.matched_count ?? 0 }}/{{ specLookupMeta?.spec_count ?? specLookupRows.length }} 已匹配
-        </el-tag>
+        <div class="spec-lookup-tags">
+          <el-tag size="small" type="info" effect="plain">
+            编码 {{ priceCheckSummary?.matched ?? 0 }}/{{ priceCheckSummary?.total ?? specLookupRows.length }}
+          </el-tag>
+          <el-tag
+            v-if="priceCheckSummary && priceCheckSummary.failed > 0"
+            size="small"
+            type="danger"
+            effect="plain"
+          >
+            价格 {{ priceCheckSummary.passed }} 通过 / {{ priceCheckSummary.failed }} 不合格
+          </el-tag>
+          <el-tag
+            v-else-if="priceCheckSummary"
+            size="small"
+            type="success"
+            effect="plain"
+          >
+            价格 {{ priceCheckSummary.passed }} 条全部通过
+          </el-tag>
+        </div>
       </div>
-      <p class="spec-lookup-hint">展开后的完整规格名如下，便于与活动页逐条对比。</p>
+      <p class="spec-lookup-hint">
+        「编码」= 是否反查到规格编码；「价格」= 活动价是否高于底价。两者独立，编码 OK 不代表价格合格。
+      </p>
+      <div class="table-scroll">
       <el-table :data="specLookupRows" size="small" stripe class="result-table spec-full-table">
         <el-table-column type="index" label="#" width="44" align="center" />
         <el-table-column label="完整规格名称" min-width="320">
@@ -201,24 +227,32 @@ const delistStats = computed(() => {
           </template>
         </el-table-column>
         <el-table-column
-          v-if="specLookupRows.some((row) => row.valid != null)"
+          v-if="specLookupRows.some((row) => row.valid != null || row.should_remove)"
           label="价格"
-          width="72"
+          width="80"
           align="center"
         >
           <template #default="{ row }">
             <el-tag
-              v-if="row.valid != null"
+              v-if="row.should_remove || row.valid === false"
               size="small"
-              :type="row.valid ? 'success' : 'danger'"
+              type="danger"
               effect="plain"
             >
-              {{ row.valid ? '通过' : '偏低' }}
+              不合格
+            </el-tag>
+            <el-tag
+              v-else-if="row.valid === true"
+              size="small"
+              type="success"
+              effect="plain"
+            >
+              通过
             </el-tag>
             <span v-else>—</span>
           </template>
         </el-table-column>
-        <el-table-column label="匹配" width="72" align="center">
+        <el-table-column label="编码" width="72" align="center">
           <template #default="{ row }">
             <el-tag size="small" :type="row.spec_code ? 'success' : 'danger'" effect="plain">
               {{ row.spec_code ? 'OK' : '—' }}
@@ -226,7 +260,51 @@ const delistStats = computed(() => {
           </template>
         </el-table-column>
       </el-table>
+      </div>
     </div>
+
+    <el-table v-if="campaignStepRows.length" :data="campaignStepRows" size="small" stripe class="result-table step-table">
+      <el-table-column prop="step" label="步骤" min-width="140" show-overflow-tooltip />
+      <el-table-column label="状态" width="88">
+        <template #default="{ row }">
+          <el-tag
+            :type="row.status === 'success' ? 'success' : 'danger'"
+            size="small"
+          >
+            {{ row.status || row.reason || '-' }}
+          </el-tag>
+        </template>
+      </el-table-column>
+      <el-table-column label="说明" min-width="160" show-overflow-tooltip>
+        <template #default="{ row }">
+          {{ row.error || row.reason || row.action || row.url || row.current_url || '-' }}
+        </template>
+      </el-table-column>
+    </el-table>
+
+    <el-table v-if="listingRows.length" :data="listingRows" size="small" stripe class="result-table">
+      <el-table-column prop="listing_label" label="商品/套图" min-width="160" />
+      <el-table-column label="状态" width="100">
+        <template #default="{ row }">
+          <el-tag
+            :type="row.status === 'success' || row.status === 'listed' ? 'success' : row.status === 'failed' ? 'danger' : row.status === 'retryable' ? 'warning' : 'info'"
+            size="small"
+          >
+            {{ listingStatusLabel[row.status as string] || row.status }}
+          </el-tag>
+        </template>
+      </el-table-column>
+      <el-table-column prop="error" label="说明" show-overflow-tooltip />
+    </el-table>
+
+    <el-descriptions v-if="delistStats" :column="2" size="small" border class="delist-stats">
+      <el-descriptions-item label="扫描行数">{{ delistStats.scanned }}</el-descriptions-item>
+      <el-descriptions-item label="命中/下架">
+        {{ delistStats.hit }}
+      </el-descriptions-item>
+      <el-descriptions-item label="早于门槛跳过">{{ delistStats.skipped_old }}</el-descriptions-item>
+      <el-descriptions-item label="扫描页数">{{ delistStats.pages }}</el-descriptions-item>
+    </el-descriptions>
 
     <div v-if="runId" class="result-foot">
       <span class="run-id">任务编号：{{ runId.slice(0, 8) }}…</span>
@@ -243,16 +321,22 @@ const delistStats = computed(() => {
 
 <style scoped>
 .result-summary {
-  margin-top: 16px;
-  padding-top: 16px;
-  border-top: 1px dashed var(--border-color);
+  padding: 14px 16px 16px;
+  background: rgba(255, 255, 255, 0.92);
+  border: 1px solid var(--border-color);
+  border-radius: 12px;
+}
+
+.result-summary--failed {
+  border-color: rgba(245, 108, 108, 0.35);
+  background: linear-gradient(180deg, rgba(254, 240, 240, 0.45) 0%, rgba(255, 255, 255, 0.95) 120px);
 }
 
 .result-head {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  margin-bottom: 8px;
+  margin-bottom: 10px;
 }
 
 .result-title {
@@ -260,15 +344,75 @@ const delistStats = computed(() => {
   font-size: 15px;
 }
 
+.result-alert {
+  margin-bottom: 12px;
+}
+
+.result-alert :deep(.el-alert__content) {
+  min-width: 0;
+  width: 100%;
+}
+
+.result-alert-body {
+  white-space: pre-wrap;
+  word-break: break-word;
+  line-height: 1.6;
+  font-size: 13px;
+  margin-top: 4px;
+}
+
 .result-msg {
   font-size: 13px;
   color: var(--text-secondary);
   margin: 0 0 12px;
+  white-space: pre-wrap;
+  word-break: break-word;
+  line-height: 1.55;
 }
 
 .result-table,
 .delist-stats {
   margin-bottom: 12px;
+}
+
+.step-table {
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px dashed var(--border-color);
+}
+
+.table-scroll {
+  overflow-x: auto;
+  margin-bottom: 12px;
+  border-radius: 8px;
+  border: 1px solid var(--el-border-color-lighter);
+}
+
+.table-scroll .result-table {
+  margin-bottom: 0;
+  min-width: 640px;
+}
+
+.result-summary--expanded .table-scroll {
+  overflow-x: visible;
+}
+
+.result-summary--expanded .table-scroll .result-table {
+  min-width: 0;
+  width: 100%;
+}
+
+.result-summary--expanded .spec-lookup-head {
+  flex-wrap: nowrap;
+}
+
+.result-summary--expanded .spec-lookup-title {
+  font-size: 15px;
+}
+
+.result-summary--expanded .spec-name-full,
+.result-summary--expanded .reason-text {
+  font-size: 14px;
 }
 
 .spec-lookup-block {
@@ -280,6 +424,14 @@ const delistStats = computed(() => {
   align-items: center;
   justify-content: space-between;
   margin-bottom: 8px;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.spec-lookup-tags {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
 }
 
 .spec-lookup-title {
@@ -327,9 +479,7 @@ const delistStats = computed(() => {
 }
 
 .removed-spec-block {
-  margin-top: 16px;
-  padding-top: 16px;
-  border-top: 1px dashed var(--el-color-danger-light-5);
+  margin-top: 12px;
 }
 
 .reason-text {

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { api } from '@/api/client'
@@ -98,7 +98,32 @@ const marketingSpecLookup = computed(() => extractActivitySpecLookupMeta(campaig
 
 const showSpecLookupPanel = computed(() => {
   if (!['20981', '21365'].includes(marketingActivityId.value)) return false
+  if (marketingResult.value || result.value) return false
   return marketingSpecLookupRows.value.length > 0
+})
+
+const hasResultSummary = computed(() => Boolean(marketingResult.value || result.value))
+
+const canExpandLeftPanel = computed(() => showSpecLookupPanel.value || hasResultSummary.value)
+
+const leftPanelExpanded = ref(false)
+
+const sideStackRef = ref<HTMLElement | null>(null)
+
+function toggleLeftPanelExpanded() {
+  leftPanelExpanded.value = !leftPanelExpanded.value
+}
+
+watch(canExpandLeftPanel, (visible) => {
+  if (!visible) leftPanelExpanded.value = false
+})
+
+watch(hasResultSummary, (visible) => {
+  if (!visible) return
+  nextTick(() => {
+    sideStackRef.value?.scrollTo({ top: 0 })
+    sideStackRef.value?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+  })
 })
 let campaignPollTimer: number | undefined
 let marketingPollTimer: number | undefined
@@ -487,7 +512,11 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <div class="campaign-page" v-loading="taskLoading || marketingTaskLoading">
+  <div
+    class="campaign-page"
+    :class="{ 'campaign-page--expanded': leftPanelExpanded }"
+    v-loading="taskLoading || marketingTaskLoading"
+  >
     <PageHeader title="活动" desc="营销活动报名 + 限时限量购设置，左侧配置、右侧选品。" />
 
     <el-alert
@@ -509,9 +538,16 @@ onBeforeUnmount(() => {
 
     <el-row :gutter="16" class="campaign-layout">
       <!-- 左侧：配置 + 操作 -->
-      <el-col :xs="24" :lg="8" :xl="7">
-        <div class="side-stack">
-          <el-card shadow="never" class="stat-card side-card">
+      <el-col :xs="24" :lg="leftPanelExpanded ? 24 : 8" :xl="leftPanelExpanded ? 24 : 7">
+        <div
+          ref="sideStackRef"
+          class="side-stack"
+          :class="{
+            'side-stack--expanded': leftPanelExpanded || hasResultSummary,
+            'side-stack--results-first': hasResultSummary,
+          }"
+        >
+          <el-card shadow="never" class="stat-card side-card side-card-config">
             <template #header>
               <div class="card-head">
                 <span>活动配置</span>
@@ -572,7 +608,7 @@ onBeforeUnmount(() => {
             </el-collapse>
           </el-card>
 
-          <el-card shadow="never" class="stat-card side-card action-card">
+          <el-card shadow="never" class="stat-card side-card side-card-action action-card">
             <template #header>
               <div class="card-head">
                 <span>已选商品</span>
@@ -636,7 +672,25 @@ onBeforeUnmount(() => {
             </div>
           </el-card>
 
-          <el-card v-if="showSpecLookupPanel" shadow="never" class="stat-card side-card spec-lookup-card">
+          <div v-if="canExpandLeftPanel" class="left-panel-toolbar">
+            <span v-if="leftPanelExpanded" class="toolbar-hint muted">
+              表格已放大，右侧选品已隐藏
+            </span>
+            <el-button size="small" @click="toggleLeftPanelExpanded">
+              <el-icon class="toolbar-icon">
+                <FullScreen v-if="!leftPanelExpanded" />
+                <Fold v-else />
+              </el-icon>
+              {{ leftPanelExpanded ? '恢复选品面板' : '放大表格' }}
+            </el-button>
+          </div>
+
+          <el-card
+            v-if="showSpecLookupPanel"
+            shadow="never"
+            class="stat-card side-card spec-lookup-card"
+            :class="{ 'spec-lookup-card--expanded': leftPanelExpanded }"
+          >
             <template #header>
               <div class="card-head">
                 <span>价格确认页规格（完整名称）</span>
@@ -698,15 +752,17 @@ onBeforeUnmount(() => {
             />
           </el-card>
 
-          <div v-if="taskError || taskSuccess" class="task-feedback">
+          <div v-if="(taskError || taskSuccess) && !hasResultSummary" class="task-feedback">
             <el-alert
               v-if="taskError"
               type="error"
-              :title="taskError"
+              title="任务失败"
               show-icon
               closable
               @close="taskError = ''"
-            />
+            >
+              <div class="task-feedback-body">{{ taskError }}</div>
+            </el-alert>
             <el-alert
               v-else-if="taskSuccess"
               type="success"
@@ -717,27 +773,35 @@ onBeforeUnmount(() => {
             />
           </div>
 
-          <ResultSummary
-            v-if="marketingResult"
-            :status="marketingResult.status"
-            :message="marketingResult.message"
-            :run-id="marketingResult.run_id"
-            :result="marketingResult.result"
-            @view-detail="goRunDetail(marketingResult!.run_id)"
-          />
-          <ResultSummary
-            v-if="result"
-            :status="result.status"
-            :message="result.message"
-            :run-id="result.run_id"
-            :result="result.result"
-            @view-detail="goRunDetail(result!.run_id)"
-          />
+          <div
+            v-if="hasResultSummary"
+            class="result-panel-wrap"
+            :class="{ 'result-panel-wrap--expanded': leftPanelExpanded }"
+          >
+            <ResultSummary
+              v-if="marketingResult"
+              :expanded="leftPanelExpanded"
+              :status="marketingResult.status"
+              :message="marketingResult.message"
+              :run-id="marketingResult.run_id"
+              :result="marketingResult.result"
+              @view-detail="goRunDetail(marketingResult!.run_id)"
+            />
+            <ResultSummary
+              v-if="result"
+              :expanded="leftPanelExpanded"
+              :status="result.status"
+              :message="result.message"
+              :run-id="result.run_id"
+              :result="result.result"
+              @view-detail="goRunDetail(result!.run_id)"
+            />
+          </div>
         </div>
       </el-col>
 
       <!-- 右侧：商品选择 -->
-      <el-col :xs="24" :lg="16" :xl="17">
+      <el-col v-show="!leftPanelExpanded" :xs="24" :lg="16" :xl="17">
         <el-card shadow="never" class="stat-card product-panel" v-loading="productLoading">
           <template #header>
             <div class="card-head">
@@ -828,6 +892,10 @@ onBeforeUnmount(() => {
   max-width: 1400px;
 }
 
+.campaign-page--expanded {
+  max-width: none;
+}
+
 .page-alert {
   margin-bottom: 12px;
 }
@@ -841,7 +909,7 @@ onBeforeUnmount(() => {
 }
 
 .campaign-layout {
-  align-items: flex-start;
+  align-items: stretch;
 }
 
 .side-stack {
@@ -849,11 +917,89 @@ onBeforeUnmount(() => {
   flex-direction: column;
   gap: 14px;
   position: sticky;
-  top: 12px;
+  top: 16px;
+  max-height: calc(100vh - 32px);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(15, 23, 42, 0.2) transparent;
+}
+
+.side-stack--expanded {
+  position: static;
+  max-height: none;
+  overflow: visible;
+}
+
+.side-stack--results-first .left-panel-toolbar {
+  order: 1;
+}
+
+.side-stack--results-first .result-panel-wrap {
+  order: 2;
+}
+
+.side-stack--results-first .side-card-config,
+.side-stack--results-first .side-card-action {
+  order: 10;
+}
+
+.side-stack--results-first .task-feedback {
+  order: 3;
+}
+
+.side-stack::-webkit-scrollbar {
+  width: 5px;
+}
+
+.side-stack::-webkit-scrollbar-thumb {
+  background: rgba(15, 23, 42, 0.18);
+  border-radius: 4px;
 }
 
 .task-feedback {
   margin-top: 2px;
+}
+
+.task-feedback-body {
+  white-space: pre-wrap;
+  word-break: break-word;
+  line-height: 1.55;
+  font-size: 13px;
+}
+
+.task-feedback :deep(.el-alert__content) {
+  min-width: 0;
+}
+
+.result-panel-wrap {
+  margin-top: 0;
+}
+
+.left-panel-toolbar,
+.result-panel-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+  margin-bottom: 8px;
+}
+
+.left-panel-toolbar {
+  margin-top: 4px;
+}
+
+.toolbar-hint {
+  margin-right: auto;
+  font-size: 12px;
+}
+
+.toolbar-icon {
+  margin-right: 4px;
+}
+
+.result-panel-wrap :deep(.result-summary) {
+  margin-top: 0;
 }
 
 .spec-lookup-card :deep(.el-card__body) {
@@ -862,6 +1008,19 @@ onBeforeUnmount(() => {
 
 .spec-lookup-table {
   width: 100%;
+}
+
+.spec-lookup-card--expanded .spec-lookup-table {
+  font-size: 14px;
+}
+
+.spec-lookup-card--expanded .spec-name-full {
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+.spec-lookup-card--expanded :deep(.el-table__header th) {
+  font-size: 13px;
 }
 
 .spec-lookup-table :deep(.cell) {

@@ -803,7 +803,29 @@ _REMOVAL_REASON_LABELS: dict[str, str] = {
     "delete_js_failed": "点击删除失败",
     "left_price_confirm_before_delete": "删除前已离开价格确认页",
     "left_price_confirm_after_delete": "删除后已离开价格确认页",
+    "pdd_product_level_delete_skipped": "拼多多仅支持整商品删除，存在合格规格时无法自动剔除",
 }
+
+
+def _format_partial_invalid_error(
+    validation: dict[str, Any],
+    removed_specs: list[dict[str, Any]],
+) -> str:
+    spec_count = int(validation.get("spec_count") or 0)
+    passed_count = int(validation.get("passed_count") or 0)
+    remove_count = int(validation.get("remove_count") or 0)
+    lines = [
+        f"共 {spec_count} 条规格：{passed_count} 条价格合格，{remove_count} 条不合格。",
+        "拼多多「删除」会移除整商品，无法只删部分规格，已停止自动删除与提交。",
+        "请先在活动页把下列规格的活动价调高（须高于底价），或补全控价表后重新报名：",
+    ]
+    for item in removed_specs[:8]:
+        code = str(item.get("spec_code") or "").strip()
+        reason = str(item.get("reason_text") or item.get("reason") or "").strip()
+        lines.append(f"· {code or '未知编码'}：{reason}")
+    if len(removed_specs) > 8:
+        lines.append(f"… 另有 {len(removed_specs) - 8} 条，见下方明细表")
+    return "\n".join(lines)
 
 
 def _format_removal_reason_text(reason: str, item: dict[str, Any]) -> str:
@@ -1309,58 +1331,93 @@ def _delete_invalid_price_goods(
     validation: dict[str, Any],
 ) -> dict[str, Any]:
     results = validation.get("results") if isinstance(validation.get("results"), list) else []
-    to_remove = [item for item in results if _should_remove_spec(item)]
+    all_to_remove = [item for item in results if _should_remove_spec(item)]
     kept_ids, remove_product_ids, partial_ids = _group_products_for_filter(results)
+    passed_count = int(validation.get("passed_count") or 0)
     deleted: list[dict[str, Any]] = []
     failed_deletes: list[dict[str, Any]] = []
     removed_specs: list[dict[str, Any]] = []
-
-    for item in to_remove:
-        if not _on_price_confirm_page(page):
-            record = _build_removed_spec_record(
+    partial_id_set = {str(pid).strip() for pid in partial_ids if str(pid).strip()}
+    partial_items = [
+        item
+        for item in all_to_remove
+        if str(item.get("pdd_product_id") or item.get("page_product_id") or "").strip() in partial_id_set
+    ]
+    for item in partial_items:
+        removed_specs.append(
+            _build_removed_spec_record(
                 item,
                 deleted=False,
-                delete_error="left_price_confirm_before_delete",
+                delete_error="pdd_product_level_delete_skipped",
             )
-            removed_specs.append(record)
-            failed_deletes.append(record)
+        )
+
+    if partial_items and not remove_product_ids:
+        remaining = _scrape_price_confirm_specs(page)
+        empty_state = _read_price_confirm_empty_state(page)
+        remaining_count = int(remaining.get("spec_count") or 0)
+        if empty_state.get("empty"):
+            remaining_count = 0
+        print(
+            f"[{account_id}] 活动价筛选：{len(partial_id_set)} 个商品存在部分不合格规格，"
+            f"跳过删除（拼多多为整商品删除），合格 {passed_count} 条，不合格 {len(all_to_remove)} 条",
+            flush=True,
+        )
+        return {
+            "kept_product_ids": kept_ids,
+            "removed_product_ids": remove_product_ids,
+            "partial_product_ids": partial_ids,
+            "removed_spec_count": len(all_to_remove),
+            "deleted_spec_count": 0,
+            "failed_deletes": [],
+            "removed_specs": removed_specs,
+            "deleted": [],
+            "remaining_count": remaining_count,
+            "remaining_specs": remaining.get("specs") or [],
+            "empty_state": empty_state,
+            "on_price_confirm_after": _on_price_confirm_page(page),
+            "url_after": str(page.url or ""),
+            "skipped_delete": True,
+            "skip_reason": "partial_invalid_specs",
+            "passed_spec_count": passed_count,
+        }
+
+    for pid in remove_product_ids:
+        if not pid:
+            continue
+        if not _on_price_confirm_page(page):
             print(f"[{account_id}] 删除中止：已离开价格确认页 url={page.url}", flush=True)
             break
 
-        pid = str(item.get("pdd_product_id") or item.get("page_product_id") or "").strip()
-        spec_name = str(item.get("spec_name") or "").strip()
-        activity_price = str(item.get("activity_price") or "").strip()
-        delete_result = _delete_price_confirm_goods(
-            page,
-            product_id=pid,
-            spec_name=spec_name,
-            activity_price=activity_price,
-        )
-        deleted_ok = bool(delete_result.get("deleted"))
-        record = _build_removed_spec_record(
-            item,
-            deleted=deleted_ok,
-            delete_error=str(delete_result.get("reason") or "") if not deleted_ok else "",
-        )
-        removed_specs.append(record)
-        entry = {
-            "pdd_product_id": pid,
-            "spec_code": item.get("spec_code"),
-            "spec_name": spec_name,
-            "activity_price": activity_price,
-            "reason": item.get("reason"),
-            "reason_text": record.get("reason_text"),
-            "delete_scope": "spec_row",
-            **delete_result,
-        }
-        deleted.append(entry)
-        if not deleted_ok:
-            failed_deletes.append(entry)
-        time.sleep(1.0)
+        delete_result = _delete_price_confirm_goods(page, product_id=pid, spec_name="")
+        for item in all_to_remove:
+            if str(item.get("pdd_product_id") or item.get("page_product_id") or "").strip() != pid:
+                continue
+            deleted_ok = bool(delete_result.get("deleted"))
+            record = _build_removed_spec_record(
+                item,
+                deleted=deleted_ok,
+                delete_error=str(delete_result.get("reason") or "") if not deleted_ok else "",
+            )
+            removed_specs.append(record)
+            entry = {
+                "pdd_product_id": pid,
+                "spec_code": item.get("spec_code"),
+                "spec_name": item.get("spec_name"),
+                "activity_price": item.get("activity_price"),
+                "reason": item.get("reason"),
+                "reason_text": record.get("reason_text"),
+                "delete_scope": "whole_product",
+                **delete_result,
+            }
+            deleted.append(entry)
+            if not deleted_ok:
+                failed_deletes.append(entry)
+        time.sleep(1.2)
 
         if not _on_price_confirm_page(page):
             print(
-                f"[{account_id}] 删除后离开价格确认页: spec={spec_name[:32]} url={page.url}",
+                f"[{account_id}] 删除后离开价格确认页: product={pid} url={page.url}",
                 flush=True,
             )
             break
@@ -1373,16 +1430,15 @@ def _delete_invalid_price_goods(
         remaining_count = 0
     deleted_ok = [item for item in deleted if item.get("deleted")]
     print(
-        f"[{account_id}] 活动价筛选：按规格删除 {len(deleted_ok)}/{len(to_remove)} 条，"
-        f"保留商品 {len(kept_ids)} 个，剩余规格 {remaining_count} 条，"
-        f"on_price_confirm={_on_price_confirm_page(page)}",
+        f"[{account_id}] 活动价筛选：整商品删除 {len(deleted_ok)} 次，保留商品 {len(kept_ids)} 个，"
+        f"剩余规格 {remaining_count} 条，on_price_confirm={_on_price_confirm_page(page)}",
         flush=True,
     )
     return {
         "kept_product_ids": kept_ids,
         "removed_product_ids": remove_product_ids,
         "partial_product_ids": partial_ids,
-        "removed_spec_count": len(to_remove),
+        "removed_spec_count": len(all_to_remove),
         "deleted_spec_count": len(deleted_ok),
         "failed_deletes": failed_deletes,
         "removed_specs": removed_specs,
@@ -1392,6 +1448,8 @@ def _delete_invalid_price_goods(
         "empty_state": empty_state,
         "on_price_confirm_after": _on_price_confirm_page(page),
         "url_after": str(page.url or ""),
+        "skipped_delete": False,
+        "passed_spec_count": passed_count,
     }
 
 
@@ -1849,17 +1907,39 @@ def filter_price_confirm_page(
         }
 
     filter_result = _delete_invalid_price_goods(page, account_id, validation)
+    if filter_result.get("skipped_delete"):
+        return {
+            **state,
+            "status": "failed",
+            "step": "filter_activity_prices",
+            "action": "partial_invalid_needs_manual",
+            "error": _format_partial_invalid_error(
+                validation,
+                filter_result.get("removed_specs") if isinstance(filter_result.get("removed_specs"), list) else [],
+            ),
+            "removed_specs": filter_result.get("removed_specs") or [],
+            "filter_result": filter_result,
+        }
+
     empty_state = filter_result.get("empty_state") if isinstance(filter_result.get("empty_state"), dict) else {}
     remaining_count = int(filter_result.get("remaining_count") or 0)
     on_price_confirm = bool(filter_result.get("on_price_confirm_after"))
+    passed_count = int(validation.get("passed_count") or 0)
     if remaining_count <= 0 or empty_state.get("empty"):
+        if passed_count > 0 and int(filter_result.get("deleted_spec_count") or 0) > 0:
+            error = (
+                f"删除不合格规格时拼多多移除了整商品（原 {validation.get('spec_count')} 条中 "
+                f"{passed_count} 条合格）。请改为在活动页手动调高不合格规格的活动价后重新报名。"
+            )
+        else:
+            error = "所有商品均不符合价格条件或缺少定价数据，已删除并关闭页面"
         close_result = _close_price_confirm_page(page, account_id)
         return {
             **state,
             "status": "all_products_removed",
             "step": "filter_activity_prices",
             "action": "close_page",
-            "error": "所有商品均不符合价格条件或缺少定价数据，已删除并关闭页面",
+            "error": error,
             "removed_specs": filter_result.get("removed_specs") or _removed_specs_from_validation(validation),
             "filter_result": filter_result,
             "close_result": close_result,

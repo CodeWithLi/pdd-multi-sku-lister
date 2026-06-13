@@ -12,7 +12,7 @@ export function summarizeRunError(run: Pick<RunRecord, 'message' | 'result'>): s
   if (Array.isArray(errors)) {
     for (const item of errors) {
       const text = String(item ?? '').trim()
-      if (text) return text
+      if (text && text !== 'marketing activity register failed') return text
     }
   }
   const results = result.results
@@ -20,11 +20,16 @@ export function summarizeRunError(run: Pick<RunRecord, 'message' | 'result'>): s
     for (const item of results) {
       if (!item || typeof item !== 'object') continue
       const row = item as Record<string, unknown>
-      if (String(row.status || '') === 'success') continue
-      const err = String(row.error || '').trim()
-      if (err) {
+      const msg = String(row.message || row.error || '').trim()
+      if (msg && String(row.status || '') !== 'success') {
         const step = String(row.step || '').trim()
-        return step ? `${step}: ${err}` : err
+        return step && !msg.includes(step) ? `${step}: ${msg}` : msg
+      }
+      const finalize = row.finalize_result
+      if (finalize && typeof finalize === 'object') {
+        const fin = finalize as Record<string, unknown>
+        const finErr = String(fin.error || '').trim()
+        if (finErr) return finErr
       }
     }
   }

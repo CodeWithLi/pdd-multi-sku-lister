@@ -213,6 +213,11 @@ function go(path: string) {
 }
 
 .sidebar {
+  position: fixed;
+  top: 0;
+  left: 0;
+  z-index: 200;
+  height: 100vh;
   background: var(--sidebar-bg);
   color: var(--sidebar-text);
   display: flex;
@@ -392,10 +397,11 @@ function go(path: string) {
 
 .main {
   flex: 1;
-  width: 100%;
+  width: calc(100% - 220px);
   min-width: 0;
+  margin-left: 220px;
   padding: 28px 32px 48px;
-  overflow-x: hidden;
+  overflow-x: clip;
   background:
     radial-gradient(circle at 78% 12%, rgba(255, 107, 53, 0.08), transparent 28%),
     linear-gradient(180deg, #f8fafc 0%, var(--app-bg) 42%, #eef3f9 100%);
@@ -426,6 +432,8 @@ function go(path: string) {
   }
 
   .main {
+    width: calc(100% - 64px);
+    margin-left: 64px;
     padding: 20px 16px 32px;
   }
 }
