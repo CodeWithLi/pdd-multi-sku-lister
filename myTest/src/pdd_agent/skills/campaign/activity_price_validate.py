@@ -782,6 +782,7 @@ def validate_spec_prices(
         "skipped_count": skipped_count,
         "checked_count": checked_count,
         "remove_count": remove_count,
+        "removed_specs": [item for item in results if item.get("should_remove")],
         "pricing_rule_count": len(pricing),
         "control_rule_count": len(control),
         "results": results,
@@ -1312,18 +1313,17 @@ def _delete_invalid_price_goods(
     kept_ids, remove_product_ids, partial_ids = _group_products_for_filter(results)
     deleted: list[dict[str, Any]] = []
     failed_deletes: list[dict[str, Any]] = []
+    removed_specs: list[dict[str, Any]] = []
 
     for item in to_remove:
         if not _on_price_confirm_page(page):
-            failed_deletes.append(
-                {
-                    "pdd_product_id": item.get("pdd_product_id"),
-                    "spec_name": item.get("spec_name"),
-                    "deleted": False,
-                    "reason": "left_price_confirm_before_delete",
-                    "url": str(page.url or ""),
-                }
+            record = _build_removed_spec_record(
+                item,
+                deleted=False,
+                delete_error="left_price_confirm_before_delete",
             )
+            removed_specs.append(record)
+            failed_deletes.append(record)
             print(f"[{account_id}] 删除中止：已离开价格确认页 url={page.url}", flush=True)
             break
 
@@ -1336,17 +1336,25 @@ def _delete_invalid_price_goods(
             spec_name=spec_name,
             activity_price=activity_price,
         )
+        deleted_ok = bool(delete_result.get("deleted"))
+        record = _build_removed_spec_record(
+            item,
+            deleted=deleted_ok,
+            delete_error=str(delete_result.get("reason") or "") if not deleted_ok else "",
+        )
+        removed_specs.append(record)
         entry = {
             "pdd_product_id": pid,
             "spec_code": item.get("spec_code"),
             "spec_name": spec_name,
             "activity_price": activity_price,
             "reason": item.get("reason"),
+            "reason_text": record.get("reason_text"),
             "delete_scope": "spec_row",
             **delete_result,
         }
         deleted.append(entry)
-        if not delete_result.get("deleted"):
+        if not deleted_ok:
             failed_deletes.append(entry)
         time.sleep(1.0)
 
