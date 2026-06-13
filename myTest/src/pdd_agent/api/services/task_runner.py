@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from pdd_agent.browser.sync_job import run_browser_job_async
 from pdd_agent.agents.campaign import build_campaign_graph
 from pdd_agent.agents.delist import build_delist_graph
 from pdd_agent.agents.listing import build_listing_graph
@@ -13,9 +14,12 @@ from pdd_agent.core.config import load_yaml_settings
 from pdd_agent.core.logging import get_logger
 from pdd_agent.db.repositories import (
     get_account_config,
+    get_published_product_by_mapping_id,
+    patch_published_product_spec_metadata,
     update_published_product_status,
     upsert_published_product,
 )
+from pdd_agent.skills.published.goods_list_lookup import lookup_published_product_in_goods_list
 from pdd_agent.domain.enums import AgentKind, RunStatus, TaskPhase
 from pdd_agent.domain.models import PlannedTask
 from pdd_agent.storage import TaskRunStore
@@ -34,6 +38,27 @@ def _json_safe(value: Any) -> Any:
     if hasattr(value, "model_dump"):
         return value.model_dump(mode="json")
     return value
+
+
+def _summarize_campaign_message(result: dict[str, Any]) -> str:
+    """活动任务失败时只存简短说明，避免把整份 results JSON 写入 message。"""
+    errors = result.get("errors") or []
+    if isinstance(errors, list):
+        for item in errors:
+            text = str(item or "").strip()
+            if text:
+                return text
+    item_results = [r for r in result.get("results") or [] if isinstance(r, dict)]
+    for item in item_results:
+        if str(item.get("status") or "") == "success":
+            continue
+        err = str(item.get("error") or "").strip()
+        if err:
+            step = str(item.get("step") or "").strip()
+            return f"{step}: {err}" if step else err
+    if item_results and all(str(r.get("status") or "") == "success" for r in item_results):
+        return "活动任务已完成"
+    return "活动任务失败"
 
 
 def plan_tasks(message: str) -> PlanResponse:
@@ -199,6 +224,63 @@ def create_delist_run(account_id: str) -> str:
     return store.create_run(AgentKind.DELIST, account_id).run_id
 
 
+def create_published_goods_lookup_run(account_id: str) -> str:
+    store = TaskRunStore()
+    return store.create_run(AgentKind.LISTING, account_id).run_id
+
+
+async def execute_published_goods_lookup(
+    *,
+    run_id: str,
+    account_id: str,
+    mapping_id: str,
+) -> dict[str, Any]:
+    store = TaskRunStore()
+    settings = load_yaml_settings()
+    account = get_account_config(settings, account_id)
+    if not account:
+        store.finish(run_id, RunStatus.FAILED, f"unknown account: {account_id}")
+        return {"error": f"unknown account: {account_id}"}
+
+    row = get_published_product_by_mapping_id(mapping_id)
+    if not row:
+        store.finish(run_id, RunStatus.FAILED, f"published product not found: {mapping_id}")
+        return {"error": f"published product not found: {mapping_id}"}
+    if not row.pdd_product_id:
+        store.finish(run_id, RunStatus.FAILED, "published product has no pdd_product_id")
+        return {"error": "published product has no pdd_product_id"}
+
+    store.update_status(run_id, RunStatus.RUNNING, "published goods lookup")
+    store.update_phase(run_id, TaskPhase.BROWSER)
+    pdd_product_id = str(row.pdd_product_id).strip()
+
+    def _job(dp):
+        return lookup_published_product_in_goods_list(dp, account_id, pdd_product_id)
+
+    try:
+        result = await run_browser_job_async(settings, account, _job)
+        lookup_payload = result.get("pdd_goods_lookup")
+        if isinstance(lookup_payload, dict):
+            patch_published_product_spec_metadata(mapping_id, {"pdd_goods_lookup": lookup_payload})
+
+        if str(result.get("status") or "") == "success":
+            store.finish(
+                run_id,
+                RunStatus.SUCCESS,
+                message=str(result.get("message") or f"goods lookup ok product_id={pdd_product_id}"),
+                result=_json_safe(result),
+            )
+            return result
+
+        error = str(result.get("error") or "published goods lookup failed")
+        store.finish(run_id, RunStatus.FAILED, error, result=_json_safe(result))
+        return result
+    except Exception as exc:
+        logger.exception("published goods lookup failed run_id=%s mapping_id=%s", run_id, mapping_id)
+        store.finish(run_id, RunStatus.FAILED, str(exc), result={"error": str(exc)})
+        return {"error": str(exc)}
+
+
 async def execute_campaign_marketing_activity_register(
     *,
     run_id: str,
@@ -237,7 +319,7 @@ async def execute_campaign_marketing_activity_register(
         item_results = [r for r in result.get("results") or [] if isinstance(r, dict)]
         item_failed = any(str(r.get("status") or "") != "success" for r in item_results)
         status = RunStatus.SUCCESS if not result.get("errors") and not item_failed else RunStatus.FAILED
-        store.finish(run_id, status, message=str(result.get("results") or ""), result=result)
+        store.finish(run_id, status, message=_summarize_campaign_message(result), result=result)
         return result
     except Exception as exc:
         logger.exception("campaign marketing activity register failed run_id=%s", run_id)
@@ -277,7 +359,7 @@ async def execute_campaign_marketing_activity_search(
         item_results = [r for r in result.get("results") or [] if isinstance(r, dict)]
         item_failed = any(str(r.get("status") or "") != "success" for r in item_results)
         status = RunStatus.SUCCESS if not result.get("errors") and not item_failed else RunStatus.FAILED
-        store.finish(run_id, status, message=str(result.get("results") or ""), result=result)
+        store.finish(run_id, status, message=_summarize_campaign_message(result), result=result)
         return result
     except Exception as exc:
         logger.exception("campaign marketing activity search failed run_id=%s", run_id)
@@ -316,7 +398,7 @@ async def execute_campaign_limited_time_setup(
         item_results = [r for r in result.get("results") or [] if isinstance(r, dict)]
         item_failed = any(str(r.get("status") or "") != "success" for r in item_results)
         status = RunStatus.SUCCESS if not result.get("errors") and not item_failed else RunStatus.FAILED
-        store.finish(run_id, status, message=str(result.get("results") or ""), result=result)
+        store.finish(run_id, status, message=_summarize_campaign_message(result), result=result)
         return result
     except Exception as exc:
         logger.exception("campaign job failed run_id=%s", run_id)

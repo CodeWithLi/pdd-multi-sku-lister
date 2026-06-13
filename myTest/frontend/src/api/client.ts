@@ -22,6 +22,10 @@ import type {
   PublishedProductListResponse,
   PublishedProductDetailResponse,
   PublishedProductDelistResponse,
+  PublishedProductLookupResponse,
+  PublishedProductDeleteResponse,
+  PublishedProductCreateResponse,
+  PublishedProductManualCreatePayload,
   StyleColor,
   StyleColorCreatePayload,
   StyleColorListResponse,
@@ -234,6 +238,15 @@ export const api = {
 
   delistPublishedProduct: (mappingId: string) =>
     http.post<PublishedProductDelistResponse>(`/published-products/${mappingId}/delist`).then((r) => r.data),
+
+  lookupPublishedProductGoods: (mappingId: string) =>
+    http.post<PublishedProductLookupResponse>(`/published-products/${mappingId}/lookup-pdd-goods`).then((r) => r.data),
+
+  deletePublishedProduct: (mappingId: string) =>
+    http.delete<PublishedProductDeleteResponse>(`/published-products/${mappingId}`).then((r) => r.data),
+
+  createManualPublishedProduct: (body: PublishedProductManualCreatePayload) =>
+    http.post<PublishedProductCreateResponse>('/published-products/manual', body).then((r) => r.data),
 
   styleColors: (params: {
     page?: number

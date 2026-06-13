@@ -24,9 +24,10 @@ from pdd_agent.skills.listing.multi_spec_page import (
 from pdd_agent.skills.listing.page_ai_title import apply_title_after_cover_upload
 from pdd_agent.skills.listing.spec_labels import enrich_listing_unit_specs, ordered_style_names
 from pdd_agent.skills.listing.title import resolve_listing_title
+from pdd_agent.skills.published.pdd_spec_format import listing_unit_sku_metadata
 
 
-def _error_screenshot_path(filename: str) -> str:
+def _unit_spec_metadata(unit: ListingUnit) -> dict[str, Any]:
     d = PROJECT_ROOT / "data" / "runs" / "screenshots"
     d.mkdir(parents=True, exist_ok=True)
     return str(d / filename)
@@ -44,20 +45,7 @@ def _unit_spec_metadata(unit: ListingUnit) -> dict[str, Any]:
         "detail_images": [str(path) for path in unit.detail_images],
         "style_codes": list(unit.style_codes),
         "model_codes": list(unit.model_codes),
-        "skus": [
-            {
-                "style_code": sku.style_code,
-                "style_name": sku.style_name,
-                "model_code": sku.model_code,
-                "model_name": sku.model_name,
-                "combo_folder": sku.combo_folder,
-                "preview_image": str(sku.preview_image),
-                "inventory": sku.inventory,
-                "group_price": sku.group_price,
-                "single_price": sku.single_price,
-            }
-            for sku in unit.skus
-        ],
+        "skus": [listing_unit_sku_metadata(sku) for sku in unit.skus],
     }
 
 
@@ -269,30 +257,97 @@ def _confirm_leave_publish_page(page: DpPage) -> None:
         pass
 
 
-def _click_submit(page: DpPage, account_id: str, label: str) -> tuple[bool, datetime | None]:
+def _click_visible_button(page: DpPage, texts: list[str], timeout: float = 0.4) -> bool:
+    for text in texts:
+        try:
+            btn = page.ele(f"text:{text}", timeout=timeout)
+            if btn:
+                btn.click(by_js=True)
+                return True
+        except Exception:
+            continue
+    return False
+
+
+def _detect_submit_blocked(page: DpPage) -> str:
+    checks = [
+        ("text:请上传预览图", "preview_missing"),
+        ("text:错误项未处理", "validation_errors"),
+        ("text:个错误项", "validation_errors"),
+        ("text:请完善", "validation_incomplete"),
+        ("text:请填写", "validation_required"),
+        ("text:不能为空", "validation_required"),
+    ]
+    for selector, reason in checks:
+        try:
+            if page.ele(selector, timeout=0.4):
+                return reason
+        except Exception:
+            continue
+    return ""
+
+
+def _detect_submit_success(page: DpPage, *, max_wait: float = 18.0) -> bool:
+    success_selectors = [
+        "css:.success-title",
+        "text:提交成功",
+        "text:发布成功",
+        "text:商品发布成功",
+        "text:上架成功",
+        "text:已提交审核",
+    ]
+    confirm_texts = ["确认提交", "确认上架", "确定", "我知道了", "知道了"]
+    deadline = time.time() + max_wait
+    while time.time() < deadline:
+        url = (page.url or "").lower()
+        if "goods_list" in url or "/goods/list" in url:
+            return True
+        for selector in success_selectors:
+            try:
+                if page.ele(selector, timeout=0.4):
+                    return True
+            except Exception:
+                continue
+        _click_visible_button(page, confirm_texts, timeout=0.25)
+        time.sleep(0.6)
+    return False
+
+
+def _click_submit(page: DpPage, account_id: str, label: str) -> tuple[bool, datetime | None, str]:
+    """点击提交；返回 (成功标志是否出现, 点击时间, 拦截原因)。"""
     print(f"[{account_id}] [{label}] 点击提交并上架...", flush=True)
     try:
         submit_btn = page.ele("text:提交并上架", timeout=3)
         if not submit_btn:
             print(f"[{account_id}] [{label}] 未找到「提交并上架」按钮", flush=True)
-            return False, None
+            return False, None, "submit_button_missing"
         submitted_at = datetime.now()
         submit_btn.click(by_js=True)
-        time.sleep(2)
-        if page.ele("css:.success-title", timeout=8):
+        time.sleep(1.5)
+        blocked = _detect_submit_blocked(page)
+        if blocked:
+            reason_map = {
+                "preview_missing": "提交被拦截：仍有预览图未上传",
+                "validation_errors": "提交被拦截：页面仍有错误项未处理",
+                "validation_incomplete": "提交被拦截：页面提示请完善信息",
+                "validation_required": "提交被拦截：页面仍有必填项未填写",
+            }
+            print(f"[{account_id}] [{label}] {reason_map.get(blocked, blocked)}", flush=True)
+            return False, submitted_at, blocked
+        if _detect_submit_success(page):
             print(
                 f"[{account_id}] [{label}] 提交成功，开始回到商品列表核验最终状态",
                 flush=True,
             )
-            return True, submitted_at
-        if page.ele("text:请上传预览图", timeout=1):
-            print(f"[{account_id}] [{label}] 提交被拦截：仍有预览图未上传", flush=True)
-            return False, submitted_at
-        print(f"[{account_id}] [{label}] 未检测到成功标志，请手动核查", flush=True)
-        return False, submitted_at
+            return True, submitted_at, ""
+        print(
+            f"[{account_id}] [{label}] 未检测到成功页（可能已提交或页面改版），将改去商品列表核验",
+            flush=True,
+        )
+        return False, submitted_at, ""
     except Exception as exc:
         print(f"[{account_id}] [{label}] 提交异常：{_safe_exc(exc)}", flush=True)
-        return False, None
+        return False, None, "submit_exception"
 
 
 def _open_goods_list(page: DpPage, account_id: str, tab_text: str = "在售中") -> bool:
@@ -371,7 +426,176 @@ def _set_goods_filter(page: DpPage, label: str, value: str) -> bool:
         return False
 
 
-def _click_goods_search(page: DpPage) -> bool:
+def _read_goods_id_filter(page: DpPage) -> str:
+    try:
+        value = page.run_js(
+            """
+            const selectors = [
+                '.goods-search-wrap input[placeholder*="商品ID"]',
+                'input[placeholder*="商品ID"]',
+                'input[placeholder*="多个商品ID"]',
+            ];
+            for (const sel of selectors) {
+                const input = document.querySelector(sel);
+                if (!input) continue;
+                return String(input.value || '').trim();
+            }
+            return '';
+            """
+        )
+        return str(value or "").strip()
+    except Exception:
+        return ""
+
+
+def _fill_goods_id_filter(page: DpPage, product_id: str) -> dict[str, Any]:
+    """填写商品列表「商品ID」筛选框，并校验值已写入。"""
+    product_id = str(product_id or "").strip()
+    if not product_id:
+        return {"filled": False, "method": "", "value": ""}
+
+    raw = page._page
+    playwright_selectors = (
+        '.goods-search-wrap input[placeholder*="商品ID"]',
+        '.goods-search-wrap input[data-testid="beast-core-input-htmlInput"]',
+        'input[placeholder*="商品ID"]',
+        'input[placeholder*="多个商品ID"]',
+    )
+    for selector in playwright_selectors:
+        try:
+            loc = raw.locator(selector).first
+            if not loc.is_visible(timeout=1500):
+                continue
+            loc.scroll_into_view_if_needed(timeout=3000)
+            loc.click(timeout=3000)
+            loc.fill("", timeout=3000)
+            loc.fill(product_id, timeout=3000)
+            time.sleep(0.3)
+            current = str(loc.input_value(timeout=1000) or "").strip()
+            if product_id in current:
+                return {"filled": True, "method": f"playwright_{selector}", "value": current}
+        except Exception:
+            continue
+
+    if _set_goods_filter(page, "商品ID", product_id):
+        current = _read_goods_id_filter(page)
+        if product_id in current:
+            return {"filled": True, "method": "set_goods_filter", "value": current}
+
+    try:
+        ok = page.run_js(
+            """
+            const productId = String(arguments[0] || '').trim();
+            function isVisible(el) {
+                if (!el || !el.getBoundingClientRect) return false;
+                const r = el.getBoundingClientRect();
+                const s = window.getComputedStyle(el);
+                return r.width > 4 && r.height > 4
+                    && s.display !== 'none'
+                    && s.visibility !== 'hidden'
+                    && parseFloat(s.opacity || '1') > 0.05;
+            }
+            function fillInput(input, value) {
+                input.focus();
+                input.value = '';
+                input.dispatchEvent(new Event('input', { bubbles: true }));
+                input.value = value;
+                input.dispatchEvent(new Event('input', { bubbles: true }));
+                input.dispatchEvent(new Event('change', { bubbles: true }));
+                return true;
+            }
+            const selectors = [
+                '.goods-search-wrap input[placeholder*="商品ID"]',
+                'input[placeholder*="商品ID"]',
+                'input[placeholder*="多个商品ID"]',
+            ];
+            for (const sel of selectors) {
+                for (const input of document.querySelectorAll(sel)) {
+                    if (!isVisible(input)) continue;
+                    fillInput(input, productId);
+                    return true;
+                }
+            }
+            return false;
+            """,
+            product_id,
+        )
+        if ok:
+            current = _read_goods_id_filter(page)
+            if product_id in current:
+                return {"filled": True, "method": "js_fill", "value": current}
+    except Exception:
+        pass
+
+    return {"filled": False, "method": "", "value": _read_goods_id_filter(page)}
+
+
+def _click_goods_search(page: DpPage) -> dict[str, Any]:
+    """点击商品列表筛选区的「查询」按钮。"""
+    raw = page._page
+
+    def _try_click(locator, method: str) -> dict[str, Any] | None:
+        try:
+            locator.wait_for(state="visible", timeout=2000)
+            locator.scroll_into_view_if_needed(timeout=3000)
+            locator.click(timeout=5000)
+            time.sleep(1.5)
+            return {"clicked": True, "method": method}
+        except Exception:
+            return None
+
+    scoped = [
+        (
+            "pw_wrap_role_query",
+            lambda: raw.locator(".goods-search-wrap").get_by_role("button", name="查询").first,
+        ),
+        (
+            "pw_sku_inquire",
+            lambda: raw.locator('button[data-tracking-viewid="sku_inquire"]').first,
+        ),
+        (
+            "pw_wrap_beast_button",
+            lambda: raw.locator(".goods-search-wrap button[data-testid='beast-core-button']")
+            .filter(has_text="查询")
+            .first,
+        ),
+        (
+            "pw_wrap_suffix_query",
+            lambda: raw.locator('.goods-search-wrap [data-testid="beast-core-input-suffix"]')
+            .filter(has_text="查询")
+            .first,
+        ),
+    ]
+    for method, factory in scoped:
+        result = _try_click(factory(), method)
+        if result:
+            return result
+
+    for sel in (
+        'button[data-tracking-viewid="sku_inquire"]',
+        '.goods-search-wrap button[data-tracking-viewid="sku_inquire"]',
+    ):
+        try:
+            loc = raw.locator(sel).first
+            result = _try_click(loc, f"playwright_{sel}")
+            if result:
+                return result
+        except Exception:
+            continue
+
+    for sel in (
+        "css:button[data-tracking-viewid='sku_inquire']",
+        "css:.goods-search-wrap button[data-testid='beast-core-button']",
+    ):
+        try:
+            el = page.ele(sel, timeout=1)
+            if el and el.states.is_displayed:
+                el.click()
+                time.sleep(1.5)
+                return {"clicked": True, "method": sel}
+        except Exception:
+            continue
+
     try:
         clicked = page.run_js(
             """
@@ -384,22 +608,57 @@ def _click_goods_search(page: DpPage) -> bool:
                     && s.visibility !== 'hidden'
                     && parseFloat(s.opacity || '1') > 0.05;
             }
-            for (const el of document.querySelectorAll('button, span, a, div')) {
-                const text = (el.innerText || el.textContent || '').trim();
-                if (text === '查询' && isVisible(el)) {
-                    el.click();
-                    return true;
+            function activate(btn) {
+                btn.scrollIntoView({ block: 'center', inline: 'center' });
+                btn.focus({ preventScroll: true });
+                btn.click();
+            }
+            const scopes = [
+                document.querySelector('.goods-search-wrap'),
+                document.querySelector('[class*="goods-search"]'),
+            ].filter(Boolean);
+            for (const scope of scopes.length ? scopes : [document]) {
+                for (const btn of scope.querySelectorAll('button[data-tracking-viewid="sku_inquire"], button[data-testid="beast-core-button"]')) {
+                    const text = (btn.innerText || btn.textContent || '').trim();
+                    if (text.includes('查询') && isVisible(btn)) {
+                        activate(btn);
+                        return { clicked: true, method: 'js_scope_button' };
+                    }
+                }
+                for (const suffix of scope.querySelectorAll('[data-testid="beast-core-input-suffix"]')) {
+                    const text = (suffix.innerText || suffix.textContent || '').trim();
+                    if (text === '查询' && isVisible(suffix)) {
+                        activate(suffix);
+                        return { clicked: true, method: 'js_scope_suffix' };
+                    }
                 }
             }
-            return false;
+            return { clicked: false, method: '' };
             """
         )
+        if isinstance(clicked, dict) and clicked.get("clicked"):
+            time.sleep(1.5)
+            return clicked
         if clicked:
-            time.sleep(2)
-            return True
+            time.sleep(1.5)
+            return {"clicked": True, "method": "js_click"}
     except Exception:
         pass
-    return False
+
+    for selector in (
+        'input[placeholder*="商品ID"]',
+        '.goods-search-wrap input[data-testid="beast-core-input-htmlInput"]',
+    ):
+        try:
+            inp = raw.locator(selector).first
+            if inp.is_visible(timeout=1500):
+                inp.press("Enter")
+                time.sleep(1.5)
+                return {"clicked": True, "method": f"enter_{selector}"}
+        except Exception:
+            continue
+
+    return {"clicked": False, "method": ""}
 
 
 def _fill_global_product_code(page: DpPage, account_id: str, label: str, value: str) -> bool:
@@ -888,11 +1147,21 @@ def upload_one_listing(
             legacy_status="skipped",
         )
 
-    ok, submitted_at = _click_submit(page, account_id, label)
+    ok, submitted_at, blocked_reason = _click_submit(page, account_id, label)
     _clear_beforeunload(page)
-    if ok:
-        print(f"[{account_id}] [{label}] 等待 30 秒后核验在售/驳回状态", flush=True)
-        time.sleep(30)
+    if blocked_reason in {"preview_missing", "validation_errors", "validation_incomplete", "validation_required"}:
+        return _listing_result(
+            unit=unit,
+            status="retryable",
+            reason=blocked_reason,
+            title=listing_info.get("title", ""),
+            retryable=True,
+            legacy_status="skipped",
+        )
+    if submitted_at:
+        wait_seconds = 20 if ok else 35
+        print(f"[{account_id}] [{label}] 等待 {wait_seconds} 秒后核验在售/驳回状态", flush=True)
+        time.sleep(wait_seconds)
         capture = _capture_publish_outcome(
             page,
             account_id,
@@ -927,7 +1196,7 @@ def upload_one_listing(
         result = _listing_result(
             unit=unit,
             status="retryable",
-            reason="published_but_not_found_in_on_sale_or_rejected",
+            reason="published_but_not_found_in_on_sale_or_rejected" if ok else "submit_uncertain",
             title=listing_info.get("title", ""),
             retryable=True,
             legacy_status="submit_uncertain",
@@ -938,7 +1207,7 @@ def upload_one_listing(
     return _listing_result(
         unit=unit,
         status="retryable",
-        reason="submit_uncertain",
+        reason=blocked_reason or "submit_uncertain",
         title=listing_info.get("title", ""),
         retryable=True,
         legacy_status="submit_uncertain",

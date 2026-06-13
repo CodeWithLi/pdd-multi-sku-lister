@@ -1,9 +1,11 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
+import { ElMessage } from 'element-plus'
 import { api } from '@/api/client'
 import PageHeader from '@/components/PageHeader.vue'
 import ResultSummary from '@/components/ResultSummary.vue'
+import { summarizeRunError, extractActivitySpecLookupMeta, extractActivitySpecLookupRows } from '@/utils/runMessage'
 import type {
   Account,
   CampaignTaskResponse,
@@ -22,7 +24,8 @@ const taskLoading = ref(false)
 const marketingTaskLoading = ref(false)
 const productLoading = ref(false)
 const error = ref('')
-const success = ref('')
+const taskError = ref('')
+const taskSuccess = ref('')
 const accounts = ref<Account[]>([])
 const accountId = ref('')
 const result = ref<CampaignTaskResponse | null>(null)
@@ -74,6 +77,29 @@ const canRegisterMarketingActivity = computed(
     Boolean(marketingActivityId.value) &&
     selectedPddProductIds.value.length > 0,
 )
+const currentStep = computed(() => {
+  if (!accountId.value || !marketingActivityId.value) return 0
+  if (!selectedPddProductIds.value.length) return 1
+  return 2
+})
+
+type ActivitySpecLookupRow = import('@/utils/runMessage').ActivitySpecLookupRow
+
+function campaignResultPayload(): Record<string, unknown> | null {
+  return (marketingResult.value?.result || activeMarketingRun.value?.result || null) as Record<
+    string,
+    unknown
+  > | null
+}
+
+const marketingSpecLookupRows = computed(() => extractActivitySpecLookupRows(campaignResultPayload() ?? undefined))
+
+const marketingSpecLookup = computed(() => extractActivitySpecLookupMeta(campaignResultPayload() ?? undefined))
+
+const showSpecLookupPanel = computed(() => {
+  if (!['20981', '21365'].includes(marketingActivityId.value)) return false
+  return marketingSpecLookupRows.value.length > 0
+})
 let campaignPollTimer: number | undefined
 let marketingPollTimer: number | undefined
 
@@ -161,6 +187,25 @@ function onProductSelectionChange(rows: PublishedProduct[]) {
   selectedProducts.value = rows.filter(isSelectableProduct)
 }
 
+function showTaskError(text: string) {
+  taskSuccess.value = ''
+  taskError.value = text
+}
+
+function showTaskSuccess(text: string) {
+  taskError.value = ''
+  taskSuccess.value = text
+  ElMessage.success(text)
+}
+
+function showFormError(text: string) {
+  ElMessage.warning(text)
+}
+
+function summarizeTaskFailure(resp: Pick<CampaignTaskResponse, 'message' | 'result'>): string {
+  return summarizeRunError({ message: resp.message, result: resp.result })
+}
+
 function formatTime(t: string | null) {
   if (!t) return '-'
   return new Date(t).toLocaleString('zh-CN')
@@ -183,10 +228,12 @@ function stopMarketingPolling() {
 function syncResultFromRun(run: RunRecord) {
   activeCampaignRun.value = run
   if (!result.value || result.value.run_id !== run.run_id) return
+  const shortMsg =
+    run.status === 'failed' ? summarizeRunError(run) : run.message || result.value.message
   result.value = {
     ...result.value,
     status: run.status,
-    message: run.message || result.value.message,
+    message: shortMsg,
     result: run.result,
   }
 }
@@ -194,10 +241,12 @@ function syncResultFromRun(run: RunRecord) {
 function syncMarketingResultFromRun(run: RunRecord) {
   activeMarketingRun.value = run
   if (!marketingResult.value || marketingResult.value.run_id !== run.run_id) return
+  const shortMsg =
+    run.status === 'failed' ? summarizeRunError(run) : run.message || marketingResult.value.message
   marketingResult.value = {
     ...marketingResult.value,
     status: run.status,
-    message: run.message || marketingResult.value.message,
+    message: shortMsg,
     result: run.result,
   }
 }
@@ -211,38 +260,41 @@ function startMarketingPolling(runId: string) {
       if (!['pending', 'running'].includes(run.status)) {
         stopMarketingPolling()
         marketingTaskLoading.value = false
-        success.value = run.status === 'success' ? '营销活动任务已完成' : ''
-        error.value = run.status === 'failed' ? (run.message || '营销活动搜索失败') : ''
+        if (run.status === 'success') {
+          showTaskSuccess('营销活动任务已完成')
+        } else if (run.status === 'failed') {
+          showTaskError(summarizeRunError(run))
+        }
       }
     } catch (e) {
       stopMarketingPolling()
       marketingTaskLoading.value = false
-      error.value = e instanceof Error ? e.message : '查询营销活动任务状态失败'
+      showTaskError(e instanceof Error ? e.message : '查询营销活动任务状态失败')
     }
   }, 2000)
 }
 
 async function startMarketingActivityRegister() {
   if (isMarketingRunning.value || isCampaignRunning.value) {
-    error.value = '当前已有活动任务正在执行，请等待完成后再启动'
+    showFormError('当前已有活动任务正在执行，请等待完成后再启动')
     return
   }
   if (!accountId.value) {
-    error.value = '请选择店铺'
+    showFormError('请选择店铺')
     return
   }
   if (!marketingActivityId.value) {
-    error.value = '请选择营销活动'
+    showFormError('请选择营销活动')
     return
   }
   if (!selectedPddProductIds.value.length) {
-    error.value = '请先选择要报名的已发布商品'
+    showFormError('请先选择要报名的已发布商品')
     return
   }
 
   marketingTaskLoading.value = true
-  error.value = ''
-  success.value = ''
+  taskError.value = ''
+  taskSuccess.value = ''
   marketingResult.value = null
   activeMarketingRun.value = null
   try {
@@ -251,7 +303,15 @@ async function startMarketingActivityRegister() {
       activity_id: marketingActivityId.value,
       pdd_product_ids: selectedPddProductIds.value,
     })
-    success.value = marketingResult.value.message || '营销活动报名任务已启动'
+    if (marketingResult.value.status === 'failed') {
+      marketingResult.value = {
+        ...marketingResult.value,
+        message: summarizeTaskFailure(marketingResult.value),
+      }
+      showTaskError(marketingResult.value.message)
+    } else {
+      showTaskSuccess(marketingResult.value.message || '营销活动报名任务已启动')
+    }
     activeMarketingRun.value = {
       run_id: marketingResult.value.run_id,
       agent: 'campaign',
@@ -270,28 +330,28 @@ async function startMarketingActivityRegister() {
       marketingTaskLoading.value = false
     }
   } catch (e) {
-    error.value = e instanceof Error ? e.message : '启动营销活动报名失败'
+    showTaskError(e instanceof Error ? e.message : '启动营销活动报名失败')
     marketingTaskLoading.value = false
   }
 }
 
 async function startMarketingActivitySearch() {
   if (isMarketingRunning.value || isCampaignRunning.value) {
-    error.value = '当前已有活动任务正在执行，请等待完成后再启动'
+    showFormError('当前已有活动任务正在执行，请等待完成后再启动')
     return
   }
   if (!accountId.value) {
-    error.value = '请选择店铺'
+    showFormError('请选择店铺')
     return
   }
   if (!marketingActivityId.value) {
-    error.value = '请选择营销活动'
+    showFormError('请选择营销活动')
     return
   }
 
   marketingTaskLoading.value = true
-  error.value = ''
-  success.value = ''
+  taskError.value = ''
+  taskSuccess.value = ''
   marketingResult.value = null
   activeMarketingRun.value = null
   try {
@@ -299,7 +359,15 @@ async function startMarketingActivitySearch() {
       account_id: accountId.value,
       activity_id: marketingActivityId.value,
     })
-    success.value = marketingResult.value.message || '营销活动搜索任务已启动'
+    if (marketingResult.value.status === 'failed') {
+      marketingResult.value = {
+        ...marketingResult.value,
+        message: summarizeTaskFailure(marketingResult.value),
+      }
+      showTaskError(marketingResult.value.message)
+    } else {
+      showTaskSuccess(marketingResult.value.message || '营销活动搜索任务已启动')
+    }
     activeMarketingRun.value = {
       run_id: marketingResult.value.run_id,
       agent: 'campaign',
@@ -318,7 +386,7 @@ async function startMarketingActivitySearch() {
       marketingTaskLoading.value = false
     }
   } catch (e) {
-    error.value = e instanceof Error ? e.message : '启动营销活动搜索失败'
+    showTaskError(e instanceof Error ? e.message : '启动营销活动搜索失败')
     marketingTaskLoading.value = false
   }
 }
@@ -332,34 +400,37 @@ function startCampaignPolling(runId: string) {
       if (!['pending', 'running'].includes(run.status)) {
         stopCampaignPolling()
         taskLoading.value = false
-        success.value = run.status === 'success' ? '活动任务已完成' : ''
-        error.value = run.status === 'failed' ? (run.message || '活动任务失败') : ''
+        if (run.status === 'success') {
+          showTaskSuccess('活动任务已完成')
+        } else if (run.status === 'failed') {
+          showTaskError(summarizeRunError(run))
+        }
       }
     } catch (e) {
       stopCampaignPolling()
       taskLoading.value = false
-      error.value = e instanceof Error ? e.message : '查询活动任务状态失败'
+      showTaskError(e instanceof Error ? e.message : '查询活动任务状态失败')
     }
   }, 2000)
 }
 
 async function startLimitedTimeSetup() {
   if (isCampaignRunning.value || isMarketingRunning.value) {
-    error.value = '当前已有活动任务正在执行，请等待完成后再启动'
+    showFormError('当前已有活动任务正在执行，请等待完成后再启动')
     return
   }
   if (!accountId.value) {
-    error.value = '请选择店铺'
+    showFormError('请选择店铺')
     return
   }
   if (!selectedPddProductIds.value.length) {
-    error.value = '请先选择要搜索的商品'
+    showFormError('请先选择要搜索的商品')
     return
   }
 
   taskLoading.value = true
-  error.value = ''
-  success.value = ''
+  taskError.value = ''
+  taskSuccess.value = ''
   result.value = null
   activeCampaignRun.value = null
   try {
@@ -368,7 +439,13 @@ async function startLimitedTimeSetup() {
       pdd_product_ids: selectedPddProductIds.value,
       published_mapping_ids: selectedMappingIds.value,
     })
-    success.value = result.value.message || '限时限量购活动设置任务已启动'
+    if (result.value.status === 'failed') {
+      const shortMsg = summarizeTaskFailure(result.value)
+      result.value = { ...result.value, message: shortMsg }
+      showTaskError(shortMsg)
+    } else {
+      showTaskSuccess(result.value.message || '限时限量购活动设置任务已启动')
+    }
     activeCampaignRun.value = {
       run_id: result.value.run_id,
       agent: 'campaign',
@@ -387,7 +464,7 @@ async function startLimitedTimeSetup() {
       taskLoading.value = false
     }
   } catch (e) {
-    error.value = e instanceof Error ? e.message : '启动活动任务失败'
+    showTaskError(e instanceof Error ? e.message : '启动活动任务失败')
     taskLoading.value = false
   }
 }
@@ -410,329 +487,537 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <div v-loading="taskLoading || marketingTaskLoading">
-    <PageHeader
-      title="活动"
-      desc="支持营销活动大厅搜索报名活动，以及限时限量购创建页设置。"
-    />
+  <div class="campaign-page" v-loading="taskLoading || marketingTaskLoading">
+    <PageHeader title="活动" desc="营销活动报名 + 限时限量购设置，左侧配置、右侧选品。" />
 
     <el-alert
       v-if="error"
       type="error"
-      :title="error"
+      title="页面加载失败"
+      :description="error"
       show-icon
       closable
-      style="margin-bottom: 12px"
+      class="page-alert"
       @close="error = ''"
     />
-    <el-alert
-      v-if="success"
-      type="success"
-      :title="success"
-      show-icon
-      closable
-      style="margin-bottom: 12px"
-      @close="success = ''"
-    />
 
-    <el-card shadow="never" class="stat-card campaign-card marketing-card">
-      <template #header>
-        <div class="card-head">
-          <span>营销活动</span>
-          <el-tag v-if="marketingActivityId" type="info" effect="plain">
-            ID {{ marketingActivityId }}
-          </el-tag>
-        </div>
-      </template>
+    <el-steps :active="currentStep" align-center class="flow-steps" finish-status="success">
+      <el-step title="选店铺与活动" description="左侧配置" />
+      <el-step title="勾选商品" description="右侧表格" />
+      <el-step title="启动任务" description="左侧按钮" />
+    </el-steps>
 
-      <div class="section-tip marketing-tip">
-        流程：搜索活动 → 活动详情 → 立即报名 → 弹窗：查询 → 全选 → 确认 → 确认选择 → 取消流量保护。
-        输入下方已选商品 ID（逗号分隔）→ 查询 → 确认。
-      </div>
-
-      <el-form label-position="top" class="campaign-form">
-        <el-form-item label="选择店铺" required>
-          <el-select v-model="accountId" filterable style="width: 100%" placeholder="请选择店铺">
-            <el-option
-              v-for="a in enabledAccounts"
-              :key="a.account_id"
-              :label="a.account_id"
-              :value="a.account_id"
-            />
-          </el-select>
-        </el-form-item>
-
-        <el-form-item label="选择营销活动" required>
-          <el-select
-            v-model="marketingActivityId"
-            filterable
-            style="width: 100%"
-            placeholder="请选择营销活动"
-          >
-            <el-option
-              v-for="item in marketingActivities"
-              :key="item.activity_id"
-              :label="`${item.name}（ID ${item.activity_id}）`"
-              :value="item.activity_id"
-            />
-          </el-select>
-          <div v-if="selectedMarketingActivity" class="muted activity-desc">
-            将搜索活动 {{ selectedMarketingActivity.activity_id }}，并完成去报名与选品确认。
-          </div>
-        </el-form-item>
-      </el-form>
-    </el-card>
-
-    <el-card shadow="never" class="stat-card campaign-card product-card">
-      <template #header>
-        <div class="card-head">
-          <span>选择报名商品</span>
-          <el-tag v-if="selectedPddProductIds.length" type="success" effect="plain">
-            已选 {{ selectedPddProductIds.length }} 个
-          </el-tag>
-        </div>
-      </template>
-
-      <div class="product-section" v-loading="productLoading">
-        <div class="product-head">
-          <div>
-            <div class="section-label">已发布商品</div>
-            <div class="muted">从当前店铺选择要参加营销活动的商品，报名时会按拼多多商品 ID 搜索。</div>
-          </div>
-          <el-button @click="loadPublishedProducts">刷新</el-button>
-        </div>
-
-        <el-form label-position="top" class="product-filter-form">
-          <el-row :gutter="12">
-            <el-col :xs="24" :sm="10">
-              <el-form-item label="拼多多商品ID">
-                <el-input
-                  v-model="productFilters.pdd_product_id"
-                  clearable
-                  placeholder="如 96442086670"
-                  @keyup.enter="applyProductFilters"
-                />
-              </el-form-item>
-            </el-col>
-            <el-col :xs="24" :sm="10">
-              <el-form-item label="商品编码 / 套图 / 货号">
-                <el-input
-                  v-model="productFilters.product_code"
-                  clearable
-                  placeholder="如 BD046A"
-                  @keyup.enter="applyProductFilters"
-                />
-              </el-form-item>
-            </el-col>
-            <el-col :xs="24" :sm="4">
-              <el-form-item label=" ">
-                <div class="filter-actions">
-                  <el-button @click="resetProductFilters">重置</el-button>
-                  <el-button type="primary" @click="applyProductFilters">查询</el-button>
-                </div>
-              </el-form-item>
-            </el-col>
-          </el-row>
-        </el-form>
-
-        <el-table
-          ref="productTableRef"
-          :data="publishedProducts"
-          row-key="mapping_id"
-          size="small"
-          stripe
-          @selection-change="onProductSelectionChange"
-        >
-          <el-table-column type="selection" width="44" :selectable="isSelectableProduct" reserve-selection />
-          <el-table-column prop="pdd_product_id" label="商品ID" width="140" />
-          <el-table-column label="商品/套图" min-width="180">
-            <template #default="{ row }">
-              <div class="strong">{{ row.listing_label }}</div>
-              <div class="muted">{{ row.product_code }}<span v-if="row.image_set"> / {{ row.image_set }}</span></div>
-              <div v-if="row.family_code" class="muted">母编码：{{ row.family_code }}</div>
+    <el-row :gutter="16" class="campaign-layout">
+      <!-- 左侧：配置 + 操作 -->
+      <el-col :xs="24" :lg="8" :xl="7">
+        <div class="side-stack">
+          <el-card shadow="never" class="stat-card side-card">
+            <template #header>
+              <div class="card-head">
+                <span>活动配置</span>
+                <el-tag v-if="marketingActivityId" size="small" type="info" effect="plain">
+                  ID {{ marketingActivityId }}
+                </el-tag>
+              </div>
             </template>
-          </el-table-column>
-          <el-table-column prop="merchant_code" label="货号" min-width="150" show-overflow-tooltip />
-          <el-table-column prop="status" label="状态" width="96" />
-          <el-table-column label="更新时间" width="160">
-            <template #default="{ row }">{{ formatTime(row.updated_at) }}</template>
-          </el-table-column>
-        </el-table>
 
-        <el-empty v-if="!publishedProducts.length && !productLoading" description="当前店铺暂无已发布商品记录" />
+            <el-form label-position="top" class="compact-form">
+              <el-form-item label="店铺" required>
+                <el-select v-model="accountId" filterable style="width: 100%" placeholder="选择店铺">
+                  <el-option
+                    v-for="a in enabledAccounts"
+                    :key="a.account_id"
+                    :label="a.account_id"
+                    :value="a.account_id"
+                  />
+                </el-select>
+              </el-form-item>
 
-        <el-pagination
-          class="pager"
-          background
-          layout="total, sizes, prev, pager, next"
-          :total="productTotal"
-          :current-page="productPage"
-          :page-size="productPageSize"
-          :page-sizes="[10, 20, 50, 100]"
-          @current-change="onProductPageChange"
-          @size-change="onProductPageSizeChange"
-        />
+              <el-form-item label="营销活动" required>
+                <el-select
+                  v-model="marketingActivityId"
+                  filterable
+                  style="width: 100%"
+                  placeholder="选择活动"
+                >
+                  <el-option
+                    v-for="item in marketingActivities"
+                    :key="item.activity_id"
+                    :label="`${item.name}（${item.activity_id}）`"
+                    :value="item.activity_id"
+                  />
+                </el-select>
+              </el-form-item>
+            </el-form>
 
-        <div v-if="selectedPddProductIds.length" class="selected-bar">
-          <span>已选商品ID</span>
-          <el-tag v-for="id in selectedPddProductIds" :key="id" effect="plain">{{ id }}</el-tag>
+            <div v-if="selectedMarketingActivity" class="activity-brief">
+              <div class="activity-brief-title">{{ selectedMarketingActivity.name }}</div>
+              <div class="muted">活动 ID：{{ selectedMarketingActivity.activity_id }}</div>
+            </div>
+
+            <el-collapse class="tip-collapse">
+              <el-collapse-item title="营销活动报名流程" name="marketing">
+                <ol class="tip-list">
+                  <li>搜索活动 → 进入详情 → 立即报名</li>
+                  <li>弹窗内：查询 → 全选 → 确认 → 确认选择</li>
+                  <li>21365：展开更多规格 → 取消「开启流量保护」等勾选（全店报名无则跳过，暂不提交）</li>
+                  <li>取消流量保护 → 填入已选商品 ID → 确认</li>
+                </ol>
+              </el-collapse-item>
+              <el-collapse-item title="限时限量购说明" name="limited">
+                <p class="tip-text">
+                  进入营销工具 → 限时限量购 → 立即创建。到设置页后只处理「同步设置惊喜优惠」复选框，不会点击最终创建。
+                </p>
+              </el-collapse-item>
+            </el-collapse>
+          </el-card>
+
+          <el-card shadow="never" class="stat-card side-card action-card">
+            <template #header>
+              <div class="card-head">
+                <span>已选商品</span>
+                <el-tag
+                  :type="selectedPddProductIds.length ? 'success' : 'info'"
+                  size="small"
+                  effect="plain"
+                >
+                  {{ selectedPddProductIds.length }} 个
+                </el-tag>
+              </div>
+            </template>
+
+            <div v-if="selectedPddProductIds.length" class="selected-chips">
+              <el-tag
+                v-for="id in selectedPddProductIds"
+                :key="id"
+                size="small"
+                effect="plain"
+                class="id-chip"
+              >
+                {{ id }}
+              </el-tag>
+            </div>
+            <el-empty v-else description="请在右侧表格勾选商品" :image-size="56" />
+
+            <div class="action-group">
+              <div class="action-group-label">营销活动</div>
+              <el-button
+                type="primary"
+                class="action-btn"
+                :disabled="!canRegisterMarketingActivity || isMarketingRunning || isCampaignRunning"
+                :loading="isMarketingRunning"
+                @click="startMarketingActivityRegister"
+              >
+                打开活动并报名
+              </el-button>
+              <el-button
+                class="action-btn"
+                :disabled="!canSearchMarketingActivity || isMarketingRunning || isCampaignRunning"
+                @click="startMarketingActivitySearch"
+              >
+                仅搜索活动（不选品）
+              </el-button>
+            </div>
+
+            <el-divider />
+
+            <div class="action-group">
+              <div class="action-group-label">限时限量购</div>
+              <el-button
+                type="warning"
+                plain
+                class="action-btn"
+                :disabled="!canStart || isCampaignRunning || isMarketingRunning"
+                :loading="isCampaignRunning"
+                @click="startLimitedTimeSetup"
+              >
+                取消惊喜优惠设置
+              </el-button>
+            </div>
+          </el-card>
+
+          <el-card v-if="showSpecLookupPanel" shadow="never" class="stat-card side-card spec-lookup-card">
+            <template #header>
+              <div class="card-head">
+                <span>价格确认页规格（完整名称）</span>
+                <el-tag
+                  :type="marketingSpecLookupRows.length ? 'success' : 'warning'"
+                  size="small"
+                  effect="plain"
+                >
+                  {{ marketingSpecLookup?.matched_count ?? 0 }}/{{ marketingSpecLookup?.spec_count ?? 0 }} 已匹配
+                </el-tag>
+              </div>
+            </template>
+
+            <el-table
+              v-if="marketingSpecLookupRows.length"
+              :data="marketingSpecLookupRows"
+              size="small"
+              stripe
+              class="spec-lookup-table spec-full-table"
+            >
+              <el-table-column type="index" label="#" width="40" align="center" />
+              <el-table-column label="完整规格名称" min-width="200">
+                <template #default="{ row }">
+                  <div class="spec-name-full">{{ row.spec_name || '—' }}</div>
+                </template>
+              </el-table-column>
+              <el-table-column prop="activity_price" label="活动价" width="72" align="right" />
+              <el-table-column
+                v-if="marketingSpecLookupRows.some((row) => row.floor_price != null)"
+                label="底价"
+                width="72"
+                align="right"
+              >
+                <template #default="{ row }">
+                  {{ row.floor_price != null ? row.floor_price : '—' }}
+                </template>
+              </el-table-column>
+              <el-table-column prop="spec_code" label="规格编码" width="130">
+                <template #default="{ row }">
+                  <span :class="row.spec_code ? 'strong' : 'muted'">{{ row.spec_code || '未匹配' }}</span>
+                </template>
+              </el-table-column>
+              <el-table-column label="匹配" width="72" align="center">
+                <template #default="{ row }">
+                  <el-tag
+                    size="small"
+                    :type="row.spec_code ? 'success' : 'danger'"
+                    effect="plain"
+                  >
+                    {{ row.spec_code ? 'OK' : '—' }}
+                  </el-tag>
+                </template>
+              </el-table-column>
+            </el-table>
+            <el-empty
+              v-else
+              description="活动页未抓到规格行，请确认已展开更多规格并停留在价格确认页"
+              :image-size="48"
+            />
+          </el-card>
+
+          <div v-if="taskError || taskSuccess" class="task-feedback">
+            <el-alert
+              v-if="taskError"
+              type="error"
+              :title="taskError"
+              show-icon
+              closable
+              @close="taskError = ''"
+            />
+            <el-alert
+              v-else-if="taskSuccess"
+              type="success"
+              :title="taskSuccess"
+              show-icon
+              closable
+              @close="taskSuccess = ''"
+            />
+          </div>
+
+          <ResultSummary
+            v-if="marketingResult"
+            :status="marketingResult.status"
+            :message="marketingResult.message"
+            :run-id="marketingResult.run_id"
+            :result="marketingResult.result"
+            @view-detail="goRunDetail(marketingResult!.run_id)"
+          />
+          <ResultSummary
+            v-if="result"
+            :status="result.status"
+            :message="result.message"
+            :run-id="result.run_id"
+            :result="result.result"
+            @view-detail="goRunDetail(result!.run_id)"
+          />
         </div>
-      </div>
+      </el-col>
 
-      <div class="marketing-actions">
-        <el-button
-          type="primary"
-          size="large"
-          class="submit-btn marketing-register-btn"
-          :disabled="!canRegisterMarketingActivity || isMarketingRunning || isCampaignRunning"
-          :loading="isMarketingRunning"
-          @click="startMarketingActivityRegister"
-        >
-          打开营销活动并报名
-        </el-button>
-        <el-button
-          size="large"
-          :disabled="!canSearchMarketingActivity || isMarketingRunning || isCampaignRunning"
-          @click="startMarketingActivitySearch"
-        >
-          仅搜索活动
-        </el-button>
-      </div>
+      <!-- 右侧：商品选择 -->
+      <el-col :xs="24" :lg="16" :xl="17">
+        <el-card shadow="never" class="stat-card product-panel" v-loading="productLoading">
+          <template #header>
+            <div class="card-head">
+              <div>
+                <div class="panel-title">选择报名商品</div>
+                <div class="muted panel-sub">
+                  店铺 {{ accountId || '—' }} · 共 {{ productTotal }} 条 · 仅可选有商品 ID 且未下架
+                </div>
+              </div>
+              <el-button @click="loadPublishedProducts">刷新</el-button>
+            </div>
+          </template>
 
-      <ResultSummary
-        v-if="marketingResult"
-        :status="marketingResult.status"
-        :message="marketingResult.message"
-        :run-id="marketingResult.run_id"
-        :result="marketingResult.result"
-        @view-detail="goRunDetail(marketingResult!.run_id)"
-      />
-    </el-card>
+          <div class="filter-bar">
+            <el-input
+              v-model="productFilters.pdd_product_id"
+              clearable
+              placeholder="拼多多商品 ID"
+              class="filter-input"
+              @keyup.enter="applyProductFilters"
+            />
+            <el-input
+              v-model="productFilters.product_code"
+              clearable
+              placeholder="商品编码 / 套图 / 货号"
+              class="filter-input"
+              @keyup.enter="applyProductFilters"
+            />
+            <el-button @click="resetProductFilters">重置</el-button>
+            <el-button type="primary" @click="applyProductFilters">查询</el-button>
+          </div>
 
-    <div class="section-tip limited-tip">
-      限时限量购任务会依次进入营销工具、限时限量购、立即创建。
-      到活动设置页后只处理“同步设置惊喜优惠”复选框，不会点击最终创建按钮。
-    </div>
+          <el-table
+            ref="productTableRef"
+            :data="publishedProducts"
+            row-key="mapping_id"
+            stripe
+            height="520"
+            @selection-change="onProductSelectionChange"
+          >
+            <el-table-column type="selection" width="48" :selectable="isSelectableProduct" reserve-selection />
+            <el-table-column prop="pdd_product_id" label="商品 ID" width="130" />
+            <el-table-column label="商品 / 套图" min-width="200">
+              <template #default="{ row }">
+                <div class="strong">{{ row.listing_label }}</div>
+                <div class="muted">
+                  {{ row.product_code }}<span v-if="row.image_set"> / {{ row.image_set }}</span>
+                </div>
+              </template>
+            </el-table-column>
+            <el-table-column prop="merchant_code" label="货号" width="120" show-overflow-tooltip />
+            <el-table-column label="状态" width="88">
+              <template #default="{ row }">
+                <el-tag size="small" :type="row.status === 'on_sale' ? 'success' : 'info'">
+                  {{ row.status || '-' }}
+                </el-tag>
+              </template>
+            </el-table-column>
+            <el-table-column label="更新时间" width="158">
+              <template #default="{ row }">{{ formatTime(row.updated_at) }}</template>
+            </el-table-column>
+          </el-table>
 
-    <el-card shadow="never" class="stat-card campaign-card">
-      <template #header>
-        <div class="card-head">
-          <span>限时限量购</span>
-          <el-tag v-if="selectedPddProductIds.length" type="success" effect="plain">
-            已选 {{ selectedPddProductIds.length }} 个
-          </el-tag>
-        </div>
-      </template>
+          <el-empty
+            v-if="!publishedProducts.length && !productLoading"
+            description="当前店铺暂无已发布商品，请先到「已发布商品」确认"
+          />
 
-      <div class="muted limited-note">
-        复用上方「选择报名商品」中已选的商品 ID。
-      </div>
-
-      <el-button
-        type="primary"
-        size="large"
-        class="submit-btn"
-        :disabled="!canStart || isCampaignRunning || isMarketingRunning"
-        :loading="isCampaignRunning"
-        @click="startLimitedTimeSetup"
-      >
-        打开限时限量购并取消惊喜优惠
-      </el-button>
-
-      <ResultSummary
-        v-if="result"
-        :status="result.status"
-        :message="result.message"
-        :run-id="result.run_id"
-        :result="result.result"
-        @view-detail="goRunDetail(result!.run_id)"
-      />
-    </el-card>
+          <el-pagination
+            class="pager"
+            background
+            layout="total, sizes, prev, pager, next"
+            :total="productTotal"
+            :current-page="productPage"
+            :page-size="productPageSize"
+            :page-sizes="[10, 20, 50, 100]"
+            @current-change="onProductPageChange"
+            @size-change="onProductPageSizeChange"
+          />
+        </el-card>
+      </el-col>
+    </el-row>
   </div>
 </template>
 
 <style scoped>
-.campaign-card {
-  max-width: 1120px;
+.campaign-page {
+  max-width: 1400px;
 }
 
-.marketing-card {
-  margin-bottom: 16px;
-}
-
-.product-card {
-  margin-bottom: 16px;
-}
-
-.marketing-actions {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 12px;
-  margin-top: 8px;
-}
-
-.marketing-register-btn {
-  flex: 1 1 320px;
-}
-
-.limited-note {
-  margin-bottom: 16px;
-}
-
-.section-tip {
+.page-alert {
   margin-bottom: 12px;
-  padding: 10px 12px;
-  border-radius: 8px;
-  background: #f8fafc;
+}
+
+.flow-steps {
+  margin-bottom: 20px;
+  padding: 16px 20px;
+  background: rgba(255, 255, 255, 0.75);
   border: 1px solid var(--border-color);
-  color: #64748b;
-  font-size: 12px;
-  line-height: 1.6;
+  border-radius: 12px;
 }
 
-.limited-tip {
-  max-width: 1120px;
+.campaign-layout {
+  align-items: flex-start;
 }
 
-.activity-desc {
-  margin-top: 8px;
-}
-
-.campaign-form {
-  max-width: 520px;
-}
-
-.card-head,
-.product-head,
-.filter-actions,
-.selected-bar {
+.side-stack {
   display: flex;
-  align-items: center;
+  flex-direction: column;
+  gap: 14px;
+  position: sticky;
+  top: 12px;
+}
+
+.task-feedback {
+  margin-top: 2px;
+}
+
+.spec-lookup-card :deep(.el-card__body) {
+  padding-top: 8px;
+}
+
+.spec-lookup-table {
+  width: 100%;
+}
+
+.spec-lookup-table :deep(.cell) {
+  font-size: 12px;
+  line-height: 1.35;
+}
+
+.spec-full-table :deep(.el-table__cell) {
+  vertical-align: top;
+}
+
+.spec-name-full {
+  white-space: normal;
+  word-break: break-word;
+  line-height: 1.45;
+}
+
+.task-feedback :deep(.el-alert) {
+  border-radius: 10px;
+}
+
+.side-card :deep(.el-card__header) {
+  padding: 14px 18px;
+}
+
+.side-card :deep(.el-card__body) {
+  padding: 16px 18px 18px;
 }
 
 .card-head {
+  display: flex;
+  align-items: center;
   justify-content: space-between;
-  gap: 12px;
+  gap: 10px;
 }
 
-.product-section {
-  margin: 8px 0 18px;
+.compact-form :deep(.el-form-item) {
+  margin-bottom: 14px;
 }
 
-.product-head {
-  justify-content: space-between;
-  gap: 12px;
+.compact-form :deep(.el-form-item__label) {
+  padding-bottom: 4px;
+  font-size: 12px;
+  color: #64748b;
+}
+
+.activity-brief {
   margin-bottom: 12px;
+  padding: 10px 12px;
+  border-radius: 8px;
+  background: linear-gradient(135deg, #fff7ed 0%, #fff 100%);
+  border: 1px solid #fed7aa;
 }
 
-.product-filter-form {
-  margin-bottom: 4px;
+.activity-brief-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: #9a3412;
+  line-height: 1.4;
 }
 
-.filter-actions {
-  justify-content: flex-end;
+.tip-collapse {
+  border: none;
+}
+
+.tip-collapse :deep(.el-collapse-item__header) {
+  height: 36px;
+  font-size: 12px;
+  color: #64748b;
+  border: none;
+  background: transparent;
+}
+
+.tip-collapse :deep(.el-collapse-item__wrap) {
+  border: none;
+}
+
+.tip-list {
+  margin: 0;
+  padding-left: 18px;
+  font-size: 12px;
+  color: #64748b;
+  line-height: 1.7;
+}
+
+.tip-text {
+  margin: 0;
+  font-size: 12px;
+  color: #64748b;
+  line-height: 1.7;
+}
+
+.action-card :deep(.el-card__body) {
+  padding-top: 12px;
+}
+
+.selected-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  max-height: 120px;
+  overflow-y: auto;
+  margin-bottom: 14px;
+}
+
+.id-chip {
+  font-family: ui-monospace, monospace;
+}
+
+.action-group {
+  display: flex;
+  flex-direction: column;
   gap: 8px;
+}
+
+.action-group-label {
+  font-size: 12px;
+  font-weight: 600;
+  color: #475569;
+  margin-bottom: 2px;
+}
+
+.action-btn {
   width: 100%;
+  margin: 0;
+}
+
+.product-panel :deep(.el-card__header) {
+  padding: 14px 18px;
+}
+
+.product-panel :deep(.el-card__body) {
+  padding: 16px 18px 18px;
+}
+
+.panel-title {
+  font-size: 15px;
+  font-weight: 600;
+  color: #0f172a;
+}
+
+.panel-sub {
+  margin-top: 2px;
+}
+
+.filter-bar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-bottom: 14px;
+  align-items: center;
+}
+
+.filter-input {
+  flex: 1 1 180px;
+  max-width: 280px;
 }
 
 .strong {
@@ -741,37 +1026,24 @@ onBeforeUnmount(() => {
 }
 
 .muted {
-  margin-top: 3px;
+  margin-top: 2px;
   font-size: 12px;
   color: var(--text-secondary);
 }
 
-.section-label {
-  font-size: 13px;
-  font-weight: 600;
-  margin-bottom: 4px;
-  color: #475569;
-}
-
 .pager {
-  margin-top: 12px;
+  margin-top: 14px;
   justify-content: flex-end;
 }
 
-.selected-bar {
-  flex-wrap: wrap;
-  gap: 8px;
-  margin-top: 12px;
-  padding: 10px 12px;
-  border: 1px solid var(--border-color);
-  border-radius: 8px;
-  background: #f8fafc;
-  color: #475569;
-  font-size: 12px;
-}
+@media (max-width: 992px) {
+  .side-stack {
+    position: static;
+    margin-bottom: 16px;
+  }
 
-.submit-btn {
-  width: 100%;
-  max-width: 520px;
+  .flow-steps :deep(.el-step__description) {
+    display: none;
+  }
 }
 </style>

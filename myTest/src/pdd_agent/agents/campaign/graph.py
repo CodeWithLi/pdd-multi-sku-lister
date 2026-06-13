@@ -34,6 +34,7 @@ async def limited_time_setup_node(state: CampaignState) -> dict:
             account_id,
             pdd_product_ids=pdd_product_ids,
             published_mapping_ids=published_mapping_ids,
+            account=account,
         )
 
     try:
@@ -68,7 +69,7 @@ async def marketing_activity_search_node(state: CampaignState) -> dict:
         return {"errors": ["marketing_activity_id is required"], "finished": True}
 
     def _job(dp):
-        return search_marketing_activity(dp, account_id, activity_id)
+        return search_marketing_activity(dp, account_id, activity_id, account=account)
 
     try:
         result = await run_browser_job_async(settings, account, _job)
@@ -110,6 +111,7 @@ async def marketing_activity_register_node(state: CampaignState) -> dict:
             account_id,
             activity_id,
             pdd_product_ids=pdd_product_ids,
+            account=account,
         )
 
     try:

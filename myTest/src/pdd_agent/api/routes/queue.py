@@ -56,13 +56,12 @@ def _control_out(row) -> QueueControlOut:
     )
 
 
-@router.get("/status", response_model=QueueStatusOut)
-def queue_status(
-    limit: int = Query(default=50, ge=1, le=200),
+def _get_queue_status(
+    *,
+    limit: int = 50,
     status: str = "",
     account_id: str = "",
-):
-    _require_db()
+) -> QueueStatusOut:
     controls = get_queue_controls()
     return QueueStatusOut(
         paused=is_queue_paused(account_id=account_id),
@@ -72,32 +71,42 @@ def queue_status(
     )
 
 
+@router.get("/status", response_model=QueueStatusOut)
+def queue_status(
+    limit: int = Query(default=50, ge=1, le=200),
+    status: str = "",
+    account_id: str = "",
+):
+    _require_db()
+    return _get_queue_status(limit=limit, status=status, account_id=account_id)
+
+
 @router.post("/pause", response_model=QueueStatusOut)
 def pause_queue(body: QueuePauseRequest):
     _require_db()
     set_queue_pause(paused=True, reason=body.reason or "paused by user")
-    return queue_status()
+    return _get_queue_status()
 
 
 @router.post("/resume", response_model=QueueStatusOut)
 def resume_queue(body: QueuePauseRequest):
     _require_db()
     set_queue_pause(paused=False, reason=body.reason or "resumed by user")
-    return queue_status()
+    return _get_queue_status()
 
 
 @router.post("/accounts/{account_id}/pause", response_model=QueueStatusOut)
 def pause_account_queue(account_id: str, body: QueuePauseRequest):
     _require_db()
     set_queue_pause(paused=True, reason=body.reason or "account paused by user", account_id=account_id)
-    return queue_status(account_id=account_id)
+    return _get_queue_status(account_id=account_id)
 
 
 @router.post("/accounts/{account_id}/resume", response_model=QueueStatusOut)
 def resume_account_queue(account_id: str, body: QueuePauseRequest):
     _require_db()
     set_queue_pause(paused=False, reason=body.reason or "account resumed by user", account_id=account_id)
-    return queue_status(account_id=account_id)
+    return _get_queue_status(account_id=account_id)
 
 
 @router.post("/cancel-queued", response_model=QueueCancelResponse)

@@ -6,6 +6,8 @@ import time
 from typing import Any
 
 from pdd_agent.browser.dp_compat_sync import DpPage
+from pdd_agent.browser.sync_login import ensure_session_sync, is_login_url
+from pdd_agent.core.config import AccountConfig
 from pdd_agent.db.repositories import get_published_products_by_mapping_ids
 from pdd_agent.skills.campaign.price_rules import (
     find_pdd_price_range,
@@ -180,14 +182,44 @@ def _dismiss_message_popup(page: DpPage) -> None:
         pass
 
 
-def _open_marketing_tools(page: DpPage, account_id: str) -> bool:
+def _ensure_session(
+    page: DpPage,
+    account: AccountConfig | None,
+    account_id: str,
+) -> dict[str, Any]:
+    try:
+        result = dict(ensure_session_sync(page, account))
+    except Exception as exc:
+        result = {
+            "logged_in": False,
+            "relogin": True,
+            "reason": _safe_exc(exc),
+            "url": str(page.url or ""),
+        }
+    if result.get("relogin"):
+        status = "成功" if result.get("logged_in") else "失败"
+        print(f"[{account_id}] 中途重新登录{status}: {result}", flush=True)
+    return result
+
+
+def _open_marketing_tools(
+    page: DpPage,
+    account_id: str,
+    account: AccountConfig | None = None,
+) -> bool:
     """进入后台左侧「营销工具」页面。"""
+    _ensure_session(page, account, account_id)
+
     for url in MARKETING_TOOL_URLS:
         try:
             page.get(url)
             time.sleep(3)
-            if "login" in page.url:
-                return False
+            if is_login_url(str(page.url or "")):
+                relogin = _ensure_session(page, account, account_id)
+                if not relogin.get("logged_in"):
+                    return False
+                page.get(url)
+                time.sleep(3)
             text = _body_text(page)
             if "营销工具" in text and "限时限量购" in text:
                 return True
@@ -198,6 +230,10 @@ def _open_marketing_tools(page: DpPage, account_id: str) -> bool:
     try:
         page.get("https://mms.pinduoduo.com/home/")
         time.sleep(2)
+        if is_login_url(str(page.url or "")):
+            relogin = _ensure_session(page, account, account_id)
+            if not relogin.get("logged_in"):
+                return False
         if _click_text(page, "营销工具", timeout=5):
             time.sleep(3)
             text = _body_text(page)
@@ -225,7 +261,11 @@ def _wait_limited_time_page(page: DpPage, timeout: int = 10) -> bool:
     return False
 
 
-def _open_limited_time_tool(page: DpPage, account_id: str) -> bool:
+def _open_limited_time_tool(
+    page: DpPage,
+    account_id: str,
+    account: AccountConfig | None = None,
+) -> bool:
     """在营销工具页点击「限时限量购」。"""
     if _is_limited_time_page(page):
         return True
@@ -234,8 +274,12 @@ def _open_limited_time_tool(page: DpPage, account_id: str) -> bool:
         try:
             page.get(url)
             time.sleep(3)
-            if "login" in page.url:
-                return False
+            if is_login_url(str(page.url or "")):
+                relogin = _ensure_session(page, account, account_id)
+                if not relogin.get("logged_in"):
+                    return False
+                page.get(url)
+                time.sleep(3)
             if _is_limited_time_page(page):
                 print(f"[{account_id}] 已通过固定入口进入限时限量购", flush=True)
                 return True
@@ -3402,12 +3446,13 @@ def setup_limited_time_campaign(
     *,
     pdd_product_ids: list[str] | None = None,
     published_mapping_ids: list[str] | None = None,
+    account: AccountConfig | None = None,
 ) -> dict[str, Any]:
     """进入限时限量购创建页，并取消「同步设置惊喜优惠」。"""
     selected_pdd_product_ids = list(dict.fromkeys(pdd_product_ids or []))
     selected_mapping_ids = list(dict.fromkeys(published_mapping_ids or []))
     try:
-        if not _open_marketing_tools(page, account_id):
+        if not _open_marketing_tools(page, account_id, account=account):
             return {
                 "status": "failed",
                 "step": "open_marketing_tools",
@@ -3416,7 +3461,7 @@ def setup_limited_time_campaign(
                 "selected_pdd_product_ids": selected_pdd_product_ids,
                 "published_mapping_ids": selected_mapping_ids,
             }
-        if not _open_limited_time_tool(page, account_id):
+        if not _open_limited_time_tool(page, account_id, account=account):
             return {
                 "status": "failed",
                 "step": "open_limited_time_tool",

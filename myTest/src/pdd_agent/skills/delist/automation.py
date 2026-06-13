@@ -604,34 +604,10 @@ def _set_goods_filter(page, label: str, value: str) -> bool:
 
 
 def _click_goods_search(page) -> bool:
-    try:
-        clicked = page.run_js(
-            """
-            function isVisible(el) {
-                if (!el || !el.getBoundingClientRect) return false;
-                const r = el.getBoundingClientRect();
-                const s = window.getComputedStyle(el);
-                return r.width > 4 && r.height > 4
-                    && s.display !== 'none'
-                    && s.visibility !== 'hidden'
-                    && parseFloat(s.opacity || '1') > 0.05;
-            }
-            for (const el of document.querySelectorAll('button, span, a, div')) {
-                const text = (el.innerText || el.textContent || '').trim();
-                if (text === '查询' && isVisible(el)) {
-                    el.click();
-                    return true;
-                }
-            }
-            return false;
-            """
-        )
-        if clicked:
-            time.sleep(2)
-            return True
-    except Exception:
-        pass
-    return False
+    from pdd_agent.skills.listing.upload import _click_goods_search as _click
+
+    result = _click(page)
+    return bool(result.get("clicked")) if isinstance(result, dict) else bool(result)
 
 
 def _find_exact_product_row(page, product_id: str):

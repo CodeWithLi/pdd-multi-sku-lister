@@ -1,11 +1,17 @@
 from types import SimpleNamespace
 
 from pdd_agent.skills.campaign.activity_price_validate import (
+    _delete_invalid_price_goods,
+    _extract_spec_name_from_tooltip_text,
     _group_products_for_filter,
+    _is_truncated_spec_text,
     _match_spec_to_sku,
     _normalize_spec_name,
     _parse_page_spec,
     _resolve_price_floor,
+    _row_matches_spec_target,
+    _spec_row_match_keys,
+    filter_price_confirm_page,
     validate_spec_prices,
 )
 from pdd_agent.skills.campaign.price_rules import CodePriceEntry, find_code_by_label
@@ -155,15 +161,101 @@ def test_validate_spec_prices_uses_product_code_when_db_skus_empty():
     assert result["results"][0]["child_code"] == "YKL001A"
 
 
-def test_group_products_for_filter_removes_product_when_any_spec_invalid():
+def test_group_products_for_filter_only_removes_when_all_specs_invalid():
     results = [
         {"pdd_product_id": "111", "should_remove": False, "valid": True},
         {"pdd_product_id": "111", "should_remove": True, "valid": False},
         {"pdd_product_id": "222", "should_remove": False, "valid": True},
+        {"pdd_product_id": "333", "should_remove": True, "valid": False},
+        {"pdd_product_id": "333", "should_remove": True, "valid": False},
     ]
-    kept, removed = _group_products_for_filter(results)
-    assert kept == ["222"]
-    assert removed == ["111"]
+    kept, removed, partial = _group_products_for_filter(results)
+    assert kept == ["111", "222"]
+    assert removed == ["333"]
+    assert partial == ["111"]
+
+
+def test_spec_row_match_keys_prefers_package_fragment():
+    spec_name = "款式: 蓝色慕斯星星笔袋；套餐: 单件装：包包【爆款热销】"
+    keys = _spec_row_match_keys(spec_name)
+    assert "单件装：包包【爆款热销】" in keys
+
+
+def test_row_matches_spec_target_uses_activity_price():
+    row_text = "款式: 蓝色慕斯星星笔袋；套餐: 单件装：包包【爆款热销】 活动价 8.8 删除"
+    assert _row_matches_spec_target(
+        row_text,
+        product_id="",
+        spec_name="款式: 蓝色慕斯星星笔袋；套餐: 单件装：包包【爆款热销】",
+        activity_price="8.8",
+    )
+    assert not _row_matches_spec_target(
+        row_text,
+        product_id="",
+        spec_name="款式: 蓝色慕斯星星笔袋；套餐: 两件套：包包+挂件",
+        activity_price="9.8",
+    )
+
+
+def test_delete_invalid_price_goods_deletes_each_invalid_spec(monkeypatch):
+    page = SimpleNamespace(url="https://mms.pinduoduo.com/act/goods_price/confirm")
+    calls: list[dict[str, str]] = []
+
+    def fake_delete(_page, *, product_id="", spec_name="", activity_price=""):
+        calls.append(
+            {
+                "product_id": product_id,
+                "spec_name": spec_name,
+                "activity_price": activity_price,
+            }
+        )
+        return {"deleted": True, "method": "mock"}
+
+    monkeypatch.setattr(
+        "pdd_agent.skills.campaign.activity_price_validate._delete_price_confirm_goods",
+        fake_delete,
+    )
+    monkeypatch.setattr(
+        "pdd_agent.skills.campaign.activity_price_validate._on_price_confirm_page",
+        lambda *_args, **_kwargs: True,
+    )
+    monkeypatch.setattr(
+        "pdd_agent.skills.campaign.activity_price_validate._scrape_price_confirm_specs",
+        lambda *_args, **_kwargs: {"spec_count": 1, "specs": [{"spec_name": "ok", "activity_price": "9.8"}]},
+    )
+    monkeypatch.setattr(
+        "pdd_agent.skills.campaign.activity_price_validate._read_price_confirm_empty_state",
+        lambda *_args, **_kwargs: {"empty": False},
+    )
+
+    validation = {
+        "results": [
+            {
+                "pdd_product_id": "111",
+                "spec_name": "款式: A；套餐: 单件",
+                "activity_price": "8.8",
+                "should_remove": True,
+            },
+            {
+                "pdd_product_id": "111",
+                "spec_name": "款式: A；套餐: 两件套",
+                "activity_price": "9.8",
+                "should_remove": False,
+            },
+            {
+                "pdd_product_id": "222",
+                "spec_name": "款式: B；套餐: 单件",
+                "activity_price": "7.8",
+                "should_remove": True,
+            },
+        ]
+    }
+    result = _delete_invalid_price_goods(page, "store_A", validation)
+    assert len(calls) == 2
+    assert calls[0]["activity_price"] == "8.8"
+    assert calls[1]["activity_price"] == "7.8"
+    assert result["deleted_spec_count"] == 2
+    assert result["remaining_count"] == 1
 
 
 def test_validate_spec_prices_marks_skipped_specs_for_removal():
@@ -224,3 +316,172 @@ def test_validate_spec_prices_fails_when_activity_price_below_floor():
     assert result["status"] == "failed"
     assert result["failed_count"] == 1
     assert result["results"][0]["reason"] == "activity_price_not_above_floor"
+
+
+def test_parse_page_spec_supports_guige_separator():
+    parsed = _parse_page_spec("款式：蓝色慕斯星星笔袋套装；规格：单件装：包包【爆款热销】 当前价 ¥12.80")
+    assert parsed["style_text"] == "蓝色慕斯星星笔袋套装"
+    assert parsed["size_text"] == "单件装：包包【爆款热销】"
+    assert parsed["is_combo"] is False
+
+
+def test_parse_page_spec_supports_taocan_separator():
+    parsed = _parse_page_spec("款式: 蓝色慕斯星星笔袋；套餐: 单件装：包包【爆款热销】 当前价：¥12.80")
+    assert parsed["style_text"] == "蓝色慕斯星星笔袋"
+    assert parsed["size_text"] == "单件装：包包【爆款热销】"
+    assert parsed["is_combo"] is False
+
+
+def test_is_truncated_spec_text_detects_ellipsis():
+    assert _is_truncated_spec_text("款式: 蓝色；套餐: 单件装...") is True
+    assert _is_truncated_spec_text("款式: 蓝色；套餐: 单件装：包包【爆款热销】") is False
+
+
+def test_extract_spec_name_from_tooltip_text():
+    tooltip = (
+        "款式: 蓝色慕斯星星笔袋；套餐: 单件装：包包【爆款热销】\n"
+        "当前价: ¥12.80\n"
+        "线上库存: 298"
+    )
+    assert _extract_spec_name_from_tooltip_text(tooltip) == (
+        "款式: 蓝色慕斯星星笔袋；套餐: 单件装：包包【爆款热销】"
+    )
+
+
+def test_validate_danjian_package_matches_single_sku_and_passes_floor():
+    from pdd_agent.skills.campaign.activity_price_validate import _match_spec_to_pdd_sku
+
+    skus = [
+        {
+            "style_name": "单件装：包包【爆款热销】",
+            "package_name": "预览",
+            "spec_code": "BD630D",
+        },
+        {
+            "style_name": "两件套：包包+挂件",
+            "package_name": "预览",
+            "spec_code": "BD630D+YKL001A",
+        },
+    ]
+    spec_name = "款式: 蓝色慕斯星星笔袋；套餐: 单件装：包包【爆款热销】"
+    matched, score, method = _match_spec_to_pdd_sku(spec_name, skus)
+    assert matched is not None
+    assert matched["spec_code"] == "BD630D"
+    assert method == "pdd_single_package"
+
+    row = _published_row(
+        pdd_product_id="965180544666",
+        product_code="965180544666",
+        skus=[],
+    )
+    row.spec_metadata = {"pdd_goods_lookup": {"pdd_skus": skus}}
+    result = validate_spec_prices(
+        specs=[{"spec_name": spec_name, "activity_price": "8.8"}],
+        published_rows=[row],
+        pricing_map={"BD630D": 8.42},
+        control_map={},
+    )
+    assert result["results"][0]["valid"] is True
+    assert result["results"][0]["should_remove"] is False
+    assert result["results"][0]["spec_code"] == "BD630D"
+
+
+def test_lookup_spec_codes_from_pdd_lookup_skus():
+    from pdd_agent.skills.campaign.activity_price_validate import lookup_spec_codes_from_specs
+
+    row = _published_row(
+        pdd_product_id="965182969751",
+        product_code="BD716C",
+        skus=[],
+    )
+    row.spec_metadata = {
+        "pdd_goods_lookup": {
+            "pdd_skus": [
+                {
+                    "style_name": "单件装：包包【爆款热销】",
+                    "package_name": "预览",
+                    "spec_code": "BD716B+YKL001AC",
+                    "group_price": "13.8",
+                }
+            ]
+        }
+    }
+    result = lookup_spec_codes_from_specs(
+        specs=[
+            {
+                "spec_name": "款式：蓝色慕斯星星笔袋套装；规格：单件装：包包【爆款热销】",
+                "activity_price": "8.8",
+                "product_id": "965182969751",
+            }
+        ],
+        published_rows=[row],
+    )
+    assert result["status"] == "success"
+    assert result["matched_count"] == 1
+    assert result["rows"][0]["spec_code"] == "BD716B+YKL001AC"
+    assert result["rows"][0]["activity_price"] == "8.8"
+
+
+def test_validate_spec_prices_uses_pdd_lookup_skus_for_manual_product():
+    row = _published_row(
+        pdd_product_id="965182969751",
+        product_code="BD716C",
+        skus=[],
+    )
+    row.spec_metadata = {
+        "pdd_goods_lookup": {
+            "pdd_skus": [
+                {
+                    "style_name": "单件装：包包【爆款热销】",
+                    "package_name": "预览",
+                    "spec_code": "BD716B+YKL001AC",
+                    "group_price": "13.8",
+                }
+            ]
+        }
+    }
+    result = validate_spec_prices(
+        specs=[
+            {
+                "spec_name": "款式：蓝色慕斯星星笔袋套装；规格：单件装：包包【爆款热销】",
+                "activity_price": "8.8",
+                "product_id": "965182969751",
+            }
+        ],
+        published_rows=[row],
+        pricing_map={"BD716B": 7.0},
+        control_map={"YKL001AC": 1.5},
+    )
+    assert result["results"][0]["sku_matched"] is True
+    assert result["results"][0]["spec_code"] == "BD716B+YKL001AC"
+    assert result["results"][0]["match_method"] == "pdd_lookup_text"
+    assert result["results"][0]["floor_price"] == 8.5
+    assert result["results"][0]["valid"] is True
+
+
+def test_filter_price_confirm_page_all_removed_status_not_overwritten(monkeypatch):
+    page = SimpleNamespace(url="https://mms.pinduoduo.com/act/goods_price/confirm")
+    state = {
+        "status": "success",
+        "step": "price_validation_ready",
+        "validation": {"remove_count": 2, "spec_count": 2},
+    }
+    monkeypatch.setattr(
+        "pdd_agent.skills.campaign.activity_price_validate._prepare_price_validation_state",
+        lambda *_args, **_kwargs: state,
+    )
+    monkeypatch.setattr(
+        "pdd_agent.skills.campaign.activity_price_validate._delete_invalid_price_goods",
+        lambda *_args, **_kwargs: {
+            "remaining_count": 0,
+            "empty_state": {"empty": True},
+            "on_price_confirm_after": True,
+        },
+    )
+    monkeypatch.setattr(
+        "pdd_agent.skills.campaign.activity_price_validate._close_price_confirm_page",
+        lambda *_args, **_kwargs: {"closed": True, "method": "close_tab"},
+    )
+    result = filter_price_confirm_page(page, "store_A", ["111"])
+    assert result["status"] == "all_products_removed"
+    assert result["action"] == "close_page"

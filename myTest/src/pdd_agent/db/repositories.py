@@ -533,10 +533,18 @@ def upsert_published_product(
         if row:
             for key, value in data.items():
                 setattr(row, key, value)
+            row.updated_at = datetime.now()
         else:
-            row = PublishedProductORM(mapping_id=mapping_id, **data)
+            now = datetime.now()
+            row = PublishedProductORM(
+                mapping_id=mapping_id,
+                created_at=now,
+                updated_at=now,
+                **data,
+            )
             session.add(row)
         session.flush()
+        session.refresh(row)
         session.expunge(row)
         return row
 
@@ -621,6 +629,43 @@ def update_published_product_status(mapping_id: str, status: str) -> PublishedPr
         session.flush()
         session.expunge(row)
         return row
+
+
+def patch_published_product_spec_metadata(
+    mapping_id: str,
+    patch: dict,
+) -> PublishedProductORM | None:
+    if not is_database_available():
+        return None
+    with session_scope() as session:
+        row = session.get(PublishedProductORM, mapping_id)
+        if not row:
+            return None
+        meta = dict(row.spec_metadata or {})
+        for key, value in patch.items():
+            if isinstance(value, dict) and isinstance(meta.get(key), dict):
+                merged = dict(meta[key])
+                merged.update(value)
+                meta[key] = merged
+            else:
+                meta[key] = value
+        row.spec_metadata = meta
+        row.updated_at = datetime.now()
+        session.flush()
+        session.refresh(row)
+        session.expunge(row)
+        return row
+
+
+def delete_published_product(mapping_id: str) -> bool:
+    if not is_database_available():
+        return False
+    with session_scope() as session:
+        row = session.get(PublishedProductORM, mapping_id)
+        if not row:
+            return False
+        session.delete(row)
+        return True
 
 
 def search_published_products(

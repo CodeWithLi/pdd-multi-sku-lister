@@ -153,10 +153,19 @@ def test_known_marketing_activities_contains_20981():
     assert "21365" in ids
 
 
-def test_activity_profile_21365_uses_go_register_and_stops_after_confirm_selection():
+def test_activity_profile_21365_uses_go_register_and_stops_after_price_page_prepared():
     profile = _get_activity_profile("21365")
     assert profile["entry"] == "go_register"
-    assert profile["stop_after"] == "confirm_selection"
+    assert profile["stop_after"] == "price_page_prepared"
+
+
+def test_activity_detail_ready_on_index_modal_without_activity_id():
+    page = FakeDpPage(
+        url="https://mms.pinduoduo.com/act/index?actHomeActivityType=canEnroll",
+        body_text="活动详情 立即报名 大促搜索池 报名进行中",
+    )
+    assert _is_activity_detail_ready(page, "21365") is False
+    assert _is_activity_detail_ready(page, "21365", require_activity_id=False) is True
 
 
 def test_activity_detail_ready_on_index_modal():
@@ -221,7 +230,7 @@ def test_activity_detail_ready_on_detail_url():
 def test_register_marketing_activity_requires_product_ids(monkeypatch):
     monkeypatch.setattr(
         "pdd_agent.skills.campaign.marketing_activities.search_marketing_activity",
-        lambda page, account_id, activity_id: {"status": "success", "step": "search_completed"},
+        lambda page, account_id, activity_id, account=None: {"status": "success", "step": "search_completed"},
     )
     page = FakeDpPage()
     result = register_marketing_activity(page, "store_A", "20981", pdd_product_ids=[])
@@ -232,7 +241,7 @@ def test_register_marketing_activity_requires_product_ids(monkeypatch):
 def test_search_marketing_activity_success_flow(monkeypatch):
     monkeypatch.setattr(
         "pdd_agent.skills.campaign.marketing_activities._open_marketing_activities_page",
-        lambda page, account_id: True,
+        lambda page, account_id, account=None: True,
     )
     monkeypatch.setattr(
         "pdd_agent.skills.campaign.marketing_activities._activity_search_input_locator",

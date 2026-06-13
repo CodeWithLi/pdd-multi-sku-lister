@@ -315,6 +315,8 @@ export interface PublishedProduct {
   created_at: string | null
   updated_at: string | null
   spec_metadata: Record<string, unknown>
+  price_sync_status: 'none' | 'specs_synced' | 'local_skus' | 'list_price' | 'detail_opened' | 'edit_opened' | 'searched' | string
+  price_sync_at: string | null
 }
 
 export interface PublishedProductListResponse {
@@ -334,6 +336,37 @@ export interface PublishedProductDetailResponse {
 export interface PublishedProductDelistResponse {
   run_id: string
   status: RunStatus | string
+  message: string
+}
+
+export interface PublishedProductLookupResponse {
+  run_id: string
+  status: RunStatus | string
+  message: string
+}
+
+export interface PublishedProductDeleteResponse {
+  ok: boolean
+  mapping_id: string
+  message: string
+}
+
+export interface PublishedProductManualCreatePayload {
+  account_id: string
+  pdd_product_id: string
+  product_code: string
+  listing_label: string
+  family_code?: string
+  image_set?: string
+  merchant_code?: string
+  status?: string
+  note?: string
+  import_catalog_skus?: boolean
+}
+
+export interface PublishedProductCreateResponse {
+  published: PublishedProduct
+  catalog_hints: string[]
   message: string
 }
 

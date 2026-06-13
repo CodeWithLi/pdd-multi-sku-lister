@@ -94,6 +94,19 @@ def test_disambiguate_style_colors_when_ai_duplicates():
     assert fixed["BD716B"] == "黑色"
 
 
+def test_reconcile_style_color_with_catalog_fixes_white_misread():
+    from pdd_agent.skills.listing.pdd_product_catalog import PddProductEntry
+    from pdd_agent.skills.listing.spec_labels import reconcile_style_color_with_catalog
+
+    entry_a = PddProductEntry("BD716A", "灰色左小狗右开窗笔袋", "笔袋")
+    entry_b = PddProductEntry("BD716B", "黑色左小狗右开窗笔袋", "笔袋")
+    entry_c = PddProductEntry("BD716C", "绿色左小狗右开窗笔袋", "笔袋")
+
+    assert reconcile_style_color_with_catalog("白色", entry_a) == ("灰色", "ai+catalog")
+    assert reconcile_style_color_with_catalog("白色", entry_b) == ("黑色", "ai+catalog")
+    assert reconcile_style_color_with_catalog("绿色", entry_c) == ("绿色", "ai")
+
+
 def test_ordered_style_names_keeps_all_siblings():
     from pdd_agent.domain.models import ListingUnit, SkuCombo
     from pdd_agent.skills.listing.spec_labels import ordered_style_names

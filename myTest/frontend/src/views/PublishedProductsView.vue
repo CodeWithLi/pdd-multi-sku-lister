@@ -7,6 +7,7 @@ import PageHeader from '@/components/PageHeader.vue'
 import type {
   Account,
   ListingUnit,
+  ProductDetail,
   PublishedProduct,
   PublishedProductDetailResponse,
   SkuCombo,
@@ -22,6 +23,8 @@ const router = useRouter()
 const loading = ref(false)
 const detailLoading = ref(false)
 const delistingId = ref('')
+const deletingId = ref('')
+const lookupId = ref('')
 const items = ref<PublishedProduct[]>([])
 const accounts = ref<Account[]>([])
 const total = ref(0)
@@ -42,12 +45,76 @@ const activeSku = ref<SkuCombo | null>(null)
 const imagePanelTitle = ref('')
 const previewImages = ref<PreviewImage[]>([])
 
+const addVisible = ref(false)
+const addSubmitting = ref(false)
+const catalogLoading = ref(false)
+const catalogHint = ref('')
+const addMode = ref<'pdd_only' | 'with_local'>('pdd_only')
+const addForm = reactive({
+  account_id: '',
+  pdd_product_id: '',
+  product_code: '',
+  listing_label: '',
+  family_code: '',
+  image_set: '',
+  merchant_code: '',
+  status: 'on_sale',
+  note: '',
+  import_catalog_skus: false,
+})
+const catalogImageSets = ref<string[]>([])
+
 const activeSkuRows = computed(() => activeUnit.value?.skus ?? [])
 
 function formatTime(t: string | null) {
   if (!t) return '-'
   return new Date(t).toLocaleString('zh-CN')
 }
+
+function priceSyncLabel(status: string) {
+  const map: Record<string, string> = {
+    none: '未反查',
+    specs_synced: '拼多多规格价',
+    local_skus: '本地规格价',
+    list_price: '已有列表价',
+    detail_opened: '已打开详情',
+    edit_opened: '已打开编辑',
+    searched: '已搜索',
+  }
+  return map[status] || status || '未反查'
+}
+
+function priceSyncTagType(status: string): 'success' | 'warning' | 'info' | 'danger' {
+  if (status === 'specs_synced' || status === 'local_skus' || status === 'list_price' || status === 'edit_opened' || status === 'detail_opened') {
+    return 'success'
+  }
+  if (status === 'searched') return 'warning'
+  return 'info'
+}
+
+function listPriceHint(row: PublishedProduct) {
+  const lookup = row.spec_metadata?.pdd_goods_lookup as Record<string, unknown> | undefined
+  const pddSkus = lookup?.pdd_skus
+  if (Array.isArray(pddSkus) && pddSkus.length) {
+    const first = pddSkus[0] as Record<string, unknown>
+    const parts = [`${pddSkus.length} 个SKU`]
+    if (first.group_price) parts.push(`拼单价 ${first.group_price}`)
+    if (first.activity_price) parts.push(`活动价 ${first.activity_price}`)
+    return parts.join(' · ')
+  }
+  const listRow = lookup?.list_row as Record<string, unknown> | undefined
+  if (!listRow) return ''
+  const parts: string[] = []
+  if (listRow.group_price) parts.push(`拼单价 ${listRow.group_price}`)
+  if (listRow.activity_price) parts.push(`活动价 ${listRow.activity_price}`)
+  return parts.join(' · ')
+}
+
+const pddSkuRows = computed(() => {
+  const lookup = detail.value?.published.spec_metadata?.pdd_goods_lookup as Record<string, unknown> | undefined
+  const rows = lookup?.pdd_skus
+  return Array.isArray(rows) ? rows : []
+})
 
 function assetUrl(path: string) {
   return `/api/catalog/asset?path=${encodeURIComponent(path)}`
@@ -113,6 +180,20 @@ function openRun(row: PublishedProduct) {
   router.push({ path: '/runs', query: { id: row.source_run_id } })
 }
 
+async function lookupPublishedGoods(row: PublishedProduct) {
+  if (!row.mapping_id || !row.pdd_product_id) return
+  lookupId.value = row.mapping_id
+  try {
+    const resp = await api.lookupPublishedProductGoods(row.mapping_id)
+    ElMessage.success(`反查任务已提交：${resp.run_id}`)
+    router.push({ path: '/runs', query: { id: resp.run_id } })
+  } catch (e) {
+    ElMessage.error(e instanceof Error ? e.message : '提交反查任务失败')
+  } finally {
+    lookupId.value = ''
+  }
+}
+
 async function delistPublished(row: PublishedProduct) {
   if (!row.mapping_id || !row.pdd_product_id) return
   try {
@@ -138,6 +219,41 @@ async function delistPublished(row: PublishedProduct) {
     ElMessage.error(e instanceof Error ? e.message : '提交下架任务失败')
   } finally {
     delistingId.value = ''
+  }
+}
+
+async function removePublished(row: PublishedProduct) {
+  if (!row.mapping_id) return
+  try {
+    await ElMessageBox.confirm(
+      `确认删除映射记录「${row.listing_label}」？\n\n仅删除数据库 published_products 表中的记录，不会在拼多多后台下架商品。`,
+      '删除映射确认',
+      {
+        confirmButtonText: '删除',
+        cancelButtonText: '取消',
+        type: 'warning',
+      },
+    )
+  } catch {
+    return
+  }
+
+  deletingId.value = row.mapping_id
+  try {
+    await api.deletePublishedProduct(row.mapping_id)
+    ElMessage.success('已删除映射记录')
+    if (detail.value?.published.mapping_id === row.mapping_id) {
+      detailVisible.value = false
+      detail.value = null
+    }
+    if (items.value.length === 1 && page.value > 1) {
+      page.value -= 1
+    }
+    await loadPublishedProducts()
+  } catch (e) {
+    ElMessage.error(e instanceof Error ? e.message : '删除失败')
+  } finally {
+    deletingId.value = ''
   }
 }
 
@@ -188,6 +304,126 @@ function openSkuPreview(sku: SkuCombo) {
   ])
 }
 
+function resetAddForm() {
+  addMode.value = 'pdd_only'
+  addForm.account_id = filters.account_id || accounts.value[0]?.account_id || ''
+  addForm.pdd_product_id = ''
+  addForm.product_code = ''
+  addForm.listing_label = ''
+  addForm.family_code = ''
+  addForm.image_set = ''
+  addForm.merchant_code = ''
+  addForm.status = 'on_sale'
+  addForm.note = ''
+  addForm.import_catalog_skus = false
+  catalogHint.value = ''
+  catalogImageSets.value = []
+}
+
+function onAddModeChange(mode: string | number | boolean | undefined) {
+  if (mode !== 'pdd_only' && mode !== 'with_local') return
+  if (mode === 'pdd_only') {
+    addForm.import_catalog_skus = false
+    addForm.family_code = ''
+    addForm.image_set = ''
+    catalogHint.value = ''
+    catalogImageSets.value = []
+    return
+  }
+  addForm.import_catalog_skus = true
+}
+
+function openAddDialog() {
+  resetAddForm()
+  addVisible.value = true
+}
+
+async function loadCatalogHint() {
+  if (addMode.value === 'pdd_only') return
+  const code = addForm.product_code.trim().toUpperCase()
+  if (!code) {
+    catalogHint.value = ''
+    catalogImageSets.value = []
+    return
+  }
+  catalogLoading.value = true
+  catalogHint.value = ''
+  try {
+    const detail: ProductDetail = await api.productDetail(code)
+    catalogImageSets.value = detail.image_sets || []
+    const imageSet = addForm.image_set.trim()
+    let unit: ListingUnit | undefined
+    if (imageSet) {
+      unit = detail.units.find((u) => u.image_set === imageSet)
+    }
+    if (!unit) {
+      unit = detail.units[0]
+    }
+    if (unit) {
+      if (!addForm.family_code) addForm.family_code = unit.family_code || ''
+      if (!addForm.image_set) addForm.image_set = unit.image_set || ''
+      if (!addForm.merchant_code) addForm.merchant_code = unit.merchant_code || code
+      if (!addForm.listing_label) {
+        addForm.listing_label = unit.listing_label || `${code}${unit.image_set ? ` / ${unit.image_set}` : ''}`
+      }
+      catalogHint.value = `素材目录已找到：${unit.sku_count} 个 SKU，${unit.style_codes?.length || 0} 个款式`
+    } else {
+      catalogHint.value = '素材目录有该编码，但未解析到套图/SKU'
+    }
+  } catch {
+    catalogHint.value = '素材目录未找到该编码；仍可保存，但活动价格校验可能缺少 SKU'
+    catalogImageSets.value = []
+  } finally {
+    catalogLoading.value = false
+  }
+}
+
+async function submitManualAdd() {
+  if (!addForm.account_id) {
+    ElMessage.warning('请选择店铺')
+    return
+  }
+  if (!/^\d+$/.test(addForm.pdd_product_id.trim())) {
+    ElMessage.warning('拼多多商品 ID 必须是纯数字')
+    return
+  }
+  if (!addForm.product_code.trim()) {
+    ElMessage.warning('请填写商品编码')
+    return
+  }
+  if (!addForm.listing_label.trim()) {
+    ElMessage.warning('请填写显示名称')
+    return
+  }
+
+  addSubmitting.value = true
+  try {
+    const resp = await api.createManualPublishedProduct({
+      account_id: addForm.account_id.trim(),
+      pdd_product_id: addForm.pdd_product_id.trim(),
+      product_code: addForm.product_code.trim().toUpperCase(),
+      listing_label: addForm.listing_label.trim(),
+      family_code: addForm.family_code.trim().toUpperCase(),
+      image_set: addForm.image_set.trim(),
+      merchant_code: (addForm.merchant_code.trim() || addForm.product_code.trim()).toUpperCase(),
+      status: addForm.status,
+      note: addForm.note.trim(),
+      import_catalog_skus: addMode.value === 'with_local' && addForm.import_catalog_skus,
+    })
+    addVisible.value = false
+    ElMessage.success(resp.message || '已添加')
+    if (resp.catalog_hints?.length) {
+      ElMessage.info(resp.catalog_hints.join('；'))
+    }
+    filters.account_id = resp.published.account_id
+    await loadPublishedProducts()
+  } catch (e) {
+    ElMessage.error(e instanceof Error ? e.message : '添加失败')
+  } finally {
+    addSubmitting.value = false
+  }
+}
+
 async function openDetail(row: PublishedProduct) {
   detailLoading.value = true
   detailVisible.value = true
@@ -219,8 +455,12 @@ onMounted(async () => {
 
 <template>
   <div v-loading="loading">
-    <PageHeader title="已发布商品" desc="查看 published_products 映射表，按店铺筛选已发布商品与拼多多商品ID。">
+    <PageHeader
+      title="已发布商品"
+      desc="本系统已上架 + 手动录入的拼多多商品映射。手动添加后可在「活动」页勾选报名。"
+    >
       <template #actions>
+        <el-button type="primary" @click="openAddDialog">手动添加已有商品</el-button>
         <el-button @click="loadPublishedProducts">刷新</el-button>
       </template>
     </PageHeader>
@@ -271,6 +511,15 @@ onMounted(async () => {
           </template>
         </el-table-column>
         <el-table-column prop="merchant_code" label="货号" min-width="150" show-overflow-tooltip />
+        <el-table-column label="拼多多价格" width="150">
+          <template #default="{ row }">
+            <el-tag size="small" :type="priceSyncTagType(row.price_sync_status)" effect="plain">
+              {{ priceSyncLabel(row.price_sync_status) }}
+            </el-tag>
+            <div v-if="listPriceHint(row)" class="muted">{{ listPriceHint(row) }}</div>
+            <div v-else-if="row.price_sync_at" class="muted">{{ formatTime(row.price_sync_at) }}</div>
+          </template>
+        </el-table-column>
         <el-table-column prop="status" label="状态" width="100" />
         <el-table-column label="发布时间" width="170">
           <template #default="{ row }">{{ formatTime(row.published_at) }}</template>
@@ -278,12 +527,24 @@ onMounted(async () => {
         <el-table-column label="更新时间" width="170">
           <template #default="{ row }">{{ formatTime(row.updated_at) }}</template>
         </el-table-column>
-        <el-table-column label="来源任务" min-width="170" show-overflow-tooltip>
-          <template #default="{ row }">{{ row.source_run_id || '-' }}</template>
+        <el-table-column label="来源任务" min-width="120" show-overflow-tooltip>
+          <template #default="{ row }">
+            <el-tag v-if="row.source_run_id === 'manual'" size="small" type="info" effect="plain">手动录入</el-tag>
+            <span v-else>{{ row.source_run_id || '-' }}</span>
+          </template>
         </el-table-column>
-        <el-table-column label="操作" width="230" fixed="right">
+        <el-table-column label="操作" width="360" fixed="right">
           <template #default="{ row }">
             <el-button link type="primary" @click="openDetail(row)">查看详情</el-button>
+            <el-button
+              link
+              type="primary"
+              :loading="lookupId === row.mapping_id"
+              :disabled="!row.pdd_product_id || row.status === 'delisted'"
+              @click="lookupPublishedGoods(row)"
+            >
+              反查规格价格
+            </el-button>
             <el-button link type="primary" :disabled="!row.source_run_id" @click="openRun(row)">查看记录</el-button>
             <el-button
               link
@@ -293,6 +554,14 @@ onMounted(async () => {
               @click="delistPublished(row)"
             >
               下架
+            </el-button>
+            <el-button
+              link
+              type="danger"
+              :loading="deletingId === row.mapping_id"
+              @click="removePublished(row)"
+            >
+              删除
             </el-button>
           </template>
         </el-table-column>
@@ -370,6 +639,17 @@ onMounted(async () => {
             </div>
           </section>
 
+          <div v-if="pddSkuRows.length" style="margin-top: 16px">
+            <div class="section-label">拼多多反查 SKU（规格与库存）</div>
+            <el-table :data="pddSkuRows" size="small" stripe max-height="360">
+              <el-table-column prop="style_name" label="款式" min-width="120" show-overflow-tooltip />
+              <el-table-column prop="package_name" label="套餐/尺寸" min-width="160" show-overflow-tooltip />
+              <el-table-column prop="group_price" label="拼单价" width="82" />
+              <el-table-column prop="single_price" label="单买价" width="82" />
+              <el-table-column prop="spec_code" label="规格编码" min-width="140" show-overflow-tooltip />
+            </el-table>
+          </div>
+
           <div v-if="detail.unit_detail" style="margin-top: 16px">
             <div class="section-label">SKU数据</div>
             <el-table :data="activeSkuRows" size="small" stripe max-height="320" @row-click="selectSku">
@@ -408,6 +688,160 @@ onMounted(async () => {
         </template>
       </div>
     </el-drawer>
+
+    <el-dialog
+      v-model="addVisible"
+      title="手动添加拼多多已有商品"
+      width="720px"
+      destroy-on-close
+      class="manual-add-dialog"
+    >
+      <el-alert type="info" :closable="false" show-icon class="guide-alert">
+        <template #title>添加方式</template>
+        <el-radio-group v-model="addMode" class="mode-radio" @change="onAddModeChange">
+          <el-radio value="pdd_only">拼多多已有商品（无本地图片/素材）</el-radio>
+          <el-radio value="with_local">本地也有素材目录（可导入 SKU）</el-radio>
+        </el-radio-group>
+        <p v-if="addMode === 'pdd_only'" class="guide-text">
+          商品和图片都在拼多多后台，本地没有素材文件夹。<strong>只需填 4 项</strong>：店铺、商品 ID、识别编码、显示名称。
+          母文件编码、套图、SKU 导入<strong>全部可不填</strong>，保存后可直接去「活动」页勾选报名（如 21365）。
+        </p>
+        <p v-else class="guide-text">
+          本地 <code>data/assets</code> 下有对应商品文件夹时，可自动导入 SKU，用于 20981 价格校验、限时限量购。
+        </p>
+      </el-alert>
+
+      <el-form label-position="top" class="manual-add-form" @submit.prevent="submitManualAdd">
+        <div class="form-section-title">必填 · 基础信息</div>
+        <el-row :gutter="12">
+          <el-col :span="12">
+            <el-form-item label="店铺" required>
+              <el-select v-model="addForm.account_id" filterable placeholder="选择店铺，如 store_A" style="width: 100%">
+                <el-option v-for="a in accounts" :key="a.account_id" :label="a.account_id" :value="a.account_id" />
+              </el-select>
+              <div class="field-hint">与「店铺设置」里的 account_id 一致，活动任务会用它打开对应浏览器 Profile</div>
+            </el-form-item>
+          </el-col>
+          <el-col :span="12">
+            <el-form-item label="拼多多商品 ID" required>
+              <el-input v-model="addForm.pdd_product_id" placeholder="如 965836045952" maxlength="20" />
+              <div class="field-hint">
+                拼多多商家后台 → 商品管理 → 商品列表 → 复制数字 ID（不是货号）
+              </div>
+            </el-form-item>
+          </el-col>
+        </el-row>
+
+        <el-row :gutter="12">
+          <el-col :span="12">
+            <el-form-item label="识别编码" required>
+              <el-input
+                v-model="addForm.product_code"
+                :placeholder="addMode === 'pdd_only' ? '填拼多多货号或任意识别码' : '如 BD716A'"
+                @blur="loadCatalogHint"
+              />
+              <div class="field-hint">
+                <template v-if="addMode === 'pdd_only'">
+                  仅在本系统里标识这条记录，可填拼多多「货号」或你记得的编码；<strong>不需要</strong>对应本地文件夹
+                </template>
+                <template v-else>
+                  用于匹配「拼多多定价.xls / 控价.xls」；填完失焦可自动查素材目录
+                </template>
+              </div>
+            </el-form-item>
+          </el-col>
+          <el-col :span="12">
+            <el-form-item label="显示名称" required>
+              <el-input
+                v-model="addForm.listing_label"
+                :placeholder="addMode === 'pdd_only' ? '如 笔袋黑色款' : '如 BD716A / 第一套图'"
+              />
+              <div class="field-hint">在活动页、本页表格中展示，写你在拼多多看到的商品名即可</div>
+            </el-form-item>
+          </el-col>
+        </el-row>
+
+        <template v-if="addMode === 'with_local'">
+          <div class="form-section-title">选填 · 编码与定价（参与价格校验时建议填写）</div>
+          <el-row :gutter="12">
+            <el-col :span="8">
+              <el-form-item label="母文件编码">
+                <el-input v-model="addForm.family_code" placeholder="如 BD716" />
+                <div class="field-hint">商品文件夹名，定价表模糊匹配用</div>
+              </el-form-item>
+            </el-col>
+            <el-col :span="8">
+              <el-form-item label="套图">
+                <el-select
+                  v-model="addForm.image_set"
+                  clearable
+                  filterable
+                  allow-create
+                  default-first-option
+                  placeholder="如 第一套图"
+                  style="width: 100%"
+                  @change="loadCatalogHint"
+                >
+                  <el-option v-for="s in catalogImageSets" :key="s" :label="s" :value="s" />
+                </el-select>
+                <div class="field-hint">多套图商品建议填写</div>
+              </el-form-item>
+            </el-col>
+            <el-col :span="8">
+              <el-form-item label="货号">
+                <el-input v-model="addForm.merchant_code" placeholder="通常同商品编码" />
+                <div class="field-hint">拼多多后台「货号」，默认可与识别编码相同</div>
+              </el-form-item>
+            </el-col>
+          </el-row>
+        </template>
+
+        <div v-else class="skip-hint">
+          当前为「无本地素材」模式：母文件编码、套图、SKU 导入已跳过，不影响 21365 等活动选品报名。
+        </div>
+
+        <div class="form-section-title">其他</div>
+        <el-row :gutter="12">
+          <el-col :span="8">
+            <el-form-item label="状态">
+              <el-select v-model="addForm.status" style="width: 100%">
+                <el-option label="在售 on_sale" value="on_sale" />
+                <el-option label="已下架 delisted" value="delisted" />
+              </el-select>
+              <div class="field-hint">仅本系统标记；不会改动拼多多后台状态</div>
+            </el-form-item>
+          </el-col>
+          <el-col :span="16">
+            <el-form-item label="备注">
+              <el-input v-model="addForm.note" placeholder="如：2024年手工上架的老款" />
+            </el-form-item>
+          </el-col>
+        </el-row>
+
+        <template v-if="addMode === 'with_local'">
+          <el-form-item>
+            <el-checkbox v-model="addForm.import_catalog_skus">
+              从本地素材目录导入 SKU 规格（20981 价格校验 / 限时限量购需要）
+            </el-checkbox>
+            <el-button
+              link
+              type="primary"
+              :loading="catalogLoading"
+              :disabled="!addForm.product_code.trim()"
+              @click="loadCatalogHint"
+            >
+              重新检测素材目录
+            </el-button>
+            <div v-if="catalogHint" class="catalog-hint">{{ catalogHint }}</div>
+          </el-form-item>
+        </template>
+      </el-form>
+
+      <template #footer>
+        <el-button @click="addVisible = false">取消</el-button>
+        <el-button type="primary" :loading="addSubmitting" @click="submitManualAdd">保存映射</el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
@@ -519,5 +953,62 @@ onMounted(async () => {
 
 .sku-detail {
   margin-top: 12px;
+}
+
+.guide-alert {
+  margin-bottom: 16px;
+}
+
+.guide-text {
+  margin: 10px 0 0;
+  font-size: 13px;
+  line-height: 1.55;
+}
+
+.mode-radio {
+  margin-top: 8px;
+}
+
+.skip-hint {
+  margin: 0 0 14px;
+  padding: 10px 12px;
+  font-size: 12px;
+  line-height: 1.5;
+  color: #64748b;
+  background: #f8fafc;
+  border: 1px dashed var(--border-color);
+  border-radius: 8px;
+}
+
+.guide-list {
+  margin: 0;
+  padding-left: 18px;
+  font-size: 13px;
+  line-height: 1.65;
+  color: #475569;
+}
+
+.form-section-title {
+  margin: 4px 0 10px;
+  font-size: 13px;
+  font-weight: 600;
+  color: #334155;
+}
+
+.field-hint {
+  margin-top: 4px;
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--text-secondary);
+}
+
+.catalog-hint {
+  margin-top: 6px;
+  font-size: 12px;
+  color: #059669;
+}
+
+.manual-add-form :deep(.el-form-item) {
+  margin-bottom: 14px;
 }
 </style>

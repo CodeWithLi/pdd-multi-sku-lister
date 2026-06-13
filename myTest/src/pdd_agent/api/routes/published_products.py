@@ -2,19 +2,30 @@
 
 from datetime import datetime
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, BackgroundTasks, HTTPException, Query
 
 from pdd_agent.api.schemas.published_products import (
+    PublishedProductCreateResponse,
     PublishedProductDelistResponse,
+    PublishedProductDeleteResponse,
     PublishedProductDetailResponse,
     PublishedProductListResponse,
+    PublishedProductLookupResponse,
+    PublishedProductManualCreateIn,
     PublishedProductOut,
 )
 from pdd_agent.api.schemas.catalog import ListingUnitOut, SkuComboOut
 from pdd_agent.api.services.catalog_service import get_product_detail
+from pdd_agent.api.services.published_price_status import derive_price_sync_status
+from pdd_agent.api.services.published_product_service import create_manual_published_product
 from pdd_agent.api.services.task_queue import enqueue_delist_task
-from pdd_agent.api.services.task_runner import create_delist_run
+from pdd_agent.api.services.task_runner import (
+    create_delist_run,
+    create_published_goods_lookup_run,
+    execute_published_goods_lookup,
+)
 from pdd_agent.db.repositories import (
+    delete_published_product,
     get_published_product_by_mapping_id,
     search_published_products,
 )
@@ -26,6 +37,7 @@ router = APIRouter(prefix="/published-products", tags=["published-products"])
 
 
 def _row_out(row) -> PublishedProductOut:
+    price_sync_status, price_sync_at = derive_price_sync_status(row.spec_metadata or {})
     return PublishedProductOut(
         mapping_id=row.mapping_id,
         account_id=row.account_id,
@@ -41,6 +53,8 @@ def _row_out(row) -> PublishedProductOut:
         created_at=row.created_at,
         updated_at=row.updated_at,
         spec_metadata=row.spec_metadata or {},
+        price_sync_status=price_sync_status,
+        price_sync_at=price_sync_at,
     )
 
 
@@ -66,6 +80,33 @@ def published_products_list(
         total=total,
         page=page,
         page_size=page_size,
+    )
+
+
+@router.post("/manual", response_model=PublishedProductCreateResponse)
+def create_manual_published(body: PublishedProductManualCreateIn):
+    """手动添加拼多多已有商品（非本工具上架）到 published_products 映射表。"""
+    result = create_manual_published_product(
+        account_id=body.account_id,
+        pdd_product_id=body.pdd_product_id,
+        product_code=body.product_code,
+        listing_label=body.listing_label,
+        family_code=body.family_code,
+        image_set=body.image_set,
+        merchant_code=body.merchant_code,
+        status=body.status,
+        note=body.note,
+        import_catalog_skus=body.import_catalog_skus,
+    )
+    row = result["published"]
+    hints = result.get("catalog_hints") or []
+    message = "已手动添加商品映射"
+    if hints:
+        message = f"{message}；{'；'.join(hints)}"
+    return PublishedProductCreateResponse(
+        published=_row_out(row),
+        catalog_hints=hints,
+        message=message,
     )
 
 
@@ -185,4 +226,45 @@ def delist_published_product(mapping_id: str):
         run_id=run_id,
         status=RunStatus.PENDING.value,
         message=f"precise delist queued for product_id={row.pdd_product_id}",
+    )
+
+
+@router.post("/{mapping_id}/lookup-pdd-goods", response_model=PublishedProductLookupResponse)
+async def lookup_pdd_goods(mapping_id: str, background: BackgroundTasks):
+    """在拼多多商品列表按商品 ID 反查，并打开商品编辑页（第一阶段）。"""
+    if not is_database_available():
+        raise HTTPException(status_code=503, detail="MySQL published products unavailable")
+    row = get_published_product_by_mapping_id(mapping_id)
+    if not row:
+        raise HTTPException(status_code=404, detail=f"published product not found: {mapping_id}")
+    if not row.pdd_product_id:
+        raise HTTPException(status_code=422, detail="published product has no pdd_product_id")
+
+    run_id = create_published_goods_lookup_run(row.account_id)
+    TaskRunStore().update_status(run_id, RunStatus.PENDING, "queued published goods lookup")
+    background.add_task(
+        execute_published_goods_lookup,
+        run_id=run_id,
+        account_id=row.account_id,
+        mapping_id=mapping_id,
+    )
+    return PublishedProductLookupResponse(
+        run_id=run_id,
+        status=RunStatus.PENDING.value,
+        message=f"goods lookup queued for product_id={row.pdd_product_id}",
+    )
+
+
+@router.delete("/{mapping_id}", response_model=PublishedProductDeleteResponse)
+def remove_published_product(mapping_id: str):
+    if not is_database_available():
+        raise HTTPException(status_code=503, detail="MySQL published products unavailable")
+    row = get_published_product_by_mapping_id(mapping_id)
+    if not row:
+        raise HTTPException(status_code=404, detail=f"published product not found: {mapping_id}")
+    if not delete_published_product(mapping_id):
+        raise HTTPException(status_code=500, detail=f"failed to delete published product: {mapping_id}")
+    return PublishedProductDeleteResponse(
+        mapping_id=mapping_id,
+        message="deleted from published_products table only; PDD listing unchanged",
     )

@@ -6,7 +6,13 @@ import time
 from typing import Any
 
 from pdd_agent.browser.dp_compat_sync import DpPage
-from pdd_agent.skills.campaign.activity_price_validate import filter_price_confirm_page
+from pdd_agent.browser.sync_login import ensure_session_sync, is_login_url
+from pdd_agent.core.config import AccountConfig
+from pdd_agent.skills.campaign.activity_price_validate import (
+    _expand_all_specs_on_page,
+    filter_price_confirm_page,
+    lookup_spec_codes_on_price_page,
+)
 from pdd_agent.skills.campaign.limited_time import (
     _bind_page,
     _body_text,
@@ -24,7 +30,7 @@ MARKETING_ACTIVITIES_URLS = (
 
 # 前端可选活动列表（后续可扩展为配置或接口拉取）
 # entry: goto_detail=同标签打开详情页；go_register=活动列表点「去报名」打开详情弹窗
-# stop_after: submit=完整提交流程；confirm_selection=选品后点「确认选择」即结束
+# stop_after: submit=完整提交流程；price_page_prepared=选品后处理价格确认页；confirm_selection=仅确认选择（旧）
 KNOWN_MARKETING_ACTIVITIES: tuple[dict[str, str], ...] = (
     {
         "activity_id": "20981",
@@ -36,7 +42,7 @@ KNOWN_MARKETING_ACTIVITIES: tuple[dict[str, str], ...] = (
         "activity_id": "21365",
         "name": "限量7折100件",
         "entry": "go_register",
-        "stop_after": "confirm_selection",
+        "stop_after": "price_page_prepared",
     },
 )
 
@@ -425,22 +431,72 @@ def _dismiss_marketing_phone_popup(page: DpPage, account_id: str = "", max_attem
     }
 
 
+def _ensure_session(
+    page: DpPage,
+    account: AccountConfig | None,
+    account_id: str,
+) -> dict[str, Any]:
+    """检测到登录页时复用 sync_login 自动登录。"""
+    try:
+        result = ensure_session_sync(page, account)
+        result = dict(result)
+    except Exception as exc:
+        result = {
+            "logged_in": False,
+            "relogin": True,
+            "reason": _safe_exc(exc),
+            "url": str(page.url or ""),
+        }
+    if result.get("relogin"):
+        status = "成功" if result.get("logged_in") else "失败"
+        print(f"[{account_id}] 中途重新登录{status}: {result}", flush=True)
+    return result
+
+
+def _require_logged_in(
+    page: DpPage,
+    account: AccountConfig | None,
+    account_id: str,
+) -> dict[str, Any] | None:
+    """未登录则尝试重新登录；仍失败则返回错误 dict。"""
+    session = _ensure_session(page, account, account_id)
+    if session.get("logged_in"):
+        return None
+    return {
+        "status": "failed",
+        "step": "session_expired",
+        "error": "会话已跳转登录页，重新登录失败" if account else "会话已跳转登录页",
+        "session": session,
+        "current_url": page.url,
+    }
+
+
 def _is_marketing_activities_page(page: DpPage) -> bool:
     text = _body_text(page)
-    if "login" in page.url:
+    if is_login_url(str(page.url or "")):
         return False
     markers = ("营销活动", "活动大厅", "我能参加的活动", "全部活动", "报名记录")
     return any(item in text for item in markers)
 
 
-def _open_marketing_activities_page(page: DpPage, account_id: str) -> bool:
+def _open_marketing_activities_page(
+    page: DpPage,
+    account_id: str,
+    account: AccountConfig | None = None,
+) -> bool:
     """进入商家后台「店铺营销 → 营销活动」页面。"""
+    _ensure_session(page, account, account_id)
+
     for url in MARKETING_ACTIVITIES_URLS:
         try:
             page.get(url)
             time.sleep(3)
-            if "login" in page.url:
-                return False
+            if is_login_url(str(page.url or "")):
+                relogin = _ensure_session(page, account, account_id)
+                if not relogin.get("logged_in"):
+                    return False
+                page.get(url)
+                time.sleep(3)
             _dismiss_message_popup(page)
             _dismiss_marketing_phone_popup(page, account_id)
             if _is_marketing_activities_page(page):
@@ -453,6 +509,10 @@ def _open_marketing_activities_page(page: DpPage, account_id: str) -> bool:
     try:
         page.get("https://mms.pinduoduo.com/home/")
         time.sleep(2)
+        if is_login_url(str(page.url or "")):
+            relogin = _ensure_session(page, account, account_id)
+            if not relogin.get("logged_in"):
+                return False
         _dismiss_message_popup(page)
         if _click_text(page, "营销活动", timeout=6):
             time.sleep(3)
@@ -808,7 +868,12 @@ def _wait_activity_search_results(page: DpPage, activity_id: str, timeout: int =
     return last
 
 
-def search_marketing_activity(page: DpPage, account_id: str, activity_id: str) -> dict[str, Any]:
+def search_marketing_activity(
+    page: DpPage,
+    account_id: str,
+    activity_id: str,
+    account: AccountConfig | None = None,
+) -> dict[str, Any]:
     """打开营销活动页，搜索指定活动 ID 并点击查询。"""
     activity_id = str(activity_id or "").strip()
     if not activity_id:
@@ -820,8 +885,11 @@ def search_marketing_activity(page: DpPage, account_id: str, activity_id: str) -
         }
 
     try:
+        if session_err := _require_logged_in(page, account, account_id):
+            return {**session_err, "activity_id": activity_id}
+
         _install_multi_quick_tab_blocker(page, account_id)
-        if not _open_marketing_activities_page(page, account_id):
+        if not _open_marketing_activities_page(page, account_id, account=account):
             return {
                 "status": "failed",
                 "step": "open_marketing_activities",
@@ -956,26 +1024,50 @@ def _is_multi_quick_channel_page(page: DpPage) -> bool:
     return _page_url_is_multi_quick(str(page.url or ""))
 
 
-def _is_activity_detail_ready(page: DpPage, activity_id: str) -> bool:
+def _is_activity_detail_ready(
+    page: DpPage,
+    activity_id: str,
+    *,
+    require_activity_id: bool = True,
+) -> bool:
     """判断活动详情是否就绪：详情页或列表页上的「活动详情」弹窗。"""
     url = str(page.url or "")
     if _page_url_is_multi_quick(url):
         return False
     text = _body_text(page)
-    detail_markers = "活动详情" in text and "立即报名" in text and activity_id in text
+    has_detail_modal = "活动详情" in text and "立即报名" in text
     if "act/index" in url or "actHomeActivityType" in url:
-        return detail_markers
-    if _page_url_is_activity_detail(url, activity_id):
-        return ("活动详情" in text or "立即报名" in text) and activity_id in text
-    return detail_markers
-
-
-def _wait_activity_detail_ready(page: DpPage, activity_id: str, account_id: str, timeout: int = 12) -> bool:
-    for _ in range(timeout):
-        _close_multi_quick_channel_tabs(page, account_id)
-        if _is_activity_detail_ready(page, activity_id):
+        if not has_detail_modal:
+            return False
+        if not require_activity_id:
             return True
-        time.sleep(1)
+        return activity_id in text
+    if _page_url_is_activity_detail(url, activity_id):
+        if not require_activity_id:
+            return has_detail_modal or activity_id in text
+        return ("活动详情" in text or "立即报名" in text) and activity_id in text
+    if not has_detail_modal:
+        return False
+    if not require_activity_id:
+        return True
+    return activity_id in text
+
+
+def _wait_activity_detail_ready(
+    page: DpPage,
+    activity_id: str,
+    account_id: str,
+    timeout: int = 12,
+    *,
+    require_activity_id: bool = True,
+    poll_interval: float = 0.25,
+) -> bool:
+    deadline = time.monotonic() + max(timeout, 1)
+    while time.monotonic() < deadline:
+        _close_multi_quick_channel_tabs(page, account_id)
+        if _is_activity_detail_ready(page, activity_id, require_activity_id=require_activity_id):
+            return True
+        time.sleep(poll_interval)
     return False
 
 
@@ -1078,6 +1170,8 @@ def _switch_to_product_pick_tab(page: DpPage, activity_id: str, account_id: str)
             return {"switched": True, "method": "product_pick_text", "url": url, "close_result": close_result}
         if "搜索商品" in text and (not activity_id or activity_id in text):
             return {"switched": True, "method": "product_pick_modal_page", "url": url, "close_result": close_result}
+        if _is_price_confirm_url(url):
+            continue
         if any(part in url for part in ("signup", "enroll", "choose", "goods", "product")):
             return {"switched": True, "method": "product_pick_url", "url": url, "close_result": close_result}
     return {"switched": False, "method": "not_found", "url": page.url, "close_result": close_result}
@@ -1484,11 +1578,17 @@ def _open_activity_for_registration(
                 "entry": entry,
                 **go_register,
             }
-        time.sleep(1.5)
+        time.sleep(0.4)
+        _close_multi_quick_channel_tabs(page, account_id)
         _dismiss_message_popup(page)
         _dismiss_marketing_phone_popup(page, account_id)
-        _close_multi_quick_channel_tabs(page, account_id)
-        if _wait_activity_detail_ready(page, activity_id, account_id, timeout=15):
+        if _wait_activity_detail_ready(
+            page,
+            activity_id,
+            account_id,
+            timeout=6,
+            require_activity_id=False,
+        ):
             print(f"[{account_id}] 已通过去报名打开活动 {activity_id} 详情", flush=True)
             return {
                 "opened": True,
@@ -1538,9 +1638,9 @@ def _click_activity_go_register(page: DpPage, activity_id: str, account_id: str)
                     if not btn.count() or not btn.is_visible():
                         continue
                     btn.scroll_into_view_if_needed(timeout=3_000)
-                    time.sleep(0.3)
+                    time.sleep(0.2)
                     btn.click(timeout=8_000)
-                    time.sleep(1.5)
+                    time.sleep(0.5)
                     wrong_page = _reject_multi_quick_channel(
                         page,
                         account_id,
@@ -1646,23 +1746,94 @@ def _click_activity_go_register(page: DpPage, activity_id: str, account_id: str)
     return js_result
 
 
-def _wait_page_contains(page: DpPage, markers: tuple[str, ...], timeout: int = 15) -> bool:
-    for _ in range(timeout):
+def _wait_page_contains(
+    page: DpPage,
+    markers: tuple[str, ...],
+    timeout: int = 15,
+    *,
+    poll_interval: float = 0.25,
+) -> bool:
+    deadline = time.monotonic() + max(timeout, 1)
+    while time.monotonic() < deadline:
         text = _body_text(page)
         if any(marker in text for marker in markers):
             return True
-        time.sleep(1)
+        time.sleep(poll_interval)
     return False
 
 
 def _click_register_now(page: DpPage, account_id: str, activity_id: str) -> dict[str, Any]:
     """在活动详情页点击「立即报名」——只在包含活动 ID 的详情区域内点击。"""
     _install_multi_quick_tab_blocker(page, account_id)
+
+    js_result = page.run_js(
+        f"""
+        function norm(text) {{
+            return (text || '').replace(/\\s+/g, '').trim();
+        }}
+        function isVisible(el) {{
+            if (!el || !el.getBoundingClientRect) return false;
+            const r = el.getBoundingClientRect();
+            const s = window.getComputedStyle(el);
+            return r.width > 20 && r.height > 16
+                && s.display !== 'none'
+                && s.visibility !== 'hidden'
+                && parseFloat(s.opacity || '1') > 0.05;
+        }}
+        function findRegisterButton(requireActivityId) {{
+            const activityId = {activity_id!r};
+            const roots = Array.from(document.querySelectorAll(
+                '[data-testid="beast-core-modal"], [class*="MDL_modal"], body'
+            ))
+                .filter(isVisible)
+                .filter((el) => {{
+                    const text = (el.innerText || el.textContent || '');
+                    if (!text.includes('活动详情') || !text.includes('立即报名')) return false;
+                    if (requireActivityId && !text.includes(activityId)) return false;
+                    return true;
+                }});
+            const root = roots.length ? roots[roots.length - 1] : document.body;
+            const buttons = Array.from(root.querySelectorAll('button[data-testid="beast-core-button"], button'))
+                .filter(isVisible)
+                .filter((el) => norm(el.innerText || el.textContent || '') === '立即报名');
+            return buttons.length ? buttons[buttons.length - 1] : null;
+        }}
+        let target = findRegisterButton(true);
+        let method = 'js_activity_detail_modal';
+        if (!target) {{
+            target = findRegisterButton(false);
+            method = 'js_activity_detail_modal_no_id';
+        }}
+        if (!target) {{
+            return {{ clicked: false, reason: 'register_now_button_not_found' }};
+        }}
+        target.scrollIntoView({{ block: 'center', inline: 'nearest' }});
+        target.click();
+        return {{ clicked: true, text: '立即报名', method }};
+        """
+    ) or {"clicked": False, "reason": "register_now_js_failed"}
+    if js_result.get("clicked"):
+        time.sleep(1)
+        _close_multi_quick_channel_tabs(page, account_id)
+        _switch_to_product_pick_tab(page, activity_id, account_id)
+        wrong_page = _reject_multi_quick_channel(
+            page,
+            account_id,
+            "click_register_now_wrong_page",
+            activity_id=activity_id,
+        )
+        if wrong_page:
+            wrong_page["clicked"] = False
+            wrong_page.update(js_result)
+            return wrong_page
+        print(f"[{account_id}] 已点击立即报名（{js_result.get('method', 'js')}）", flush=True)
+        return js_result
+
     raw_page = getattr(page, "_page", None)
     if raw_page is not None:
         scoped_selectors = (
-            f'div:has-text("{activity_id}"):has(button:has-text("立即报名"))',
             'div:has-text("活动详情"):has(button:has-text("立即报名"))',
+            f'div:has-text("{activity_id}"):has(button:has-text("立即报名"))',
         )
         for scope_selector in scoped_selectors:
             try:
@@ -1674,7 +1845,7 @@ def _click_register_now(page: DpPage, account_id: str, activity_id: str) -> dict
                     if btn.count() and btn.is_visible():
                         btn.scroll_into_view_if_needed(timeout=3_000)
                         btn.click(timeout=8_000)
-                        time.sleep(2)
+                        time.sleep(1)
                         _close_multi_quick_channel_tabs(page, account_id)
                         _switch_to_product_pick_tab(page, activity_id, account_id)
                         wrong_page = _reject_multi_quick_channel(
@@ -1692,59 +1863,6 @@ def _click_register_now(page: DpPage, account_id: str, activity_id: str) -> dict
             except Exception:
                 continue
 
-    js_result = page.run_js(
-        f"""
-        function norm(text) {{
-            return (text || '').replace(/\\s+/g, '').trim();
-        }}
-        function isVisible(el) {{
-            if (!el || !el.getBoundingClientRect) return false;
-            const r = el.getBoundingClientRect();
-            const s = window.getComputedStyle(el);
-            return r.width > 20 && r.height > 16
-                && s.display !== 'none'
-                && s.visibility !== 'hidden'
-                && parseFloat(s.opacity || '1') > 0.05;
-        }}
-        const activityId = {activity_id!r};
-        const roots = Array.from(document.querySelectorAll(
-            '[data-testid="beast-core-modal"], [class*="MDL_modal"], body'
-        ))
-            .filter(isVisible)
-            .filter((el) => {{
-                const text = (el.innerText || el.textContent || '');
-                return text.includes('活动详情')
-                    && text.includes('立即报名')
-                    && text.includes(activityId);
-            }});
-        const root = roots.length ? roots[roots.length - 1] : document.body;
-        const buttons = Array.from(root.querySelectorAll('button[data-testid="beast-core-button"], button'))
-            .filter(isVisible)
-            .filter((el) => norm(el.innerText || el.textContent || '') === '立即报名');
-        if (!buttons.length) {{
-            return {{ clicked: false, reason: 'register_now_button_not_found' }};
-        }}
-        const target = buttons[buttons.length - 1];
-        target.scrollIntoView({{ block: 'center', inline: 'nearest' }});
-        target.click();
-        return {{ clicked: true, text: '立即报名', method: 'js_activity_detail_modal' }};
-        """
-    ) or {"clicked": False, "reason": "register_now_js_failed"}
-    if js_result.get("clicked"):
-        time.sleep(2)
-        _close_multi_quick_channel_tabs(page, account_id)
-        _switch_to_product_pick_tab(page, activity_id, account_id)
-        wrong_page = _reject_multi_quick_channel(
-            page,
-            account_id,
-            "click_register_now_wrong_page",
-            activity_id=activity_id,
-        )
-        if wrong_page:
-            wrong_page["clicked"] = False
-            wrong_page.update(js_result)
-            return wrong_page
-        print(f"[{account_id}] 已点击立即报名（弹窗 JS）", flush=True)
     return js_result
 
 
@@ -2236,6 +2354,78 @@ def _click_modal_confirm_button(modal) -> dict[str, Any]:
     return {"clicked": False, "reason": "modal_confirm_button_not_found"}
 
 
+def _is_price_confirm_url(url: str) -> bool:
+    return "goods_price/confirm" in url or "goods/price" in url
+
+
+def _describe_campaign_page(page: DpPage) -> dict[str, Any]:
+    """当前页面/标签页诊断信息，便于排查流程跳页。"""
+    tabs: list[str] = []
+    for item in _live_context_pages(page):
+        try:
+            tabs.append(str(item.url or ""))
+        except Exception:
+            continue
+    body = _body_text(page)
+    return {
+        "current_url": str(page.url or ""),
+        "is_login_page": is_login_url(str(page.url or "")),
+        "is_price_confirm": _is_price_confirm_page(page),
+        "open_tab_count": len(tabs),
+        "open_tab_urls": tabs,
+        "body_sample": body[:500],
+        "has_traffic_protection": "开启流量保护" in body,
+        "has_confirm_submit": "确认提交" in body,
+        "has_price_confirm_title": "确认商品价格信息" in body or "填写报名信息" in body,
+    }
+
+
+def _switch_to_price_confirm_tab(
+    page: DpPage,
+    activity_id: str,
+    account_id: str,
+) -> dict[str, Any]:
+    """切到价格确认页标签（goods_price/confirm），避免误停在活动详情。"""
+    if _is_price_confirm_page(page):
+        return {
+            "switched": True,
+            "method": "already_on_page",
+            "url": str(page.url or ""),
+        }
+
+    candidates: list[tuple[str, Any]] = []
+    for item in _live_context_pages(page):
+        try:
+            url = str(item.url or "")
+        except Exception:
+            continue
+        if not _is_price_confirm_url(url):
+            continue
+        if activity_id and activity_id not in url:
+            continue
+        candidates.append((url, item))
+
+    for url, item in reversed(candidates):
+        try:
+            _bind_page(page, item)
+            item.bring_to_front()
+            time.sleep(0.8)
+            if _is_price_confirm_page(page):
+                print(f"[{account_id}] 已切到价格确认页: {url}", flush=True)
+                return {"switched": True, "method": "price_confirm_tab", "url": url}
+        except Exception:
+            continue
+
+    diagnosis = _describe_campaign_page(page)
+    print(f"[{account_id}] 未找到价格确认页标签: {diagnosis}", flush=True)
+    return {
+        "switched": False,
+        "method": "price_confirm_tab_not_found",
+        "url": str(page.url or ""),
+        "diagnosis": diagnosis,
+    }
+
+
 def _is_price_confirm_page(page: DpPage) -> bool:
     url = str(page.url or "")
     if "goods_price/confirm" in url or "goods/price" in url:
@@ -2267,12 +2457,274 @@ def _scroll_page_to_bottom(page: DpPage) -> None:
     time.sleep(0.8)
 
 
-def _wait_price_confirm_page(page: DpPage, timeout: int = 25) -> bool:
-    for _ in range(timeout):
+def _wait_price_confirm_page(
+    page: DpPage,
+    timeout: int = 25,
+    poll_interval: float = 0.25,
+) -> bool:
+    deadline = time.monotonic() + max(timeout, 1)
+    while time.monotonic() < deadline:
         if _is_price_confirm_page(page):
             return True
-        time.sleep(1)
+        time.sleep(poll_interval)
     return False
+
+
+def _shop_wide_promotion_find_js() -> str:
+    return """
+        function beastChecked(input) {
+            if (!input) return false;
+            return input.checked || input.getAttribute('data-checked') === 'true';
+        }
+        function norm(text) {
+            return (text || '').replace(/\\s+/g, ' ').trim();
+        }
+        function isShopWideCheckboxText(text) {
+            const value = norm(text);
+            if (!value.includes('全店报名')) return false;
+            if (value.includes('开启流量保护')) return false;
+            if (value.includes('分口两流')) return false;
+            if (value.includes('我已阅读并同意')) return false;
+            if (value.includes('开启全店报名')) return false;
+            return true;
+        }
+        function findShopWideBlock() {
+            const labels = Array.from(document.querySelectorAll(
+                '[data-testid="beast-core-checkbox"], label[class*="CBX"], label[class*="ICE"]'
+            ));
+            for (const label of labels) {
+                const text = norm(label.innerText || label.textContent || '');
+                if (!isShopWideCheckboxText(text)) continue;
+                return label.closest('[data-testid="beast-core-checkbox"]') || label;
+            }
+            const blocks = Array.from(document.querySelectorAll('div, section, label, span'))
+                .filter((el) => isShopWideCheckboxText(el.innerText || el.textContent || ''));
+            if (!blocks.length) return null;
+            blocks.sort((a, b) => {
+                const ta = norm(a.innerText || a.textContent || '').length;
+                const tb = norm(b.innerText || b.textContent || '').length;
+                return ta - tb;
+            });
+            return blocks[0];
+        }
+    """
+
+
+def _read_shop_wide_promotion_checked(page: DpPage) -> dict[str, Any]:
+    script = (
+        _shop_wide_promotion_find_js()
+        + """
+        const block = findShopWideBlock();
+        if (!block) {
+            return { found: false, reason: 'shop_wide_promotion_not_found' };
+        }
+        const input = block.querySelector('input[type="checkbox"]')
+            || block.closest('label')?.querySelector('input[type="checkbox"]')
+            || block.parentElement?.querySelector('input[type="checkbox"]');
+        const activeIcon = block.querySelector('[class*="CBX_active"], [class*="CBX_iconCheck"][class*="active"]');
+        const checked = beastChecked(input) || Boolean(activeIcon);
+        return {
+            found: true,
+            checked,
+            text: norm(block.innerText || block.textContent || '').slice(0, 180),
+        };
+        """
+    )
+    return page.run_js(script) or {"found": False, "reason": "shop_wide_promotion_state_js_failed"}
+
+
+def _uncheck_shop_wide_promotion(page: DpPage, account_id: str) -> dict[str, Any]:
+    """价格确认页取消勾选「全店报名官方大促…」复选框（部分活动页无此项）。"""
+    for _ in range(3):
+        _scroll_page_to_bottom(page)
+        before = _read_shop_wide_promotion_checked(page)
+        if before.get("found"):
+            break
+        try:
+            page.run_js("window.scrollTo(0, 0);")
+        except Exception:
+            pass
+        time.sleep(0.4)
+    else:
+        before = _read_shop_wide_promotion_checked(page)
+    if not before.get("found"):
+        return {"unchecked": False, "reason": "shop_wide_promotion_not_found", "before": before}
+    if not before.get("checked"):
+        print(f"[{account_id}] 全店报名已是未勾选状态", flush=True)
+        return {"unchecked": True, "method": "already_unchecked", "before": before}
+
+    raw_page = getattr(page, "_page", None)
+    if raw_page is not None:
+        playwright_selectors = (
+            '[data-testid="beast-core-checkbox"]:has-text("全店报名")',
+            'label:has-text("全店报名官方大促")',
+            'label:has-text("全店报名")',
+        )
+        for selector in playwright_selectors:
+            try:
+                target = raw_page.locator(selector).first
+                if not target.count() or not target.is_visible():
+                    continue
+                target.scroll_into_view_if_needed(timeout=3_000)
+                label = target.locator('label[class*="CBX"], label[class*="ICE"]').first
+                click_target = label if label.count() and label.is_visible() else target
+                click_target.click(timeout=5_000)
+                time.sleep(0.6)
+                after = _read_shop_wide_promotion_checked(page)
+                if not after.get("checked"):
+                    print(f"[{account_id}] 已取消勾选全店报名", flush=True)
+                    return {
+                        "unchecked": True,
+                        "method": f"playwright_{selector}",
+                        "before": before,
+                        "after": after,
+                    }
+            except Exception:
+                continue
+
+    js_result = page.run_js(
+        _shop_wide_promotion_find_js()
+        + """
+        const block = findShopWideBlock();
+        if (!block) {
+            return { unchecked: false, reason: 'shop_wide_promotion_block_not_found' };
+        }
+        const input = block.querySelector('input[type="checkbox"]')
+            || block.closest('label')?.querySelector('input[type="checkbox"]')
+            || block.parentElement?.querySelector('input[type="checkbox"]');
+        const activeIcon = block.querySelector('[class*="CBX_active"], [class*="CBX_iconCheck"][class*="active"]');
+        if (!beastChecked(input) && !activeIcon) {
+            return { unchecked: true, method: 'js_already_unchecked' };
+        }
+        const label = block.querySelector('label[class*="CBX"], label[class*="ICE"]')
+            || (block.tagName === 'LABEL' ? block : null);
+        if (label) {
+            label.click();
+        } else if (input) {
+            input.click();
+        } else {
+            block.click();
+        }
+        const afterInput = block.querySelector('input[type="checkbox"]') || input;
+        const afterActive = block.querySelector('[class*="CBX_active"], [class*="CBX_iconCheck"][class*="active"]');
+        return {
+            unchecked: !beastChecked(afterInput) && !afterActive,
+            method: label ? 'js_label_click' : 'js_input_click',
+        };
+        """
+    ) or {"unchecked": False, "reason": "shop_wide_promotion_js_failed"}
+
+    after = _read_shop_wide_promotion_checked(page)
+    if js_result.get("unchecked") or not after.get("checked"):
+        print(f"[{account_id}] 已取消勾选全店报名", flush=True)
+        return {
+            "unchecked": True,
+            "method": js_result.get("method", "js_uncheck"),
+            "before": before,
+            "after": after,
+            "js_result": js_result,
+        }
+    return {
+        "unchecked": False,
+        "reason": "shop_wide_promotion_still_checked",
+        "before": before,
+        "after": after,
+        "js_result": js_result,
+    }
+
+
+def _expand_price_confirm_specs(page: DpPage, account_id: str) -> dict[str, Any]:
+    """价格确认页点击「展开更多规格」（每个商品各点一次，直到页面上无剩余链接）。"""
+    expand_result = _expand_all_specs_on_page(page)
+    clicked_count = int(expand_result.get("clicked_count") or 0)
+    remaining = int(expand_result.get("remaining_links") or 0)
+
+    if clicked_count > 0:
+        print(f"[{account_id}] 已展开更多规格 x{clicked_count}", flush=True)
+
+    if remaining <= 0:
+        return {
+            "expanded": True,
+            "clicked_count": clicked_count,
+            "remaining_links": 0,
+            **expand_result,
+        }
+
+    return {
+        "expanded": False,
+        "reason": "expand_specs_link_not_clicked",
+        "clicked_count": clicked_count,
+        "remaining_links": remaining,
+        **expand_result,
+    }
+
+
+def _prepare_price_confirm_page(page: DpPage, account_id: str, activity_id: str) -> dict[str, Any]:
+    """确认选择后：进入填写报名信息页 → 展开规格 → 取消全店报名/流量保护勾选。"""
+    time.sleep(1)
+    _dismiss_wrong_tabs_and_focus_product_pick(page, activity_id, account_id)
+
+    if not _wait_price_confirm_page(page, timeout=25):
+        return {
+            "status": "failed",
+            "step": "wait_price_confirm_page",
+            "reason": "price_confirm_page_not_ready",
+            "url": page.url,
+        }
+
+    expand_result = _expand_price_confirm_specs(page, account_id)
+    if not expand_result.get("expanded"):
+        return {
+            "status": "failed",
+            "step": "expand_price_specs",
+            "error": "未能点击展开更多规格",
+            "expand_result": expand_result,
+            "url": page.url,
+        }
+
+    uncheck_result = _uncheck_shop_wide_promotion(page, account_id)
+    if not uncheck_result.get("unchecked"):
+        not_present = (
+            uncheck_result.get("reason") == "shop_wide_promotion_not_found"
+            or not (uncheck_result.get("before") or {}).get("found")
+        )
+        if not_present:
+            print(f"[{account_id}] 本页未找到全店报名勾选项，跳过", flush=True)
+            uncheck_result = {
+                **uncheck_result,
+                "unchecked": True,
+                "method": "skipped_not_present",
+            }
+        else:
+            return {
+                "status": "failed",
+                "step": "uncheck_shop_wide_promotion",
+                "error": uncheck_result.get("reason") or "未能取消全店报名勾选",
+                "expand_result": expand_result,
+                "shop_wide_promotion": uncheck_result,
+                "url": page.url,
+            }
+
+    traffic_result = _uncheck_traffic_protection(page, account_id, activity_id)
+    if not traffic_result.get("unchecked"):
+        return {
+            "status": "failed",
+            "step": "uncheck_traffic_protection",
+            "error": traffic_result.get("reason") or "未能取消开启流量保护勾选",
+            "expand_result": expand_result,
+            "shop_wide_promotion": uncheck_result,
+            "traffic_protection": traffic_result,
+            "url": page.url,
+        }
+
+    return {
+        "status": "success",
+        "step": "price_page_prepared",
+        "expand_result": expand_result,
+        "shop_wide_promotion": uncheck_result,
+        "traffic_protection": traffic_result,
+        "current_url": page.url,
+    }
 
 
 def _wait_traffic_protection_visible(page: DpPage, timeout: int = 20) -> bool:
@@ -2364,10 +2816,17 @@ def _read_traffic_protection_checked(page: DpPage) -> dict[str, Any]:
     return page.run_js(script) or {"found": False, "reason": "traffic_protection_state_js_failed"}
 
 
-def _uncheck_traffic_protection(page: DpPage, account_id: str) -> dict[str, Any]:
+def _uncheck_traffic_protection(page: DpPage, account_id: str, activity_id: str = "") -> dict[str, Any]:
     """确认商品价格信息页取消勾选「开启流量保护」（图四红框）。"""
-    if not _wait_price_confirm_page(page, timeout=25):
-        return {"unchecked": False, "reason": "price_confirm_page_not_ready", "url": page.url}
+    switch_result = _switch_to_price_confirm_tab(page, activity_id, account_id)
+    if not switch_result.get("switched") and not _wait_price_confirm_page(page, timeout=8):
+        return {
+            "unchecked": False,
+            "reason": "price_confirm_page_not_ready",
+            "url": page.url,
+            "switch_result": switch_result,
+            "page_diagnosis": _describe_campaign_page(page),
+        }
 
     if not _wait_traffic_protection_visible(page, timeout=20):
         return {
@@ -2621,29 +3080,60 @@ def _finalize_standard_registration(
     account_id: str,
     activity_id: str,
     pdd_product_ids: list[str] | None = None,
+    account: AccountConfig | None = None,
 ) -> dict[str, Any]:
     """弹窗确认后：确认选择 → 价格筛选删除 → 取消流量保护 → 确认提交。"""
     product_ids = list(dict.fromkeys(str(item).strip() for item in (pdd_product_ids or []) if str(item).strip()))
+    steps: list[dict[str, Any]] = []
+
+    def _log_step(name: str, result: dict[str, Any]) -> None:
+        entry = {"step": name, **result, "page": _describe_campaign_page(page)}
+        steps.append(entry)
+        print(f"[{account_id}] finalize.{name}: {entry.get('status', result.get('reason', 'ok'))} url={page.url}", flush=True)
+
+    if session_err := _require_logged_in(page, account, account_id):
+        return {**session_err, "steps": steps}
+
     time.sleep(1.5)
     _dismiss_wrong_tabs_and_focus_product_pick(page, activity_id, account_id)
 
     confirm_selection = _click_confirm_product_selection(page, account_id, activity_id)
+    _log_step("confirm_selection", {"status": "success" if confirm_selection.get("clicked") else "failed", **confirm_selection})
     if not confirm_selection.get("clicked"):
-        return {"status": "failed", "step": "click_confirm_selection", **confirm_selection}
+        return {"status": "failed", "step": "click_confirm_selection", "steps": steps, **confirm_selection}
 
     time.sleep(2.5)
-    _dismiss_wrong_tabs_and_focus_product_pick(page, activity_id, account_id)
+    switch_after_confirm = _switch_to_price_confirm_tab(page, activity_id, account_id)
+    _log_step("switch_price_confirm_after_confirm", {"status": "success" if switch_after_confirm.get("switched") else "failed", **switch_after_confirm})
 
-    if not _wait_price_confirm_page(page, timeout=25):
+    if not switch_after_confirm.get("switched") and not _wait_price_confirm_page(page, timeout=25):
+        if session_err := _require_logged_in(page, account, account_id):
+            return {**session_err, "steps": steps}
         return {
             "status": "failed",
             "step": "wait_price_confirm_page",
             "reason": "price_confirm_page_not_ready",
             "url": page.url,
+            "steps": steps,
             "confirm_selection": confirm_selection,
+            "page_diagnosis": _describe_campaign_page(page),
         }
 
+    if session_err := _require_logged_in(page, account, account_id):
+        return {**session_err, "steps": steps}
+
     price_filter = filter_price_confirm_page(page, account_id, product_ids)
+    _log_step(
+        "filter_activity_prices",
+        {
+            "status": price_filter.get("status"),
+            "action": price_filter.get("action"),
+            "remove_count": price_filter.get("remove_count"),
+            "remaining_count": price_filter.get("remaining_count"),
+            "failed_count": price_filter.get("failed_count"),
+            "spec_count": price_filter.get("spec_count"),
+        },
+    )
     if price_filter.get("status") == "all_products_removed":
         return {
             "status": "cancelled",
@@ -2651,6 +3141,7 @@ def _finalize_standard_registration(
             "error": price_filter.get("error") or "所有商品均不符合价格条件，已删除并关闭页面",
             "price_filter": price_filter,
             "confirm_selection": confirm_selection,
+            "steps": steps,
             "current_url": page.url,
         }
     if price_filter.get("status") != "success":
@@ -2660,15 +3151,47 @@ def _finalize_standard_registration(
             "error": price_filter.get("error") or price_filter.get("reason") or "价格确认页筛选失败",
             "price_filter": price_filter,
             "confirm_selection": confirm_selection,
+            "steps": steps,
+            "page_diagnosis": _describe_campaign_page(page),
         }
 
-    traffic_result = _uncheck_traffic_protection(page, account_id)
+    switch_after_filter = _switch_to_price_confirm_tab(page, activity_id, account_id)
+    _log_step(
+        "switch_price_confirm_after_filter",
+        {"status": "success" if switch_after_filter.get("switched") else "failed", **switch_after_filter},
+    )
+    if not switch_after_filter.get("switched"):
+        return {
+            "status": "failed",
+            "step": "switch_price_confirm_after_filter",
+            "error": "价格筛选后已离开价格确认页，无法继续取消流量保护",
+            "price_filter": price_filter,
+            "confirm_selection": confirm_selection,
+            "steps": steps,
+            "page_diagnosis": _describe_campaign_page(page),
+        }
+
+    if session_err := _require_logged_in(page, account, account_id):
+        return {**session_err, "steps": steps}
+
+    traffic_result = _uncheck_traffic_protection(page, account_id, activity_id)
+    _log_step("uncheck_traffic_protection", {"status": "success" if traffic_result.get("unchecked") else "failed", **traffic_result})
     if not traffic_result.get("unchecked"):
-        return {"status": "failed", "step": "uncheck_traffic_protection", **traffic_result}
+        return {
+            "status": "failed",
+            "step": "uncheck_traffic_protection",
+            "error": traffic_result.get("reason") or "未能取消开启流量保护",
+            "price_filter": price_filter,
+            "confirm_selection": confirm_selection,
+            "steps": steps,
+            "page_diagnosis": _describe_campaign_page(page),
+            **traffic_result,
+        }
 
     submit_result = _click_confirm_submit(page, account_id)
+    _log_step("confirm_submit", {"status": "success" if submit_result.get("clicked") else "failed", **submit_result})
     if not submit_result.get("clicked"):
-        return {"status": "failed", "step": "click_confirm_submit", **submit_result}
+        return {"status": "failed", "step": "click_confirm_submit", "steps": steps, **submit_result}
 
     return {
         "status": "success",
@@ -2677,6 +3200,7 @@ def _finalize_standard_registration(
         "price_filter": price_filter,
         "traffic_protection": traffic_result,
         "confirm_submit": submit_result,
+        "steps": steps,
         "current_url": page.url,
     }
 
@@ -2970,6 +3494,7 @@ def register_marketing_activity(
     account_id: str,
     activity_id: str,
     pdd_product_ids: list[str] | None = None,
+    account: AccountConfig | None = None,
 ) -> dict[str, Any]:
     """搜索活动 → 活动详情/潜力商品通道 → 选品并确认报名。"""
     activity_id = str(activity_id or "").strip()
@@ -2978,6 +3503,9 @@ def register_marketing_activity(
         return _fail("validate_activity_id", "activity_id 不能为空", activity_id=activity_id)
     if not product_ids:
         return _fail("validate_product_ids", "请先选择已发布商品", activity_id=activity_id)
+
+    if session_err := _require_logged_in(page, account, account_id):
+        return {**session_err, "activity_id": activity_id}
 
     def _finish_multi_quick_fallback(standard_attempt: dict[str, Any] | None = None) -> dict[str, Any]:
         multi_result = _select_products_in_multi_quick_channel(page, account_id, activity_id, product_ids)
@@ -3005,7 +3533,7 @@ def register_marketing_activity(
 
     try:
         _install_multi_quick_tab_blocker(page, account_id)
-        search_result = search_marketing_activity(page, account_id, activity_id)
+        search_result = search_marketing_activity(page, account_id, activity_id, account=account)
         if search_result.get("status") != "success":
             return search_result
 
@@ -3019,8 +3547,11 @@ def register_marketing_activity(
                 {"step": "open_activity_detail", "open_detail": open_detail},
             )
 
-        time.sleep(1)
-        tab_result = _switch_to_registration_tab(page, activity_id, account_id)
+        if entry != "go_register":
+            time.sleep(0.5)
+            tab_result = _switch_to_registration_tab(page, activity_id, account_id)
+        else:
+            tab_result = {"switched": False, "method": "modal_already_open"}
         _dismiss_message_popup(page)
         _dismiss_marketing_phone_popup(page, account_id)
 
@@ -3029,8 +3560,9 @@ def register_marketing_activity(
         ):
             return _finish_multi_quick_fallback({**wrong, "open_detail": open_detail, "tab_result": tab_result})
 
-        if not _wait_page_contains(page, ("立即报名", "活动详情"), timeout=15) and not _is_activity_detail_ready(
-            page, activity_id
+        detail_ready = _is_activity_detail_ready(page, activity_id, require_activity_id=False)
+        if not detail_ready and not _wait_page_contains(
+            page, ("立即报名", "活动详情"), timeout=5
         ):
             if wrong := _reject_multi_quick_channel(
                 page, account_id, "wait_activity_detail_wrong_page", activity_id=activity_id
@@ -3110,7 +3642,7 @@ def register_marketing_activity(
                 product_selection=product_selection,
             )
 
-        if stop_after == "confirm_selection":
+        if stop_after in {"confirm_selection", "price_page_prepared"}:
             pick_confirm_result = _complete_product_pick_confirmation(page, account_id, activity_id)
             if pick_confirm_result.get("status") != "success":
                 return _fail(
@@ -3124,13 +3656,54 @@ def register_marketing_activity(
                     product_selection=product_selection,
                     pick_confirm_result=pick_confirm_result,
                 )
+
+            if stop_after == "confirm_selection":
+                print(
+                    f"[{account_id}] 营销活动选品完成（至确认选择）: activity={activity_id} products={len(product_ids)}",
+                    flush=True,
+                )
+                return {
+                    "status": "success",
+                    "step": "product_pick_confirmed",
+                    "registration_path": "standard",
+                    "activity_id": activity_id,
+                    "product_ids": product_ids,
+                    "activity_profile": profile,
+                    "current_url": page.url,
+                    "search_result": search_result,
+                    "open_detail": open_detail,
+                    "register_now": register_now,
+                    "product_selection": product_selection,
+                    "pick_confirm_result": pick_confirm_result,
+                }
+
+            price_prep = _prepare_price_confirm_page(page, account_id, activity_id)
+            if price_prep.get("status") != "success":
+                return _fail(
+                    price_prep.get("step", "prepare_price_confirm_page"),
+                    price_prep.get("error") or price_prep.get("reason") or "价格确认页处理失败",
+                    activity_id=activity_id,
+                    current_url=page.url,
+                    search_result=search_result,
+                    open_detail=open_detail,
+                    register_now=register_now,
+                    product_selection=product_selection,
+                    pick_confirm_result=pick_confirm_result,
+                    price_prep=price_prep,
+                )
+
             print(
-                f"[{account_id}] 营销活动选品完成（至确认选择）: activity={activity_id} products={len(product_ids)}",
+                f"[{account_id}] 营销活动价格确认页已处理: activity={activity_id} products={len(product_ids)}",
+                flush=True,
+            )
+            spec_lookup = lookup_spec_codes_on_price_page(page, account_id, product_ids)
+            print(
+                f"[{account_id}] 活动规格反查: matched={spec_lookup.get('matched_count')}/{spec_lookup.get('spec_count')}",
                 flush=True,
             )
             return {
                 "status": "success",
-                "step": "product_pick_confirmed",
+                "step": "price_page_prepared",
                 "registration_path": "standard",
                 "activity_id": activity_id,
                 "product_ids": product_ids,
@@ -3141,10 +3714,12 @@ def register_marketing_activity(
                 "register_now": register_now,
                 "product_selection": product_selection,
                 "pick_confirm_result": pick_confirm_result,
+                "price_prep": price_prep,
+                "spec_lookup": spec_lookup,
             }
 
         finalize_result = _finalize_standard_registration(
-            page, account_id, activity_id, pdd_product_ids=product_ids
+            page, account_id, activity_id, pdd_product_ids=product_ids, account=account
         )
         if finalize_result.get("status") == "cancelled":
             return {

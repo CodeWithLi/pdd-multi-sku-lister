@@ -812,25 +812,20 @@ function getRow(idx) {
 function fillRow(idx, vals) {
     const tr = getRow(idx);
     if (!tr) return 0;
-    const inputs = rowInputs(tr);
-    if (inputs.length < 4) return 0;
-    const setter = Object.getOwnPropertyDescriptor(
-        window.HTMLInputElement.prototype, 'value'
-    ).set;
-    for (let i = 0; i < 4; i++) {
-        const el = inputs[i];
-        const val = String(vals[i]);
-        setter.call(el, val);
-        el.dispatchEvent(new InputEvent('input', {
-            bubbles: true, data: val, inputType: 'insertText'
-        }));
-        el.dispatchEvent(new Event('change', { bubbles: true }));
-    }
-    return inputs.length;
+    return fillRowReliable(tr, vals);
 }
 
 function fillRowDirect(tr, vals) {
+    return fillRowReliable(tr, vals);
+}
+
+function fillRowReliable(tr, vals) {
     if (!tr) return 0;
+    try {
+        tr.scrollIntoView({block: 'nearest', behavior: 'instant'});
+    } catch (e) {
+        tr.scrollIntoView({block: 'nearest'});
+    }
     const inputs = rowInputs(tr);
     if (inputs.length < 4) return 0;
     const setter = Object.getOwnPropertyDescriptor(
@@ -839,11 +834,13 @@ function fillRowDirect(tr, vals) {
     for (let i = 0; i < 4; i++) {
         const el = inputs[i];
         const val = String(vals[i]);
+        try { el.focus({preventScroll: true}); } catch (e) { try { el.focus(); } catch (e2) {} }
         setter.call(el, val);
         el.dispatchEvent(new InputEvent('input', {
             bubbles: true, data: val, inputType: 'insertText'
         }));
         el.dispatchEvent(new Event('change', { bubbles: true }));
+        try { el.blur(); } catch (e) {}
     }
     return inputs.length;
 }
@@ -881,15 +878,21 @@ return fillRow(parseInt(arguments[0], 10), JSON.parse(arguments[1]));
 """
 )
 
-_BUILD_STYLE_SIZE_ROW_MAP_JS = (
-    _JS_FILL_HELPERS
-    + """
+_STYLE_SIZE_MAP_JS = """
 function cellHasDataInput(td) {
     for (const inp of td.querySelectorAll('input')) {
         const t = (inp.type || '').toLowerCase();
         if (!['file','hidden','checkbox','radio','button','submit'].includes(t)) return true;
     }
     return false;
+}
+
+function normCellText(td) {
+    return (td.textContent || td.innerText || '').replace(/\\s+/g, ' ').trim();
+}
+
+function styleSizeKey(style, size) {
+    return (style || '') + '\\0' + (size || '');
 }
 
 function buildStyleSizeRowMap() {
@@ -903,7 +906,7 @@ function buildStyleSizeRowMap() {
         const texts = [];
         for (const td of tr.querySelectorAll('td')) {
             if (cellHasDataInput(td)) break;
-            const text = (td.innerText || '').trim();
+            const text = normCellText(td);
             if (!text) continue;
             texts.push(text);
             if (td.getAttribute('rowspan')) currentStyle = text;
@@ -916,19 +919,60 @@ function buildStyleSizeRowMap() {
             model = texts[0];
         }
         if (currentStyle && model) {
-            map[currentStyle + '\\0' + model] = rowIdx;
+            map[styleSizeKey(currentStyle, model)] = { tr: tr, idx: rowIdx };
         }
     }
     return map;
 }
+"""
 
+_FILL_ONE_BY_STYLE_SIZE_JS = (
+    _JS_FILL_HELPERS
+    + _STYLE_SIZE_MAP_JS
+    + """
+const style = arguments[0] || '';
+const size = arguments[1] || '';
+const vals = JSON.parse(arguments[2]);
+const hit = buildStyleSizeRowMap()[styleSizeKey(style, size)];
+if (!hit || !hit.tr) return 0;
+return fillRowReliable(hit.tr, vals);
+"""
+)
+
+_FILL_SKUS_BY_STYLE_SIZE_JS = (
+    _JS_FILL_HELPERS
+    + _STYLE_SIZE_MAP_JS
+    + """
+const items = JSON.parse(arguments[0]);
+const rowMap = buildStyleSizeRowMap();
+let ok = 0;
+const failed = [];
+for (const item of items) {
+    const key = styleSizeKey(item.style, item.size);
+    const hit = rowMap[key];
+    if (!hit || !hit.tr) {
+        failed.push({style: item.style || '', size: item.size || '', reason: 'row_not_found'});
+        continue;
+    }
+    if (fillRowReliable(hit.tr, item.vals) >= 4) ok++;
+    else failed.push({style: item.style || '', size: item.size || '', reason: 'fill_failed'});
+}
+return JSON.stringify({ok: ok, failed: failed});
+"""
+)
+
+_BUILD_STYLE_SIZE_ROW_MAP_JS = (
+    _JS_FILL_HELPERS
+    + _STYLE_SIZE_MAP_JS
+    + """
 const pairs = JSON.parse(arguments[0]);
 const rowMap = buildStyleSizeRowMap();
 const out = [];
 for (let i = 0; i < pairs.length; i++) {
     const p = pairs[i];
-    const key = (p.style || '') + '\\0' + (p.size || '');
-    out.push(Object.prototype.hasOwnProperty.call(rowMap, key) ? rowMap[key] : i);
+    const key = styleSizeKey(p.style, p.size);
+    const hit = rowMap[key];
+    out.push(hit ? hit.idx : i);
 }
 return JSON.stringify(out);
 """
@@ -954,16 +998,33 @@ return JSON.stringify({
 """
 
 
-def _sku_row_values(skus: list, defaults: dict) -> list[list[str]]:
+def _sku_fill_items(skus: list, defaults: dict) -> list[dict]:
     return [
-        [
-            str(getattr(sku, "inventory", None) or defaults.get("inventory", "10")),
-            str(getattr(sku, "group_price", None) or defaults.get("group_price", "199.9")),
-            str(getattr(sku, "single_price", None) or defaults.get("single_price", "299.9")),
-            sku.combo_folder,
-        ]
+        {
+            "style": getattr(sku, "style_name", "") or "",
+            "size": getattr(sku, "model_name", "") or "",
+            "vals": [
+                str(getattr(sku, "inventory", None) or defaults.get("inventory", "10")),
+                str(getattr(sku, "group_price", None) or defaults.get("group_price", "199.9")),
+                str(getattr(sku, "single_price", None) or defaults.get("single_price", "299.9")),
+                sku.combo_folder,
+            ],
+        }
         for sku in skus
     ]
+
+
+def _fill_skus_by_style_size(page, skus: list, defaults: dict) -> tuple[int, list[dict]]:
+    """按「款式+尺寸」定位行并填写，返回 (成功数, 失败列表)。"""
+    payload = json.dumps(_sku_fill_items(skus, defaults), ensure_ascii=False)
+    try:
+        raw = page.run_js(_FILL_SKUS_BY_STYLE_SIZE_JS, payload) or "{}"
+        result = json.loads(raw) if isinstance(raw, str) else raw
+        if not isinstance(result, dict):
+            return 0, []
+        return int(result.get("ok") or 0), list(result.get("failed") or [])
+    except Exception:
+        return 0, []
 
 
 def _diagnose_fill_state(page, account_id: str):
@@ -981,34 +1042,14 @@ def _diagnose_fill_state(page, account_id: str):
 
 def _fill_all_rows_batch(page, skus: list, defaults: dict) -> int:
     """一次 JS 填完所有行的库存/价格/编码（参数用 JSON 传递）。"""
-    payload = json.dumps(_sku_row_values(skus, defaults), ensure_ascii=False)
-    try:
-        return page.run_js(_FILL_ROWS_JS, payload) or 0
-    except Exception:
-        return 0
+    filled, _failed = _fill_skus_by_style_size(page, skus, defaults)
+    return filled
 
 
 def _fill_rows_mapped_batch(page, skus: list, row_indices: list[int], defaults: dict) -> int:
-    """按映射行号一次 JS 填完（款式×尺寸顺序与表格不一致时用）。"""
-    items = []
-    for i, sku in enumerate(skus):
-        row_idx = row_indices[i] if i < len(row_indices) else i
-        items.append(
-            {
-                "idx": row_idx,
-                "vals": [
-                    str(getattr(sku, "inventory", None) or defaults.get("inventory", "10")),
-                    str(getattr(sku, "group_price", None) or defaults.get("group_price", "199.9")),
-                    str(getattr(sku, "single_price", None) or defaults.get("single_price", "299.9")),
-                    sku.combo_folder,
-                ],
-            }
-        )
-    payload = json.dumps(items, ensure_ascii=False)
-    try:
-        return page.run_js(_FILL_ROWS_MAPPED_JS, payload) or 0
-    except Exception:
-        return 0
+    """按「款式+尺寸」一次 JS 填完（row_indices 仅用于预览图，填表以 style+size 为准）。"""
+    filled, _failed = _fill_skus_by_style_size(page, skus, defaults)
+    return filled
 
 
 def _fill_row_by_index(page, index: int, row_data: dict) -> bool:
@@ -1023,6 +1064,23 @@ def _fill_row_by_index(page, index: int, row_data: dict) -> bool:
     )
     try:
         count = page.run_js(_FILL_ROW_AT_INDEX_JS, str(index), vals) or 0
+        return count >= 4
+    except Exception:
+        return False
+
+
+def _fill_row_by_style_size(page, style_name: str, size_name: str, row_data: dict) -> bool:
+    vals = json.dumps(
+        [
+            str(row_data.get("inventory", "")),
+            str(row_data.get("group_price", "")),
+            str(row_data.get("single_price", "")),
+            str(row_data.get("sku_code", "")),
+        ],
+        ensure_ascii=False,
+    )
+    try:
+        count = page.run_js(_FILL_ONE_BY_STYLE_SIZE_JS, style_name, size_name, vals) or 0
         return count >= 4
     except Exception:
         return False
@@ -1102,16 +1160,28 @@ def fill_multi_spec_rows(
     _log_step(account_id, "匹配价格表行索引", t)
 
     t = _now()
-    if row_indices == list(range(len(skus))):
-        filled = _fill_all_rows_batch(page, skus, defaults)
-    else:
-        filled = _fill_rows_mapped_batch(page, skus, row_indices, defaults)
+    filled, failed = _fill_skus_by_style_size(page, skus, defaults)
+    if failed:
+        for item in failed:
+            print(
+                f"[{account_id}] 批量填表未命中：{item.get('style')} / {item.get('size')} "
+                f"({item.get('reason')})",
+                flush=True,
+            )
     _log_step(account_id, f"批量填写库存/价格/编码 {filled}/{len(skus)} 行", t)
 
-    if filled < len(skus):
+    if failed or filled < len(skus):
         _diagnose_fill_state(page, account_id)
-        for i, sku in enumerate(skus):
+        failed_keys = {(f.get("style"), f.get("size")) for f in failed}
+        retry_skus = (
+            [sku for sku in skus if (sku.style_name, sku.model_name) in failed_keys]
+            if failed_keys
+            else list(skus)
+        )
+        refilled = filled
+        for sku in retry_skus:
             label = f"{sku.style_name} / {sku.model_name}"
+            sku_idx = next((j for j, s in enumerate(skus) if s is sku), 0)
             row_data = {
                 "inventory": getattr(sku, "inventory", None) or defaults.get("inventory", "10"),
                 "group_price": getattr(sku, "group_price", None) or defaults.get("group_price", "199.9"),
@@ -1120,14 +1190,19 @@ def fill_multi_spec_rows(
             }
             try:
                 t = _now()
-                ok = _fill_row_by_index(page, row_indices[i], row_data)
+                ok = _fill_row_by_style_size(page, sku.style_name, sku.model_name, row_data)
+                if not ok:
+                    row_idx = row_indices[sku_idx] if sku_idx < len(row_indices) else sku_idx
+                    ok = _fill_row_by_index(page, row_idx, row_data)
                 if ok:
-                    filled += 1
-                    _log_step(account_id, f"JS补填第 {i + 1} 行 {label}", t)
+                    if (sku.style_name, sku.model_name) in failed_keys:
+                        refilled += 1
+                    _log_step(account_id, f"补填 {label}", t)
                 else:
-                    print(f"[{account_id}] JS补填失败：{label}", flush=True)
+                    print(f"[{account_id}] 补填失败：{label}", flush=True)
             except Exception as exc:
-                print(f"[{account_id}] JS补填异常 [{label}]：{_safe_exc(exc)}", flush=True)
+                print(f"[{account_id}] 补填异常 [{label}]：{_safe_exc(exc)}", flush=True)
+        filled = min(refilled, len(skus))
         _log_step(account_id, f"补填后合计 {filled}/{len(skus)} 行", t)
 
     print(f"[{account_id}] 文字字段填完，开始上传预览图...", flush=True)

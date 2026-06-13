@@ -30,6 +30,39 @@ def catalog_style_label(entry) -> str:
     return spec[:6] if spec else entry.code
 
 
+def reconcile_style_color_with_catalog(ai_color: str, entry) -> tuple[str, str]:
+    """用商品表颜色规格纠偏 AI 识色（尤其浅灰/黑色被误判为白色）。"""
+    if not entry:
+        return (ai_color or "").strip(), "ai"
+    catalog_color = catalog_style_label(entry)
+    ai_norm = (ai_color or "").strip()
+    if not catalog_color:
+        return ai_norm or entry.code, "ai"
+    if not ai_norm:
+        return catalog_color, "catalog"
+    if ai_norm in ("白色", "米白色") and catalog_color not in ("白色", "米白色"):
+        if _fallback_color_from_catalog(entry):
+            return catalog_color, "ai+catalog"
+    return ai_norm, "ai"
+
+
+def persist_style_color_cache(
+    unit: ListingUnit,
+    colors: dict[str, str],
+    *,
+    source: str = "final",
+) -> None:
+    for style_code, color in colors.items():
+        image = pick_style_reference_image(unit, style_code)
+        image_str = str(image.resolve()) if image else None
+        upsert_cached_style_color(
+            style_code,
+            color,
+            source=source,
+            image_path=image_str,
+        )
+
+
 def disambiguate_style_colors(
     colors: dict[str, str],
     catalog: dict,
@@ -176,20 +209,34 @@ def resolve_style_colors(unit: ListingUnit, account_id: str = "") -> dict[str, s
         image_str = str(image.resolve()) if image else None
         cached = get_cached_style_color(style_code, image_str)
         if cached:
+            reconciled, src = reconcile_style_color_with_catalog(cached, entry)
+            if reconciled != cached:
+                upsert_cached_style_color(
+                    style_code,
+                    reconciled,
+                    source=src,
+                    image_path=image_str,
+                )
             print(
-                f"{prefix}[{unit.listing_label}] 缓存款式颜色：{style_code} → {cached}",
+                f"{prefix}[{unit.listing_label}] 缓存款式颜色：{style_code} → {reconciled}",
                 flush=True,
             )
-            colors[style_code] = cached
+            colors[style_code] = reconciled
             continue
         if image:
             print(f"{prefix}[{unit.listing_label}] AI识别款式颜色：{style_code} ← {image.name}", flush=True)
-            color = detect_product_color(image, catalog_entry=entry)
+            raw_color = detect_product_color(image, catalog_entry=entry)
+            color, src = reconcile_style_color_with_catalog(raw_color, entry)
+            if color != raw_color:
+                print(
+                    f"{prefix}[{unit.listing_label}] 商品表纠偏：{style_code} {raw_color} → {color}",
+                    flush=True,
+                )
             colors[style_code] = color
             upsert_cached_style_color(
                 style_code,
                 color,
-                source="ai",
+                source=src,
                 image_path=image_str,
             )
         elif entry:
@@ -232,6 +279,7 @@ def enrich_listing_unit_specs(unit: ListingUnit, account_id: str = "") -> None:
     sub_category_cache = build_sub_category_cache(unit, account_id=account_id)
     style_colors = resolve_style_colors(unit, account_id=account_id)
     style_colors = disambiguate_style_colors(style_colors, catalog)
+    persist_style_color_cache(unit, style_colors, source="final")
 
     seen_sizes: list[str] = []
     for sku in unit.skus:

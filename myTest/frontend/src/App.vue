@@ -1,7 +1,8 @@
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import {
+  ArrowDown,
   DataBoard,
   Shop,
   FolderOpened,
@@ -14,30 +15,124 @@ import {
   Warning,
   Brush,
 } from '@element-plus/icons-vue'
+import type { Component } from 'vue'
+
+interface NavItem {
+  path: string
+  label: string
+  icon: Component
+}
+
+interface NavGroup {
+  key: string
+  label: string
+  items: NavItem[]
+}
 
 const route = useRoute()
 const router = useRouter()
 
-const menus = [
-  { path: '/', label: '工作台', desc: '日常入口', icon: DataBoard },
-  { path: '/tasks', label: '上架 / 下架', desc: '执行操作', icon: Goods },
-  { path: '/campaign', label: '活动', desc: '营销工具', icon: Discount },
-  { path: '/catalog', label: '素材检查', desc: '上架前检查', icon: FolderOpened },
-  { path: '/accounts', label: '店铺设置', desc: '账号管理', icon: Shop },
-  { path: '/login-health', label: '登录体检', desc: '状态检查', icon: Key },
-  { path: '/published-products', label: '已发布商品', desc: '商品ID映射', icon: DocumentCopy },
-  { path: '/style-colors', label: '款式颜色', desc: '识色缓存', icon: Brush },
-  { path: '/failures', label: '失败项工作台', desc: '人工重跑', icon: Warning },
-  { path: '/settings', label: '系统设置', desc: '运行参数', icon: Setting },
-  { path: '/runs', label: '操作记录', desc: '历史结果', icon: Document },
+const topItem: NavItem = { path: '/', label: '工作台', icon: DataBoard }
+const bottomItem: NavItem = { path: '/settings', label: '系统设置', icon: Setting }
+
+const navGroups: NavGroup[] = [
+  {
+    key: 'ops',
+    label: '日常操作',
+    items: [
+      { path: '/tasks', label: '上架 / 下架', icon: Goods },
+      { path: '/campaign', label: '活动', icon: Discount },
+      { path: '/catalog', label: '素材检查', icon: FolderOpened },
+    ],
+  },
+  {
+    key: 'store',
+    label: '店铺管理',
+    items: [
+      { path: '/accounts', label: '店铺设置', icon: Shop },
+      { path: '/login-health', label: '登录体检', icon: Key },
+    ],
+  },
+  {
+    key: 'data',
+    label: '商品数据',
+    items: [
+      { path: '/published-products', label: '已发布商品', icon: DocumentCopy },
+      { path: '/style-colors', label: '款式颜色', icon: Brush },
+    ],
+  },
+  {
+    key: 'monitor',
+    label: '监控排错',
+    items: [
+      { path: '/failures', label: '失败项工作台', icon: Warning },
+      { path: '/runs', label: '操作记录', icon: Document },
+    ],
+  },
 ]
+
+const allItems = computed(() => [
+  topItem,
+  ...navGroups.flatMap((g) => g.items),
+  bottomItem,
+])
 
 const active = computed(() => {
   const p = route.path
   if (p === '/') return '/'
-  const item = menus.find((m) => m.path !== '/' && p.startsWith(m.path))
+  const item = allItems.value.find((m) => m.path !== '/' && p.startsWith(m.path))
   return item?.path ?? p
 })
+
+function groupHasActive(group: NavGroup) {
+  return group.items.some((item) => active.value === item.path)
+}
+
+function loadOpenGroups(): string[] {
+  try {
+    const raw = sessionStorage.getItem('sidebar-open-groups')
+    if (raw) {
+      const parsed = JSON.parse(raw)
+      if (Array.isArray(parsed)) return parsed
+    }
+  } catch {
+    /* ignore */
+  }
+  return navGroups.map((g) => g.key)
+}
+
+const openGroups = ref<string[]>(loadOpenGroups())
+
+function persistOpenGroups() {
+  sessionStorage.setItem('sidebar-open-groups', JSON.stringify(openGroups.value))
+}
+
+function isGroupOpen(key: string) {
+  return openGroups.value.includes(key)
+}
+
+function toggleGroup(key: string) {
+  if (isGroupOpen(key)) {
+    openGroups.value = openGroups.value.filter((k) => k !== key)
+  } else {
+    openGroups.value = [...openGroups.value, key]
+  }
+  persistOpenGroups()
+}
+
+function ensureActiveGroupOpen() {
+  const group = navGroups.find((g) => groupHasActive(g))
+  if (group && !isGroupOpen(group.key)) {
+    openGroups.value = [...openGroups.value, group.key]
+    persistOpenGroups()
+  }
+}
+
+watch(
+  () => route.path,
+  () => ensureActiveGroupOpen(),
+  { immediate: true },
+)
 
 function go(path: string) {
   router.push(path)
@@ -46,10 +141,10 @@ function go(path: string) {
 
 <template>
   <el-container class="layout">
-    <el-aside width="240px" class="sidebar">
+    <el-aside width="220px" class="sidebar">
       <div class="brand">
         <div class="brand-icon">拼</div>
-        <div>
+        <div class="brand-text">
           <div class="brand-title">拼多多上架助手</div>
           <div class="brand-sub">多规格商品 · 自动上架</div>
         </div>
@@ -57,23 +152,50 @@ function go(path: string) {
 
       <nav class="nav">
         <button
-          v-for="item in menus"
-          :key="item.path"
-          class="nav-item"
-          :class="{ active: active === item.path }"
-          @click="go(item.path)"
+          class="nav-item top-item"
+          :class="{ active: active === topItem.path }"
+          @click="go(topItem.path)"
         >
-          <el-icon class="nav-icon"><component :is="item.icon" /></el-icon>
-          <div class="nav-text">
-            <span class="nav-label">{{ item.label }}</span>
-            <span class="nav-desc">{{ item.desc }}</span>
-          </div>
+          <el-icon class="nav-icon"><component :is="topItem.icon" /></el-icon>
+          <span class="nav-label">{{ topItem.label }}</span>
         </button>
+
+        <section v-for="group in navGroups" :key="group.key" class="nav-group">
+          <button class="group-head" @click="toggleGroup(group.key)">
+            <span class="group-title">{{ group.label }}</span>
+            <el-icon class="group-arrow" :class="{ open: isGroupOpen(group.key) }">
+              <ArrowDown />
+            </el-icon>
+          </button>
+
+          <div v-show="isGroupOpen(group.key)" class="group-items">
+            <button
+              v-for="item in group.items"
+              :key="item.path"
+              class="nav-item"
+              :class="{ active: active === item.path }"
+              @click="go(item.path)"
+            >
+              <el-icon class="nav-icon"><component :is="item.icon" /></el-icon>
+              <span class="nav-label">{{ item.label }}</span>
+            </button>
+          </div>
+        </section>
       </nav>
 
-      <div class="sidebar-foot">
-        <el-icon><Setting /></el-icon>
-        <span>有问题请联系技术同事</span>
+      <div class="sidebar-bottom">
+        <button
+          class="nav-item bottom-item"
+          :class="{ active: active === bottomItem.path }"
+          @click="go(bottomItem.path)"
+        >
+          <el-icon class="nav-icon"><component :is="bottomItem.icon" /></el-icon>
+          <span class="nav-label">{{ bottomItem.label }}</span>
+        </button>
+        <div class="sidebar-foot">
+          <el-icon><Setting /></el-icon>
+          <span>有问题请联系技术同事</span>
+        </div>
       </div>
     </el-aside>
 
@@ -95,62 +217,131 @@ function go(path: string) {
   color: var(--sidebar-text);
   display: flex;
   flex-direction: column;
-  padding: 20px 12px;
+  padding: 16px 10px;
+  overflow: hidden;
 }
 
 .brand {
   display: flex;
-  gap: 12px;
+  gap: 10px;
   align-items: center;
-  padding: 8px 10px 28px;
+  padding: 4px 8px 16px;
+  flex-shrink: 0;
 }
 
 .brand-icon {
-  width: 42px;
-  height: 42px;
-  border-radius: 12px;
+  width: 38px;
+  height: 38px;
+  border-radius: 10px;
   background: linear-gradient(135deg, #ff6b35, #ff8f5a);
   color: #fff;
   font-weight: 800;
   display: flex;
   align-items: center;
   justify-content: center;
-  font-size: 18px;
+  font-size: 17px;
   box-shadow: 0 4px 12px rgba(255, 107, 53, 0.35);
+  flex-shrink: 0;
+}
+
+.brand-text {
+  min-width: 0;
 }
 
 .brand-title {
   color: #f8fafc;
   font-weight: 700;
-  font-size: 15px;
+  font-size: 14px;
+  line-height: 1.3;
 }
 
 .brand-sub {
-  font-size: 11px;
+  font-size: 10px;
   color: #64748b;
-  margin-top: 3px;
+  margin-top: 2px;
 }
 
 .nav {
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: 2px;
   flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding-right: 2px;
+}
+
+.nav::-webkit-scrollbar {
+  width: 4px;
+}
+
+.nav::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.12);
+  border-radius: 4px;
+}
+
+.nav-group {
+  margin-top: 4px;
+}
+
+.group-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  border: none;
+  background: transparent;
+  color: #64748b;
+  padding: 6px 10px;
+  border-radius: 6px;
+  cursor: pointer;
+  text-align: left;
+  transition: color 0.15s;
+}
+
+.group-head:hover {
+  color: #94a3b8;
+}
+
+.group-title {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+}
+
+.group-arrow {
+  font-size: 12px;
+  transition: transform 0.2s;
+}
+
+.group-arrow.open {
+  transform: rotate(180deg);
+}
+
+.group-items {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding-top: 2px;
 }
 
 .nav-item {
   display: flex;
   align-items: center;
-  gap: 12px;
+  gap: 10px;
   width: 100%;
   border: none;
   background: transparent;
   color: var(--sidebar-text);
-  padding: 11px 12px;
-  border-radius: 10px;
+  padding: 8px 10px 8px 12px;
+  border-radius: 8px;
   cursor: pointer;
   text-align: left;
   transition: all 0.15s;
+}
+
+.group-items .nav-item {
+  padding-left: 18px;
 }
 
 .nav-item:hover {
@@ -163,35 +354,40 @@ function go(path: string) {
   color: var(--sidebar-active);
 }
 
+.top-item {
+  margin-bottom: 4px;
+}
+
 .nav-icon {
-  font-size: 18px;
+  font-size: 16px;
   flex-shrink: 0;
 }
 
-.nav-text {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-}
-
 .nav-label {
-  font-size: 14px;
-  font-weight: 600;
+  font-size: 13px;
+  font-weight: 500;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
-.nav-desc {
-  font-size: 11px;
-  opacity: 0.65;
+.sidebar-bottom {
+  flex-shrink: 0;
+  padding-top: 8px;
+  border-top: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.bottom-item {
+  margin-bottom: 4px;
 }
 
 .sidebar-foot {
   display: flex;
   align-items: center;
   gap: 6px;
-  font-size: 11px;
+  font-size: 10px;
   color: #64748b;
-  padding: 14px 10px 0;
-  border-top: 1px solid rgba(255, 255, 255, 0.06);
+  padding: 6px 10px 0;
 }
 
 .main {
@@ -207,24 +403,26 @@ function go(path: string) {
 
 @media (max-width: 768px) {
   .sidebar {
-    width: 78px !important;
-    padding: 16px 10px;
+    width: 64px !important;
+    padding: 12px 8px;
   }
 
   .brand {
     justify-content: center;
-    padding: 4px 0 20px;
+    padding: 4px 0 12px;
   }
 
-  .brand > div:not(.brand-icon),
-  .nav-text,
+  .brand-text,
+  .group-head,
+  .nav-label,
   .sidebar-foot span {
     display: none;
   }
 
+  .group-items .nav-item,
   .nav-item {
     justify-content: center;
-    padding: 12px;
+    padding: 10px;
   }
 
   .main {

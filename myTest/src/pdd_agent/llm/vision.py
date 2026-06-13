@@ -89,8 +89,10 @@ def detect_product_color(image_path: Path, *, catalog_entry: PddProductEntry | N
                 {
                     "type": "text",
                     "text": (
-                        "这是电商商品图。请判断商品主体最主要的颜色，"
-                        "只回答一个中文颜色词（如：白色、黑色、蓝色、紫色、粉色）。不要解释。"
+                        "这是电商商品规格图。请判断商品主体（笔袋/公仔/拖鞋等本体）的主色，"
+                        "忽略白色背景、小面积印花和挂件配件的颜色。"
+                        "浅灰色应回答「灰色」，不要回答白色。"
+                        "只回答一个中文颜色词（如：白色、黑色、灰色、绿色、蓝色）。不要解释。"
                     ),
                 },
                 {"type": "image_url", "image_url": {"url": f"data:{media};base64,{data}"}},
