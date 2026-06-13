@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import os
 import uuid
 from datetime import datetime, timedelta
 
@@ -188,11 +189,16 @@ def requeue_interrupted_tasks() -> int:
             select(TaskQueueORM).where(TaskQueueORM.status == "running")
         ).all()
         now = datetime.now()
+        account_ids = {row.account_id for row in rows if row.account_id}
         for row in rows:
             row.status = "queued"
             row.error = "requeued after worker restart"
             row.started_at = None
             row.scheduled_at = now
+        for account_id in account_ids:
+            lock = session.get(AccountLockORM, account_id)
+            if lock:
+                session.delete(lock)
         return len(rows)
 
 
@@ -653,6 +659,50 @@ def search_published_products(
         return rows, total
 
 
+def _lock_owner_alive(owner: str) -> bool:
+    """锁 owner 格式为 {pid}_{uuid}；进程不存在则视为 stale。"""
+    token = str(owner or "").split("_", 1)[0]
+    try:
+        pid = int(token)
+    except ValueError:
+        return False
+    if pid <= 0:
+        return False
+    try:
+        os.kill(pid, 0)
+        return True
+    except OSError:
+        return False
+
+
+def release_stale_account_locks(*, max_age_seconds: int = 7200) -> int:
+    """清理过期锁或持有进程已退出的锁。"""
+    if not is_database_available():
+        return 0
+    now = datetime.now()
+    removed = 0
+    with session_scope() as session:
+        rows = list(session.scalars(select(AccountLockORM)).all())
+        for row in rows:
+            expired = row.expires_at <= now
+            owner_dead = not _lock_owner_alive(row.owner)
+            if expired or owner_dead:
+                session.delete(row)
+                removed += 1
+    return removed
+
+
+def force_release_account_lock(account_id: str) -> bool:
+    if not is_database_available():
+        return False
+    with session_scope() as session:
+        row = session.get(AccountLockORM, account_id)
+        if not row:
+            return False
+        session.delete(row)
+        return True
+
+
 def acquire_account_lock(
     *,
     account_id: str,
@@ -667,8 +717,11 @@ def acquire_account_lock(
     try:
         with session_scope() as session:
             row = session.get(AccountLockORM, account_id)
-            if row and row.expires_at > now:
-                return row.owner == owner
+            if row and row.expires_at > now and row.owner != owner:
+                if _lock_owner_alive(row.owner):
+                    return False
+                session.delete(row)
+                row = None
             if row:
                 row.owner = owner
                 row.reason = reason

@@ -323,9 +323,9 @@ return isPreviewUploaded(parseInt(arguments[0], 10));
 )
 
 _MAX_PREVIEW_RETRIES = 3
-_PREVIEW_VERIFY_TIMEOUT = 30.0
+_PREVIEW_VERIFY_TIMEOUT = 12.0
 _PREVIEW_VERIFY_INTERVAL = 0.5
-_PREVIEW_POST_INPUT_WAIT = 2.0
+_PREVIEW_POST_INPUT_WAIT = 0.8
 
 _PREVIEW_CHECK_ONLY_JS = """
 const idx = parseInt(arguments[0], 10);
@@ -846,6 +846,18 @@ return ok;
 """
 )
 
+_FILL_ROWS_MAPPED_JS = (
+    _JS_FILL_HELPERS
+    + """
+const items = JSON.parse(arguments[0]);
+let ok = 0;
+for (const item of items) {
+    if (fillRow(item.idx, item.vals) >= 4) ok++;
+}
+return ok;
+"""
+)
+
 _FILL_ROW_AT_INDEX_JS = (
     _JS_FILL_HELPERS
     + """
@@ -907,6 +919,29 @@ def _fill_all_rows_batch(page, skus: list, defaults: dict) -> int:
         return 0
 
 
+def _fill_rows_mapped_batch(page, skus: list, row_indices: list[int], defaults: dict) -> int:
+    """按映射行号一次 JS 填完（款式×尺寸顺序与表格不一致时用）。"""
+    items = []
+    for i, sku in enumerate(skus):
+        row_idx = row_indices[i] if i < len(row_indices) else i
+        items.append(
+            {
+                "idx": row_idx,
+                "vals": [
+                    str(getattr(sku, "inventory", None) or defaults.get("inventory", "10")),
+                    str(getattr(sku, "group_price", None) or defaults.get("group_price", "199.9")),
+                    str(getattr(sku, "single_price", None) or defaults.get("single_price", "299.9")),
+                    sku.combo_folder,
+                ],
+            }
+        )
+    payload = json.dumps(items, ensure_ascii=False)
+    try:
+        return page.run_js(_FILL_ROWS_MAPPED_JS, payload) or 0
+    except Exception:
+        return 0
+
+
 def _fill_row_by_index(page, index: int, row_data: dict) -> bool:
     vals = json.dumps(
         [
@@ -924,25 +959,38 @@ def _fill_row_by_index(page, index: int, row_data: dict) -> bool:
         return False
 
 
+def _compute_row_indices(skus: list, marked_rows: list) -> list[int]:
+    """按款式+尺寸匹配价格表行索引（只扫一次 DOM）。"""
+    row_map = _sku_row_index_from_rows(marked_rows)
+    indices: list[int] = []
+    for i, sku in enumerate(skus):
+        style_name = getattr(sku, "style_name", "") or ""
+        size_name = getattr(sku, "model_name", "") or ""
+        row = row_map.get((style_name, size_name)) if style_name and size_name else None
+        if row is not None:
+            marked = row.attr(_SKU_ROW_ATTR)
+            if marked is not None and str(marked).isdigit():
+                indices.append(int(marked))
+                continue
+            for row_idx, candidate in enumerate(marked_rows):
+                if candidate == row:
+                    indices.append(row_idx)
+                    break
+            else:
+                indices.append(i)
+        else:
+            indices.append(i)
+    return indices
+
+
 def _resolve_sku_row_index(page, skus: list, index: int, rows: list | None = None) -> int:
     """按款式+尺寸匹配价格表行；匹配失败时回退到顺序索引。"""
     if index >= len(skus):
         return index
-    sku = skus[index]
-    style_name = getattr(sku, "style_name", "") or ""
-    size_name = getattr(sku, "model_name", "") or ""
-    if style_name and size_name:
-        row_map = _sku_row_index_from_rows(rows or _sku_price_table_rows(page, scroll=False))
-        row = row_map.get((style_name, size_name))
-        if row is not None:
-            marked = row.attr(_SKU_ROW_ATTR)
-            if marked is not None and str(marked).isdigit():
-                return int(marked)
-            active_rows = rows or _sku_price_table_rows(page, scroll=False)
-            for row_idx, candidate in enumerate(active_rows):
-                if candidate == row:
-                    return row_idx
-    return index
+    if rows is None:
+        rows = _sku_price_table_rows(page, scroll=False)
+    indices = _compute_row_indices(skus, rows)
+    return indices[index]
 
 
 def fill_multi_spec_rows(
@@ -966,21 +1014,14 @@ def fill_multi_spec_rows(
     marked_rows = _sku_price_table_rows(page, scroll=False)
     _log_step(account_id, "重新标记价格表行", t)
 
+    row_indices = _compute_row_indices(skus, marked_rows)
+
     t = _now()
-    filled = 0
-    row_indices: list[int] = []
-    for i, sku in enumerate(skus):
-        row_idx = _resolve_sku_row_index(page, skus, i, marked_rows)
-        row_indices.append(row_idx)
-        row_data = {
-            "inventory": getattr(sku, "inventory", None) or defaults.get("inventory", "10"),
-            "group_price": getattr(sku, "group_price", None) or defaults.get("group_price", "199.9"),
-            "single_price": getattr(sku, "single_price", None) or defaults.get("single_price", "299.9"),
-            "sku_code": sku.combo_folder,
-        }
-        if _fill_row_by_index(page, row_idx, row_data):
-            filled += 1
-    _log_step(account_id, f"按款式+尺寸填写库存/价格/编码 {filled}/{len(skus)} 行", t)
+    if row_indices == list(range(len(skus))):
+        filled = _fill_all_rows_batch(page, skus, defaults)
+    else:
+        filled = _fill_rows_mapped_batch(page, skus, row_indices, defaults)
+    _log_step(account_id, f"批量填写库存/价格/编码 {filled}/{len(skus)} 行", t)
 
     if filled < len(skus):
         _diagnose_fill_state(page, account_id)
@@ -996,11 +1037,13 @@ def fill_multi_spec_rows(
                 t = _now()
                 ok = _fill_row_by_index(page, row_indices[i], row_data)
                 if ok:
+                    filled += 1
                     _log_step(account_id, f"JS补填第 {i + 1} 行 {label}", t)
                 else:
                     print(f"[{account_id}] JS补填失败：{label}", flush=True)
             except Exception as exc:
                 print(f"[{account_id}] JS补填异常 [{label}]：{_safe_exc(exc)}", flush=True)
+        _log_step(account_id, f"补填后合计 {filled}/{len(skus)} 行", t)
 
     print(f"[{account_id}] 文字字段填完，开始上传预览图...", flush=True)
     t = _now()

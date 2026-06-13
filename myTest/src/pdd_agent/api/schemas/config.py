@@ -81,7 +81,7 @@ class BrowserConfigIn(BaseModel):
 
 
 class MultiSpecConfigIn(BaseModel):
-    excel: str = "data/assets/sku+名称.xlsx"
+    excel: str = "data/assets/拼多多所有商品.xls"
     defaults: dict[str, str] = Field(default_factory=dict)
 
 

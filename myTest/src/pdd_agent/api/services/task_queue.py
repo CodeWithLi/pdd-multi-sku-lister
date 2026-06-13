@@ -13,6 +13,7 @@ from pdd_agent.db.repositories import (
     count_running_queue_tasks,
     enqueue_task,
     finish_queue_task,
+    release_stale_account_locks,
     requeue_interrupted_tasks,
 )
 from pdd_agent.db.session import is_database_available
@@ -38,6 +39,9 @@ class TaskQueueWorker:
         recovered = requeue_interrupted_tasks()
         if recovered:
             logger.warning("task queue recovered %s interrupted tasks", recovered)
+        stale_locks = release_stale_account_locks()
+        if stale_locks:
+            logger.warning("task queue cleared %s stale account locks", stale_locks)
         self._main_task = asyncio.create_task(self._loop())
         logger.info("task queue worker started")
 

@@ -49,9 +49,9 @@ class PathsConfig(BaseModel):
 
 
 class MultiSpecConfig(BaseModel):
-    """多规格上架：Excel 路径与默认价格/库存。"""
+    """多规格上架：商品表路径与默认价格/库存。"""
 
-    excel: str = "data/assets/sku+名称.xlsx"
+    excel: str = "data/assets/拼多多所有商品.xls"
     defaults: dict[str, str] = Field(default_factory=dict)
 
     @property

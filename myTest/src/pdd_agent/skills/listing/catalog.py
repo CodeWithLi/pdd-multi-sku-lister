@@ -24,26 +24,24 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from langchain_core.tools import StructuredTool
-from openpyxl import load_workbook
 
 from pdd_agent.core.config import YamlSettings
 from pdd_agent.domain.models import ListingUnit, SkuCombo
 from pdd_agent.skills.base import Skill
-from pdd_agent.skills.listing.pdd_product_catalog import get_catalog_entry, get_pdd_product_catalog
+from pdd_agent.skills.listing.pdd_product_catalog import (
+    PddProductEntry,
+    default_catalog_path,
+    get_pdd_product_catalog,
+    load_pdd_product_catalog,
+    lookup_catalog_spec,
+    resolve_combo_pricing,
+)
 from pdd_agent.skills.listing.spec_labels import enrich_listing_unit_specs
 
 RESERVED_DIRS = frozenset({"主图", "详情页"})
 IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".webp"}
 PREVIEW_NAMES = ("预览图.png", "预览图.jpg", "预览图.jpeg", "预览图.webp")
 IMAGE_SET_PATTERN = re.compile(r"^第.+套(图)?$")
-
-
-@dataclass(frozen=True)
-class SkuExcelInfo:
-    code: str
-    name: str
-    inventory: int
-    price: float
 
 
 @dataclass(frozen=True)
@@ -90,109 +88,19 @@ def is_image_set_dir(name: str) -> bool:
     return bool(IMAGE_SET_PATTERN.match(name.strip()))
 
 
-def _parse_excel_int(value, default: int = 0) -> int:
-    if value is None or value == "":
-        return default
-    if isinstance(value, bool):
-        return int(value)
-    if isinstance(value, int):
-        return value
-    if isinstance(value, float):
-        return int(value)
-    try:
-        return int(float(str(value).strip()))
-    except (TypeError, ValueError):
-        return default
-
-
-def _parse_excel_float(value, default: float = 0.0) -> float:
-    if value is None or value == "":
-        return default
-    if isinstance(value, (int, float)) and not isinstance(value, bool):
-        return float(value)
-    try:
-        return float(str(value).strip())
-    except (TypeError, ValueError):
-        return default
-
-
-def _format_price(value: float) -> str:
-    rounded = round(value, 2)
-    if rounded == int(rounded):
-        return str(int(rounded))
-    return f"{rounded:.2f}".rstrip("0").rstrip(".")
-
-
-def load_sku_excel_map(excel_path: Path) -> dict[str, SkuExcelInfo]:
-    """读取 sku+名称.xlsx -> {SKU编码: SkuExcelInfo}。"""
-    if not excel_path.is_file():
+def _load_product_catalog(settings: YamlSettings | None = None) -> dict[str, PddProductEntry]:
+    """上架唯一商品数据源：拼多多所有商品.xls（可在系统设置中改路径）。"""
+    if settings is not None:
+        path = settings.multi_spec.excel_path
+        if path.is_file():
+            catalog = load_pdd_product_catalog(path)
+            if catalog:
+                return catalog
+        default_path = default_catalog_path()
+        if default_path.is_file() and default_path != path:
+            return load_pdd_product_catalog(default_path)
         return {}
-    wb = load_workbook(excel_path, read_only=True, data_only=True)
-    ws = wb.active
-    mapping: dict[str, SkuExcelInfo] = {}
-    for row in ws.iter_rows(min_row=2, values_only=True):
-        if not row or not row[0]:
-            continue
-        code = str(row[0]).strip()
-        name = str(row[1]).strip() if len(row) > 1 and row[1] else ""
-        if not name:
-            continue
-        mapping[code] = SkuExcelInfo(
-            code=code,
-            name=name,
-            inventory=_parse_excel_int(row[2] if len(row) > 2 else None, 0),
-            price=_parse_excel_float(row[3] if len(row) > 3 else None, 0.0),
-        )
-    wb.close()
-    return mapping
-
-
-def lookup_sku_name(code: str, excel_map: dict[str, SkuExcelInfo]) -> str | None:
-    info = excel_map.get((code or "").strip())
-    return info.name if info else None
-
-
-def _load_excel_map_with_fallback(settings: YamlSettings, assets_root: Path) -> dict[str, SkuExcelInfo]:
-    excel_map = load_sku_excel_map(settings.multi_spec.excel_path)
-    if excel_map:
-        return excel_map
-
-    candidates = [
-        assets_root / "sku+名称.xlsx",
-        assets_root.parent / "sku+名称.xlsx",
-        *sorted(assets_root.parent.glob("*/sku+*.xlsx")),
-    ]
-    seen: set[Path] = set()
-    for candidate in candidates:
-        candidate = candidate.resolve()
-        if candidate in seen or candidate.name.startswith("~$"):
-            continue
-        seen.add(candidate)
-        excel_map = load_sku_excel_map(candidate)
-        if excel_map:
-            return excel_map
-    return {}
-
-
-def resolve_combo_pricing(
-    style_code: str,
-    model_code: str,
-    excel_map: dict[str, SkuExcelInfo],
-    defaults: dict[str, str],
-) -> tuple[str, str, str]:
-    fallback_inv = defaults.get("inventory", "10")
-    fallback_gp = defaults.get("group_price", "199.9")
-    fallback_sp = defaults.get("single_price", "299.9")
-
-    style = excel_map.get(style_code.strip())
-    model = excel_map.get(model_code.strip())
-    if not style or not model:
-        return fallback_inv, fallback_gp, fallback_sp
-
-    inventory = min(style.inventory, model.inventory)
-    group_price = style.price + model.price
-    single_price = group_price + 100
-    return str(inventory), _format_price(group_price), _format_price(single_price)
+    return get_pdd_product_catalog()
 
 
 def _collect_images(folder: Path) -> list[Path]:
@@ -395,7 +303,7 @@ def _append_skus_from_previews(
     unit: ListingUnit,
     previews: list[Path],
     default_style_code: str,
-    excel_map: dict[str, SkuExcelInfo],
+    catalog: dict[str, PddProductEntry],
     defaults: dict[str, str],
     *,
     include_excel_missing_previews: bool,
@@ -420,51 +328,39 @@ def _append_skus_from_previews(
             continue
         seen_combo_keys.add(combo_key)
 
-        pdd_entry = get_catalog_entry(style_code)
-        use_pdd_catalog = (
-            bool(get_pdd_product_catalog())
-            and pdd_entry is not None
-            and bool(excel_map.get(style_code.strip()))
-            and (model_code == style_code or bool(excel_map.get(model_code.strip())))
-        )
+        style_key = style_code.strip().upper()
+        model_key = model_code.strip().upper()
+        is_combo = model_key != style_key
+        style_entry = catalog.get(style_key)
+        model_entry = catalog.get(model_key) if is_combo else style_entry
 
-        if use_pdd_catalog:
-            if not get_catalog_entry(style_code):
-                unit.warnings.append(f"{prefix} 商品表无母编码[{style_code}]，不上架 {preview.name}")
+        if not catalog:
+            if not include_excel_missing_previews:
+                unit.warnings.append(f"{prefix} 商品表无编码[{style_code}]，不上架 {preview.name}")
                 continue
-            if model_code != style_code and not get_catalog_entry(model_code):
+        elif not style_entry:
+            if not include_excel_missing_previews:
+                unit.warnings.append(f"{prefix} 商品表无款式编码[{style_code}]，不上架 {preview.name}")
+                continue
+            unit.warnings.append(f"{prefix} 商品表无款式编码[{style_code}]，仅后台展示不上架 {preview.name}")
+        elif is_combo and not model_entry:
+            if not include_excel_missing_previews:
                 unit.warnings.append(f"{prefix} 商品表无子编码[{model_code}]，不上架 {preview.name}")
                 continue
-            if not excel_map.get(style_code.strip()):
-                unit.warnings.append(f"{prefix} 定价表无款式编码[{style_code}]，不上架 {preview.name}")
-                continue
-            if model_code != style_code and not excel_map.get(model_code.strip()):
-                unit.warnings.append(f"{prefix} 定价表无子编码[{model_code}]，不上架 {preview.name}")
-                continue
+            unit.warnings.append(f"{prefix} 商品表无子编码[{model_code}]，仅后台展示不上架 {preview.name}")
+
+        style_name = lookup_catalog_spec(style_code, catalog) or style_code
+        model_name = lookup_catalog_spec(model_code, catalog) or model_code
+        if catalog and style_entry:
             style_name = style_code
-            model_name = model_code
-        else:
-            style_name = lookup_sku_name(style_code, excel_map)
-            model_name = lookup_sku_name(model_code, excel_map)
-            if style_name is None:
-                if not include_excel_missing_previews:
-                    unit.warnings.append(f"{prefix} Excel 无款式编码[{style_code}]，不上架 {preview.name}")
-                    continue
-                unit.warnings.append(f"{prefix} Excel 无款式编码[{style_code}]，仅后台展示不上架 {preview.name}")
-                style_name = style_code
-            if model_name is None:
-                if not include_excel_missing_previews:
-                    unit.warnings.append(f"{prefix} Excel 无型号编码[{model_code}]，不上架 {preview.name}")
-                    continue
-                unit.warnings.append(f"{prefix} Excel 无型号编码[{model_code}]，仅后台展示不上架 {preview.name}")
-                model_name = model_code
+            model_name = model_code if is_combo else style_code
 
         if style_code not in unit.style_codes:
             unit.style_codes.append(style_code)
         if model_code not in unit.model_codes:
             unit.model_codes.append(model_code)
 
-        inv, gp, sp = resolve_combo_pricing(style_code, model_code, excel_map, defaults)
+        inv, gp, sp = resolve_combo_pricing(style_code, model_code, catalog, defaults)
         unit.skus.append(
             SkuCombo(
                 style_code=style_code,
@@ -499,7 +395,7 @@ def parse_new_listing_unit(
     product_code: str,
     unit_root: Path,
     image_set: str,
-    excel_map: dict[str, SkuExcelInfo],
+    catalog: dict[str, PddProductEntry],
     defaults: dict[str, str],
     *,
     include_excel_missing_previews: bool = False,
@@ -544,7 +440,7 @@ def parse_new_listing_unit(
             unit,
             previews,
             sibling_dir.name,
-            excel_map,
+            catalog,
             defaults,
             include_excel_missing_previews=include_excel_missing_previews,
             seen_combo_keys=seen_combo_keys,
@@ -562,7 +458,7 @@ def parse_legacy_listing_unit(
     product_code: str,
     unit_root: Path,
     image_set: str,
-    excel_map: dict[str, SkuExcelInfo],
+    catalog: dict[str, PddProductEntry],
     defaults: dict[str, str],
 ) -> ListingUnit:
     label = f"{product_code}/{image_set}" if image_set else product_code
@@ -580,9 +476,9 @@ def parse_legacy_listing_unit(
             continue
 
         style_code = style_dir.name
-        style_name = lookup_sku_name(style_code, excel_map)
+        style_name = lookup_catalog_spec(style_code, catalog)
         if style_name is None:
-            unit.warnings.append(f"[{label}] Excel 无款式编码[{style_code}]，跳过")
+            unit.warnings.append(f"[{label}] 商品表无款式编码[{style_code}]，跳过")
             continue
 
         unit.style_codes.append(style_code)
@@ -598,9 +494,9 @@ def parse_legacy_listing_unit(
                 continue
 
             _, model_code = parsed
-            model_name = lookup_sku_name(model_code, excel_map)
+            model_name = lookup_catalog_spec(model_code, catalog)
             if model_name is None:
-                unit.warnings.append(f"[{label}] Excel 无型号编码[{model_code}]，跳过")
+                unit.warnings.append(f"[{label}] 商品表无型号编码[{model_code}]，跳过")
                 continue
 
             preview = _find_preview_image(combo_dir)
@@ -611,7 +507,7 @@ def parse_legacy_listing_unit(
             if model_code not in unit.model_codes:
                 unit.model_codes.append(model_code)
 
-            inv, gp, sp = resolve_combo_pricing(style_code, model_code, excel_map, defaults)
+            inv, gp, sp = resolve_combo_pricing(style_code, model_code, catalog, defaults)
             unit.skus.append(
                 SkuCombo(
                     style_code=style_code,
@@ -635,7 +531,7 @@ def parse_listing_unit(
     product_code: str,
     unit_root: Path,
     image_set: str,
-    excel_map: dict[str, SkuExcelInfo],
+    catalog: dict[str, PddProductEntry],
     defaults: dict[str, str],
     *,
     include_excel_missing_previews: bool = False,
@@ -645,11 +541,11 @@ def parse_listing_unit(
             product_code,
             unit_root,
             image_set,
-            excel_map,
+            catalog,
             defaults,
             include_excel_missing_previews=include_excel_missing_previews,
         )
-    return parse_legacy_listing_unit(product_code, unit_root, image_set, excel_map, defaults)
+    return parse_legacy_listing_unit(product_code, unit_root, image_set, catalog, defaults)
 
 
 def parse_all_listings(
@@ -659,7 +555,7 @@ def parse_all_listings(
     include_excel_missing_previews: bool = False,
 ) -> list[ListingUnit]:
     assets_root = settings.paths.resolve("assets_root")
-    excel_map = _load_excel_map_with_fallback(settings, assets_root)
+    catalog = _load_product_catalog(settings)
     defaults = settings.multi_spec.defaults
 
     new_units = _new_layout_units(product_code, assets_root)
@@ -669,7 +565,7 @@ def parse_all_listings(
                 product_code,
                 unit_root,
                 image_set,
-                excel_map,
+                catalog,
                 defaults,
                 include_excel_missing_previews=include_excel_missing_previews,
             )
@@ -687,7 +583,7 @@ def parse_all_listings(
                 product_code,
                 product_root / image_set,
                 image_set,
-                excel_map,
+                catalog,
                 defaults,
                 include_excel_missing_previews=include_excel_missing_previews,
             )
@@ -698,7 +594,7 @@ def parse_all_listings(
             product_code,
             product_root,
             "",
-            excel_map,
+            catalog,
             defaults,
             include_excel_missing_previews=include_excel_missing_previews,
         )
@@ -715,7 +611,7 @@ def parse_listing_target(
     if product_selector:
         family_code, image_set, product_code = product_selector
         assets_root = settings.paths.resolve("assets_root")
-        excel_map = _load_excel_map_with_fallback(settings, assets_root)
+        catalog = _load_product_catalog(settings)
         defaults = settings.multi_spec.defaults
         code_dir = assets_root / family_code / image_set / product_code
         if not code_dir.is_dir() or not _code_dir_has_numbered_images(code_dir):
@@ -725,7 +621,7 @@ def parse_listing_target(
                 product_code,
                 code_dir,
                 image_set,
-                excel_map,
+                catalog,
                 defaults,
                 include_excel_missing_previews=include_excel_missing_previews,
             )
@@ -741,7 +637,7 @@ def parse_listing_target(
 
     family_code, image_set = selector
     assets_root = settings.paths.resolve("assets_root")
-    excel_map = _load_excel_map_with_fallback(settings, assets_root)
+    catalog = _load_product_catalog(settings)
     defaults = settings.multi_spec.defaults
     set_dir = assets_root / family_code / image_set
     if not set_dir.is_dir():
@@ -754,7 +650,7 @@ def parse_listing_target(
                 code_dir.name,
                 code_dir,
                 image_set,
-                excel_map,
+                catalog,
                 defaults,
                 include_excel_missing_previews=include_excel_missing_previews,
             )
@@ -778,7 +674,7 @@ def list_product_codes(settings: YamlSettings) -> list[str]:
 
 
 class CatalogSkill(Skill):
-    name = "parse_catalog"
+    name = "parse_product_catalog"
     description = "解析多规格素材目录，返回可上架单元列表"
 
     def as_tool(self) -> StructuredTool:

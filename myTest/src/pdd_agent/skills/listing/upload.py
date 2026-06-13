@@ -22,7 +22,7 @@ from pdd_agent.skills.listing.multi_spec_page import (
     wait_multi_sku_rows,
 )
 from pdd_agent.skills.listing.page_ai_title import apply_title_after_cover_upload
-from pdd_agent.skills.listing.spec_labels import enrich_listing_unit_specs
+from pdd_agent.skills.listing.spec_labels import enrich_listing_unit_specs, ordered_style_names
 from pdd_agent.skills.listing.title import resolve_listing_title
 
 
@@ -748,8 +748,8 @@ def upload_one_listing(
     enrich_listing_unit_specs(unit, account_id=account_id)
     covers = [str(p.resolve()) for p in unit.carousel_images]
     details = [str(p.resolve()) for p in unit.detail_images]
-    style_names = list(dict.fromkeys(sku.style_name for sku in unit.skus))
-    size_names = list(dict.fromkeys(sku.model_name for sku in unit.skus))
+    style_names = ordered_style_names(unit)
+    size_names = list(unit.model_codes)
 
     listing_info = dict(product_info)
     listing_info["title"] = resolve_listing_title(product_info, account_id)

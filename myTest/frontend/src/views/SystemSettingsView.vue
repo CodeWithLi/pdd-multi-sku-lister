@@ -27,7 +27,7 @@ const form = reactive<RuntimeConfig>({
     channel: '',
   },
   multi_spec: {
-    excel: 'data/assets/sku+名称.xlsx',
+    excel: 'data/assets/拼多多所有商品.xls',
     defaults: {
       inventory: '10',
       group_price: '199.9',
@@ -155,7 +155,7 @@ onMounted(load)
               <el-input v-model="form.paths.runs_root" />
               <div class="form-tip">MySQL 不可用时会回退写入该目录</div>
             </el-form-item>
-            <el-form-item label="SKU Excel 路径">
+            <el-form-item label="商品表路径（拼多多所有商品.xls）">
               <el-input v-model="form.multi_spec.excel" />
             </el-form-item>
           </el-form>
