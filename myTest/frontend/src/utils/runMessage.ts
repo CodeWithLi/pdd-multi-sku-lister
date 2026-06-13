@@ -67,6 +67,8 @@ export type ActivitySpecLookupRow = {
   pdd_product_id?: string
   product_code?: string
   spec_code?: string
+  parent_code?: string
+  child_code?: string
   match_score?: number
   match_method?: string
   floor_price?: number
@@ -75,10 +77,27 @@ export type ActivitySpecLookupRow = {
   valid?: boolean
   should_remove?: boolean
   reason?: string
+  reason_text?: string
   spec_name_source?: string
   spec_combined?: string
   spec_dim1_value?: string
   spec_dim2_value?: string
+}
+
+export type ActivityRemovedSpecRow = {
+  spec_name: string
+  spec_code: string
+  activity_price: string | number
+  floor_price?: number
+  pricing?: number
+  control_price?: number
+  parent_code?: string
+  child_code?: string
+  reason: string
+  reason_text: string
+  deleted?: boolean
+  delete_error?: string
+  delete_error_text?: string
 }
 
 function firstResultPayload(result?: Record<string, unknown>): Record<string, unknown> | null {
@@ -159,6 +178,8 @@ function mapValidationRow(row: Record<string, unknown>): ActivitySpecLookupRow {
     pdd_product_id: String(row.pdd_product_id || ''),
     product_code: String(row.product_code || ''),
     spec_code: String(row.spec_code || row.combo_folder || ''),
+    parent_code: String(row.parent_code || ''),
+    child_code: String(row.child_code || ''),
     match_score: row.sku_matched ? 100 : 0,
     match_method: String(row.match_method || ''),
     floor_price: row.floor_price as number | undefined,
@@ -167,10 +188,29 @@ function mapValidationRow(row: Record<string, unknown>): ActivitySpecLookupRow {
     valid: row.valid as boolean | undefined,
     should_remove: row.should_remove as boolean | undefined,
     reason: String(row.reason || ''),
+    reason_text: String(row.reason_text || ''),
     spec_name_source: String(row.spec_name_source || ''),
     spec_combined: String(row.spec_combined || ''),
     spec_dim1_value: String(row.spec_dim1_value || ''),
     spec_dim2_value: String(row.spec_dim2_value || ''),
+  }
+}
+
+function mapRemovedSpecRow(row: Record<string, unknown>): ActivityRemovedSpecRow {
+  return {
+    spec_name: String(row.spec_name || ''),
+    spec_code: String(row.spec_code || ''),
+    activity_price: row.activity_price as string | number,
+    floor_price: row.floor_price as number | undefined,
+    pricing: row.pricing as number | undefined,
+    control_price: row.control_price as number | undefined,
+    parent_code: String(row.parent_code || ''),
+    child_code: String(row.child_code || ''),
+    reason: String(row.reason || ''),
+    reason_text: String(row.reason_text || row.reason || ''),
+    deleted: row.deleted as boolean | undefined,
+    delete_error: String(row.delete_error || ''),
+    delete_error_text: String(row.delete_error_text || ''),
   }
 }
 
@@ -247,4 +287,60 @@ export function extractActivitySpecLookupRows(result?: Record<string, unknown>):
   const scrapeSpecs = extractScrapeSpecs(payload)
   if (!scrapeSpecs.length) return []
   return scrapeSpecs.map((item) => mapScrapeOnlyRow(item))
+}
+
+/** 提取被删除/不符合价格条件的规格明细（含原因说明）。 */
+export function extractActivityRemovedSpecRows(result?: Record<string, unknown>): ActivityRemovedSpecRow[] {
+  const payload = firstResultPayload(result)
+  if (!payload) return []
+
+  const blocks: Record<string, unknown>[] = []
+  const priceFilter = findPriceFilterBlock(payload)
+  if (priceFilter) blocks.push(priceFilter)
+  const finalize = payload.finalize_result
+  if (finalize && typeof finalize === 'object') blocks.push(finalize as Record<string, unknown>)
+
+  for (const block of blocks) {
+    const removed = block.removed_specs
+    if (Array.isArray(removed) && removed.length) {
+      return removed
+        .filter((item) => item && typeof item === 'object')
+        .map((item) => mapRemovedSpecRow(item as Record<string, unknown>))
+    }
+    const filterResult = block.filter_result
+    if (filterResult && typeof filterResult === 'object') {
+      const nested = (filterResult as Record<string, unknown>).removed_specs
+      if (Array.isArray(nested) && nested.length) {
+        return nested
+          .filter((item) => item && typeof item === 'object')
+          .map((item) => mapRemovedSpecRow(item as Record<string, unknown>))
+      }
+    }
+    const validation = block.validation
+    if (validation && typeof validation === 'object') {
+      const nested = (validation as Record<string, unknown>).removed_specs
+      if (Array.isArray(nested) && nested.length) {
+        return nested
+          .filter((item) => item && typeof item === 'object')
+          .map((item) => mapRemovedSpecRow(item as Record<string, unknown>))
+      }
+    }
+  }
+
+  return extractActivitySpecLookupRows(result)
+    .filter((row) => row.should_remove)
+    .map((row) =>
+      mapRemovedSpecRow({
+        spec_name: row.spec_name,
+        spec_code: row.spec_code,
+        activity_price: row.activity_price,
+        floor_price: row.floor_price,
+        pricing: row.pricing,
+        control_price: row.control_price,
+        parent_code: row.parent_code,
+        child_code: row.child_code,
+        reason: row.reason,
+        reason_text: row.reason_text,
+      }),
+    )
 }

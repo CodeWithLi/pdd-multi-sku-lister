@@ -2,6 +2,7 @@
 import { computed } from 'vue'
 import { listingStatusLabel, runStatusLabel, runStatusType } from '@/utils/labels'
 import {
+  extractActivityRemovedSpecRows,
   extractActivitySpecLookupMeta,
   extractActivitySpecLookupRows,
   extractCampaignStepRows,
@@ -25,6 +26,8 @@ const listingRows = computed(() => {
 const campaignStepRows = computed(() => extractCampaignStepRows(props.result))
 
 const specLookupRows = computed(() => extractActivitySpecLookupRows(props.result))
+
+const removedSpecRows = computed(() => extractActivityRemovedSpecRows(props.result))
 
 const specLookupMeta = computed(() => extractActivitySpecLookupMeta(props.result))
 
@@ -91,6 +94,64 @@ const delistStats = computed(() => {
       <el-descriptions-item label="扫描页数">{{ delistStats.pages }}</el-descriptions-item>
     </el-descriptions>
 
+    <div v-if="removedSpecRows.length" class="spec-lookup-block removed-spec-block">
+      <div class="spec-lookup-head">
+        <span class="spec-lookup-title">不符合条件 / 已删除规格</span>
+        <el-tag size="small" type="danger" effect="plain">
+          {{ removedSpecRows.filter((row) => row.deleted !== false).length }}/{{ removedSpecRows.length }} 已删除
+        </el-tag>
+      </div>
+      <p class="spec-lookup-hint">以下 SKU 因价格或定价数据问题被剔除，可按底价调整活动价后重新报名。</p>
+      <el-table :data="removedSpecRows" size="small" stripe class="result-table spec-full-table">
+        <el-table-column type="index" label="#" width="44" align="center" />
+        <el-table-column prop="spec_code" label="规格编码" width="150">
+          <template #default="{ row }">
+            <div class="spec-code-ok">{{ row.spec_code || '—' }}</div>
+            <div v-if="row.parent_code" class="spec-name-sub">
+              母 {{ row.parent_code }}<span v-if="row.child_code"> + 子 {{ row.child_code }}</span>
+            </div>
+          </template>
+        </el-table-column>
+        <el-table-column label="完整规格名称" min-width="260">
+          <template #default="{ row }">
+            <div class="spec-name-full">{{ row.spec_name || '—' }}</div>
+          </template>
+        </el-table-column>
+        <el-table-column label="活动价" width="72" align="right">
+          <template #default="{ row }">{{ row.activity_price }}</template>
+        </el-table-column>
+        <el-table-column label="底价" width="72" align="right">
+          <template #default="{ row }">
+            {{ row.floor_price != null ? row.floor_price : '—' }}
+          </template>
+        </el-table-column>
+        <el-table-column label="定价/控价" width="110" align="right">
+          <template #default="{ row }">
+            <div v-if="row.pricing != null">母 {{ row.pricing }}</div>
+            <div v-if="row.control_price != null">子 {{ row.control_price }}</div>
+            <span v-if="row.pricing == null && row.control_price == null">—</span>
+          </template>
+        </el-table-column>
+        <el-table-column label="原因" min-width="220">
+          <template #default="{ row }">
+            <div class="reason-text">{{ row.reason_text || row.reason || '—' }}</div>
+            <div v-if="row.delete_error_text" class="spec-name-sub">删除失败：{{ row.delete_error_text }}</div>
+          </template>
+        </el-table-column>
+        <el-table-column label="删除" width="80" align="center">
+          <template #default="{ row }">
+            <el-tag
+              size="small"
+              :type="row.deleted === false ? 'warning' : 'danger'"
+              effect="plain"
+            >
+              {{ row.deleted === false ? '未删' : '已删' }}
+            </el-tag>
+          </template>
+        </el-table-column>
+      </el-table>
+    </div>
+
     <div v-if="specLookupRows.length" class="spec-lookup-block spec-lookup-block--full">
       <div class="spec-lookup-head">
         <span class="spec-lookup-title">价格确认页规格（完整名称）</span>
@@ -125,6 +186,9 @@ const delistStats = computed(() => {
             <span :class="row.spec_code ? 'spec-code-ok' : 'spec-code-miss'">
               {{ row.spec_code || '未匹配' }}
             </span>
+            <div v-if="row.parent_code" class="spec-name-sub">
+              母 {{ row.parent_code }}<span v-if="row.child_code"> + 子 {{ row.child_code }}</span>
+            </div>
           </template>
         </el-table-column>
         <el-table-column
@@ -260,6 +324,19 @@ const delistStats = computed(() => {
 
 .spec-code-miss {
   color: var(--text-muted);
+}
+
+.removed-spec-block {
+  margin-top: 16px;
+  padding-top: 16px;
+  border-top: 1px dashed var(--el-color-danger-light-5);
+}
+
+.reason-text {
+  white-space: normal;
+  word-break: break-word;
+  line-height: 1.45;
+  font-size: 13px;
 }
 
 .result-foot {

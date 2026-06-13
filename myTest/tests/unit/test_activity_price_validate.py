@@ -1,8 +1,10 @@
 from types import SimpleNamespace
 
 from pdd_agent.skills.campaign.activity_price_validate import (
+    _build_removed_spec_record,
     _delete_invalid_price_goods,
     _extract_spec_name_from_tooltip_text,
+    _format_removal_reason_text,
     _group_products_for_filter,
     _is_truncated_spec_text,
     _match_spec_to_sku,
@@ -161,6 +163,75 @@ def test_validate_spec_prices_uses_product_code_when_db_skus_empty():
     assert result["results"][0]["child_code"] == "YKL001A"
 
 
+def test_format_removal_reason_text_for_low_price():
+    text = _format_removal_reason_text(
+        "activity_price_not_above_floor",
+        {
+            "activity_price": 8.8,
+            "floor_price": 9.42,
+            "parent_code": "BD630D",
+            "child_code": "YKL020A",
+            "pricing": 8.42,
+            "control_price": 1.0,
+        },
+    )
+    assert "活动价 8.8" in text
+    assert "底价 9.42" in text
+    assert "母码 BD630D" in text
+    assert "子码 YKL020A" in text
+
+
+def test_validate_spec_prices_exposes_removed_specs_summary():
+    row = _published_row(product_code="BD630D", skus=[])
+    row.spec_metadata = {
+        "pdd_goods_lookup": {
+            "pdd_skus": [
+                {
+                    "style_name": "单件装：包包【爆款热销】",
+                    "package_name": "预览",
+                    "spec_code": "BD630D",
+                }
+            ]
+        }
+    }
+    result = validate_spec_prices(
+        specs=[
+            {
+                "spec_name": "款式: 蓝色；套餐: 单件装：包包【爆款热销】",
+                "activity_price": "7.0",
+            }
+        ],
+        published_rows=[row],
+        pricing_map={"BD630D": 8.42},
+        control_map={},
+    )
+    assert result["remove_count"] == 1
+    assert len(result["removed_specs"]) == 1
+    removed = result["removed_specs"][0]
+    assert removed["spec_code"] == "BD630D"
+    assert removed["reason"] == "activity_price_not_above_floor"
+    assert "活动价 7.0" in removed["reason_text"]
+
+
+def test_build_removed_spec_record_marks_delete_failure():
+    record = _build_removed_spec_record(
+        {
+            "spec_name": "款式: A",
+            "spec_code": "BD630D",
+            "activity_price": 7.0,
+            "floor_price": 8.42,
+            "parent_code": "BD630D",
+            "pricing": 8.42,
+            "reason": "activity_price_not_above_floor",
+        },
+        deleted=False,
+        delete_error="delete_goods_not_found",
+    )
+    assert record["deleted"] is False
+    assert record["delete_error"] == "delete_goods_not_found"
+    assert record["delete_error_text"] == "活动页未找到删除按钮"
+
+
 def test_group_products_for_filter_only_removes_when_all_specs_invalid():
     results = [
         {"pdd_product_id": "111", "should_remove": False, "valid": True},
@@ -256,6 +327,9 @@ def test_delete_invalid_price_goods_deletes_each_invalid_spec(monkeypatch):
     assert calls[1]["activity_price"] == "7.8"
     assert result["deleted_spec_count"] == 2
     assert result["remaining_count"] == 1
+    assert len(result["removed_specs"]) == 2
+    assert result["removed_specs"][0]["reason_text"]
+    assert result["removed_specs"][0]["deleted"] is True
 
 
 def test_validate_spec_prices_marks_skipped_specs_for_removal():

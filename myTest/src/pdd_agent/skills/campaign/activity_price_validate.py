@@ -1385,6 +1385,7 @@ def _delete_invalid_price_goods(
         "removed_spec_count": len(to_remove),
         "deleted_spec_count": len(deleted_ok),
         "failed_deletes": failed_deletes,
+        "removed_specs": removed_specs,
         "deleted": deleted,
         "remaining_count": remaining_count,
         "remaining_specs": remaining.get("specs") or [],
@@ -1844,6 +1845,7 @@ def filter_price_confirm_page(
             "step": "filter_activity_prices",
             "action": "keep_all",
             "remaining_count": int(validation.get("spec_count") or 0),
+            "removed_specs": [],
         }
 
     filter_result = _delete_invalid_price_goods(page, account_id, validation)
@@ -1858,6 +1860,7 @@ def filter_price_confirm_page(
             "step": "filter_activity_prices",
             "action": "close_page",
             "error": "所有商品均不符合价格条件或缺少定价数据，已删除并关闭页面",
+            "removed_specs": filter_result.get("removed_specs") or _removed_specs_from_validation(validation),
             "filter_result": filter_result,
             "close_result": close_result,
         }
@@ -1879,6 +1882,7 @@ def filter_price_confirm_page(
         "step": "filter_activity_prices",
         "action": "continue_submit",
         "remaining_count": remaining_count,
+        "removed_specs": filter_result.get("removed_specs") or [],
         "filter_result": filter_result,
     }
     failed_deletes = filter_result.get("failed_deletes") if isinstance(filter_result.get("failed_deletes"), list) else []
