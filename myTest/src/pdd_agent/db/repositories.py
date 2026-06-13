@@ -6,6 +6,7 @@ import hashlib
 import os
 import uuid
 from datetime import datetime, timedelta
+from pathlib import Path
 
 from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
@@ -16,6 +17,7 @@ from pdd_agent.db.models import (
     AccountORM,
     FailureItemORM,
     LoginStatusORM,
+    ProductStyleColorORM,
     PublishedProductORM,
     QueueControlORM,
     TaskQueueORM,
@@ -749,3 +751,190 @@ def release_account_lock(*, account_id: str, owner: str) -> None:
         row = session.get(AccountLockORM, account_id)
         if row and row.owner == owner:
             session.delete(row)
+
+
+def _norm_product_code(code: str) -> str:
+    return str(code or "").strip().upper()
+
+
+def get_cached_style_color(product_code: str, image_path: str | None = None) -> str | None:
+    """读取已缓存的款式颜色；规格图变更后自动失效。"""
+    if not is_database_available():
+        return None
+    code = _norm_product_code(product_code)
+    if not code:
+        return None
+    with session_scope() as session:
+        row = session.get(ProductStyleColorORM, code)
+        if not row or not row.color_label:
+            return None
+        if row.source == "manual":
+            return row.color_label
+        if image_path:
+            path = Path(image_path)
+            if path.is_file():
+                mtime = path.stat().st_mtime
+                if row.image_mtime and abs(row.image_mtime - mtime) > 0.5:
+                    return None
+        return row.color_label
+
+
+def upsert_cached_style_color(
+    product_code: str,
+    color_label: str,
+    *,
+    source: str = "ai",
+    image_path: str | None = None,
+) -> None:
+    if not is_database_available():
+        return
+    code = _norm_product_code(product_code)
+    label = str(color_label or "").strip()
+    if not code or not label:
+        return
+    mtime = 0.0
+    if image_path:
+        path = Path(image_path)
+        if path.is_file():
+            mtime = path.stat().st_mtime
+    with session_scope() as session:
+        row = session.get(ProductStyleColorORM, code)
+        if row:
+            row.color_label = label
+            row.source = source
+            row.image_path = str(image_path or "")
+            row.image_mtime = mtime
+        else:
+            session.add(
+                ProductStyleColorORM(
+                    product_code=code,
+                    color_label=label,
+                    source=source,
+                    image_path=str(image_path or ""),
+                    image_mtime=mtime,
+                )
+            )
+
+
+def get_style_color_row(product_code: str) -> ProductStyleColorORM | None:
+    if not is_database_available():
+        return None
+    code = _norm_product_code(product_code)
+    if not code:
+        return None
+    with session_scope() as session:
+        row = session.get(ProductStyleColorORM, code)
+        if row:
+            session.expunge(row)
+        return row
+
+
+def search_style_colors(
+    *,
+    page: int = 1,
+    page_size: int = 50,
+    product_code: str = "",
+    color_label: str = "",
+    source: str = "",
+) -> tuple[list[ProductStyleColorORM], int]:
+    if not is_database_available():
+        return [], 0
+    page = max(1, page)
+    page_size = max(1, min(200, page_size))
+    with session_scope() as session:
+        query = session.query(ProductStyleColorORM)
+        if product_code:
+            query = query.filter(ProductStyleColorORM.product_code.like(f"%{product_code.strip().upper()}%"))
+        if color_label:
+            query = query.filter(ProductStyleColorORM.color_label.like(f"%{color_label.strip()}%"))
+        if source:
+            query = query.filter(ProductStyleColorORM.source == source.strip().lower())
+        total = int(query.order_by(None).count())
+        rows = (
+            query.order_by(ProductStyleColorORM.updated_at.desc(), ProductStyleColorORM.created_at.desc())
+            .offset((page - 1) * page_size)
+            .limit(page_size)
+            .all()
+        )
+        for row in rows:
+            session.expunge(row)
+        return rows, total
+
+
+def create_style_color(
+    product_code: str,
+    color_label: str,
+    *,
+    source: str = "manual",
+    image_path: str | None = None,
+) -> ProductStyleColorORM:
+    if not is_database_available():
+        raise RuntimeError("database unavailable")
+    code = _norm_product_code(product_code)
+    label = str(color_label or "").strip()
+    if not code or not label:
+        raise ValueError("product_code and color_label are required")
+    with session_scope() as session:
+        if session.get(ProductStyleColorORM, code):
+            raise ValueError(f"style color already exists: {code}")
+        mtime = 0.0
+        if image_path:
+            path = Path(image_path)
+            if path.is_file():
+                mtime = path.stat().st_mtime
+        row = ProductStyleColorORM(
+            product_code=code,
+            color_label=label,
+            source=source,
+            image_path=str(image_path or ""),
+            image_mtime=mtime,
+        )
+        session.add(row)
+        session.flush()
+        session.expunge(row)
+        return row
+
+
+def update_style_color(
+    product_code: str,
+    color_label: str,
+    *,
+    image_path: str | None = None,
+) -> ProductStyleColorORM | None:
+    if not is_database_available():
+        return None
+    code = _norm_product_code(product_code)
+    label = str(color_label or "").strip()
+    if not code or not label:
+        return None
+    mtime = 0.0
+    if image_path:
+        path = Path(image_path)
+        if path.is_file():
+            mtime = path.stat().st_mtime
+    with session_scope() as session:
+        row = session.get(ProductStyleColorORM, code)
+        if not row:
+            return None
+        row.color_label = label
+        row.source = "manual"
+        if image_path is not None:
+            row.image_path = str(image_path or "")
+            row.image_mtime = mtime
+        session.flush()
+        session.expunge(row)
+        return row
+
+
+def delete_style_color(product_code: str) -> bool:
+    if not is_database_available():
+        return False
+    code = _norm_product_code(product_code)
+    if not code:
+        return False
+    with session_scope() as session:
+        row = session.get(ProductStyleColorORM, code)
+        if not row:
+            return False
+        session.delete(row)
+        return True

@@ -337,6 +337,34 @@ export interface PublishedProductDelistResponse {
   message: string
 }
 
+export interface StyleColor {
+  product_code: string
+  color_label: string
+  source: string
+  image_path: string
+  image_mtime: number
+  created_at: string | null
+  updated_at: string | null
+}
+
+export interface StyleColorListResponse {
+  items: StyleColor[]
+  total: number
+  page: number
+  page_size: number
+}
+
+export interface StyleColorCreatePayload {
+  product_code: string
+  color_label: string
+  image_path?: string
+}
+
+export interface StyleColorUpdatePayload {
+  color_label: string
+  image_path?: string | null
+}
+
 export interface ProductDetail {
   product_code: string
   image_sets: string[]

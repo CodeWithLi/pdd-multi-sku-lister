@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from sqlalchemy import Boolean, DateTime, Integer, String, Text, func
+from sqlalchemy import Boolean, DateTime, Float, Integer, String, Text, func
 from sqlalchemy.dialects.mysql import JSON as MySQLJSON
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -172,6 +172,24 @@ class AccountLockORM(Base):
     reason: Mapped[str] = mapped_column(String(255), default="", nullable=False)
     locked_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
     expires_at: Mapped[datetime] = mapped_column(DateTime, index=True, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, server_default=func.now(), nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, server_default=func.now(), onupdate=func.now(), nullable=False
+    )
+
+
+class ProductStyleColorORM(Base):
+    """商品编码 → AI/人工识别的款式颜色（缓存，省 token）。"""
+
+    __tablename__ = "product_style_colors"
+
+    product_code: Mapped[str] = mapped_column(String(64), primary_key=True)
+    color_label: Mapped[str] = mapped_column(String(64), nullable=False)
+    source: Mapped[str] = mapped_column(String(16), default="ai", nullable=False)
+    image_path: Mapped[str] = mapped_column(String(512), default="", nullable=False)
+    image_mtime: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
     created_at: Mapped[datetime] = mapped_column(
         DateTime, server_default=func.now(), nullable=False
     )

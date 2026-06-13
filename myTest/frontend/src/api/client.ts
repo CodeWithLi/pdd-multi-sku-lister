@@ -22,6 +22,10 @@ import type {
   PublishedProductListResponse,
   PublishedProductDetailResponse,
   PublishedProductDelistResponse,
+  StyleColor,
+  StyleColorCreatePayload,
+  StyleColorListResponse,
+  StyleColorUpdatePayload,
   ProductDetail,
   ProductSummary,
   QueueCancelResponse,
@@ -230,6 +234,26 @@ export const api = {
 
   delistPublishedProduct: (mappingId: string) =>
     http.post<PublishedProductDelistResponse>(`/published-products/${mappingId}/delist`).then((r) => r.data),
+
+  styleColors: (params: {
+    page?: number
+    page_size?: number
+    product_code?: string
+    color_label?: string
+    source?: string
+  } = {}) => http.get<StyleColorListResponse>('/style-colors', { params }).then((r) => r.data),
+
+  styleColorDetail: (productCode: string) =>
+    http.get<StyleColor>(`/style-colors/${encodeURIComponent(productCode)}`).then((r) => r.data),
+
+  createStyleColor: (body: StyleColorCreatePayload) =>
+    http.post<StyleColor>('/style-colors', body).then((r) => r.data),
+
+  updateStyleColor: (productCode: string, body: StyleColorUpdatePayload) =>
+    http.put<StyleColor>(`/style-colors/${encodeURIComponent(productCode)}`, body).then((r) => r.data),
+
+  deleteStyleColor: (productCode: string) =>
+    http.delete(`/style-colors/${encodeURIComponent(productCode)}`).then(() => undefined),
 
   loginStatuses: () =>
     http.get<LoginStatus[]>('/login/statuses').then((r) => r.data),

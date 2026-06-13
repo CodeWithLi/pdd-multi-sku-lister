@@ -812,7 +812,6 @@ function getRow(idx) {
 function fillRow(idx, vals) {
     const tr = getRow(idx);
     if (!tr) return 0;
-    tr.scrollIntoView({block: 'nearest'});
     const inputs = rowInputs(tr);
     if (inputs.length < 4) return 0;
     const setter = Object.getOwnPropertyDescriptor(
@@ -821,14 +820,30 @@ function fillRow(idx, vals) {
     for (let i = 0; i < 4; i++) {
         const el = inputs[i];
         const val = String(vals[i]);
-        el.focus();
-        el.click();
         setter.call(el, val);
         el.dispatchEvent(new InputEvent('input', {
             bubbles: true, data: val, inputType: 'insertText'
         }));
         el.dispatchEvent(new Event('change', { bubbles: true }));
-        el.blur();
+    }
+    return inputs.length;
+}
+
+function fillRowDirect(tr, vals) {
+    if (!tr) return 0;
+    const inputs = rowInputs(tr);
+    if (inputs.length < 4) return 0;
+    const setter = Object.getOwnPropertyDescriptor(
+        window.HTMLInputElement.prototype, 'value'
+    ).set;
+    for (let i = 0; i < 4; i++) {
+        const el = inputs[i];
+        const val = String(vals[i]);
+        setter.call(el, val);
+        el.dispatchEvent(new InputEvent('input', {
+            bubbles: true, data: val, inputType: 'insertText'
+        }));
+        el.dispatchEvent(new Event('change', { bubbles: true }));
     }
     return inputs.length;
 }
@@ -838,9 +853,10 @@ _FILL_ROWS_JS = (
     _JS_FILL_HELPERS
     + """
 const allVals = JSON.parse(arguments[0]);
+const rows = getAllDataRows();
 let ok = 0;
-for (let i = 0; i < allVals.length; i++) {
-    if (fillRow(i, allVals[i]) >= 4) ok++;
+for (let i = 0; i < allVals.length && i < rows.length; i++) {
+    if (fillRowDirect(rows[i], allVals[i]) >= 4) ok++;
 }
 return ok;
 """
@@ -862,6 +878,59 @@ _FILL_ROW_AT_INDEX_JS = (
     _JS_FILL_HELPERS
     + """
 return fillRow(parseInt(arguments[0], 10), JSON.parse(arguments[1]));
+"""
+)
+
+_BUILD_STYLE_SIZE_ROW_MAP_JS = (
+    _JS_FILL_HELPERS
+    + """
+function cellHasDataInput(td) {
+    for (const inp of td.querySelectorAll('input')) {
+        const t = (inp.type || '').toLowerCase();
+        if (!['file','hidden','checkbox','radio','button','submit'].includes(t)) return true;
+    }
+    return false;
+}
+
+function buildStyleSizeRowMap() {
+    const rows = getAllDataRows();
+    const map = {};
+    let currentStyle = '';
+    for (let i = 0; i < rows.length; i++) {
+        const tr = rows[i];
+        const marked = tr.getAttribute('data-pdd-sku-row');
+        const rowIdx = marked !== null && marked !== '' ? parseInt(marked, 10) : i;
+        const texts = [];
+        for (const td of tr.querySelectorAll('td')) {
+            if (cellHasDataInput(td)) break;
+            const text = (td.innerText || '').trim();
+            if (!text) continue;
+            texts.push(text);
+            if (td.getAttribute('rowspan')) currentStyle = text;
+        }
+        let model = '';
+        if (texts.length >= 2) {
+            currentStyle = texts[0];
+            model = texts[1];
+        } else if (texts.length === 1) {
+            model = texts[0];
+        }
+        if (currentStyle && model) {
+            map[currentStyle + '\\0' + model] = rowIdx;
+        }
+    }
+    return map;
+}
+
+const pairs = JSON.parse(arguments[0]);
+const rowMap = buildStyleSizeRowMap();
+const out = [];
+for (let i = 0; i < pairs.length; i++) {
+    const p = pairs[i];
+    const key = (p.style || '') + '\\0' + (p.size || '');
+    out.push(Object.prototype.hasOwnProperty.call(rowMap, key) ? rowMap[key] : i);
+}
+return JSON.stringify(out);
 """
 )
 
@@ -959,8 +1028,26 @@ def _fill_row_by_index(page, index: int, row_data: dict) -> bool:
         return False
 
 
-def _compute_row_indices(skus: list, marked_rows: list) -> list[int]:
-    """按款式+尺寸匹配价格表行索引（只扫一次 DOM）。"""
+def _compute_row_indices(skus: list, marked_rows: list | None = None, page=None) -> list[int]:
+    """按款式+尺寸匹配价格表行索引。"""
+    if page is not None:
+        pairs = [
+            {
+                "style": getattr(sku, "style_name", "") or "",
+                "size": getattr(sku, "model_name", "") or "",
+            }
+            for sku in skus
+        ]
+        try:
+            raw = page.run_js(_BUILD_STYLE_SIZE_ROW_MAP_JS, json.dumps(pairs, ensure_ascii=False))
+            if raw:
+                indices = json.loads(raw) if isinstance(raw, str) else raw
+                if isinstance(indices, list) and len(indices) == len(skus):
+                    return [int(i) for i in indices]
+        except Exception:
+            pass
+    if not marked_rows:
+        return list(range(len(skus)))
     row_map = _sku_row_index_from_rows(marked_rows)
     indices: list[int] = []
     for i, sku in enumerate(skus):
@@ -989,7 +1076,7 @@ def _resolve_sku_row_index(page, skus: list, index: int, rows: list | None = Non
         return index
     if rows is None:
         rows = _sku_price_table_rows(page, scroll=False)
-    indices = _compute_row_indices(skus, rows)
+    indices = _compute_row_indices(skus, rows, page=page)
     return indices[index]
 
 
@@ -1011,10 +1098,8 @@ def fill_multi_spec_rows(
     print(f"[{account_id}] 开始填写 {len(skus)} 个 SKU（已定位 {len(rows)} 行）", flush=True)
 
     t = _now()
-    marked_rows = _sku_price_table_rows(page, scroll=False)
-    _log_step(account_id, "重新标记价格表行", t)
-
-    row_indices = _compute_row_indices(skus, marked_rows)
+    row_indices = _compute_row_indices(skus, rows, page=page)
+    _log_step(account_id, "匹配价格表行索引", t)
 
     t = _now()
     if row_indices == list(range(len(skus))):

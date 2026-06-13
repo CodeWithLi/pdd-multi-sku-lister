@@ -6,6 +6,7 @@ from pathlib import Path
 
 from pdd_agent.domain.models import ListingUnit, SkuCombo
 from pdd_agent.llm.vision import detect_product_color, detect_sub_product_category, _fallback_color_from_catalog
+from pdd_agent.db.repositories import get_cached_style_color, upsert_cached_style_color
 from pdd_agent.skills.listing.pdd_product_catalog import (
     get_catalog_entry,
     get_pdd_product_catalog,
@@ -168,15 +169,38 @@ def build_sub_category_cache(unit: ListingUnit, account_id: str = "") -> dict[st
 def resolve_style_colors(unit: ListingUnit, account_id: str = "") -> dict[str, str]:
     catalog = get_pdd_product_catalog()
     colors: dict[str, str] = {}
+    prefix = f"[{account_id}] " if account_id else ""
     for style_code in unit.style_codes:
         entry = catalog.get(style_code.strip().upper())
         image = pick_style_reference_image(unit, style_code)
+        image_str = str(image.resolve()) if image else None
+        cached = get_cached_style_color(style_code, image_str)
+        if cached:
+            print(
+                f"{prefix}[{unit.listing_label}] 缓存款式颜色：{style_code} → {cached}",
+                flush=True,
+            )
+            colors[style_code] = cached
+            continue
         if image:
-            prefix = f"[{account_id}] " if account_id else ""
             print(f"{prefix}[{unit.listing_label}] AI识别款式颜色：{style_code} ← {image.name}", flush=True)
-            colors[style_code] = detect_product_color(image, catalog_entry=entry)
+            color = detect_product_color(image, catalog_entry=entry)
+            colors[style_code] = color
+            upsert_cached_style_color(
+                style_code,
+                color,
+                source="ai",
+                image_path=image_str,
+            )
         elif entry:
-            colors[style_code] = catalog_style_label(entry)
+            color = catalog_style_label(entry)
+            colors[style_code] = color
+            upsert_cached_style_color(
+                style_code,
+                color,
+                source="catalog",
+                image_path=image_str,
+            )
         else:
             colors[style_code] = style_code
     return colors

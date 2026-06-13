@@ -210,3 +210,38 @@ def test_resolve_combo_pricing_from_catalog():
     assert inv == "50"
     assert gp == "50"
     assert sp == "150"
+
+
+def test_resolve_style_colors_uses_db_cache(monkeypatch, tmp_path):
+    from pdd_agent.domain.models import ListingUnit
+    from pdd_agent.skills.listing import spec_labels
+
+    set_dir = tmp_path / "BD716" / "第一套图"
+    dir_a = set_dir / "BD716A"
+    dir_a.mkdir(parents=True)
+    solo = dir_a / "BD716A.png"
+    solo.write_bytes(b"img")
+
+    unit = ListingUnit(product_code="BD716A", image_set="第一套图", root=dir_a)
+    unit.style_codes = ["BD716A"]
+
+    calls = {"ai": 0, "upsert": 0}
+
+    def fake_get_cached(code, image_path=None):
+        return "灰色" if code.upper() == "BD716A" else None
+
+    def fake_detect(*args, **kwargs):
+        calls["ai"] += 1
+        return "白色"
+
+    def fake_upsert(*args, **kwargs):
+        calls["upsert"] += 1
+
+    monkeypatch.setattr(spec_labels, "get_cached_style_color", fake_get_cached)
+    monkeypatch.setattr(spec_labels, "detect_product_color", fake_detect)
+    monkeypatch.setattr(spec_labels, "upsert_cached_style_color", fake_upsert)
+
+    colors = spec_labels.resolve_style_colors(unit)
+    assert colors["BD716A"] == "灰色"
+    assert calls["ai"] == 0
+    assert calls["upsert"] == 0
