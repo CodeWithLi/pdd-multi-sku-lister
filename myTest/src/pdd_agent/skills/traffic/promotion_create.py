@@ -68,6 +68,10 @@ GLOBAL_BOOST_CHECKBOX_MARKERS = (
     "优选起量",
     "起量花费比例",
 )
+GLOBAL_BOOST_CLOSE_CONFIRM_BUTTON = "确定关闭"
+GLOBAL_BOOST_CLOSE_CONFIRM_TITLE_MARKERS = ("确定关闭", "优选起量", "全站优选起量", "全局优选起量")
+BEGIN_PROMOTION_BUTTON_TESTID = "beginPromotionButton"
+CANCEL_PROMOTION_BUTTON_TESTID = "cancelPromotionButton"
 _PROMOTION_SEARCH_ZERO_COUNT_JSON = json.dumps(list(PROMOTION_SEARCH_ZERO_COUNT_MARKERS))
 PRODUCT_SEARCH_BATCH_SIZE = 30
 UNWANTED_TAB_URL_PARTS = (
@@ -1471,6 +1475,183 @@ return {{
 """
 
 
+_CLICK_GLOBAL_BOOST_CLOSE_CONFIRM_JS = f"""
+function isVisible(el) {{
+    if (!el || !el.getBoundingClientRect) return false;
+    const r = el.getBoundingClientRect();
+    const s = window.getComputedStyle(el);
+    return r.width > 4 && r.height > 4
+        && s.display !== 'none'
+        && s.visibility !== 'hidden'
+        && parseFloat(s.opacity || '1') > 0.05;
+}}
+
+function norm(text) {{
+    return (text || '').replace(/\\s+/g, '').trim();
+}}
+
+function findConfirmPopover() {{
+    const roots = Array.from(document.querySelectorAll(
+        '.anq-popover, .anq-popover-content, .anq-popover-inner-content, [class*="popover"]'
+    )).filter(isVisible);
+    const titleMarkers = {json.dumps(list(GLOBAL_BOOST_CLOSE_CONFIRM_TITLE_MARKERS))};
+    for (const root of roots) {{
+        const text = norm(root.innerText || root.textContent || '');
+        if (!text.includes('{GLOBAL_BOOST_CLOSE_CONFIRM_BUTTON}')) continue;
+        if (titleMarkers.some((marker) => text.includes(marker))) return root;
+    }}
+    return null;
+}}
+
+const popover = findConfirmPopover();
+if (!popover) {{
+    return {{ clicked: false, visible: false, reason: 'global_boost_close_confirm_not_found' }};
+}}
+
+const buttons = Array.from(popover.querySelectorAll('button, span, a'))
+    .filter(isVisible);
+const confirmBtn = buttons.find((el) => norm(el.innerText || el.textContent || '') === '{GLOBAL_BOOST_CLOSE_CONFIRM_BUTTON}');
+if (!confirmBtn) {{
+    const footerBtn = popover.querySelector('.anq-popover-footer button.anq-cancel, .anq-popover-footer button');
+    if (footerBtn && isVisible(footerBtn)) {{
+        footerBtn.click();
+        return {{ clicked: true, visible: true, method: 'popover_footer_button' }};
+    }}
+    return {{ clicked: false, visible: true, reason: 'global_boost_close_confirm_button_not_found' }};
+}}
+confirmBtn.click();
+return {{
+    clicked: true,
+    visible: true,
+    method: 'confirm_close_text_button',
+    text: '{GLOBAL_BOOST_CLOSE_CONFIRM_BUTTON}',
+}};
+"""
+
+
+_IS_GLOBAL_BOOST_CLOSE_CONFIRM_OPEN_JS = f"""
+function isVisible(el) {{
+    if (!el || !el.getBoundingClientRect) return false;
+    const r = el.getBoundingClientRect();
+    const s = window.getComputedStyle(el);
+    return r.width > 4 && r.height > 4
+        && s.display !== 'none'
+        && s.visibility !== 'hidden'
+        && parseFloat(s.opacity || '1') > 0.05;
+}}
+function norm(text) {{
+    return (text || '').replace(/\\s+/g, '').trim();
+}}
+const titleMarkers = {json.dumps(list(GLOBAL_BOOST_CLOSE_CONFIRM_TITLE_MARKERS))};
+const roots = Array.from(document.querySelectorAll(
+    '.anq-popover, .anq-popover-content, .anq-popover-inner-content'
+)).filter(isVisible);
+for (const root of roots) {{
+    const text = norm(root.innerText || root.textContent || '');
+    if (!text.includes('{GLOBAL_BOOST_CLOSE_CONFIRM_BUTTON}')) continue;
+    if (titleMarkers.some((marker) => text.includes(marker))) return true;
+}}
+const bodyText = norm(document.body?.innerText || '');
+return bodyText.includes('确定关闭') && bodyText.includes('优选起量');
+"""
+
+
+def _is_global_boost_close_confirm_open(page: DpPage) -> bool:
+    try:
+        return bool(page.run_js(_IS_GLOBAL_BOOST_CLOSE_CONFIRM_OPEN_JS))
+    except Exception:
+        return GLOBAL_BOOST_CLOSE_CONFIRM_BUTTON in _body_text(page) and "优选起量" in _body_text(page)
+
+
+def _click_global_boost_close_confirm(page: DpPage) -> dict[str, Any]:
+    """点击「确定关闭」确认弹层。"""
+    result = page.run_js(_CLICK_GLOBAL_BOOST_CLOSE_CONFIRM_JS) or {
+        "clicked": False,
+        "reason": "click_global_boost_close_confirm_js_failed",
+    }
+    if result.get("clicked"):
+        time.sleep(1)
+        return result
+
+    try:
+        raw_page = getattr(page, "_page")
+        for selector in (
+            '.anq-popover-footer button.anq-cancel:has-text("确定关闭")',
+            '.anq-popover:has-text("优选起量") button:has-text("确定关闭")',
+            'button.anq-cancel:has-text("确定关闭")',
+        ):
+            btn = raw_page.locator(selector).last
+            if btn.count():
+                btn.click(timeout=5_000)
+                time.sleep(1)
+                return {"clicked": True, "method": f"playwright_{selector}"}
+    except Exception as exc:
+        return {"clicked": False, "reason": _safe_exc(exc), **result}
+
+    if _click_text(page, GLOBAL_BOOST_CLOSE_CONFIRM_BUTTON, timeout=2):
+        time.sleep(1)
+        return {"clicked": True, "method": "text_click"}
+
+    return result
+
+
+def _wait_and_confirm_global_boost_close(
+    page: DpPage,
+    account_id: str,
+    *,
+    timeout: int = 8,
+) -> dict[str, Any]:
+    """取消勾选后等待并点击「确定关闭」。"""
+    last_click: dict[str, Any] = {"clicked": False, "visible": False}
+    for _ in range(timeout):
+        if _is_global_boost_close_confirm_open(page):
+            last_click = _click_global_boost_close_confirm(page)
+            if last_click.get("clicked"):
+                print(f"[{account_id}] 已点击确定关闭全局优选起量", flush=True)
+                return last_click
+        time.sleep(0.5)
+    return last_click
+
+
+def _finalize_global_boost_uncheck(page: DpPage, account_id: str) -> dict[str, Any]:
+    """处理确认弹层并校验复选框最终为未勾选。"""
+    confirm_result = _wait_and_confirm_global_boost_close(page, account_id)
+    state = _read_global_boost_checkbox_state(page)
+    if state.get("found") and not state.get("checked"):
+        return {
+            "status": "success",
+            "unchecked": True,
+            "confirm_result": confirm_result,
+            "final_state": state,
+        }
+    if confirm_result.get("clicked") and state.get("found") and state.get("checked"):
+        pw_result = _uncheck_global_boost_checkbox_playwright(page)
+        _wait_and_confirm_global_boost_close(page, account_id)
+        state = _read_global_boost_checkbox_state(page)
+        if state.get("found") and not state.get("checked"):
+            return {
+                "status": "success",
+                "unchecked": True,
+                "confirm_result": confirm_result,
+                "playwright_retry": pw_result,
+                "final_state": state,
+            }
+    if state.get("found") and state.get("checked"):
+        return {
+            "status": "failed",
+            "error": "点击确定关闭后全局优选起量仍为勾选状态",
+            "confirm_result": confirm_result,
+            "final_state": state,
+        }
+    return {
+        "status": "success",
+        "unchecked": True,
+        "confirm_result": confirm_result,
+        "final_state": state,
+        "assumed": True,
+    }
+
+
 def _read_global_boost_checkbox_state(page: DpPage) -> dict[str, Any]:
     """读取「全局/全店优选起量」勾选状态。"""
     try:
@@ -1600,14 +1781,26 @@ def _ensure_global_boost_checkbox_unchecked(
         if not state.get("found"):
             pw_probe = _uncheck_global_boost_checkbox_playwright(page)
             attempts.append({"attempt": attempt_index + 1, "playwright_probe": pw_probe})
-            if pw_probe.get("found") and (pw_probe.get("unchecked") or pw_probe.get("already_unchecked")):
-                print(f"[{account_id}] 已通过 Playwright 取消勾选全局优选起量", flush=True)
+            if pw_probe.get("found") and pw_probe.get("was_checked"):
+                finalize = _finalize_global_boost_uncheck(page, account_id)
+                attempts.append({"attempt": attempt_index + 1, "finalize_result": finalize})
+                if finalize.get("status") == "success":
+                    print(f"[{account_id}] 已通过 Playwright 取消勾选全局优选起量", flush=True)
+                    return {
+                        "status": "success",
+                        "unchecked": True,
+                        "attempts": attempts,
+                        "finalize_result": finalize,
+                        "method": "playwright_direct",
+                    }
+            elif pw_probe.get("found") and pw_probe.get("already_unchecked"):
+                print(f"[{account_id}] 全局优选起量已处于取消勾选状态", flush=True)
                 return {
                     "status": "success",
                     "unchecked": True,
+                    "already_unchecked": True,
                     "attempts": attempts,
                     "final_state": pw_probe,
-                    "method": "playwright_direct",
                 }
             time.sleep(1)
             last_state = _read_global_boost_checkbox_state(page)
@@ -1615,6 +1808,17 @@ def _ensure_global_boost_checkbox_unchecked(
 
         last_state = state
         if not state.get("checked"):
+            if _is_global_boost_close_confirm_open(page):
+                finalize = _finalize_global_boost_uncheck(page, account_id)
+                attempts.append({"attempt": attempt_index + 1, "finalize_result": finalize})
+                if finalize.get("status") != "success":
+                    return {
+                        "status": "failed",
+                        "step": "confirm_global_boost_close",
+                        "error": finalize.get("error") or "无法点击确定关闭",
+                        "attempts": attempts,
+                        "finalize_result": finalize,
+                    }
             print(f"[{account_id}] 全局优选起量已处于取消勾选状态", flush=True)
             return {
                 "status": "success",
@@ -1631,27 +1835,31 @@ def _ensure_global_boost_checkbox_unchecked(
         attempts.append({"attempt": attempt_index + 1, "uncheck_result": uncheck_result})
         time.sleep(0.8)
 
-        verify_state = _read_global_boost_checkbox_state(page)
-        if verify_state.get("found") and not verify_state.get("checked"):
-            print(f"[{account_id}] 已取消勾选全局优选起量", flush=True)
+        finalize = _finalize_global_boost_uncheck(page, account_id)
+        attempts.append({"attempt": attempt_index + 1, "finalize_result": finalize})
+        if finalize.get("status") == "success":
+            print(f"[{account_id}] 已取消勾选全局优选起量并确认关闭", flush=True)
             return {
                 "status": "success",
                 "unchecked": True,
                 "attempts": attempts,
-                "final_state": verify_state,
+                "finalize_result": finalize,
             }
 
         pw_result = _uncheck_global_boost_checkbox_playwright(page)
         attempts.append({"attempt": attempt_index + 1, "playwright_uncheck": pw_result})
-        if pw_result.get("found") and pw_result.get("unchecked"):
-            print(f"[{account_id}] 已通过 Playwright 取消勾选全局优选起量", flush=True)
-            return {
-                "status": "success",
-                "unchecked": True,
-                "attempts": attempts,
-                "final_state": pw_result,
-                "method": "playwright_fallback",
-            }
+        if pw_result.get("found") and pw_result.get("was_checked"):
+            finalize = _finalize_global_boost_uncheck(page, account_id)
+            attempts.append({"attempt": attempt_index + 1, "finalize_result": finalize})
+            if finalize.get("status") == "success":
+                print(f"[{account_id}] 已通过 Playwright 取消勾选全局优选起量并确认关闭", flush=True)
+                return {
+                    "status": "success",
+                    "unchecked": True,
+                    "attempts": attempts,
+                    "finalize_result": finalize,
+                    "method": "playwright_fallback",
+                }
 
         last_state = _read_global_boost_checkbox_state(page)
         time.sleep(0.5)
@@ -1672,6 +1880,140 @@ def _ensure_global_boost_checkbox_unchecked(
         "attempts": attempts,
         "final_state": last_state,
         "body_preview": _body_text(page)[-400:],
+    }
+
+
+def _click_begin_promotion_button(page: DpPage, account_id: str) -> dict[str, Any]:
+    """点击添加推广商品抽屉底部「开启推广」。"""
+    _dismiss_message_popup(page)
+    page.run_js(
+        """
+        const bodies = Array.from(document.querySelectorAll(
+            '.anq-drawer-body, .anq-drawer-content, .anq-drawer-content-wrapper'
+        ));
+        for (const body of bodies) {
+            try { body.scrollTop = body.scrollHeight; } catch (e) {}
+        }
+        """
+    )
+    time.sleep(0.3)
+
+    result = page.run_js(
+        _DRAWER_ROOT_JS
+        + f"""
+        function buttonLabel(btn) {{
+            return norm(btn.innerText || btn.textContent || '');
+        }}
+
+        function isDisabled(btn) {{
+            if (!btn) return true;
+            if (btn.disabled) return true;
+            const cls = btn.className || '';
+            return cls.includes('disabled') || cls.includes('anq-btn-disabled');
+        }}
+
+        function isBeginPromotionButton(btn) {{
+            const label = buttonLabel(btn);
+            if (!label.startsWith('开启推广')) return false;
+            if (label.includes('查看全部')) return false;
+            return true;
+        }}
+
+        const root = drawerRoot() || document.body;
+        const testBtn = root.querySelector('button[data-testid="{BEGIN_PROMOTION_BUTTON_TESTID}"]')
+            || document.querySelector('button[data-testid="{BEGIN_PROMOTION_BUTTON_TESTID}"]');
+        if (testBtn && isVisible(testBtn)) {{
+            if (isDisabled(testBtn)) {{
+                return {{
+                    clicked: false,
+                    reason: 'begin_promotion_button_disabled',
+                    text: buttonLabel(testBtn),
+                    testid: testBtn.getAttribute('data-testid') || '',
+                }};
+            }}
+            testBtn.scrollIntoView({{ block: 'center', inline: 'nearest' }});
+            testBtn.click();
+            return {{
+                clicked: true,
+                text: buttonLabel(testBtn),
+                method: 'beginPromotionButton_testid',
+                testid: testBtn.getAttribute('data-testid') || '',
+            }};
+        }}
+
+        const footerScopes = Array.from(document.querySelectorAll(
+            '[class*="footer_footer"], .anq-drawer-footer, .anq-drawer-content-wrapper, [class*="GoodsSelection"]'
+        )).filter(isVisible);
+        const scopes = footerScopes.length ? footerScopes : [root];
+        for (const scope of scopes) {{
+            const buttons = Array.from(scope.querySelectorAll('button.anq-btn-primary, button'))
+                .filter(isVisible)
+                .filter(isBeginPromotionButton);
+            if (!buttons.length) continue;
+            const btn = buttons[0];
+            if (isDisabled(btn)) {{
+                return {{
+                    clicked: false,
+                    reason: 'begin_promotion_button_disabled',
+                    text: buttonLabel(btn),
+                }};
+            }}
+            btn.scrollIntoView({{ block: 'center', inline: 'nearest' }});
+            btn.click();
+            return {{
+                clicked: true,
+                text: buttonLabel(btn),
+                method: 'footer_begin_promotion_button',
+            }};
+        }}
+
+        return {{ clicked: false, reason: 'begin_promotion_button_not_found', url: location.href }};
+        """
+    ) or {"clicked": False, "reason": "begin_promotion_js_failed"}
+
+    if result.get("clicked"):
+        time.sleep(2)
+        print(f"[{account_id}] 已点击开启推广: {result.get('text')}", flush=True)
+        return result
+
+    try:
+        raw_page = getattr(page, "_page")
+        drawer = raw_page.locator(
+            '.anq-drawer-wrapper:has-text("添加推广商品"), '
+            '[class*="GoodsSelection"]:has-text("添加推广商品")'
+        ).last
+        btn = drawer.locator(f'button[data-testid="{BEGIN_PROMOTION_BUTTON_TESTID}"]').first
+        if not btn.count():
+            btn = drawer.locator('button.anq-btn-primary:has-text("开启推广")').first
+        if not btn.count():
+            btn = raw_page.locator(f'button[data-testid="{BEGIN_PROMOTION_BUTTON_TESTID}"]').last
+        btn.wait_for(state="visible", timeout=5_000)
+        if btn.is_disabled():
+            return {
+                "clicked": False,
+                "reason": "begin_promotion_button_disabled",
+                "method": "playwright_begin_promotion",
+            }
+        btn.scroll_into_view_if_needed(timeout=5_000)
+        btn.click(timeout=5_000)
+        time.sleep(2)
+        text = str(btn.inner_text(timeout=2_000) or "").strip()
+        return {
+            "clicked": True,
+            "text": text or "开启推广",
+            "method": "playwright_begin_promotion",
+        }
+    except Exception as exc:
+        print(f"[{account_id}] Playwright 点击开启推广失败: {_safe_exc(exc)}", flush=True)
+
+    if _click_text(page, "开启推广", timeout=3):
+        time.sleep(2)
+        return {"clicked": True, "text": "开启推广", "method": "text_click"}
+
+    return {
+        **result,
+        "current_url": _page_url(page),
+        "body_preview": _body_text(page)[-300:],
     }
 
 
@@ -2632,12 +2974,28 @@ def open_product_promotion_create(
                 "selected_pdd_product_ids": selected_pdd_product_ids,
             }
 
+        begin_promotion_result = _click_begin_promotion_button(page, account_id)
+        if not begin_promotion_result.get("clicked"):
+            return {
+                "status": "failed",
+                "step": "click_begin_promotion",
+                "error": begin_promotion_result.get("reason") or "无法点击开启推广",
+                "click_result": click_result,
+                "drawer_wait": drawer_wait,
+                "close_result": close_result,
+                "search_result": search_result,
+                "edit_bid_result": edit_bid_result,
+                "boost_checkbox_result": boost_checkbox_result,
+                "begin_promotion_result": begin_promotion_result,
+                "current_url": _page_url(page),
+                "selected_pdd_product_ids": selected_pdd_product_ids,
+            }
+
         return {
             "status": "success",
-            "step": "global_boost_unchecked",
+            "step": "promotion_started",
             "message": (
-                f"已为 {edit_bid_result.get('found_count', 0)} 个商品设置净目标投产比，"
-                f"并已取消勾选全局优选起量"
+                f"已为 {edit_bid_result.get('found_count', 0)} 个商品完成推广设置并点击开启推广"
             ),
             "click_result": click_result,
             "drawer_wait": drawer_wait,
@@ -2645,6 +3003,8 @@ def open_product_promotion_create(
             "search_result": search_result,
             "edit_bid_result": edit_bid_result,
             "boost_checkbox_result": boost_checkbox_result,
+            "begin_promotion_result": begin_promotion_result,
+            "configured_prices": edit_bid_result.get("configured_prices", {}),
             "current_url": _page_url(page),
             "selected_pdd_product_ids": selected_pdd_product_ids,
             "open_tabs": len(_live_context_pages(page)),

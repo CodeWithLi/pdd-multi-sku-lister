@@ -1,6 +1,7 @@
 from unittest.mock import patch
 
 from pdd_agent.skills.traffic.promotion_create import (
+    _click_begin_promotion_button,
     _click_promotion_edit_bid_icons,
     _ensure_global_boost_checkbox_unchecked,
     _is_add_promotion_product_drawer,
@@ -170,6 +171,23 @@ def test_click_promotion_edit_bid_icons_fails_when_search_empty():
     assert result["step"] == "promotion_search_empty"
 
 
+def test_click_begin_promotion_button_by_testid():
+    page = FakeDpPage("https://yingxiao.pinduoduo.com/mains/promotionOverview", "")
+    with patch.object(
+        page,
+        "run_js",
+        return_value={
+            "clicked": True,
+            "text": "开启推广 (2/30)",
+            "method": "beginPromotionButton_testid",
+            "testid": "beginPromotionButton",
+        },
+    ):
+        result = _click_begin_promotion_button(page, "store_A")
+    assert result["clicked"] is True
+    assert "开启推广" in result["text"]
+
+
 def test_ensure_global_boost_checkbox_unchecked_when_already_off():
     page = FakeDpPage("https://yingxiao.pinduoduo.com/mains/promotionOverview", "")
     with patch(
@@ -185,21 +203,35 @@ def test_ensure_global_boost_checkbox_unchecked_clicks_when_checked():
     page = FakeDpPage("https://yingxiao.pinduoduo.com/mains/promotionOverview", "")
     with (
         patch(
+            "pdd_agent.skills.traffic.promotion_create._wait_global_boost_checkbox",
+            return_value={
+                "found": True,
+                "checked": True,
+                "testid": "create_goods_additional_max_cost_checkbox",
+            },
+        ),
+        patch(
             "pdd_agent.skills.traffic.promotion_create._read_global_boost_checkbox_state",
-            side_effect=[
-                {"found": True, "checked": True, "testid": "create_goods_additional_max_cost_checkbox"},
-                {"found": True, "checked": False, "testid": "create_goods_additional_max_cost_checkbox"},
-            ],
+            return_value={"found": True, "checked": True, "testid": "create_goods_additional_max_cost_checkbox"},
         ),
         patch.object(
             page,
             "run_js",
-            return_value={"changed": True, "found": True, "checked": False},
+            return_value={"changed": True, "found": True, "checked": True, "was_checked": True},
         ),
+        patch(
+            "pdd_agent.skills.traffic.promotion_create._finalize_global_boost_uncheck",
+            return_value={
+                "status": "success",
+                "unchecked": True,
+                "confirm_result": {"clicked": True, "method": "confirm_close_text_button"},
+            },
+        ) as finalize_mock,
     ):
         result = _ensure_global_boost_checkbox_unchecked(page, "store_A")
     assert result["status"] == "success"
     assert result["unchecked"] is True
+    finalize_mock.assert_called()
 
 
 def test_parse_roi_bid_limit_price_extracts_suggested_value():
