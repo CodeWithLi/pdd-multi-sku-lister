@@ -199,3 +199,112 @@ def detect_sub_product_category(
     if ruled:
         return ruled
     return fallback_sub_category_from_spec(entry)
+
+
+def _normalize_size_display_label(text: str, max_len: int = 24) -> str:
+    raw = re.sub(r"[。．.!！?？\s]+", "", str(text or "").strip())
+    raw = raw.strip("「」\"'")
+    if not raw:
+        return ""
+    if len(raw) > max_len:
+        return raw[:max_len]
+    return raw
+
+
+def disambiguate_conflicting_size_labels_ai(
+    style_code: str,
+    skus: list,
+    catalog: dict,
+) -> dict[str, str]:
+    """
+    同款式下尺寸名仍冲突时，结合规格图 + 商品表为每个子编码生成唯一尺寸名。
+    返回 model_code.upper() -> 完整尺寸展示名。
+    """
+    from pdd_agent.skills.listing.pdd_product_catalog import get_catalog_entry
+
+    if not skus or not _llm_api_available():
+        return {}
+    lines: list[str] = [
+        "你是电商拼多多规格命名助手。",
+        f"款式编码（固定，不可改）：{style_code}",
+        "以下子商品同属该款式，当前尺寸展示名冲突，请为每个子商品编码生成唯一尺寸名。",
+        "格式：{基础尺寸名}({商品类型}-{2~4字区分词})，例如 笔袋+挂件(公仔-鲨鱼)、笔袋+挂件(公仔-KT)。",
+        "区分词从颜色规格或图片主体提取；商品类型用商品表字段。",
+        "每个编码的尺寸名必须互不相同；编码必须与本款式严格对应，不得混淆到其他款式。",
+        "只返回 JSON 对象，键为子商品编码，值为完整尺寸名。不要 markdown、不要解释。",
+        "",
+        "商品列表：",
+    ]
+    content: list = []
+    for idx, sku in enumerate(skus, start=1):
+        model_code = sku.model_code.strip().upper()
+        entry = catalog.get(model_code) or get_catalog_entry(model_code)
+        base_label = sku.model_name or ""
+        ptype = entry.product_type if entry else ""
+        color_spec = entry.color_spec if entry else ""
+        lines.append(
+            f"{idx}. 子商品编码={model_code}；当前尺寸名={base_label}；"
+            f"商品类型={ptype}；颜色规格={color_spec}；组合文件夹={sku.combo_folder}"
+        )
+        image = sku.preview_image if sku.preview_image and sku.preview_image.is_file() else None
+        if image:
+            lines.append(f"   （下图对应子商品编码 {model_code}）")
+            try:
+                data = base64.b64encode(image.read_bytes()).decode("ascii")
+                media = _image_media_type(image)
+                content.append({"type": "text", "text": f"子商品编码 {model_code} 规格图："})
+                content.append(
+                    {
+                        "type": "image_url",
+                        "image_url": {"url": f"data:{media};base64,{data}"},
+                    }
+                )
+            except Exception as exc:
+                logger.warning("size label image load failed code=%s err=%s", model_code, exc)
+
+    content.insert(0, {"type": "text", "text": "\n".join(lines)})
+
+    try:
+        model = create_vision_model()
+        resp = model.invoke([HumanMessage(content=content)])
+        raw = resp.content if isinstance(resp.content, str) else str(resp.content)
+        parsed = _parse_size_label_json(raw, expected_codes=[s.model_code for s in skus])
+        out: dict[str, str] = {}
+        for sku in skus:
+            code = sku.model_code.strip().upper()
+            label = parsed.get(code) or parsed.get(sku.model_code.strip())
+            if label:
+                out[code] = _normalize_size_display_label(label)
+        return out
+    except Exception as exc:
+        logger.warning("size label AI disambiguate failed style=%s err=%s", style_code, exc)
+        return {}
+
+
+def _parse_size_label_json(raw: str, expected_codes: list[str]) -> dict[str, str]:
+    text = str(raw or "").strip()
+    if not text:
+        return {}
+    # 去掉 markdown 代码块
+    if "```" in text:
+        text = re.sub(r"^```(?:json)?\s*", "", text)
+        text = re.sub(r"\s*```$", "", text.strip())
+    try:
+        import json
+
+        data = json.loads(text)
+        if isinstance(data, dict):
+            return {str(k).strip().upper(): str(v).strip() for k, v in data.items()}
+    except Exception:
+        pass
+    out: dict[str, str] = {}
+    for code in expected_codes:
+        norm = code.strip().upper()
+        m = re.search(
+            rf'["\']?{re.escape(norm)}["\']?\s*[:：]\s*["\']?([^"\']+)["\']?',
+            text,
+            re.IGNORECASE,
+        )
+        if m:
+            out[norm] = m.group(1).strip()
+    return out

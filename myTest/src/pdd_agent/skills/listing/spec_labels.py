@@ -5,13 +5,20 @@ from __future__ import annotations
 from pathlib import Path
 
 from pdd_agent.domain.models import ListingUnit, SkuCombo
-from pdd_agent.llm.vision import detect_product_color, detect_sub_product_category, _fallback_color_from_catalog
+from pdd_agent.llm.vision import (
+    detect_product_color,
+    detect_sub_product_category,
+    disambiguate_conflicting_size_labels_ai,
+    _fallback_color_from_catalog,
+)
 from pdd_agent.db.repositories import get_cached_style_color, upsert_cached_style_color
 from pdd_agent.skills.listing.pdd_product_catalog import (
+    append_product_type_to_size_label,
     get_catalog_entry,
     get_pdd_product_catalog,
     infer_sub_product_category_rules,
     is_weak_sub_category,
+    meaningful_product_type_for_label,
     resolve_size_label,
 )
 
@@ -268,6 +275,101 @@ def apply_spec_labels_to_sku(
     )
 
 
+def _combo_skus_for_style(unit: ListingUnit, style_code: str) -> list[SkuCombo]:
+    style_norm = style_code.strip().upper()
+    return [
+        sku
+        for sku in unit.skus
+        if sku.style_code.strip().upper() == style_norm
+        and sku.model_code.strip().upper() != style_norm
+    ]
+
+
+def _group_skus_by_model_name(skus: list[SkuCombo]) -> dict[str, list[SkuCombo]]:
+    groups: dict[str, list[SkuCombo]] = {}
+    for sku in skus:
+        key = (sku.model_name or "").strip()
+        groups.setdefault(key, []).append(sku)
+    return groups
+
+
+def _fallback_distinct_size_label(sku: SkuCombo, base_label: str, catalog: dict) -> str:
+    """AI/商品类型仍无法区分时，用颜色规格短名或子编码兜底。"""
+    code = sku.model_code.strip().upper()
+    entry = catalog.get(code) or get_catalog_entry(sku.model_code)
+    if entry and entry.color_spec.strip():
+        tail = entry.color_spec.strip()
+        for prefix in ("亚克力定制款", "亚克力定制", "定制款", "亚克力"):
+            if tail.startswith(prefix):
+                tail = tail[len(prefix) :].strip()
+        tail = tail[:4] if tail else ""
+        if tail:
+            return append_product_type_to_size_label(
+                base_label,
+                meaningful_product_type_for_label(entry) or tail,
+            )
+    return f"{base_label}-{sku.model_code}"
+
+
+def disambiguate_size_labels(unit: ListingUnit, catalog: dict, account_id: str = "") -> None:
+    """
+    同款式下若多个子配件落到同一尺寸名，先附加商品类型，仍冲突则 AI 识图区分。
+    仅在同一 style_code 内消歧，避免子编码张冠李戴。
+    """
+    prefix = f"[{account_id}] " if account_id else ""
+
+    for style_code in unit.style_codes:
+        combo_skus = _combo_skus_for_style(unit, style_code)
+        if len(combo_skus) < 2:
+            continue
+
+        by_label = _group_skus_by_model_name(combo_skus)
+        for base_label, group in by_label.items():
+            if len(group) <= 1:
+                continue
+
+            # 第一步：附加商品类型 → 笔袋+挂件(公仔)
+            for sku in group:
+                code = sku.model_code.strip().upper()
+                entry = catalog.get(code) or get_catalog_entry(sku.model_code)
+                ptype = meaningful_product_type_for_label(entry)
+                if ptype:
+                    sku.model_name = append_product_type_to_size_label(base_label, ptype)
+
+            by_typed = _group_skus_by_model_name(group)
+            for typed_label, typed_group in by_typed.items():
+                if len(typed_group) <= 1:
+                    continue
+
+                print(
+                    f"{prefix}[{unit.listing_label}] 尺寸名冲突（{style_code}）："
+                    f"{typed_label} × {len(typed_group)}，AI 区分…",
+                    flush=True,
+                )
+                ai_map = disambiguate_conflicting_size_labels_ai(style_code, typed_group, catalog)
+                for sku in typed_group:
+                    code = sku.model_code.strip().upper()
+                    if ai_map.get(code):
+                        sku.model_name = ai_map[code]
+                        print(
+                            f"{prefix}  {code} → {sku.model_name} ← {sku.combo_folder}",
+                            flush=True,
+                        )
+
+            # 最终仍冲突：颜色规格/编码兜底
+            by_final = _group_skus_by_model_name(group)
+            for final_label, final_group in by_final.items():
+                if len(final_group) <= 1:
+                    continue
+                for sku in final_group:
+                    old = sku.model_name
+                    sku.model_name = _fallback_distinct_size_label(sku, base_label, catalog)
+                    print(
+                        f"{prefix}  兜底区分 {sku.model_code}：{old} → {sku.model_name}",
+                        flush=True,
+                    )
+
+
 def enrich_listing_unit_specs(unit: ListingUnit, account_id: str = "") -> None:
     """将 SKU 的款式/尺寸名改为 AI 颜色 + 商品表分组尺寸（全品类通用）。"""
     if not unit.skus:
@@ -287,5 +389,34 @@ def enrich_listing_unit_specs(unit: ListingUnit, account_id: str = "") -> None:
         if sku.model_name not in seen_sizes:
             seen_sizes.append(sku.model_name)
 
+    disambiguate_size_labels(unit, catalog, account_id=account_id)
+
     unit.style_codes = list(dict.fromkeys(sku.style_code for sku in unit.skus))
-    unit.model_codes = seen_sizes
+    unit.model_codes = list(dict.fromkeys(sku.model_name for sku in unit.skus))
+    dedupe_listing_skus_by_display_spec(unit, account_id=account_id)
+
+
+def dedupe_listing_skus_by_display_spec(unit: ListingUnit, account_id: str = "") -> None:
+    """同一「款式名 + 尺寸名」冲突时编码后缀兜底，不丢弃 SKU。"""
+    if not unit.skus:
+        return
+    prefix = f"[{account_id}] " if account_id else ""
+    kept: list[SkuCombo] = []
+    seen_keys: set[tuple[str, str]] = set()
+    for sku in unit.skus:
+        key = (sku.style_name or "", sku.model_name or "")
+        if key in seen_keys:
+            sku.model_name = f"{sku.model_name}-{sku.model_code}"
+            key = (sku.style_name or "", sku.model_name or "")
+            if key in seen_keys:
+                sku.model_name = f"{sku.model_name}-{sku.combo_folder}"
+                key = (sku.style_name or "", sku.model_name or "")
+            print(
+                f"{prefix}[{unit.listing_label}] 尺寸名兜底：{sku.model_code} → {sku.model_name}",
+                flush=True,
+            )
+        seen_keys.add(key)
+        kept.append(sku)
+    unit.skus = kept
+    unit.style_codes = list(dict.fromkeys(sku.style_code for sku in unit.skus))
+    unit.model_codes = list(dict.fromkeys(sku.model_name for sku in unit.skus))

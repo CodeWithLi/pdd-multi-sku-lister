@@ -215,6 +215,165 @@ def test_load_real_pdd_product_catalog():
     assert catalog["YKL001N"].price > 0
 
 
+def test_append_product_type_to_size_label():
+    from pdd_agent.skills.listing.pdd_product_catalog import append_product_type_to_size_label
+
+    assert append_product_type_to_size_label("笔袋+挂件", "公仔") == "笔袋+挂件(公仔)"
+    assert append_product_type_to_size_label("笔袋+挂件(公仔)", "公仔") == "笔袋+挂件(公仔)"
+    assert append_product_type_to_size_label("笔袋+挂件", "") == "笔袋+挂件"
+
+
+def test_disambiguate_size_labels_by_product_type():
+    from pdd_agent.domain.models import ListingUnit
+    from pdd_agent.skills.listing.spec_labels import disambiguate_size_labels
+
+    unit = ListingUnit(product_code="BD719A", image_set="第一套图", root=Path("."))
+    unit.style_codes = ["BD719A"]
+    unit.skus = [
+        SkuCombo(
+            style_code="BD719A",
+            style_name="蓝色",
+            model_code="ABC123A",
+            model_name="笔袋+挂件",
+            combo_folder="BD719A+ABC123A",
+            preview_image=Path("a.png"),
+        ),
+        SkuCombo(
+            style_code="BD719A",
+            style_name="蓝色",
+            model_code="ABC123B",
+            model_name="笔袋+挂件",
+            combo_folder="BD719A+ABC123B",
+            preview_image=Path("b.png"),
+        ),
+    ]
+    catalog = {
+        "BD719A": PddProductEntry("BD719A", "笔袋", "笔袋"),
+        "ABC123A": PddProductEntry("ABC123A", "鲨鱼挂件", "公仔"),
+        "ABC123B": PddProductEntry("ABC123B", "KT挂件", "钥匙扣"),
+    }
+    disambiguate_size_labels(unit, catalog)
+    assert unit.skus[0].model_name == "笔袋+挂件(公仔)"
+    assert unit.skus[1].model_name == "笔袋+挂件(钥匙扣)"
+
+
+def test_disambiguate_size_labels_uses_ai_when_product_type_collides(monkeypatch):
+    from pdd_agent.domain.models import ListingUnit
+    from pdd_agent.skills.listing.spec_labels import disambiguate_size_labels
+
+    unit = ListingUnit(product_code="BD719A", image_set="第一套图", root=Path("."))
+    unit.style_codes = ["BD719A", "BD719B"]
+    unit.skus = [
+        SkuCombo(
+            style_code="BD719A",
+            style_name="蓝色",
+            model_code="ABC123A",
+            model_name="笔袋+挂件",
+            combo_folder="BD719A+ABC123A",
+            preview_image=Path("a.png"),
+        ),
+        SkuCombo(
+            style_code="BD719A",
+            style_name="蓝色",
+            model_code="ABC123B",
+            model_name="笔袋+挂件",
+            combo_folder="BD719A+ABC123B",
+            preview_image=Path("b.png"),
+        ),
+        SkuCombo(
+            style_code="BD719B",
+            style_name="灰色",
+            model_code="ABC123C",
+            model_name="笔袋+挂件",
+            combo_folder="BD719B+ABC123C",
+            preview_image=Path("c.png"),
+        ),
+        SkuCombo(
+            style_code="BD719B",
+            style_name="灰色",
+            model_code="ABC123D",
+            model_name="笔袋+挂件",
+            combo_folder="BD719B+ABC123D",
+            preview_image=Path("d.png"),
+        ),
+    ]
+    catalog = {
+        "BD719A": PddProductEntry("BD719A", "笔袋", "笔袋"),
+        "BD719B": PddProductEntry("BD719B", "笔袋", "笔袋"),
+        "ABC123A": PddProductEntry("ABC123A", "鲨鱼挂件", "公仔"),
+        "ABC123B": PddProductEntry("ABC123B", "KT挂件", "公仔"),
+        "ABC123C": PddProductEntry("ABC123C", "鲨鱼灰", "公仔"),
+        "ABC123D": PddProductEntry("ABC123D", "KT灰", "公仔"),
+    }
+
+    def fake_ai(style_code, skus, catalog):
+        if style_code == "BD719A":
+            return {
+                "ABC123A": "笔袋+挂件(公仔-鲨鱼)",
+                "ABC123B": "笔袋+挂件(公仔-KT)",
+            }
+        return {
+            "ABC123C": "笔袋+挂件(公仔-鲨鱼)",
+            "ABC123D": "笔袋+挂件(公仔-KT)",
+        }
+
+    monkeypatch.setattr(
+        "pdd_agent.skills.listing.spec_labels.disambiguate_conflicting_size_labels_ai",
+        fake_ai,
+    )
+    disambiguate_size_labels(unit, catalog)
+    assert unit.skus[0].model_name == "笔袋+挂件(公仔-鲨鱼)"
+    assert unit.skus[1].model_name == "笔袋+挂件(公仔-KT)"
+    assert unit.skus[2].model_name == "笔袋+挂件(公仔-鲨鱼)"
+    assert unit.skus[3].model_name == "笔袋+挂件(公仔-KT)"
+
+
+def test_enrich_listing_unit_specs_dedupes_duplicate_display_rows(monkeypatch):
+    from pdd_agent.domain.models import ListingUnit
+    from pdd_agent.skills.listing import spec_labels
+    from pdd_agent.skills.listing.spec_labels import enrich_listing_unit_specs
+
+    unit = ListingUnit(product_code="BD719A", image_set="第一套图", root=Path("."))
+    unit.style_codes = ["BD719A"]
+    unit.skus = [
+        SkuCombo(
+            style_code="BD719A",
+            style_name="BD719A",
+            model_code="GJ361A",
+            model_name="GJ361A",
+            combo_folder="BD719A+GJ361A",
+            preview_image=Path("a.png"),
+        ),
+        SkuCombo(
+            style_code="BD719A",
+            style_name="BD719A",
+            model_code="YKL001A",
+            model_name="YKL001A",
+            combo_folder="BD719A+YKL001A",
+            preview_image=Path("b.png"),
+        ),
+    ]
+
+    catalog = {
+        "BD719A": PddProductEntry("BD719A", "星星笔袋", "笔袋"),
+        "GJ361A": PddProductEntry("GJ361A", "星星亚克力挂件", "公仔"),
+        "YKL001A": PddProductEntry("YKL001A", "白色小铁挂件", "钥匙扣"),
+    }
+
+    monkeypatch.setattr(spec_labels, "get_pdd_product_catalog", lambda: catalog)
+    monkeypatch.setattr(spec_labels, "resolve_style_colors", lambda unit, account_id="": {"BD719A": "蓝色"})
+    monkeypatch.setattr(spec_labels, "disambiguate_style_colors", lambda colors, catalog: colors)
+    monkeypatch.setattr(spec_labels, "persist_style_color_cache", lambda *args, **kwargs: None)
+    monkeypatch.setattr(spec_labels, "build_sub_category_cache", lambda unit, account_id="": {})
+
+    enrich_listing_unit_specs(unit)
+
+    assert len(unit.skus) == 2
+    assert unit.skus[0].combo_folder == "BD719A+GJ361A"
+    assert unit.skus[0].model_name == "笔袋+挂件(公仔)"
+    assert unit.skus[1].model_name == "笔袋+挂件(钥匙扣)"
+
+
 def test_resolve_combo_pricing_from_catalog():
     catalog = {
         "BD716A": PddProductEntry("BD716A", "灰色笔袋", "笔袋", 100, 20.0),

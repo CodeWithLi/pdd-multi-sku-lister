@@ -257,6 +257,27 @@ def infer_sub_product_category(entry: PddProductEntry) -> str:
     return fallback_sub_category_from_spec(entry)
 
 
+def append_product_type_to_size_label(base_label: str, product_type: str) -> str:
+    """在尺寸名后附加商品类型，如 笔袋+挂件 → 笔袋+挂件(公仔)。"""
+    label = (base_label or "").strip()
+    ptype = (product_type or "").strip()
+    if not label or not ptype:
+        return label
+    if f"({ptype})" in label or label.endswith(f"({ptype})"):
+        return label
+    return f"{label}({ptype})"
+
+
+def meaningful_product_type_for_label(entry: PddProductEntry | None) -> str:
+    """可用于尺寸名后缀的商品类型（排除亚克力等弱类型）。"""
+    if not entry:
+        return ""
+    ptype = entry.product_type.strip()
+    if not ptype or ptype in WEAK_SUB_CATEGORIES:
+        return ""
+    return ptype
+
+
 def resolve_size_label(
     style_code: str,
     model_code: str,

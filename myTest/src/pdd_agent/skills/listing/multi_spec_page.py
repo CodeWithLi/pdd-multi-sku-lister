@@ -1365,6 +1365,15 @@ def _resolve_sku_row_index(page, skus: list, index: int, rows: list | None = Non
     return indices[index]
 
 
+def _unique_sku_spec_pairs(skus: list) -> int:
+    return len(
+        {
+            (getattr(sku, "style_name", "") or "", getattr(sku, "model_name", "") or "")
+            for sku in skus
+        }
+    )
+
+
 def fill_multi_spec_rows(
     page,
     account_id: str,
@@ -1374,19 +1383,27 @@ def fill_multi_spec_rows(
 ) -> bool:
     """先批量填文字字段，再逐个上传预览图。返回预览图是否全部就绪。"""
     total_start = _now()
+    unique_rows = _unique_sku_spec_pairs(skus)
 
     if not rows:
         t = _now()
-        _scroll_sku_table_to_load(page, len(skus))
+        _scroll_sku_table_to_load(page, unique_rows)
         rows = _sku_price_table_rows(page)
         _log_step(account_id, f"定位价格表 {len(rows)} 行", t)
     else:
-        _scroll_sku_table_to_load(page, len(skus))
+        _scroll_sku_table_to_load(page, unique_rows)
         _remark_sku_rows(page)
 
-    print(f"[{account_id}] 开始填写 {len(skus)} 个 SKU（已定位 {len(rows)} 行）", flush=True)
+    print(
+        f"[{account_id}] 开始填写 {len(skus)} 个 SKU（已定位 {len(rows)} 行，"
+        f"唯一规格 {unique_rows}）",
+        flush=True,
+    )
 
     t = _now()
+    _scroll_sku_table_to_load(page, unique_rows)
+    _remark_sku_rows(page)
+    time.sleep(0.35)
     row_indices = _compute_row_indices(skus, rows, page=page)
     _log_step(account_id, "匹配价格表行索引", t)
 
@@ -1412,7 +1429,6 @@ def fill_multi_spec_rows(
         refilled = filled
         for sku in retry_skus:
             label = f"{sku.style_name} / {sku.model_name}"
-            sku_idx = next((j for j, s in enumerate(skus) if s is sku), 0)
             row_data = {
                 "inventory": getattr(sku, "inventory", None) or defaults.get("inventory", "10"),
                 "group_price": getattr(sku, "group_price", None) or defaults.get("group_price", "199.9"),
@@ -1422,9 +1438,6 @@ def fill_multi_spec_rows(
             try:
                 t = _now()
                 ok = _fill_row_by_style_size(page, sku.style_name, sku.model_name, row_data)
-                if not ok:
-                    row_idx = row_indices[sku_idx] if sku_idx < len(row_indices) else sku_idx
-                    ok = _fill_row_by_index(page, row_idx, row_data)
                 if ok:
                     if (sku.style_name, sku.model_name) in failed_keys:
                         refilled += 1
