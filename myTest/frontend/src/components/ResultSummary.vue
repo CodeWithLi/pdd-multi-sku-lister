@@ -2,6 +2,7 @@
 import { computed } from 'vue'
 import { listingStatusLabel, runStatusLabel, runStatusType } from '@/utils/labels'
 import {
+  extractActivityRegistrationSummary,
   extractActivityRemovedSpecRows,
   extractActivitySpecLookupMeta,
   extractActivitySpecLookupRows,
@@ -32,6 +33,23 @@ const removedSpecRows = computed(() => extractActivityRemovedSpecRows(props.resu
 
 const specLookupMeta = computed(() => extractActivitySpecLookupMeta(props.result))
 
+const registrationSummary = computed(() => extractActivityRegistrationSummary(props.result))
+
+const registrationTagType = computed(() => {
+  const type = registrationSummary.value?.headline_type
+  if (type === 'success') return 'success'
+  if (type === 'warning') return 'warning'
+  if (type === 'danger') return 'danger'
+  return 'info'
+})
+
+const productOutcomeTagType = (outcome: string) => {
+  if (outcome === 'submitted') return 'success'
+  if (outcome === 'blocked') return 'warning'
+  if (outcome === 'removed' || outcome === 'not_submitted') return 'danger'
+  return 'info'
+}
+
 const priceCheckSummary = computed(() => {
   const rows = specLookupRows.value
   if (!rows.length) return null
@@ -42,6 +60,29 @@ const priceCheckSummary = computed(() => {
 })
 
 const isFailed = computed(() => props.status === 'failed' || props.status === 'cancelled')
+
+const campaignStep = computed(() => {
+  const results = props.result?.results
+  if (!Array.isArray(results) || !results[0] || typeof results[0] !== 'object') return ''
+  return String((results[0] as Record<string, unknown>).step || '')
+})
+
+/** 任务标 success 但只做了规格反查/价格页准备，未点「确认提交」。 */
+const isPartialCampaignSuccess = computed(
+  () => props.status === 'success' && campaignStep.value === 'price_page_prepared',
+)
+
+const displayStatusLabel = computed(() => {
+  if (isPartialCampaignSuccess.value) return '未完成提交'
+  if (props.status) return runStatusLabel[props.status] || props.status
+  return ''
+})
+
+const displayStatusType = computed(() => {
+  if (isPartialCampaignSuccess.value) return 'warning'
+  if (props.status) return (runStatusType[props.status] as string) || 'info'
+  return 'info'
+})
 
 const messageLines = computed(() => {
   const msg = String(props.message || '').trim()
@@ -80,9 +121,54 @@ const delistStats = computed(() => {
   >
     <div class="result-head">
       <span class="result-title">执行结果</span>
-      <el-tag v-if="status" :type="(runStatusType[status] as any) || 'info'" size="small">
-        {{ runStatusLabel[status] || status }}
+      <el-tag v-if="displayStatusLabel" :type="displayStatusType as any" size="small">
+        {{ displayStatusLabel }}
       </el-tag>
+    </div>
+
+    <div v-if="registrationSummary?.visible" class="registration-summary">
+      <el-alert
+        :type="registrationTagType"
+        :closable="false"
+        show-icon
+        class="registration-alert"
+      >
+        <template #title>{{ registrationSummary.headline }}</template>
+        <div class="registration-alert-body">
+          <div class="registration-stats">
+            <span>选品 {{ registrationSummary.selected_count }} 个</span>
+            <span>已提交 {{ registrationSummary.submitted_count }} 个</span>
+            <span v-if="registrationSummary.blocked_count">待核对 {{ registrationSummary.blocked_count }} 个</span>
+            <span v-if="registrationSummary.removed_count">未报名 {{ registrationSummary.removed_count }} 个</span>
+            <span v-if="registrationSummary.spec_total">
+              规格 {{ registrationSummary.spec_passed }}/{{ registrationSummary.spec_total }} 合格
+            </span>
+          </div>
+          <p v-for="(note, index) in registrationSummary.notes" :key="index" class="registration-note">
+            {{ note }}
+          </p>
+        </div>
+      </el-alert>
+
+      <div v-if="registrationSummary.products.length" class="table-scroll registration-product-table">
+        <el-table :data="registrationSummary.products" size="small" stripe class="result-table">
+          <el-table-column prop="pdd_product_id" label="拼多多商品ID" width="140" />
+          <el-table-column prop="product_code" label="识别编码" width="110" />
+          <el-table-column label="报名结果" width="120">
+            <template #default="{ row }">
+              <el-tag size="small" :type="productOutcomeTagType(row.outcome)" effect="plain">
+                {{ row.outcome_label }}
+              </el-tag>
+            </template>
+          </el-table-column>
+          <el-table-column label="规格" width="120">
+            <template #default="{ row }">
+              {{ row.passed_specs }}/{{ row.total_specs || '—' }} 合格
+            </template>
+          </el-table-column>
+          <el-table-column prop="detail" label="说明" min-width="220" show-overflow-tooltip />
+        </el-table>
+      </div>
     </div>
 
     <el-alert
@@ -95,7 +181,7 @@ const delistStats = computed(() => {
       <template #title>{{ resultAlertTitle }}</template>
       <div class="result-alert-body">{{ resultAlertBody }}</div>
     </el-alert>
-    <p v-else-if="message" class="result-msg">{{ message }}</p>
+    <p v-else-if="message && !registrationSummary?.visible" class="result-msg">{{ message }}</p>
 
     <div v-if="removedSpecRows.length" class="spec-lookup-block removed-spec-block">
       <div class="spec-lookup-head">
@@ -342,6 +428,38 @@ const delistStats = computed(() => {
 .result-title {
   font-weight: 600;
   font-size: 15px;
+}
+
+.registration-summary {
+  margin-bottom: 14px;
+}
+
+.registration-alert {
+  margin-bottom: 10px;
+}
+
+.registration-alert-body {
+  margin-top: 4px;
+}
+
+.registration-stats {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px 16px;
+  font-size: 13px;
+  font-weight: 600;
+  color: #334155;
+}
+
+.registration-note {
+  margin: 8px 0 0;
+  font-size: 12px;
+  line-height: 1.55;
+  color: var(--text-secondary);
+}
+
+.registration-product-table {
+  margin-bottom: 0;
 }
 
 .result-alert {

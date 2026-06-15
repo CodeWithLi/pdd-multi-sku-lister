@@ -118,13 +118,18 @@ def _summarize_delist_message(result: dict[str, Any]) -> str:
 
 def _summarize_campaign_message(result: dict[str, Any]) -> str:
     """活动任务失败时只存简短说明，避免把整份 results JSON 写入 message。"""
+    item_results = [r for r in result.get("results") or [] if isinstance(r, dict)]
+    for item in item_results:
+        reg_msg = _activity_registration_summary_line(item)
+        if reg_msg:
+            return reg_msg
+
     errors = result.get("errors") or []
     if isinstance(errors, list):
         for item in errors:
             text = str(item or "").strip()
             if text:
                 return text
-    item_results = [r for r in result.get("results") or [] if isinstance(r, dict)]
     for item in item_results:
         if str(item.get("status") or "") == "success":
             continue
@@ -135,6 +140,113 @@ def _summarize_campaign_message(result: dict[str, Any]) -> str:
     if item_results and all(str(r.get("status") or "") == "success" for r in item_results):
         return "活动任务已完成"
     return "活动任务失败"
+
+
+def _activity_registration_summary_line(item: dict[str, Any]) -> str:
+    """从单次活动报名结果生成一眼可读的摘要。"""
+    step = str(item.get("step") or "").strip()
+    if step == "price_page_prepared":
+        return "仅完成规格反查，未点击确认提交"
+
+    product_ids = [
+        str(pid).strip()
+        for pid in (item.get("product_ids") or [])
+        if str(pid).strip()
+    ]
+    selected = len(product_ids)
+
+    finalize = item.get("finalize_result") if isinstance(item.get("finalize_result"), dict) else {}
+    price_filter = finalize.get("price_filter") if isinstance(finalize.get("price_filter"), dict) else {}
+    if not price_filter and isinstance(item.get("price_filter"), dict):
+        price_filter = item["price_filter"]
+
+    verify = finalize.get("submit_verification") if isinstance(finalize.get("submit_verification"), dict) else {}
+
+    submitted = False
+    if isinstance(finalize.get("confirm_submit"), dict) and finalize["confirm_submit"].get("clicked"):
+        submitted = verify.get("verified") is not False
+    elif step == "register_completed" and str(item.get("status") or "") == "success":
+        submitted = verify.get("verified") is not False
+
+    if str(item.get("status") or "") == "cancelled" or finalize.get("status") == "cancelled":
+        return "未提交报名：全部商品不符合条件"
+    if finalize.get("status") == "failed":
+        err = str(finalize.get("error") or "").strip()
+        if err:
+            return err
+        if verify.get("verified") is False:
+            return "已点击确认提交，但拼多多未受理（可能仍有不合格规格）"
+        return "报名未完成"
+    if price_filter.get("action") == "partial_invalid_needs_manual":
+        err = str(price_filter.get("error") or "").strip()
+        return err.split("\n")[0] if err else "部分商品未能从活动页删除，未提交报名"
+    if price_filter.get("status") == "all_products_removed":
+        summary = str(price_filter.get("filter_summary") or price_filter.get("error") or "").strip()
+        if summary:
+            return summary.split("\n")[0]
+        return "未提交报名：所选商品均含不合格规格，已整商品剔除"
+
+    validation = price_filter.get("validation") if isinstance(price_filter.get("validation"), dict) else {}
+    results = validation.get("results") if isinstance(validation.get("results"), list) else []
+    passed_specs = sum(
+        1
+        for row in results
+        if isinstance(row, dict) and row.get("valid") is True and not row.get("should_remove")
+    )
+    failed_specs = sum(
+        1
+        for row in results
+        if isinstance(row, dict) and (row.get("should_remove") or row.get("valid") is False)
+    )
+
+    filter_result = price_filter.get("filter_result") if isinstance(price_filter.get("filter_result"), dict) else {}
+    partial_ids = {
+        str(pid).strip()
+        for pid in (filter_result.get("partial_product_ids") or [])
+        if str(pid).strip()
+    }
+    removed_ids = {
+        str(pid).strip()
+        for pid in (filter_result.get("removed_product_ids") or [])
+        if str(pid).strip()
+    }
+    skipped_delete = bool(price_filter.get("action") == "partial_invalid_needs_manual")
+
+    if submitted:
+        submitted_products = 0
+        blocked_products = 0
+        removed_products = 0
+        by_product: dict[str, list[dict[str, Any]]] = {}
+        for row in results:
+            if not isinstance(row, dict):
+                continue
+            pid = str(row.get("pdd_product_id") or row.get("page_product_id") or "").strip()
+            by_product.setdefault(pid, []).append(row)
+
+        keys = product_ids or list(by_product.keys())
+        for pid in keys:
+            rows = by_product.get(pid, [])
+            passed = sum(1 for row in rows if row.get("valid") is True and not row.get("should_remove"))
+            failed = sum(1 for row in rows if row.get("should_remove") or row.get("valid") is False)
+            if pid in removed_ids or (failed > 0 and passed == 0):
+                removed_products += 1
+            elif passed > 0:
+                submitted_products += 1
+
+        if submitted_products <= 0:
+            return "未有任何商品完成报名"
+        parts = [f"报名已提交：{submitted_products}/{selected or submitted_products} 个商品"]
+        if blocked_products:
+            parts.append(f"{blocked_products} 个待核对")
+        if removed_products:
+            parts.append(f"{removed_products} 个未报名")
+        if failed_specs:
+            parts.append(f"规格 {passed_specs}/{passed_specs + failed_specs} 合格")
+        return "；".join(parts)
+
+    if step in {"register_completed", "product_pick_confirmed"} and str(item.get("status") or "") == "success":
+        return "活动任务已完成"
+    return ""
 
 
 def _summarize_traffic_message(result: dict[str, Any]) -> str:

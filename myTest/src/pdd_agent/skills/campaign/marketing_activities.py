@@ -10,6 +10,7 @@ from pdd_agent.browser.sync_login import ensure_session_sync, is_login_url
 from pdd_agent.core.config import AccountConfig
 from pdd_agent.skills.campaign.activity_price_validate import (
     _expand_all_specs_on_page,
+    _pause_for_manual_review,
     filter_price_confirm_page,
     lookup_spec_codes_on_price_page,
 )
@@ -42,7 +43,7 @@ KNOWN_MARKETING_ACTIVITIES: tuple[dict[str, str], ...] = (
         "activity_id": "21365",
         "name": "限量7折100件",
         "entry": "go_register",
-        "stop_after": "price_page_prepared",
+        "stop_after": "submit",
     },
 )
 
@@ -988,6 +989,11 @@ WRONG_REGISTRATION_URL_PARTS = ("multi-quick-channel", "MMSMultiQuickCard")
 WRONG_REGISTRATION_TEXT_MARKERS = ("潜力商品报名",)
 EXPECTED_PRODUCT_PICK_MARKERS = ("选择活动商品", "确认选择")
 REGISTRATION_TAB_URL_PARTS = ("act/detail", "act/signup")
+STALE_REGISTRATION_TAB_URL_PARTS = (
+    "/act/index",
+    "actHomeActivityType",
+    "/act/home",
+)
 MULTI_QUICK_CHANNEL_URL = (
     "https://mms.pinduoduo.com/act/multi-quick-channel"
     "?SourceType=PROMO-MMSMultiQuickCard&SceneType=ActivityCard"
@@ -1072,7 +1078,7 @@ def _wait_activity_detail_ready(
 
 
 def _install_multi_quick_tab_blocker(page: DpPage, account_id: str) -> None:
-    """新开标签若是潜力商品快捷通道，立即关闭。"""
+    """新开标签若是潜力商品快捷通道或无关活动列表页，立即关闭。"""
     if getattr(page, "_multi_quick_blocker_installed", False):
         return
     raw_page = getattr(page, "_page", None)
@@ -1082,6 +1088,13 @@ def _install_multi_quick_tab_blocker(page: DpPage, account_id: str) -> None:
     if context is None or not callable(getattr(context, "on", None)):
         return
 
+    def _should_block_new_tab(url: str) -> bool:
+        if _page_url_is_multi_quick(url):
+            return True
+        if not getattr(page, "_campaign_close_stale_tabs", False):
+            return False
+        return _page_url_is_stale_registration_tab(url, "")
+
     def _on_new_page(new_page: Any) -> None:
         for _ in range(8):
             try:
@@ -1089,8 +1102,9 @@ def _install_multi_quick_tab_blocker(page: DpPage, account_id: str) -> None:
                     return
                 url = str(new_page.url or "")
                 if url and url not in ("about:blank", "chrome://newtab/"):
-                    if _page_url_is_multi_quick(url):
-                        print(f"[{account_id}] 拦截新开潜力商品标签: {url}", flush=True)
+                    if _should_block_new_tab(url):
+                        label = "潜力商品" if _page_url_is_multi_quick(url) else "无关活动页"
+                        print(f"[{account_id}] 拦截新开{label}标签: {url}", flush=True)
                         new_page.close()
                     return
             except Exception:
@@ -1098,8 +1112,9 @@ def _install_multi_quick_tab_blocker(page: DpPage, account_id: str) -> None:
             time.sleep(0.5)
         try:
             url = str(new_page.url or "")
-            if _page_url_is_multi_quick(url):
-                print(f"[{account_id}] 拦截新开潜力商品标签: {url}", flush=True)
+            if _should_block_new_tab(url):
+                label = "潜力商品" if _page_url_is_multi_quick(url) else "无关活动页"
+                print(f"[{account_id}] 拦截新开{label}标签: {url}", flush=True)
                 new_page.close()
         except Exception:
             pass
@@ -1219,6 +1234,92 @@ def _close_multi_quick_channel_tabs(page: DpPage, account_id: str) -> dict[str, 
             pass
 
     return {"closed": closed_urls}
+
+
+def _page_url_is_stale_registration_tab(url: str, body_text: str = "") -> bool:
+    """活动报名流程中应关闭的无关标签（活动大厅/详情，非选品/价格确认）。"""
+    safe_url = str(url or "")
+    text = str(body_text or "")
+    if _page_url_is_multi_quick(safe_url):
+        return True
+    if _is_price_confirm_url(safe_url):
+        return False
+    if any(marker in text for marker in ("确认商品价格信息", "填写报名信息")):
+        return False
+    if any(marker in text for marker in EXPECTED_PRODUCT_PICK_MARKERS):
+        return False
+    if any(part in safe_url for part in STALE_REGISTRATION_TAB_URL_PARTS):
+        return True
+    if "act/detail" in safe_url and "goods_price" not in safe_url:
+        return True
+    if "立即报名" in text and "活动详情" in text and "确认选择" not in text:
+        return True
+    return False
+
+
+def _close_irrelevant_registration_tabs(
+    page: DpPage,
+    account_id: str,
+    *,
+    keep_product_pick: bool = False,
+) -> dict[str, Any]:
+    """关闭误开的活动大厅/详情/潜力商品标签，保留价格确认与（可选）选品页。"""
+    multi_quick_result = _close_multi_quick_channel_tabs(page, account_id)
+    closed_urls: list[str] = []
+    raw_page = getattr(page, "_page", None)
+    pages = _live_context_pages(page)
+    if not pages:
+        return {"closed": closed_urls, "multi_quick": multi_quick_result}
+
+    keep_pages: list[Any] = []
+    stale_pages: list[Any] = []
+    for item in pages:
+        try:
+            url = str(item.url or "")
+        except Exception:
+            continue
+        try:
+            _bind_page(page, item)
+            text = _body_text(page)
+        except Exception:
+            text = ""
+        if _is_price_confirm_page(page) or _is_price_confirm_url(url):
+            keep_pages.append(item)
+            continue
+        if keep_product_pick and any(marker in text for marker in EXPECTED_PRODUCT_PICK_MARKERS):
+            keep_pages.append(item)
+            continue
+        if _page_url_is_stale_registration_tab(url, text):
+            stale_pages.append(item)
+
+    if not stale_pages:
+        return {"closed": closed_urls, "multi_quick": multi_quick_result, "kept": len(keep_pages)}
+
+    for item in stale_pages:
+        pages_now = _live_context_pages(page)
+        if len(pages_now) <= 1:
+            break
+        try:
+            url = str(item.url or "")
+        except Exception:
+            url = ""
+        try:
+            if item is raw_page:
+                fallback = next((p for p in keep_pages if p is not item), None)
+                if fallback is None:
+                    fallback = next((p for p in pages_now if p is not item), None)
+                if fallback is None:
+                    break
+                _bind_page(page, fallback)
+                fallback.bring_to_front()
+            if not item.is_closed():
+                item.close()
+            closed_urls.append(url)
+            print(f"[{account_id}] 已关闭无关活动标签页: {url}", flush=True)
+        except Exception:
+            continue
+
+    return {"closed": closed_urls, "multi_quick": multi_quick_result, "kept": len(keep_pages)}
 
 
 def _switch_to_registration_tab(page: DpPage, activity_id: str, account_id: str) -> dict[str, Any]:
@@ -2358,6 +2459,102 @@ def _is_price_confirm_url(url: str) -> bool:
     return "goods_price/confirm" in url or "goods/price" in url
 
 
+def _find_price_confirm_page(
+    page: DpPage,
+    activity_id: str,
+) -> tuple[Any | None, str]:
+    if _is_price_confirm_page(page):
+        return getattr(page, "_page", None), str(page.url or "")
+
+    candidates: list[tuple[str, Any]] = []
+    for item in _live_context_pages(page):
+        try:
+            url = str(item.url or "")
+        except Exception:
+            continue
+        if not _is_price_confirm_url(url):
+            continue
+        if activity_id and activity_id not in url:
+            continue
+        candidates.append((url, item))
+
+    for url, item in reversed(candidates):
+        try:
+            _bind_page(page, item)
+            item.bring_to_front()
+            time.sleep(0.4)
+            if _is_price_confirm_page(page):
+                return item, url
+        except Exception:
+            continue
+    return None, ""
+
+
+def _ensure_price_confirm_page(
+    page: DpPage,
+    activity_id: str,
+    account_id: str,
+    *,
+    timeout: int = 25,
+    keep_product_pick: bool = True,
+) -> dict[str, Any]:
+    """轮询并切到价格确认页，同时关闭误开的活动大厅/详情标签。"""
+    deadline = time.monotonic() + max(timeout, 1)
+    close_history: list[str] = []
+    last_diagnosis: dict[str, Any] = {}
+
+    while time.monotonic() < deadline:
+        target, url = _find_price_confirm_page(page, activity_id)
+        if target is not None:
+            print(f"[{account_id}] 已进入价格确认页: {url}", flush=True)
+            return {
+                "ready": True,
+                "switched": True,
+                "method": "price_confirm_tab",
+                "url": url,
+                "closed_tabs": close_history,
+            }
+
+        close_result = _close_irrelevant_registration_tabs(
+            page,
+            account_id,
+            keep_product_pick=keep_product_pick,
+        )
+        close_history.extend(close_result.get("closed") or [])
+
+        target, url = _find_price_confirm_page(page, activity_id)
+        if target is not None:
+            print(f"[{account_id}] 清理标签后进入价格确认页: {url}", flush=True)
+            return {
+                "ready": True,
+                "switched": True,
+                "method": "price_confirm_tab_after_cleanup",
+                "url": url,
+                "closed_tabs": close_history,
+            }
+
+        if _is_price_confirm_page(page):
+            return {
+                "ready": True,
+                "switched": True,
+                "method": "current_page",
+                "url": str(page.url or ""),
+                "closed_tabs": close_history,
+            }
+
+        last_diagnosis = _describe_campaign_page(page)
+        time.sleep(0.35)
+
+    return {
+        "ready": False,
+        "switched": False,
+        "reason": "price_confirm_page_not_ready",
+        "url": str(page.url or ""),
+        "closed_tabs": close_history,
+        "diagnosis": last_diagnosis,
+    }
+
+
 def _describe_campaign_page(page: DpPage) -> dict[str, Any]:
     """当前页面/标签页诊断信息，便于排查流程跳页。"""
     tabs: list[str] = []
@@ -2385,44 +2582,30 @@ def _switch_to_price_confirm_tab(
     activity_id: str,
     account_id: str,
 ) -> dict[str, Any]:
-    """切到价格确认页标签（goods_price/confirm），避免误停在活动详情。"""
-    if _is_price_confirm_page(page):
+    """切到价格确认页标签（goods_price/confirm），并关闭无关活动页。"""
+    ensure_result = _ensure_price_confirm_page(
+        page,
+        activity_id,
+        account_id,
+        timeout=3,
+        keep_product_pick=True,
+    )
+    if ensure_result.get("ready"):
         return {
             "switched": True,
-            "method": "already_on_page",
-            "url": str(page.url or ""),
+            "method": ensure_result.get("method"),
+            "url": ensure_result.get("url"),
+            "closed_tabs": ensure_result.get("closed_tabs") or [],
         }
 
-    candidates: list[tuple[str, Any]] = []
-    for item in _live_context_pages(page):
-        try:
-            url = str(item.url or "")
-        except Exception:
-            continue
-        if not _is_price_confirm_url(url):
-            continue
-        if activity_id and activity_id not in url:
-            continue
-        candidates.append((url, item))
-
-    for url, item in reversed(candidates):
-        try:
-            _bind_page(page, item)
-            item.bring_to_front()
-            time.sleep(0.8)
-            if _is_price_confirm_page(page):
-                print(f"[{account_id}] 已切到价格确认页: {url}", flush=True)
-                return {"switched": True, "method": "price_confirm_tab", "url": url}
-        except Exception:
-            continue
-
-    diagnosis = _describe_campaign_page(page)
+    diagnosis = ensure_result.get("diagnosis") or _describe_campaign_page(page)
     print(f"[{account_id}] 未找到价格确认页标签: {diagnosis}", flush=True)
     return {
         "switched": False,
         "method": "price_confirm_tab_not_found",
         "url": str(page.url or ""),
         "diagnosis": diagnosis,
+        "closed_tabs": ensure_result.get("closed_tabs") or [],
     }
 
 
@@ -2467,6 +2650,23 @@ def _wait_price_confirm_page(
         if _is_price_confirm_page(page):
             return True
         time.sleep(poll_interval)
+    return False
+
+
+def _wait_price_confirm_content_ready(page: DpPage, *, timeout: int = 20) -> bool:
+    """等待价格确认页表格/按钮渲染完成（避免未展开就抓取规格）。"""
+    deadline = time.monotonic() + max(timeout, 1)
+    while time.monotonic() < deadline:
+        if not _is_price_confirm_page(page):
+            time.sleep(0.4)
+            continue
+        text = _body_text(page)
+        if any(
+            marker in text
+            for marker in ("确认提交", "确认商品价格信息", "填写报名信息", "展开更多规格", "活动价")
+        ):
+            return True
+        time.sleep(0.45)
     return False
 
 
@@ -2661,15 +2861,26 @@ def _expand_price_confirm_specs(page: DpPage, account_id: str) -> dict[str, Any]
 
 def _prepare_price_confirm_page(page: DpPage, account_id: str, activity_id: str) -> dict[str, Any]:
     """确认选择后：进入填写报名信息页 → 展开规格 → 取消全店报名/流量保护勾选。"""
-    time.sleep(1)
-    _dismiss_wrong_tabs_and_focus_product_pick(page, activity_id, account_id)
+    time.sleep(0.8)
+    setattr(page, "_campaign_close_stale_tabs", True)
+    try:
+        ensure_price = _ensure_price_confirm_page(
+            page,
+            activity_id,
+            account_id,
+            timeout=25,
+            keep_product_pick=False,
+        )
+    finally:
+        setattr(page, "_campaign_close_stale_tabs", False)
 
-    if not _wait_price_confirm_page(page, timeout=25):
+    if not ensure_price.get("ready"):
         return {
             "status": "failed",
             "step": "wait_price_confirm_page",
-            "reason": "price_confirm_page_not_ready",
-            "url": page.url,
+            "reason": ensure_price.get("reason") or "price_confirm_page_not_ready",
+            "url": str(page.url or ""),
+            "ensure_price": ensure_price,
         }
 
     expand_result = _expand_price_confirm_specs(page, account_id)
@@ -2818,14 +3029,14 @@ def _read_traffic_protection_checked(page: DpPage) -> dict[str, Any]:
 
 def _uncheck_traffic_protection(page: DpPage, account_id: str, activity_id: str = "") -> dict[str, Any]:
     """确认商品价格信息页取消勾选「开启流量保护」（图四红框）。"""
-    switch_result = _switch_to_price_confirm_tab(page, activity_id, account_id)
-    if not switch_result.get("switched") and not _wait_price_confirm_page(page, timeout=8):
+    ensure_result = _ensure_price_confirm_page(page, activity_id, account_id, timeout=10)
+    if not ensure_result.get("ready"):
         return {
             "unchecked": False,
             "reason": "price_confirm_page_not_ready",
             "url": page.url,
-            "switch_result": switch_result,
-            "page_diagnosis": _describe_campaign_page(page),
+            "ensure_result": ensure_result,
+            "page_diagnosis": ensure_result.get("diagnosis") or _describe_campaign_page(page),
         }
 
     if not _wait_traffic_protection_visible(page, timeout=20):
@@ -2982,6 +3193,63 @@ def _click_confirm_submit(page: DpPage, account_id: str) -> dict[str, Any]:
     return js_result
 
 
+def _verify_registration_submit(page: DpPage, account_id: str, *, timeout: int = 18) -> dict[str, Any]:
+    """确认提交后校验拼多多是否受理（不能只看按钮有没有点到）。"""
+    time.sleep(1.2)
+    deadline = time.monotonic() + max(timeout, 1)
+    last_url = str(page.url or "")
+    last_text = ""
+
+    while time.monotonic() < deadline:
+        _dismiss_message_popup(page)
+        last_url = str(page.url or "")
+        last_text = _body_text(page)
+
+        success_markers = ("活动报名成功", "报名成功", "提交成功", "报名提交成功", "已成功报名", "报名已提交")
+        if any(marker in last_text for marker in success_markers):
+            print(f"[{account_id}] 报名提交校验通过：页面出现成功提示", flush=True)
+            return {"verified": True, "method": "success_text", "url": last_url}
+
+        if not _is_price_confirm_page(page) and "goods_price/confirm" not in last_url:
+            if "确认提交" not in last_text:
+                print(f"[{account_id}] 报名提交校验通过：已离开价格确认页 url={last_url}", flush=True)
+                return {"verified": True, "method": "left_price_confirm", "url": last_url}
+
+        error_markers = (
+            "活动价须高于",
+            "价格不符合",
+            "请修改后",
+            "无法提交",
+            "存在不符合报名要求的商品",
+            "高于活动底价",
+            "请调整活动价",
+        )
+        if any(marker in last_text for marker in error_markers):
+            return {
+                "verified": False,
+                "reason": "submit_rejected_on_page",
+                "url": last_url,
+                "body_sample": last_text[:400],
+            }
+
+        time.sleep(0.45)
+
+    if _is_price_confirm_page(page) or "确认提交" in last_text:
+        return {
+            "verified": False,
+            "reason": "still_on_price_confirm_page",
+            "url": last_url,
+            "body_sample": last_text[:400],
+        }
+
+    return {
+        "verified": False,
+        "reason": "submit_result_unknown",
+        "url": last_url,
+        "body_sample": last_text[:400],
+    }
+
+
 def _wait_product_pick_page_ready(page: DpPage, timeout: int = 15) -> bool:
     for _ in range(timeout):
         _dismiss_message_popup(page)
@@ -3067,11 +3335,35 @@ def _complete_product_pick_confirmation(
     confirm_selection = _click_confirm_product_selection(page, account_id, activity_id)
     if not confirm_selection.get("clicked"):
         return {"status": "failed", "step": "click_confirm_selection", **confirm_selection}
+
+    setattr(page, "_campaign_close_stale_tabs", True)
+    try:
+        ensure_price = _ensure_price_confirm_page(
+            page,
+            activity_id,
+            account_id,
+            timeout=20,
+            keep_product_pick=False,
+        )
+    finally:
+        setattr(page, "_campaign_close_stale_tabs", False)
+
+    if not ensure_price.get("ready"):
+        return {
+            "status": "failed",
+            "step": "wait_price_confirm_page",
+            "error": ensure_price.get("reason") or "price_confirm_page_not_ready",
+            "confirm_selection": confirm_selection,
+            "ensure_price": ensure_price,
+            "current_url": str(page.url or ""),
+        }
+
     return {
         "status": "success",
         "step": "product_pick_confirmed",
         "confirm_selection": confirm_selection,
-        "current_url": page.url,
+        "ensure_price": ensure_price,
+        "current_url": ensure_price.get("url") or str(page.url or ""),
     }
 
 
@@ -3094,6 +3386,31 @@ def _finalize_standard_registration(
     if session_err := _require_logged_in(page, account, account_id):
         return {**session_err, "steps": steps}
 
+    setattr(page, "_campaign_close_stale_tabs", True)
+    try:
+        return _finalize_standard_registration_impl(
+            page,
+            account_id,
+            activity_id,
+            product_ids=product_ids,
+            account=account,
+            steps=steps,
+            _log_step=_log_step,
+        )
+    finally:
+        setattr(page, "_campaign_close_stale_tabs", False)
+
+
+def _finalize_standard_registration_impl(
+    page: DpPage,
+    account_id: str,
+    activity_id: str,
+    *,
+    product_ids: list[str],
+    account: AccountConfig | None,
+    steps: list[dict[str, Any]],
+    _log_step,
+) -> dict[str, Any]:
     time.sleep(1.5)
     _dismiss_wrong_tabs_and_focus_product_pick(page, activity_id, account_id)
 
@@ -3102,25 +3419,101 @@ def _finalize_standard_registration(
     if not confirm_selection.get("clicked"):
         return {"status": "failed", "step": "click_confirm_selection", "steps": steps, **confirm_selection}
 
-    time.sleep(2.5)
-    switch_after_confirm = _switch_to_price_confirm_tab(page, activity_id, account_id)
-    _log_step("switch_price_confirm_after_confirm", {"status": "success" if switch_after_confirm.get("switched") else "failed", **switch_after_confirm})
+    time.sleep(1.5)
+    ensure_price = _ensure_price_confirm_page(
+        page,
+        activity_id,
+        account_id,
+        timeout=25,
+        keep_product_pick=False,
+    )
+    switch_after_confirm = {
+        "switched": bool(ensure_price.get("ready")),
+        "method": ensure_price.get("method") or ensure_price.get("reason"),
+        "url": ensure_price.get("url"),
+        "closed_tabs": ensure_price.get("closed_tabs") or [],
+    }
+    _log_step(
+        "switch_price_confirm_after_confirm",
+        {"status": "success" if ensure_price.get("ready") else "failed", **switch_after_confirm},
+    )
 
-    if not switch_after_confirm.get("switched") and not _wait_price_confirm_page(page, timeout=25):
+    if not ensure_price.get("ready"):
         if session_err := _require_logged_in(page, account, account_id):
             return {**session_err, "steps": steps}
         return {
             "status": "failed",
             "step": "wait_price_confirm_page",
-            "reason": "price_confirm_page_not_ready",
+            "reason": ensure_price.get("reason") or "price_confirm_page_not_ready",
+            "url": page.url,
+            "steps": steps,
+            "confirm_selection": confirm_selection,
+            "ensure_price": ensure_price,
+            "page_diagnosis": ensure_price.get("diagnosis") or _describe_campaign_page(page),
+        }
+
+    if session_err := _require_logged_in(page, account, account_id):
+        return {**session_err, "steps": steps}
+
+    if not _wait_price_confirm_content_ready(page, timeout=22):
+        _pause_for_manual_review(page, account_id, reason="价格确认页内容未加载完成")
+        return {
+            "status": "failed",
+            "step": "wait_price_confirm_content",
+            "error": "价格确认页未加载完成（未看到活动价/确认提交）",
             "url": page.url,
             "steps": steps,
             "confirm_selection": confirm_selection,
             "page_diagnosis": _describe_campaign_page(page),
         }
 
-    if session_err := _require_logged_in(page, account, account_id):
-        return {**session_err, "steps": steps}
+    time.sleep(1.2)
+    expand_result = _expand_price_confirm_specs(page, account_id)
+    _log_step(
+        "expand_price_specs",
+        {
+            "status": "success" if expand_result.get("expanded") else "failed",
+            **expand_result,
+        },
+    )
+    if not expand_result.get("expanded"):
+        _pause_for_manual_review(page, account_id, reason="未能展开全部规格")
+        return {
+            "status": "failed",
+            "step": "expand_price_specs",
+            "error": expand_result.get("error") or expand_result.get("reason") or "未能点击展开全部规格",
+            "expand_result": expand_result,
+            "url": page.url,
+            "steps": steps,
+            "confirm_selection": confirm_selection,
+            "page_diagnosis": _describe_campaign_page(page),
+        }
+
+    shop_wide_result = _uncheck_shop_wide_promotion(page, account_id)
+    if not shop_wide_result.get("unchecked"):
+        not_present = (
+            shop_wide_result.get("reason") == "shop_wide_promotion_not_found"
+            or not (shop_wide_result.get("before") or {}).get("found")
+        )
+        if not_present:
+            shop_wide_result = {**shop_wide_result, "unchecked": True, "method": "skipped_not_present"}
+    _log_step(
+        "uncheck_shop_wide_promotion",
+        {"status": "success" if shop_wide_result.get("unchecked") else "failed", **shop_wide_result},
+    )
+    if not shop_wide_result.get("unchecked"):
+        _pause_for_manual_review(page, account_id, reason="未能取消全店报名勾选")
+        return {
+            "status": "failed",
+            "step": "uncheck_shop_wide_promotion",
+            "error": shop_wide_result.get("reason") or "未能取消全店报名勾选",
+            "shop_wide_promotion": shop_wide_result,
+            "expand_result": expand_result,
+            "url": page.url,
+            "steps": steps,
+            "confirm_selection": confirm_selection,
+            "page_diagnosis": _describe_campaign_page(page),
+        }
 
     price_filter = filter_price_confirm_page(page, account_id, product_ids)
     _log_step(
@@ -3135,6 +3528,7 @@ def _finalize_standard_registration(
         },
     )
     if price_filter.get("status") == "all_products_removed":
+        _pause_for_manual_review(page, account_id, reason="全部商品不符合价格条件")
         return {
             "status": "cancelled",
             "step": "filter_activity_prices",
@@ -3145,6 +3539,11 @@ def _finalize_standard_registration(
             "current_url": page.url,
         }
     if price_filter.get("status") != "success":
+        _pause_for_manual_review(
+            page,
+            account_id,
+            reason=str(price_filter.get("error") or price_filter.get("reason") or "价格校验未通过"),
+        )
         return {
             "status": "failed",
             "step": price_filter.get("step", "filter_activity_prices"),
@@ -3193,6 +3592,25 @@ def _finalize_standard_registration(
     if not submit_result.get("clicked"):
         return {"status": "failed", "step": "click_confirm_submit", "steps": steps, **submit_result}
 
+    submit_verify = _verify_registration_submit(page, account_id)
+    _log_step(
+        "verify_submit",
+        {"status": "success" if submit_verify.get("verified") else "failed", **submit_verify},
+    )
+    if not submit_verify.get("verified"):
+        _pause_for_manual_review(page, account_id, reason="拼多多未确认报名成功")
+        return {
+            "status": "failed",
+            "step": "verify_registration_submit",
+            "error": submit_verify.get("reason") or "拼多多未确认报名成功，可能仍有不合格规格未处理",
+            "price_filter": price_filter,
+            "confirm_selection": confirm_selection,
+            "confirm_submit": submit_result,
+            "submit_verification": submit_verify,
+            "steps": steps,
+            "page_diagnosis": _describe_campaign_page(page),
+        }
+
     return {
         "status": "success",
         "step": "register_submitted",
@@ -3200,6 +3618,7 @@ def _finalize_standard_registration(
         "price_filter": price_filter,
         "traffic_protection": traffic_result,
         "confirm_submit": submit_result,
+        "submit_verification": submit_verify,
         "steps": steps,
         "current_url": page.url,
     }

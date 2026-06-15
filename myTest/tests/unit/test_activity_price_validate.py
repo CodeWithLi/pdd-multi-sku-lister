@@ -232,7 +232,7 @@ def test_build_removed_spec_record_marks_delete_failure():
     assert record["delete_error_text"] == "活动页未找到删除按钮"
 
 
-def test_group_products_for_filter_only_removes_when_all_specs_invalid():
+def test_group_products_for_filter_removes_partial_invalid_whole_product():
     results = [
         {"pdd_product_id": "111", "should_remove": False, "valid": True},
         {"pdd_product_id": "111", "should_remove": True, "valid": False},
@@ -241,8 +241,8 @@ def test_group_products_for_filter_only_removes_when_all_specs_invalid():
         {"pdd_product_id": "333", "should_remove": True, "valid": False},
     ]
     kept, removed, partial = _group_products_for_filter(results)
-    assert kept == ["111", "222"]
-    assert removed == ["333"]
+    assert kept == ["222"]
+    assert removed == ["111", "333"]
     assert partial == ["111"]
 
 
@@ -268,7 +268,7 @@ def test_row_matches_spec_target_uses_activity_price():
     )
 
 
-def test_delete_invalid_price_goods_skips_when_partial_invalid(monkeypatch):
+def test_delete_invalid_price_goods_deletes_partial_invalid_product_whole(monkeypatch):
     page = SimpleNamespace(url="https://mms.pinduoduo.com/act/goods_price/confirm")
     delete_calls: list[str] = []
 
@@ -286,15 +286,15 @@ def test_delete_invalid_price_goods_skips_when_partial_invalid(monkeypatch):
     )
     monkeypatch.setattr(
         "pdd_agent.skills.campaign.activity_price_validate._scrape_price_confirm_specs",
-        lambda *_args, **_kwargs: {"spec_count": 12, "specs": [{}] * 12},
+        lambda *_args, **_kwargs: {"spec_count": 0, "specs": []},
     )
     monkeypatch.setattr(
         "pdd_agent.skills.campaign.activity_price_validate._read_price_confirm_empty_state",
-        lambda *_args, **_kwargs: {"empty": False},
+        lambda *_args, **_kwargs: {"empty": True},
     )
 
     validation = {
-        "passed_count": 8,
+        "passed_count": 1,
         "results": [
             {
                 "pdd_product_id": "965180544666",
@@ -319,11 +319,11 @@ def test_delete_invalid_price_goods_skips_when_partial_invalid(monkeypatch):
         ],
     }
     result = _delete_invalid_price_goods(page, "store_A", validation)
-    assert delete_calls == []
-    assert result["skipped_delete"] is True
-    assert result["remaining_count"] == 12
-    assert len(result["removed_specs"]) == 1
-    assert result["removed_specs"][0]["delete_error"] == "pdd_product_level_delete_skipped"
+    assert delete_calls == ["965180544666"]
+    assert result["skipped_delete"] is False
+    assert result["remaining_count"] == 0
+    assert len(result["removed_specs"]) == 2
+    assert result["removed_specs"][1]["removal_cause"] == "collateral_with_invalid_specs"
 
 
 def test_delete_invalid_price_goods_deletes_all_invalid_product(monkeypatch):
@@ -582,6 +582,43 @@ def test_validate_spec_prices_uses_pdd_lookup_skus_for_manual_product():
     assert result["results"][0]["valid"] is True
 
 
+def test_filter_price_confirm_page_deletes_partial_then_continues(monkeypatch):
+    page = SimpleNamespace(url="https://mms.pinduoduo.com/act/goods_price/confirm")
+    state = {
+        "status": "success",
+        "step": "price_validation_ready",
+        "validation": {
+            "remove_count": 1,
+            "spec_count": 3,
+            "passed_count": 2,
+            "results": [
+                {"pdd_product_id": "111", "should_remove": True, "spec_code": "BAD"},
+                {"pdd_product_id": "222", "should_remove": False, "spec_code": "OK1"},
+                {"pdd_product_id": "222", "should_remove": False, "spec_code": "OK2"},
+            ],
+        },
+    }
+    monkeypatch.setattr(
+        "pdd_agent.skills.campaign.activity_price_validate._prepare_price_validation_state",
+        lambda *_args, **_kwargs: state,
+    )
+    monkeypatch.setattr(
+        "pdd_agent.skills.campaign.activity_price_validate._delete_invalid_price_goods",
+        lambda *_args, **_kwargs: {
+            "remaining_count": 2,
+            "on_price_confirm_after": True,
+            "removed_product_ids": ["111"],
+            "partial_product_ids": ["111"],
+            "removed_specs": [],
+            "failed_deletes": [],
+        },
+    )
+    result = filter_price_confirm_page(page, "store_A", ["111", "222"])
+    assert result["status"] == "success"
+    assert result["action"] == "continue_submit"
+    assert result.get("filter_summary")
+
+
 def test_filter_price_confirm_page_all_removed_status_not_overwritten(monkeypatch):
     page = SimpleNamespace(url="https://mms.pinduoduo.com/act/goods_price/confirm")
     state = {
@@ -608,3 +645,17 @@ def test_filter_price_confirm_page_all_removed_status_not_overwritten(monkeypatc
     result = filter_price_confirm_page(page, "store_A", ["111"])
     assert result["status"] == "all_products_removed"
     assert result["action"] == "close_page"
+
+
+def test_prepare_price_validation_state_fails_when_expand_incomplete(monkeypatch):
+    page = SimpleNamespace(url="https://mms.pinduoduo.com/act/goods_price/confirm")
+    monkeypatch.setattr(
+        "pdd_agent.skills.campaign.activity_price_validate._expand_all_specs_on_page",
+        lambda *_args, **_kwargs: {"clicked_count": 1, "remaining_links": 2, "clicked": ["展开更多规格(10个)"]},
+    )
+    from pdd_agent.skills.campaign.activity_price_validate import _prepare_price_validation_state
+
+    result = _prepare_price_validation_state(page, "store_A", ["965182969751"])
+    assert result["status"] == "failed"
+    assert result["reason"] == "expand_specs_incomplete"
+    assert "仍有 2 个" in str(result.get("error") or "")

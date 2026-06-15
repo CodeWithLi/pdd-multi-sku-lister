@@ -1,0 +1,47 @@
+# Docker 部署用 settings.yaml 模板
+# 复制：cp config/settings.docker.example.yaml config/settings.yaml
+
+app:
+  log_level: INFO
+
+paths:
+  assets_root: data/assets/商品上架规格文件
+  profiles_root: data/profiles
+  runs_root: data/runs
+
+browser:
+  headless: true
+  slow_mo: 0
+  default_timeout_ms: 30000
+  base_url: https://mms.pinduoduo.com
+  channel: ""
+
+multi_spec:
+  excel: data/assets/拼多多所有商品.xls
+  defaults:
+    inventory: "10"
+    group_price: "199.9"
+    single_price: "299.9"
+
+listing:
+  category_keyword: 玩偶
+  title_mode: page_ai
+
+delist:
+  min_created_after: ""
+  dry_run: true
+  merchant_code_contains: ""
+  max_delist_per_run: 50
+  account_ids: []
+
+batch:
+  max_concurrent_stores: 1
+  store_start_delay_min_seconds: 30
+  store_start_delay_max_seconds: 180
+
+accounts:
+  - account_id: store_A
+    enabled: true
+    username: ""
+    password: ""
+    product_codes: []

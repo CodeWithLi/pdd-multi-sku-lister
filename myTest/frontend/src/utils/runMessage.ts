@@ -20,9 +20,15 @@ export function summarizeRunError(run: Pick<RunRecord, 'message' | 'result'>): s
     for (const item of results) {
       if (!item || typeof item !== 'object') continue
       const row = item as Record<string, unknown>
-      const msg = String(row.message || row.error || '').trim()
+      const msg = String(row.message || row.error || row.reason || '').trim()
       if (msg && String(row.status || '') !== 'success') {
         const step = String(row.step || '').trim()
+        if (step === 'wait_price_confirm_page' || msg === 'price_confirm_page_not_ready') {
+          return '未能进入价格确认页：浏览器停在活动大厅/详情页。已尝试关闭无关标签，请重试；若仍失败请手动保留价格确认页后再跑。'
+        }
+        if (step === 'expand_price_specs' || msg === 'expand_specs_incomplete') {
+          return '未能展开全部规格：价格确认页仍有「展开更多规格」未点击，无法完整校验活动价。'
+        }
         return step && !msg.includes(step) ? `${step}: ${msg}` : msg
       }
       const finalize = row.finalize_result
@@ -348,4 +354,364 @@ export function extractActivityRemovedSpecRows(result?: Record<string, unknown>)
         reason_text: row.reason_text,
       }),
     )
+}
+
+export type ActivityRegistrationProductOutcome =
+  | 'submitted'
+  | 'removed'
+  | 'blocked'
+  | 'not_submitted'
+  | 'prepared_only'
+  | 'unknown'
+
+export type ActivityRegistrationProductRow = {
+  pdd_product_id: string
+  product_code: string
+  outcome: ActivityRegistrationProductOutcome
+  outcome_label: string
+  passed_specs: number
+  failed_specs: number
+  total_specs: number
+  detail: string
+}
+
+export type ActivityRegistrationSummary = {
+  visible: boolean
+  headline: string
+  headline_type: 'success' | 'warning' | 'danger' | 'info'
+  submitted: boolean | null
+  selected_count: number
+  submitted_count: number
+  removed_count: number
+  blocked_count: number
+  spec_passed: number
+  spec_failed: number
+  spec_total: number
+  products: ActivityRegistrationProductRow[]
+  notes: string[]
+}
+
+function isCampaignRegistrationPayload(payload: Record<string, unknown>): boolean {
+  if (Array.isArray(payload.product_ids) && payload.product_ids.length) return true
+  if (payload.activity_id) return true
+  if (payload.finalize_result) return true
+  if (payload.spec_lookup) return true
+  const step = String(payload.step || '')
+  return ['register_completed', 'price_page_prepared', 'product_pick_confirmed', 'register_submitted'].includes(step)
+}
+
+function detectActivitySubmitted(payload: Record<string, unknown>): boolean | null {
+  const step = String(payload.step || '')
+  if (step === 'price_page_prepared' || step === 'product_pick_confirmed') return null
+
+  if (String(payload.status || '') === 'cancelled') return false
+
+  const priceFilter = payload.price_filter
+  if (priceFilter && typeof priceFilter === 'object') {
+    const pf = priceFilter as Record<string, unknown>
+    if (pf.action === 'partial_invalid_needs_manual') return false
+  }
+
+  const finalize = payload.finalize_result
+  if (finalize && typeof finalize === 'object') {
+    const fin = finalize as Record<string, unknown>
+    if (fin.status === 'cancelled' || fin.status === 'failed') return false
+    const priceFilter = fin.price_filter
+    if (priceFilter && typeof priceFilter === 'object') {
+      const pf = priceFilter as Record<string, unknown>
+      if (pf.status === 'all_products_removed') return false
+      if (pf.action === 'close_page') return false
+    }
+    const submit = fin.confirm_submit
+    if (submit && typeof submit === 'object') {
+      if ((submit as Record<string, unknown>).clicked === true) {
+        const verify = fin.submit_verification
+        if (verify && typeof verify === 'object') {
+          if ((verify as Record<string, unknown>).verified === false) return false
+          if ((verify as Record<string, unknown>).verified === true) return true
+        }
+        return true
+      }
+      if ((submit as Record<string, unknown>).clicked === false) return false
+    }
+    if (fin.status === 'success' && step === 'register_completed') return true
+  }
+
+  const confirm = payload.confirm_result
+  if (confirm && typeof confirm === 'object') {
+    const clicked = (confirm as Record<string, unknown>).clicked
+    if (clicked === true) return true
+  }
+
+  if (step === 'register_completed' && String(payload.status || '') === 'success') return true
+  return null
+}
+
+function groupSpecRowsByProduct(rows: ActivitySpecLookupRow[]): Map<string, ActivitySpecLookupRow[]> {
+  const grouped = new Map<string, ActivitySpecLookupRow[]>()
+  for (const row of rows) {
+    const pid = String(row.pdd_product_id || row.product_code || 'unknown').trim() || 'unknown'
+    const bucket = grouped.get(pid) || []
+    bucket.push(row)
+    grouped.set(pid, bucket)
+  }
+  return grouped
+}
+
+function countSpecStates(rows: ActivitySpecLookupRow[]) {
+  const passed = rows.filter((row) => row.valid === true && !row.should_remove).length
+  const failed = rows.filter((row) => row.should_remove || row.valid === false).length
+  return { passed, failed, total: rows.length }
+}
+
+function resolveProductOutcome(
+  pid: string,
+  specs: ActivitySpecLookupRow[],
+  ctx: {
+    submitted: boolean | null
+    step: string
+    partialIds: Set<string>
+    removedIds: Set<string>
+    skippedDelete: boolean
+    removedSpecCodes: Set<string>
+  },
+): ActivityRegistrationProductRow {
+  const productCode = String(specs[0]?.product_code || pid || '').trim()
+  const { passed, failed, total } = countSpecStates(specs)
+  const base = {
+    pdd_product_id: pid,
+    product_code: productCode,
+    passed_specs: passed,
+    failed_specs: failed,
+    total_specs: total,
+  }
+
+  if (ctx.step === 'price_page_prepared') {
+    return {
+      ...base,
+      outcome: 'prepared_only',
+      outcome_label: '仅反查',
+      detail: '已完成价格确认页准备，未点击正式提交报名',
+    }
+  }
+
+  if (ctx.submitted === false) {
+    if (ctx.partialIds.has(pid) || ctx.removedIds.has(pid) || (failed > 0 && passed === 0)) {
+      const detail = ctx.partialIds.has(pid) && failed > 0
+        ? `${failed} 条规格不合格（共 ${total} 条），有一不合格即整商品剔除，未参与报名`
+        : ctx.removedIds.has(pid)
+          ? '全部规格不合格或已整商品剔除，未参与报名'
+          : '商品不符合条件，已从价格确认页剔除'
+      return {
+        ...base,
+        outcome: 'removed',
+        outcome_label: '已剔除',
+        detail,
+      }
+    }
+    return {
+      ...base,
+      outcome: 'not_submitted',
+      outcome_label: '未报名',
+      detail: '任务未提交到拼多多（可能全部商品被剔除或流程中断）',
+    }
+  }
+
+  if (ctx.removedIds.has(pid) || ctx.partialIds.has(pid)) {
+    if (ctx.partialIds.has(pid) && failed > 0) {
+      return {
+        ...base,
+        outcome: 'removed',
+        outcome_label: '已剔除',
+        detail:
+          passed > 0
+            ? `${failed} 条规格不合格（共 ${total} 条），有一不合格即整商品剔除，未参与报名`
+            : '全部规格不合格，整商品已删除',
+      }
+    }
+  }
+
+  if (ctx.removedIds.has(pid) || (passed === 0 && failed > 0)) {
+    const removedBySpec = specs.some((row) => row.spec_code && ctx.removedSpecCodes.has(row.spec_code))
+    if (removedBySpec || ctx.removedIds.has(pid)) {
+      return {
+        ...base,
+        outcome: 'removed',
+        outcome_label: '未报名',
+        detail: '全部规格不合格或已删除，未参与最终提交',
+      }
+    }
+  }
+
+  if (ctx.submitted === true) {
+    if (passed > 0) {
+      return {
+        ...base,
+        outcome: 'submitted',
+        outcome_label: '已提交报名',
+        detail:
+          failed > 0
+            ? `共 ${total} 条规格，${passed} 条合格并已提交`
+            : `共 ${passed} 条规格全部合格并已提交`,
+      }
+    }
+    return {
+      ...base,
+      outcome: 'removed',
+      outcome_label: '未报名',
+      detail: '无合格规格参与提交',
+    }
+  }
+
+  return {
+    ...base,
+    outcome: 'unknown',
+    outcome_label: '待确认',
+    detail: '请查看下方规格明细或在拼多多后台核对报名结果',
+  }
+}
+
+/** 活动报名最终结果摘要：一眼看出有没有商品提交成功。 */
+export function extractActivityRegistrationSummary(
+  result?: Record<string, unknown>,
+): ActivityRegistrationSummary | null {
+  const payload = firstResultPayload(result)
+  if (!payload || !isCampaignRegistrationPayload(payload)) return null
+
+  const step = String(payload.step || '')
+  const submitted = detectActivitySubmitted(payload)
+  const specRows = extractActivitySpecLookupRows(result)
+  const removedRows = extractActivityRemovedSpecRows(result)
+  const priceFilter = findPriceFilterBlock(payload)
+  const filterResult =
+    priceFilter?.filter_result && typeof priceFilter.filter_result === 'object'
+      ? (priceFilter.filter_result as Record<string, unknown>)
+      : null
+
+  const partialIds = new Set(
+    (Array.isArray(filterResult?.partial_product_ids)
+      ? filterResult?.partial_product_ids
+      : []
+    ).map((item) => String(item || '').trim()).filter(Boolean),
+  )
+  const removedIds = new Set(
+    (Array.isArray(filterResult?.removed_product_ids)
+      ? filterResult?.removed_product_ids
+      : []
+    ).map((item) => String(item || '').trim()).filter(Boolean),
+  )
+  const skippedDelete = priceFilter?.action === 'partial_invalid_needs_manual'
+  const filterSummary =
+    typeof priceFilter?.filter_summary === 'string' ? String(priceFilter.filter_summary).trim() : ''
+
+  const removedSpecCodes = new Set(
+    removedRows
+      .filter((row) => row.deleted !== false)
+      .map((row) => String(row.spec_code || '').trim())
+      .filter(Boolean),
+  )
+
+  const selectedIds = Array.isArray(payload.product_ids)
+    ? payload.product_ids.map((item) => String(item || '').trim()).filter(Boolean)
+    : []
+
+  const grouped = groupSpecRowsByProduct(specRows)
+  const productKeys = selectedIds.length
+    ? selectedIds
+    : Array.from(grouped.keys()).filter((key) => key !== 'unknown')
+
+  const products = productKeys.map((pid) => {
+    const specs = grouped.get(pid) || []
+    return resolveProductOutcome(pid, specs, {
+      submitted,
+      step,
+      partialIds,
+      removedIds,
+      skippedDelete,
+      removedSpecCodes,
+    })
+  })
+
+  const submittedCount = products.filter((row) => row.outcome === 'submitted').length
+  const blockedCount = products.filter((row) => row.outcome === 'blocked').length
+  const removedCount = products.filter((row) => row.outcome === 'removed' || row.outcome === 'not_submitted').length
+  const specPassed = specRows.filter((row) => row.valid === true && !row.should_remove).length
+  const specFailed = specRows.filter((row) => row.should_remove || row.valid === false).length
+  const selectedCount = productKeys.length || selectedIds.length
+
+  let headline = '报名结果待确认'
+  let headline_type: ActivityRegistrationSummary['headline_type'] = 'info'
+  const notes: string[] = []
+
+  if (submitted === true) {
+    if (submittedCount <= 0) {
+      headline = '未有任何商品完成报名'
+      headline_type = 'danger'
+      notes.push('任务虽执行完成，但没有商品带着合格规格提交到拼多多。')
+    } else if (blockedCount > 0 || removedCount > 0) {
+      headline = `报名已提交：${submittedCount}/${selectedCount || submittedCount} 个商品`
+      headline_type = 'warning'
+      if (blockedCount > 0) {
+        notes.push(`${blockedCount} 个商品含未能自动剔除的不合格规格，请到拼多多后台核对。`)
+      }
+      if (removedCount > 0) {
+        notes.push(`${removedCount} 个商品未参与报名（已剔除或无合格规格）。`)
+      }
+    } else {
+      headline = `报名成功：${submittedCount} 个商品已提交`
+      headline_type = 'success'
+    }
+  } else if (submitted === false) {
+    if (filterSummary) {
+      headline = '未提交报名'
+      headline_type = 'danger'
+      notes.push(filterSummary.split('\n')[0])
+    } else {
+      headline = '未提交报名'
+      headline_type = 'danger'
+      notes.push('全部商品被剔除或任务在提交前已终止。')
+    }
+  } else if (step === 'price_page_prepared') {
+    headline = '仅完成规格反查，未正式提交报名'
+    headline_type = 'warning'
+    notes.push('本活动此前配置为只反查不提交；若需自动点「确认提交」，请更新后端后重试。')
+  } else if (step === 'register_completed' && String(payload.status || '') === 'success') {
+    headline = submittedCount > 0 ? `报名已提交：${submittedCount} 个商品` : '报名结果待后台核对'
+    headline_type = submittedCount > 0 ? 'success' : 'warning'
+  }
+
+  if (specRows.length) {
+    notes.push(`规格价格：${specPassed} 条合格 / ${specFailed} 条不合格（共 ${specRows.length} 条）。`)
+  }
+  if (filterSummary) {
+    for (const line of filterSummary.split('\n').filter(Boolean)) {
+      if (!notes.includes(line)) notes.push(line)
+    }
+  }
+  if (removedRows.some((row) => row.deleted === false)) {
+    notes.push('部分不合格商品未能从活动页删除，请手动处理后重试。')
+  }
+
+  return {
+    visible: true,
+    headline,
+    headline_type,
+    submitted,
+    selected_count: selectedCount,
+    submitted_count: submittedCount,
+    removed_count: removedCount,
+    blocked_count: blockedCount,
+    spec_passed: specPassed,
+    spec_failed: specFailed,
+    spec_total: specRows.length,
+    products,
+    notes,
+  }
+}
+
+export function formatActivityRegistrationMessage(summary: ActivityRegistrationSummary | null): string {
+  if (!summary?.visible) return ''
+  const parts = [summary.headline]
+  if (summary.notes.length) parts.push(summary.notes[0])
+  return parts.join('；')
 }

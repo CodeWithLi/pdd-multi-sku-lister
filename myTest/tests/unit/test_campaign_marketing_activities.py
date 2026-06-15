@@ -153,10 +153,10 @@ def test_known_marketing_activities_contains_20981():
     assert "21365" in ids
 
 
-def test_activity_profile_21365_uses_go_register_and_stops_after_price_page_prepared():
+def test_activity_profile_21365_uses_go_register_and_full_submit():
     profile = _get_activity_profile("21365")
     assert profile["entry"] == "go_register"
-    assert profile["stop_after"] == "price_page_prepared"
+    assert profile["stop_after"] == "submit"
 
 
 def test_activity_detail_ready_on_index_modal_without_activity_id():
@@ -259,3 +259,65 @@ def test_search_marketing_activity_success_flow(monkeypatch):
     assert result["activity_id"] == "20981"
     assert result["results"]["matched"] is True
     assert any(call[0] == "run_js" for call in page.calls)
+
+
+def test_stale_registration_tab_detects_activity_index():
+    from pdd_agent.skills.campaign.marketing_activities import _page_url_is_stale_registration_tab
+
+    assert _page_url_is_stale_registration_tab(
+        "https://mms.pinduoduo.com/act/index?tab=1",
+        "活动详情 立即报名 限量7折100件",
+    )
+    assert not _page_url_is_stale_registration_tab(
+        "https://mms.pinduoduo.com/act/goods_price/confirm?activityId=20981",
+        "确认商品价格信息",
+    )
+    assert not _page_url_is_stale_registration_tab(
+        "https://mms.pinduoduo.com/act/signup/goods",
+        "选择活动商品 确认选择",
+    )
+
+
+def test_prepare_price_confirm_page_does_not_focus_product_pick(monkeypatch):
+    from pdd_agent.skills.campaign.marketing_activities import _prepare_price_confirm_page
+
+    calls: list[str] = []
+
+    def _track(name: str):
+        def _wrapped(*args, **kwargs):
+            calls.append(name)
+            if name == "ensure":
+                return {"ready": True, "url": "https://mms.pinduoduo.com/act/goods_price/confirm?activityId=21365"}
+            return {"expanded": True}
+
+        return _wrapped
+
+    monkeypatch.setattr(
+        "pdd_agent.skills.campaign.marketing_activities._dismiss_wrong_tabs_and_focus_product_pick",
+        lambda *args, **kwargs: calls.append("dismiss") or {},
+    )
+    monkeypatch.setattr(
+        "pdd_agent.skills.campaign.marketing_activities._ensure_price_confirm_page",
+        _track("ensure"),
+    )
+    monkeypatch.setattr(
+        "pdd_agent.skills.campaign.marketing_activities._expand_price_confirm_specs",
+        _track("expand"),
+    )
+    monkeypatch.setattr(
+        "pdd_agent.skills.campaign.marketing_activities._uncheck_shop_wide_promotion",
+        lambda *args, **kwargs: {"unchecked": True, "method": "already_unchecked"},
+    )
+    monkeypatch.setattr(
+        "pdd_agent.skills.campaign.marketing_activities._uncheck_traffic_protection",
+        lambda *args, **kwargs: {"unchecked": True, "method": "already_unchecked"},
+    )
+
+    page = FakeDpPage(
+        url="https://mms.pinduoduo.com/act/goods_price/confirm?activityId=21365",
+        body_text="确认商品价格信息 填写报名信息",
+    )
+    result = _prepare_price_confirm_page(page, "store_A", "21365")
+    assert result["status"] == "success"
+    assert "dismiss" not in calls
+    assert "ensure" in calls

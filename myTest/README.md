@@ -81,6 +81,8 @@ Skills (skills/) ──→ Playwright (browser/)
 
 ## 快速开始
 
+本地开发见上文；**Docker 部署到 Ubuntu / 绑定域名**见 [deploy/DEPLOY.md](deploy/DEPLOY.md)。
+
 ```bash
 cd myTest
 

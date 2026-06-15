@@ -5,7 +5,7 @@ import { ElMessage } from 'element-plus'
 import { api } from '@/api/client'
 import PageHeader from '@/components/PageHeader.vue'
 import ResultSummary from '@/components/ResultSummary.vue'
-import { summarizeRunError, extractActivitySpecLookupMeta, extractActivitySpecLookupRows } from '@/utils/runMessage'
+import { summarizeRunError, extractActivitySpecLookupMeta, extractActivitySpecLookupRows, formatActivityRegistrationMessage, extractActivityRegistrationSummary } from '@/utils/runMessage'
 import type {
   Account,
   CampaignTaskResponse,
@@ -276,6 +276,13 @@ function syncMarketingResultFromRun(run: RunRecord) {
   }
 }
 
+function campaignCompletionMessage(run: RunRecord): string {
+  const summary = extractActivityRegistrationSummary(run.result as Record<string, unknown> | undefined)
+  const formatted = formatActivityRegistrationMessage(summary)
+  if (formatted) return formatted
+  return run.message || '营销活动任务已完成'
+}
+
 function startMarketingPolling(runId: string) {
   stopMarketingPolling()
   marketingPollTimer = window.setInterval(async () => {
@@ -286,7 +293,7 @@ function startMarketingPolling(runId: string) {
         stopMarketingPolling()
         marketingTaskLoading.value = false
         if (run.status === 'success') {
-          showTaskSuccess('营销活动任务已完成')
+          showTaskSuccess(campaignCompletionMessage(run))
         } else if (run.status === 'failed') {
           showTaskError(summarizeRunError(run))
         }
