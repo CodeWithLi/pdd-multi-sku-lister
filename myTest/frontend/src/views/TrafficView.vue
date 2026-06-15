@@ -318,6 +318,7 @@ onBeforeUnmount(stopPolling)
                   <li>在「添加推广商品」输入 ID 并查询；无结果会报错</li>
                   <li>有结果则依次点击每行「推广设置」小笔，打开净目标投产比弹层</li>
                   <li>探测出价（10→20→30…）获取建议价，填入后点「确定」</li>
+                  <li>取消勾选底部「全局/全店优选起量」复选框</li>
                 </ol>
               </el-collapse-item>
             </el-collapse>

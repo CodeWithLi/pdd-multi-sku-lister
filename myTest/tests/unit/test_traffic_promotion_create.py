@@ -2,6 +2,7 @@ from unittest.mock import patch
 
 from pdd_agent.skills.traffic.promotion_create import (
     _click_promotion_edit_bid_icons,
+    _ensure_global_boost_checkbox_unchecked,
     _is_add_promotion_product_drawer,
     _is_product_promotion_create_page,
     _is_promotion_overview_page,
@@ -16,6 +17,9 @@ class FakeDpPage:
     def __init__(self, url: str, body_text: str):
         self.url = url
         self._body_text = body_text
+
+    def run_js(self, *_args, **_kwargs):
+        return {}
 
 
 def test_is_promotion_overview_page_detects_product_tab_and_create_button():
@@ -164,6 +168,38 @@ def test_click_promotion_edit_bid_icons_fails_when_search_empty():
         result = _click_promotion_edit_bid_icons(page, "store_A", ["965180544565"])
     assert result["status"] == "failed"
     assert result["step"] == "promotion_search_empty"
+
+
+def test_ensure_global_boost_checkbox_unchecked_when_already_off():
+    page = FakeDpPage("https://yingxiao.pinduoduo.com/mains/promotionOverview", "")
+    with patch(
+        "pdd_agent.skills.traffic.promotion_create._read_global_boost_checkbox_state",
+        return_value={"found": True, "checked": False, "testid": "create_goods_additional_max_cost_checkbox"},
+    ):
+        result = _ensure_global_boost_checkbox_unchecked(page, "store_A")
+    assert result["status"] == "success"
+    assert result["unchecked"] is True
+
+
+def test_ensure_global_boost_checkbox_unchecked_clicks_when_checked():
+    page = FakeDpPage("https://yingxiao.pinduoduo.com/mains/promotionOverview", "")
+    with (
+        patch(
+            "pdd_agent.skills.traffic.promotion_create._read_global_boost_checkbox_state",
+            side_effect=[
+                {"found": True, "checked": True, "testid": "create_goods_additional_max_cost_checkbox"},
+                {"found": True, "checked": False, "testid": "create_goods_additional_max_cost_checkbox"},
+            ],
+        ),
+        patch.object(
+            page,
+            "run_js",
+            return_value={"changed": True, "found": True, "checked": False},
+        ),
+    ):
+        result = _ensure_global_boost_checkbox_unchecked(page, "store_A")
+    assert result["status"] == "success"
+    assert result["unchecked"] is True
 
 
 def test_parse_roi_bid_limit_price_extracts_suggested_value():

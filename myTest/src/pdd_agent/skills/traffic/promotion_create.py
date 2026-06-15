@@ -61,6 +61,13 @@ ROI_BID_PROBE_START = 10
 ROI_BID_PROBE_STEP = 10
 ROI_BID_PROBE_MAX = 200
 ROI_BID_LIMIT_PRICE_PATTERN = re.compile(r"请降低至\s*([\d.]+)\s*及以下")
+GLOBAL_BOOST_CHECKBOX_TESTID = "create_goods_additional_max_cost_checkbox"
+GLOBAL_BOOST_CHECKBOX_MARKERS = (
+    "全局优选起量",
+    "全店优选起量",
+    "优选起量",
+    "起量花费比例",
+)
 _PROMOTION_SEARCH_ZERO_COUNT_JSON = json.dumps(list(PROMOTION_SEARCH_ZERO_COUNT_MARKERS))
 PRODUCT_SEARCH_BATCH_SIZE = 30
 UNWANTED_TAB_URL_PARTS = (
@@ -1256,6 +1263,418 @@ def _configure_roi_bid_for_product(
     }
 
 
+_READ_GLOBAL_BOOST_CHECKBOX_JS = f"""
+function isVisible(el) {{
+    if (!el || !el.getBoundingClientRect) return false;
+    const r = el.getBoundingClientRect();
+    const s = window.getComputedStyle(el);
+    return r.width > 4 && r.height > 4
+        && s.display !== 'none'
+        && s.visibility !== 'hidden'
+        && parseFloat(s.opacity || '1') > 0.05;
+}}
+
+function norm(text) {{
+    return (text || '').replace(/\\s+/g, '').trim();
+}}
+
+function scrollDrawerFooter() {{
+    const bodies = Array.from(document.querySelectorAll(
+        '.anq-drawer-body, .anq-drawer-content, .anq-drawer-content-wrapper, [class*="GoodsSelection"]'
+    ));
+    for (const body of bodies) {{
+        try {{ body.scrollTop = body.scrollHeight; }} catch (e) {{}}
+    }}
+    window.scrollTo(0, document.body.scrollHeight);
+}}
+
+function findBoostCheckboxInput() {{
+    scrollDrawerFooter();
+
+    const testidSelectors = [
+        'input[data-testid="{GLOBAL_BOOST_CHECKBOX_TESTID}"]',
+        'input[data-testid*="additional_max_cost"]',
+        'input[data-testid*="max_cost_checkbox"]',
+    ];
+    for (const selector of testidSelectors) {{
+        const nodes = Array.from(document.querySelectorAll(selector)).filter(isVisible);
+        if (nodes.length) return nodes[nodes.length - 1];
+    }}
+
+    const drawerScopes = Array.from(document.querySelectorAll(
+        '.anq-drawer-wrapper, .anq-drawer, .anq-drawer-content-wrapper, [class*="GoodsSelection"], [class*="anq-drawer"]'
+    )).filter(isVisible);
+    for (const scope of drawerScopes) {{
+        for (const selector of testidSelectors) {{
+            const node = scope.querySelector(selector);
+            if (node && isVisible(node)) return node;
+        }}
+    }}
+
+    const markers = {json.dumps(list(GLOBAL_BOOST_CHECKBOX_MARKERS))};
+    const textHits = Array.from(document.querySelectorAll('span, div, label, p'))
+        .filter(isVisible)
+        .filter((el) => {{
+            const text = norm(el.innerText || el.textContent || '');
+            if (!text || text.length > 120) return false;
+            return markers.some((marker) => text.includes(marker));
+        }});
+    for (const hit of textHits) {{
+        let node = hit;
+        for (let depth = 0; depth < 6 && node; depth += 1) {{
+            const input = node.querySelector?.('input[type="checkbox"]');
+            if (input && isVisible(input)) return input;
+            const prev = node.previousElementSibling;
+            if (prev) {{
+                const prevInput = prev.querySelector?.('input[type="checkbox"]');
+                if (prevInput && isVisible(prevInput)) return prevInput;
+            }}
+            const parentInput = node.parentElement?.querySelector?.('input[type="checkbox"]');
+            if (parentInput && isVisible(parentInput)) return parentInput;
+            node = node.parentElement;
+        }}
+    }}
+
+    const footerCheckboxes = Array.from(document.querySelectorAll(
+        '.anq-drawer-footer input[type="checkbox"], .anq-drawer-wrapper input[type="checkbox"]'
+    )).filter(isVisible);
+    if (footerCheckboxes.length) return footerCheckboxes[footerCheckboxes.length - 1];
+
+    return null;
+}}
+
+function isCheckboxChecked(input) {{
+    if (!input) return false;
+    if (input.type === 'checkbox') return !!input.checked;
+    const wrap = input.closest('.anq-checkbox-wrapper');
+    return !!(wrap && wrap.classList.contains('anq-checkbox-wrapper-checked'));
+}}
+
+const input = findBoostCheckboxInput();
+if (!input) {{
+    return {{ found: false, reason: 'global_boost_checkbox_not_found' }};
+}}
+const label = input.closest('label.anq-checkbox-wrapper, label');
+return {{
+    found: true,
+    checked: isCheckboxChecked(input),
+    testid: input.getAttribute('data-testid') || '',
+    label_preview: ((label?.innerText || label?.textContent || '') + '').replace(/\\s+/g, ' ').slice(0, 80),
+}};
+"""
+
+
+_UNCHECK_GLOBAL_BOOST_CHECKBOX_JS = f"""
+function isVisible(el) {{
+    if (!el || !el.getBoundingClientRect) return false;
+    const r = el.getBoundingClientRect();
+    const s = window.getComputedStyle(el);
+    return r.width > 4 && r.height > 4
+        && s.display !== 'none'
+        && s.visibility !== 'hidden'
+        && parseFloat(s.opacity || '1') > 0.05;
+}}
+
+function norm(text) {{
+    return (text || '').replace(/\\s+/g, '').trim();
+}}
+
+function scrollDrawerFooter() {{
+    const bodies = Array.from(document.querySelectorAll(
+        '.anq-drawer-body, .anq-drawer-content, .anq-drawer-content-wrapper, [class*="GoodsSelection"]'
+    ));
+    for (const body of bodies) {{
+        try {{ body.scrollTop = body.scrollHeight; }} catch (e) {{}}
+    }}
+    window.scrollTo(0, document.body.scrollHeight);
+}}
+
+function findBoostCheckboxInput() {{
+    scrollDrawerFooter();
+    const testidSelectors = [
+        'input[data-testid="{GLOBAL_BOOST_CHECKBOX_TESTID}"]',
+        'input[data-testid*="additional_max_cost"]',
+        'input[data-testid*="max_cost_checkbox"]',
+    ];
+    for (const selector of testidSelectors) {{
+        const nodes = Array.from(document.querySelectorAll(selector)).filter(isVisible);
+        if (nodes.length) return nodes[nodes.length - 1];
+    }}
+    const markers = {json.dumps(list(GLOBAL_BOOST_CHECKBOX_MARKERS))};
+    const textHits = Array.from(document.querySelectorAll('span, div, label, p'))
+        .filter(isVisible)
+        .filter((el) => {{
+            const text = norm(el.innerText || el.textContent || '');
+            if (!text || text.length > 120) return false;
+            return markers.some((marker) => text.includes(marker));
+        }});
+    for (const hit of textHits) {{
+        let node = hit;
+        for (let depth = 0; depth < 6 && node; depth += 1) {{
+            const input = node.querySelector?.('input[type="checkbox"]');
+            if (input && isVisible(input)) return input;
+            const prev = node.previousElementSibling;
+            if (prev) {{
+                const prevInput = prev.querySelector?.('input[type="checkbox"]');
+                if (prevInput && isVisible(prevInput)) return prevInput;
+            }}
+            node = node.parentElement;
+        }}
+    }}
+    return null;
+}}
+
+function isCheckboxChecked(input) {{
+    if (!input) return false;
+    if (input.type === 'checkbox') return !!input.checked;
+    const wrap = input.closest('.anq-checkbox-wrapper');
+    return !!(wrap && wrap.classList.contains('anq-checkbox-wrapper-checked'));
+}}
+
+function clickCheckbox(input) {{
+    const label = input.closest('label.anq-checkbox-wrapper, label');
+    const target = label || input;
+    target.scrollIntoView({{ block: 'center', inline: 'nearest' }});
+    target.click();
+}}
+
+const input = findBoostCheckboxInput();
+if (!input) {{
+    return {{ changed: false, found: false, reason: 'global_boost_checkbox_not_found' }};
+}}
+
+const wasChecked = isCheckboxChecked(input);
+if (!wasChecked) {{
+    return {{
+        changed: false,
+        found: true,
+        checked: false,
+        already_unchecked: true,
+        testid: input.getAttribute('data-testid') || '',
+    }};
+}}
+
+clickCheckbox(input);
+if (isCheckboxChecked(input)) {{
+    input.click();
+    const inner = input.closest('.anq-checkbox');
+    if (inner) inner.click();
+}}
+return {{
+    changed: true,
+    found: true,
+    checked: isCheckboxChecked(input),
+    was_checked: wasChecked,
+    testid: input.getAttribute('data-testid') || '',
+    method: 'click_checkbox_label',
+}};
+"""
+
+
+def _read_global_boost_checkbox_state(page: DpPage) -> dict[str, Any]:
+    """读取「全局/全店优选起量」勾选状态。"""
+    try:
+        return page.run_js(_READ_GLOBAL_BOOST_CHECKBOX_JS) or {
+            "found": False,
+            "reason": "read_global_boost_checkbox_js_failed",
+        }
+    except Exception as exc:
+        return {"found": False, "reason": _safe_exc(exc)}
+
+
+def _uncheck_global_boost_checkbox_playwright(page: DpPage) -> dict[str, Any]:
+    """Playwright 定位并取消勾选优选起量复选框。"""
+    try:
+        raw_page = getattr(page, "_page")
+        loc = None
+        for selector in (
+            f'input[data-testid="{GLOBAL_BOOST_CHECKBOX_TESTID}"]',
+            'input[data-testid*="additional_max_cost"]',
+            'input[data-testid*="max_cost_checkbox"]',
+        ):
+            candidate = raw_page.locator(selector).last
+            if candidate.count():
+                loc = candidate
+                break
+
+        drawer = raw_page.locator(
+            '.anq-drawer-wrapper:has-text("添加推广商品"), '
+            '[class*="GoodsSelection"]:has-text("添加推广商品")'
+        ).last
+        if loc is None and drawer.count():
+            for selector in (
+                f'input[data-testid="{GLOBAL_BOOST_CHECKBOX_TESTID}"]',
+                'input[data-testid*="additional_max_cost"]',
+            ):
+                candidate = drawer.locator(selector).last
+                if candidate.count():
+                    loc = candidate
+                    break
+            if loc is None:
+                text_row = drawer.locator('div, span, p, label').filter(has_text='优选起量').last
+                if text_row.count():
+                    candidate = text_row.locator('xpath=ancestor::*[position()<=5]//input[@type="checkbox"]').last
+                    if candidate.count():
+                        loc = candidate
+                    else:
+                        candidate = text_row.locator('xpath=preceding::input[@type="checkbox"][1]').last
+                        if candidate.count():
+                            loc = candidate
+
+        if loc is None or not loc.count():
+            label = raw_page.locator(
+                f'label.anq-checkbox-wrapper:has(input[data-testid="{GLOBAL_BOOST_CHECKBOX_TESTID}"])'
+            ).last
+            if label.count():
+                loc = label.locator('input[type="checkbox"]').first
+
+        if loc is None or not loc.count():
+            return {"found": False, "reason": "global_boost_checkbox_not_found"}
+
+        loc.scroll_into_view_if_needed(timeout=5_000)
+        was_checked = loc.is_checked()
+        if not was_checked:
+            return {
+                "found": True,
+                "unchecked": True,
+                "already_unchecked": True,
+                "method": "playwright_checkbox",
+            }
+
+        label = loc.locator('xpath=ancestor::label[contains(@class,"checkbox-wrapper")]').last
+        if label.count():
+            label.click(timeout=5_000)
+        else:
+            loc.click(force=True, timeout=5_000)
+
+        time.sleep(0.8)
+        if loc.is_checked():
+            loc.click(force=True, timeout=3_000)
+            time.sleep(0.5)
+
+        return {
+            "found": True,
+            "unchecked": not loc.is_checked(),
+            "was_checked": was_checked,
+            "method": "playwright_checkbox_click",
+        }
+    except Exception as exc:
+        return {"found": False, "reason": _safe_exc(exc)}
+
+
+def _wait_global_boost_checkbox(page: DpPage, timeout: int = 12) -> dict[str, Any]:
+    last_state: dict[str, Any] = {}
+    for _ in range(timeout):
+        last_state = _read_global_boost_checkbox_state(page)
+        if last_state.get("found"):
+            return last_state
+        time.sleep(1)
+    return last_state
+
+
+def _ensure_global_boost_checkbox_unchecked(
+    page: DpPage,
+    account_id: str,
+    *,
+    max_attempts: int = 5,
+) -> dict[str, Any]:
+    """确保「开启全局/全店优选起量」复选框为取消勾选状态。"""
+    _dismiss_message_popup(page)
+    page.run_js(
+        """
+        const bodies = Array.from(document.querySelectorAll(
+            '.anq-drawer-body, .anq-drawer-content, .anq-drawer-content-wrapper'
+        ));
+        for (const body of bodies) {
+            try { body.scrollTop = body.scrollHeight; } catch (e) {}
+        }
+        """
+    )
+    time.sleep(0.5)
+
+    last_state = _wait_global_boost_checkbox(page, timeout=12)
+    attempts: list[dict[str, Any]] = []
+
+    for attempt_index in range(max_attempts):
+        state = last_state if attempt_index == 0 and last_state.get("found") else _read_global_boost_checkbox_state(page)
+        if not state.get("found"):
+            pw_probe = _uncheck_global_boost_checkbox_playwright(page)
+            attempts.append({"attempt": attempt_index + 1, "playwright_probe": pw_probe})
+            if pw_probe.get("found") and (pw_probe.get("unchecked") or pw_probe.get("already_unchecked")):
+                print(f"[{account_id}] 已通过 Playwright 取消勾选全局优选起量", flush=True)
+                return {
+                    "status": "success",
+                    "unchecked": True,
+                    "attempts": attempts,
+                    "final_state": pw_probe,
+                    "method": "playwright_direct",
+                }
+            time.sleep(1)
+            last_state = _read_global_boost_checkbox_state(page)
+            continue
+
+        last_state = state
+        if not state.get("checked"):
+            print(f"[{account_id}] 全局优选起量已处于取消勾选状态", flush=True)
+            return {
+                "status": "success",
+                "unchecked": True,
+                "already_unchecked": True,
+                "attempts": attempts,
+                "final_state": state,
+            }
+
+        uncheck_result = page.run_js(_UNCHECK_GLOBAL_BOOST_CHECKBOX_JS) or {
+            "found": False,
+            "reason": "uncheck_global_boost_checkbox_js_failed",
+        }
+        attempts.append({"attempt": attempt_index + 1, "uncheck_result": uncheck_result})
+        time.sleep(0.8)
+
+        verify_state = _read_global_boost_checkbox_state(page)
+        if verify_state.get("found") and not verify_state.get("checked"):
+            print(f"[{account_id}] 已取消勾选全局优选起量", flush=True)
+            return {
+                "status": "success",
+                "unchecked": True,
+                "attempts": attempts,
+                "final_state": verify_state,
+            }
+
+        pw_result = _uncheck_global_boost_checkbox_playwright(page)
+        attempts.append({"attempt": attempt_index + 1, "playwright_uncheck": pw_result})
+        if pw_result.get("found") and pw_result.get("unchecked"):
+            print(f"[{account_id}] 已通过 Playwright 取消勾选全局优选起量", flush=True)
+            return {
+                "status": "success",
+                "unchecked": True,
+                "attempts": attempts,
+                "final_state": pw_result,
+                "method": "playwright_fallback",
+            }
+
+        last_state = _read_global_boost_checkbox_state(page)
+        time.sleep(0.5)
+
+    if last_state.get("found") and last_state.get("checked"):
+        return {
+            "status": "failed",
+            "step": "ensure_global_boost_unchecked",
+            "error": "无法取消勾选「全局/全店优选起量」，请手动关闭后重试",
+            "attempts": attempts,
+            "final_state": last_state,
+        }
+
+    return {
+        "status": "failed",
+        "step": "ensure_global_boost_unchecked",
+        "error": last_state.get("reason") or "未找到全局/全店优选起量复选框",
+        "attempts": attempts,
+        "final_state": last_state,
+        "body_preview": _body_text(page)[-400:],
+    }
+
+
 def _click_promotion_edit_bid_icon(page: DpPage, product_id: str) -> dict[str, Any]:
     """点击指定商品行的净目标投产比编辑小笔。"""
     pid = str(product_id or "").strip()
@@ -2197,18 +2616,35 @@ def open_product_promotion_create(
                 "selected_pdd_product_ids": selected_pdd_product_ids,
             }
 
+        boost_checkbox_result = _ensure_global_boost_checkbox_unchecked(page, account_id)
+        if boost_checkbox_result.get("status") != "success":
+            return {
+                "status": "failed",
+                "step": boost_checkbox_result.get("step") or "ensure_global_boost_unchecked",
+                "error": boost_checkbox_result.get("error") or "无法取消勾选全局优选起量",
+                "click_result": click_result,
+                "drawer_wait": drawer_wait,
+                "close_result": close_result,
+                "search_result": search_result,
+                "edit_bid_result": edit_bid_result,
+                "boost_checkbox_result": boost_checkbox_result,
+                "current_url": _page_url(page),
+                "selected_pdd_product_ids": selected_pdd_product_ids,
+            }
+
         return {
             "status": "success",
-            "step": "roi_bid_configured",
+            "step": "global_boost_unchecked",
             "message": (
-                f"已为 {edit_bid_result.get('found_count', 0)} 个商品设置净目标投产比："
-                f"{edit_bid_result.get('configured_prices', {})}"
+                f"已为 {edit_bid_result.get('found_count', 0)} 个商品设置净目标投产比，"
+                f"并已取消勾选全局优选起量"
             ),
             "click_result": click_result,
             "drawer_wait": drawer_wait,
             "close_result": close_result,
             "search_result": search_result,
             "edit_bid_result": edit_bid_result,
+            "boost_checkbox_result": boost_checkbox_result,
             "current_url": _page_url(page),
             "selected_pdd_product_ids": selected_pdd_product_ids,
             "open_tabs": len(_live_context_pages(page)),
