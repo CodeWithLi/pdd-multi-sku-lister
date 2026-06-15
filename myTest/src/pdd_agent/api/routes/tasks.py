@@ -17,6 +17,8 @@ from pdd_agent.api.schemas.tasks import (
     CampaignTaskResponse,
     MarketingActivityListResponse,
     MarketingActivityOption,
+    TrafficPromotionCreateRequest,
+    TrafficTaskResponse,
     DelistBatchTaskRequest,
     DelistTaskRequest,
     DelistTaskResponse,
@@ -38,7 +40,9 @@ from pdd_agent.api.services.task_runner import (
     execute_campaign_marketing_activity_search,
     execute_delist,
     execute_listing,
+    execute_traffic_promotion_create,
     plan_tasks,
+    create_traffic_run,
 )
 from pdd_agent.skills.campaign.marketing_activities import KNOWN_MARKETING_ACTIVITIES
 from pdd_agent.core.config import load_yaml_settings
@@ -49,6 +53,7 @@ from pdd_agent.storage import TaskRunStore
 
 router = APIRouter(prefix="/tasks", tags=["tasks"])
 _ACTIVE_CAMPAIGN_RUNS: dict[str, str] = {}
+_ACTIVE_TRAFFIC_RUNS: dict[str, str] = {}
 
 
 def _dedupe_account_ids(account_ids: list[str]) -> list[str]:
@@ -113,6 +118,26 @@ def _find_running_campaign_run(account_id: str) -> str:
     return ""
 
 
+def _find_running_traffic_run(account_id: str) -> str:
+    active_run_id = _ACTIVE_TRAFFIC_RUNS.get(account_id)
+    if active_run_id:
+        return active_run_id
+
+    store = TaskRunStore()
+    started_from = datetime.now() - timedelta(minutes=30)
+    records, _ = store.search_runs(
+        page=1,
+        page_size=20,
+        account_id=account_id,
+        agent=AgentKind.TRAFFIC.value,
+        started_from=started_from,
+    )
+    for record in records:
+        if record.status in {RunStatus.PENDING, RunStatus.RUNNING}:
+            return record.run_id
+    return ""
+
+
 async def _execute_campaign_limited_time_setup_guarded(**kwargs):
     account_id = str(kwargs.get("account_id") or "")
     run_id = str(kwargs.get("run_id") or "")
@@ -141,6 +166,16 @@ async def _execute_campaign_marketing_activity_search_guarded(**kwargs):
     finally:
         if account_id and _ACTIVE_CAMPAIGN_RUNS.get(account_id) == run_id:
             _ACTIVE_CAMPAIGN_RUNS.pop(account_id, None)
+
+
+async def _execute_traffic_promotion_create_guarded(**kwargs):
+    account_id = str(kwargs.get("account_id") or "")
+    run_id = str(kwargs.get("run_id") or "")
+    try:
+        return await execute_traffic_promotion_create(**kwargs)
+    finally:
+        if account_id and _ACTIVE_TRAFFIC_RUNS.get(account_id) == run_id:
+            _ACTIVE_TRAFFIC_RUNS.pop(account_id, None)
 
 
 @router.post("/plan", response_model=PlanResponse)
@@ -531,4 +566,45 @@ async def campaign_limited_time_setup(
         run_id=run_id,
         status=RunStatus.RUNNING,
         message="限时限量购活动设置任务已启动；完成后在操作记录查看结果",
+    )
+
+
+@router.post("/traffic/promotion-create", response_model=TrafficTaskResponse)
+async def traffic_promotion_create(
+    body: TrafficPromotionCreateRequest,
+    background: BackgroundTasks,
+):
+    settings = load_yaml_settings()
+    if not get_account_or_none(body.account_id, settings):
+        raise HTTPException(status_code=404, detail=f"unknown account: {body.account_id}")
+
+    pdd_product_ids = _dedupe_strings(body.pdd_product_ids)
+    published_mapping_ids = _dedupe_strings(body.published_mapping_ids)
+    if not pdd_product_ids:
+        raise HTTPException(status_code=422, detail="pdd_product_ids cannot be empty")
+
+    running_run_id = _find_running_traffic_run(body.account_id)
+    if running_run_id:
+        return TrafficTaskResponse(
+            run_id=running_run_id,
+            status=RunStatus.RUNNING,
+            message="该店铺已有推广任务正在执行，已复用当前运行记录；请等待完成后再启动新的推广任务。",
+        )
+
+    run_id = create_traffic_run(body.account_id)
+    _ACTIVE_TRAFFIC_RUNS[body.account_id] = run_id
+    background.add_task(
+        _execute_traffic_promotion_create_guarded,
+        run_id=run_id,
+        account_id=body.account_id,
+        pdd_product_ids=pdd_product_ids,
+        published_mapping_ids=published_mapping_ids,
+    )
+    return TrafficTaskResponse(
+        run_id=run_id,
+        status=RunStatus.RUNNING,
+        message=(
+            f"推广新建任务已启动（商品 {len(pdd_product_ids)} 个）；"
+            "将打开推广概况并点击新建推广，完成后在操作记录查看结果"
+        ),
     )

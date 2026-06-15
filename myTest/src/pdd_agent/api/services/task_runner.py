@@ -10,6 +10,7 @@ from pdd_agent.agents.campaign import build_campaign_graph
 from pdd_agent.agents.delist import build_delist_graph
 from pdd_agent.agents.listing import build_listing_graph
 from pdd_agent.agents.orchestrator import build_orchestrator_graph
+from pdd_agent.agents.traffic import build_traffic_graph
 from pdd_agent.api.schemas.tasks import PlanResponse
 from pdd_agent.core.config import load_yaml_settings
 from pdd_agent.core.logging import get_logger
@@ -62,6 +63,27 @@ def _summarize_campaign_message(result: dict[str, Any]) -> str:
     return "活动任务失败"
 
 
+def _summarize_traffic_message(result: dict[str, Any]) -> str:
+    """推广任务失败时只存简短说明。"""
+    errors = result.get("errors") or []
+    if isinstance(errors, list):
+        for item in errors:
+            text = str(item or "").strip()
+            if text:
+                return text
+    item_results = [r for r in result.get("results") or [] if isinstance(r, dict)]
+    for item in item_results:
+        if str(item.get("status") or "") == "success":
+            continue
+        err = str(item.get("error") or "").strip()
+        if err:
+            step = str(item.get("step") or "").strip()
+            return f"{step}: {err}" if step else err
+    if item_results and all(str(r.get("status") or "") == "success" for r in item_results):
+        return "推广任务已完成"
+    return "推广任务失败"
+
+
 def plan_tasks(message: str) -> PlanResponse:
     graph = build_orchestrator_graph()
     result = graph.invoke({"user_message": message})
@@ -72,35 +94,40 @@ def plan_tasks(message: str) -> PlanResponse:
     )
 
 
+def persist_published_item(run_id: str, account_id: str, item: dict[str, Any]) -> None:
+    """单个上架成功结果写入 published_products（支持批次中途取消/中断）。"""
+    if not isinstance(item, dict):
+        return
+    if str(item.get("status") or "") not in {"success", "listed"}:
+        return
+    pdd_product_id = str(item.get("pdd_product_id") or "").strip()
+    if not pdd_product_id:
+        return
+    product_code = str(item.get("product_code") or "").strip()
+    family_code = str(item.get("family_code") or "").strip()
+    image_set = str(item.get("image_set") or "").strip()
+    listing_label = str(item.get("listing_label") or "").strip()
+    merchant_code = str(
+        item.get("platform_listing_code") or item.get("merchant_code") or ""
+    ).strip()
+    if not product_code or not listing_label:
+        return
+    upsert_published_product(
+        account_id=account_id,
+        source_run_id=run_id,
+        product_code=product_code,
+        family_code=family_code,
+        image_set=image_set,
+        listing_label=listing_label,
+        merchant_code=merchant_code,
+        pdd_product_id=pdd_product_id,
+        spec_metadata=item.get("spec_metadata") if isinstance(item.get("spec_metadata"), dict) else {},
+    )
+
+
 def _persist_published_products(run_id: str, account_id: str, result: dict[str, Any]) -> None:
     for item in result.get("results") or []:
-        if not isinstance(item, dict):
-            continue
-        if str(item.get("status") or "") not in {"success", "listed"}:
-            continue
-        pdd_product_id = str(item.get("pdd_product_id") or "").strip()
-        if not pdd_product_id:
-            continue
-        product_code = str(item.get("product_code") or "").strip()
-        family_code = str(item.get("family_code") or "").strip()
-        image_set = str(item.get("image_set") or "").strip()
-        listing_label = str(item.get("listing_label") or "").strip()
-        merchant_code = str(
-            item.get("platform_listing_code") or item.get("merchant_code") or ""
-        ).strip()
-        if not product_code or not listing_label:
-            continue
-        upsert_published_product(
-            account_id=account_id,
-            source_run_id=run_id,
-            product_code=product_code,
-            family_code=family_code,
-            image_set=image_set,
-            listing_label=listing_label,
-            merchant_code=merchant_code,
-            pdd_product_id=pdd_product_id,
-            spec_metadata=item.get("spec_metadata") if isinstance(item.get("spec_metadata"), dict) else {},
-        )
+        persist_published_item(run_id, account_id, item)
 
 
 async def execute_listing(
@@ -139,6 +166,8 @@ async def execute_listing(
             }
         )
         result = _json_safe(raw)
+        # 批次内已成功的商品先落库，避免取消/中断时丢失
+        _persist_published_products(run_id, account_id, result)
         record = store.load(run_id)
         if record and record.status == RunStatus.CANCELED:
             return {"canceled": True, "results": result.get("results") or []}
@@ -153,7 +182,16 @@ async def execute_listing(
         item_results = [r for r in result.get("results") or [] if isinstance(r, dict)]
         item_failed = any(r.get("status") in {"failed", "retryable"} for r in item_results)
         status = RunStatus.SUCCESS if not result.get("errors") and not item_failed else RunStatus.FAILED
-        _persist_published_products(run_id, account_id, result)
+        try:
+            from pdd_agent.api.services.listing_failure_log import persist_listing_run_failures
+
+            persist_listing_run_failures(
+                source_run_id=run_id,
+                account_id=account_id,
+                result=result,
+            )
+        except Exception:
+            logger.warning("persist listing failure details failed run_id=%s", run_id)
         store.finish(
             run_id,
             status,
@@ -423,3 +461,47 @@ async def execute_campaign_limited_time_setup(
 def create_campaign_run(account_id: str) -> str:
     store = TaskRunStore()
     return store.create_run(AgentKind.CAMPAIGN, account_id).run_id
+
+
+async def execute_traffic_promotion_create(
+    *,
+    run_id: str,
+    account_id: str,
+    pdd_product_ids: list[str] | None = None,
+    published_mapping_ids: list[str] | None = None,
+) -> dict[str, Any]:
+    store = TaskRunStore()
+    settings = load_yaml_settings()
+    if not get_account_config(settings, account_id):
+        store.finish(run_id, RunStatus.FAILED, f"unknown account: {account_id}")
+        return {"error": f"unknown account: {account_id}"}
+
+    store.update_status(run_id, RunStatus.RUNNING)
+    store.update_phase(run_id, TaskPhase.BROWSER)
+    selected_product_ids = list(dict.fromkeys(pdd_product_ids or []))
+    selected_mapping_ids = list(dict.fromkeys(published_mapping_ids or []))
+    try:
+        graph = build_traffic_graph()
+        raw = await graph.ainvoke(
+            {
+                "account_id": account_id,
+                "traffic_type": "promotion_create",
+                "pdd_product_ids": selected_product_ids,
+                "published_mapping_ids": selected_mapping_ids,
+            }
+        )
+        result = _json_safe(raw)
+        item_results = [r for r in result.get("results") or [] if isinstance(r, dict)]
+        item_failed = any(str(r.get("status") or "") != "success" for r in item_results)
+        status = RunStatus.SUCCESS if not result.get("errors") and not item_failed else RunStatus.FAILED
+        store.finish(run_id, status, message=_summarize_traffic_message(result), result=result)
+        return result
+    except Exception as exc:
+        logger.exception("traffic promotion create failed run_id=%s", run_id)
+        store.finish(run_id, RunStatus.FAILED, str(exc), result={"error": str(exc)})
+        return {"error": str(exc)}
+
+
+def create_traffic_run(account_id: str) -> str:
+    store = TaskRunStore()
+    return store.create_run(AgentKind.TRAFFIC, account_id).run_id

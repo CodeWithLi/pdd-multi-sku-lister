@@ -22,6 +22,8 @@ export const runStatusType: Record<string, string> = {
 export const agentLabel: Record<string, string> = {
   listing: '商品上架',
   delist: '商品下架',
+  campaign: '活动',
+  traffic: '推广',
   orchestrator: '智能规划',
 }
 

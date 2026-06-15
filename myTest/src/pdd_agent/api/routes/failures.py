@@ -11,12 +11,18 @@ from pdd_agent.api.schemas.failures import (
     FailureRetryResponse,
     FailureRetryResult,
     FailureSyncResponse,
+    ListingFailureDetailListResponse,
+    ListingFailureDetailOut,
 )
 from pdd_agent.api.services.failure_workbench import (
     list_failures,
     mark_failure_item,
     retry_failure_item,
     sync_failure_items,
+)
+from pdd_agent.api.services.listing_failure_log import (
+    get_failure_details_for_item,
+    get_failure_details_for_run,
 )
 from pdd_agent.db.session import is_database_available
 
@@ -49,6 +55,48 @@ def _summary(items: list[FailureItemOut]) -> dict[str, int]:
     for item in items:
         data[item.decision_status] = data.get(item.decision_status, 0) + 1
     return data
+
+
+def _detail_out(row) -> ListingFailureDetailOut:
+    return ListingFailureDetailOut(
+        detail_id=row.detail_id,
+        failure_item_id=row.failure_item_id or "",
+        source_run_id=row.source_run_id or "",
+        account_id=row.account_id or "",
+        listing_label=row.listing_label or "",
+        product_code=row.product_code or "",
+        image_set=row.image_set or "",
+        family_code=row.family_code or "",
+        merchant_code=row.merchant_code or "",
+        phase=row.phase or "",
+        step=row.step or "",
+        severity=row.severity or "error",
+        reason_code=row.reason_code or "",
+        message=row.message or "",
+        error=row.error or "",
+        detail=row.detail if isinstance(row.detail, dict) else {},
+        screenshot_path=row.screenshot_path or "",
+        page_url=row.page_url or "",
+        created_at=getattr(row, "created_at", None),
+    )
+
+
+@router.get("/{item_id}/details", response_model=ListingFailureDetailListResponse)
+def failure_item_details(item_id: str, limit: int = Query(default=200, ge=1, le=500)):
+    if not is_database_available():
+        raise HTTPException(status_code=503, detail="MySQL failure workbench unavailable")
+    rows = get_failure_details_for_item(item_id, limit=limit)
+    items = [_detail_out(r) for r in rows]
+    return ListingFailureDetailListResponse(items=items, total=len(items))
+
+
+@router.get("/details/by-run/{run_id}", response_model=ListingFailureDetailListResponse)
+def failure_details_by_run(run_id: str, limit: int = Query(default=500, ge=1, le=1000)):
+    if not is_database_available():
+        raise HTTPException(status_code=503, detail="MySQL failure workbench unavailable")
+    rows = get_failure_details_for_run(run_id, limit=limit)
+    items = [_detail_out(r) for r in rows]
+    return ListingFailureDetailListResponse(items=items, total=len(items))
 
 
 @router.post("/sync", response_model=FailureSyncResponse)

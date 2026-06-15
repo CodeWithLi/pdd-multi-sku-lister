@@ -92,6 +92,49 @@ def _listing_result(
     }
 
 
+def _finish_listing(
+    run_id: str,
+    account_id: str,
+    unit: ListingUnit,
+    *,
+    status: str,
+    reason: str = "",
+    error: str = "",
+    title: str = "",
+    retryable: bool = False,
+    legacy_status: str = "",
+    extra: dict[str, Any] | None = None,
+    phase: str = "upload",
+    step: str = "final",
+    screenshot_path: str = "",
+    page_url: str = "",
+) -> dict[str, Any]:
+    result = _listing_result(
+        unit=unit,
+        status=status,
+        reason=reason,
+        error=error,
+        title=title,
+        retryable=retryable,
+        legacy_status=legacy_status,
+    )
+    if extra:
+        result.update(extra)
+    if run_id and status not in {"success", "listed"}:
+        from pdd_agent.api.services.listing_failure_log import record_from_listing_result
+
+        record_from_listing_result(
+            source_run_id=run_id,
+            account_id=account_id,
+            result=result,
+            phase=phase,
+            step=step,
+            screenshot_path=screenshot_path,
+            page_url=page_url,
+        )
+    return result
+
+
 def _normalize_match_text(value: str) -> str:
     return re.sub(r"\s+", "", (value or "")).lower()
 
@@ -1001,10 +1044,18 @@ def upload_one_listing(
     product_info: dict[str, Any],
     defaults: dict[str, str],
     platform_listing_code: str = "",
+    run_id: str = "",
 ) -> dict[str, Any]:
     """对单个上架单元执行完整发布流程。"""
     label = unit.listing_label
     enrich_listing_unit_specs(unit, account_id=account_id)
+    if run_id:
+        from pdd_agent.api.services.listing_failure_log import (
+            record_price_fill_summary,
+            validate_unit_image_files,
+        )
+
+        validate_unit_image_files(unit, source_run_id=run_id, account_id=account_id)
     covers = [str(p.resolve()) for p in unit.carousel_images]
     details = [str(p.resolve()) for p in unit.detail_images]
     style_names = ordered_style_names(unit)
@@ -1101,7 +1152,7 @@ def upload_one_listing(
     sku_rows = wait_multi_sku_rows(page, account_id, unit.skus)
 
     print(f"[{account_id}] [{label}] 开始填写价格表...")
-    previews_ok = fill_multi_spec_rows(
+    fill_stats = fill_multi_spec_rows(
         page,
         account_id,
         unit.skus,
@@ -1110,20 +1161,65 @@ def upload_one_listing(
         style_names=style_names,
         size_names=size_names,
     )
+    previews_ok = bool(fill_stats.get("previews_ok"))
+    if run_id:
+        from pdd_agent.api.services.listing_failure_log import (
+            record_listing_failure_detail,
+            record_price_fill_summary,
+        )
+
+        record_price_fill_summary(
+            source_run_id=run_id,
+            account_id=account_id,
+            unit=unit,
+            filled=int(fill_stats.get("price_filled") or 0),
+            total=int(fill_stats.get("price_total") or 0),
+            failed_items=list(fill_stats.get("price_failed") or []),
+            style_names=style_names,
+            size_names=size_names,
+        )
+        if not previews_ok:
+            record_listing_failure_detail(
+                source_run_id=run_id,
+                account_id=account_id,
+                listing_label=unit.listing_label,
+                product_code=unit.product_code,
+                image_set=unit.image_set,
+                family_code=unit.family_code,
+                merchant_code=unit.merchant_code,
+                phase="preview",
+                step="verify_preview_images",
+                severity="error",
+                reason_code="preview_not_ready",
+                message=(
+                    f"预览图页面校验 {fill_stats.get('preview_verified')}/{fill_stats.get('preview_need')}，"
+                    f"上传成功 {fill_stats.get('preview_uploaded')}/{fill_stats.get('preview_need')}"
+                ),
+                detail=dict(fill_stats),
+            )
+
+    try:
+        page_url = str(page.url or "")
+    except Exception:
+        page_url = ""
 
     pcode = (platform_listing_code or "").strip() or unit.merchant_code
     if not _fill_global_product_code(page, account_id, label, pcode):
         _clear_beforeunload(page)
-        result = _listing_result(
-            unit=unit,
+        return _finish_listing(
+            run_id,
+            account_id,
+            unit,
             status="retryable",
             reason="platform_listing_code_not_filled",
             title=listing_info.get("title", ""),
             retryable=True,
             legacy_status="skipped",
+            extra={"platform_listing_code": pcode},
+            phase="upload",
+            step="fill_global_product_code",
+            page_url=page_url,
         )
-        result["platform_listing_code"] = pcode
-        return result
 
     time.sleep(random.uniform(1.0, 2.0))
     visible_global_code = _read_global_product_code(page)
@@ -1133,38 +1229,56 @@ def upload_one_listing(
             flush=True,
         )
         _clear_beforeunload(page)
-        result = _listing_result(
-            unit=unit,
+        return _finish_listing(
+            run_id,
+            account_id,
+            unit,
             status="retryable",
             reason="platform_listing_code_verify_failed",
             title=listing_info.get("title", ""),
             retryable=True,
             legacy_status="skipped",
+            extra={
+                "platform_listing_code": pcode,
+                "visible_global_code": visible_global_code or "",
+            },
+            phase="upload",
+            step="verify_global_product_code",
+            page_url=page_url,
         )
-        result["platform_listing_code"] = pcode
-        return result
 
     if not previews_ok:
         print(f"[{account_id}] [{label}] 预览图未全部就绪，跳过提交", flush=True)
         _clear_beforeunload(page)
-        return _listing_result(
-            unit=unit,
+        return _finish_listing(
+            run_id,
+            account_id,
+            unit,
             status="retryable",
             reason="preview_not_ready",
             retryable=True,
             legacy_status="skipped",
+            extra=dict(fill_stats),
+            phase="upload",
+            step="skip_submit_preview",
+            page_url=page_url,
         )
 
     ok, submitted_at, blocked_reason = _click_submit(page, account_id, label)
     _clear_beforeunload(page)
     if blocked_reason in {"preview_missing", "validation_errors", "validation_incomplete", "validation_required"}:
-        return _listing_result(
-            unit=unit,
+        return _finish_listing(
+            run_id,
+            account_id,
+            unit,
             status="retryable",
             reason=blocked_reason,
             title=listing_info.get("title", ""),
             retryable=True,
             legacy_status="skipped",
+            phase="submit",
+            step="blocked_by_validation",
+            page_url=page_url,
         )
     if submitted_at:
         wait_seconds = 20 if ok else 35
@@ -1187,38 +1301,62 @@ def upload_one_listing(
             )
             result["platform_listing_code"] = pcode
             result["publish_submitted_at"] = format_datetime(submitted_at) if submitted_at else ""
-            return _attach_capture_fields(result, capture)
+            result = _attach_capture_fields(result, capture)
+            if run_id:
+                from pdd_agent.api.services.task_runner import persist_published_item
+
+                persist_published_item(run_id, account_id, result)
+            return result
         if capture["status"] == "rejected":
-            result = _listing_result(
-                unit=unit,
+            result = _finish_listing(
+                run_id,
+                account_id,
+                unit,
                 status="failed",
                 reason="rejected_after_publish",
                 title=listing_info.get("title", ""),
                 retryable=False,
                 legacy_status="failed",
+                extra={
+                    "platform_listing_code": pcode,
+                    "publish_submitted_at": format_datetime(submitted_at) if submitted_at else "",
+                },
+                phase="post_submit",
+                step="capture_outcome",
+                page_url=page_url,
             )
-            result["platform_listing_code"] = pcode
-            result["publish_submitted_at"] = format_datetime(submitted_at) if submitted_at else ""
             return _attach_capture_fields(result, capture)
 
-        result = _listing_result(
-            unit=unit,
+        result = _finish_listing(
+            run_id,
+            account_id,
+            unit,
             status="retryable",
             reason="published_but_not_found_in_on_sale_or_rejected" if ok else "submit_uncertain",
             title=listing_info.get("title", ""),
             retryable=True,
             legacy_status="submit_uncertain",
+            extra={
+                "platform_listing_code": pcode,
+                "publish_submitted_at": format_datetime(submitted_at) if submitted_at else "",
+            },
+            phase="post_submit",
+            step="capture_outcome",
+            page_url=page_url,
         )
-        result["platform_listing_code"] = pcode
-        result["publish_submitted_at"] = format_datetime(submitted_at) if submitted_at else ""
         return _attach_capture_fields(result, capture)
-    return _listing_result(
-        unit=unit,
+    return _finish_listing(
+        run_id,
+        account_id,
+        unit,
         status="retryable",
         reason=blocked_reason or "submit_uncertain",
         title=listing_info.get("title", ""),
         retryable=True,
         legacy_status="submit_uncertain",
+        phase="submit",
+        step="submit_button",
+        page_url=page_url,
     )
 
 
@@ -1260,24 +1398,14 @@ def run_listing_uploads(
                     product_info,
                     defaults,
                     platform_listing_code=platform_listing_code,
+                    run_id=run_id,
                 )
             )
         except Exception as e:
             err = _safe_exc(e)
             reason, retryable = _classify_exception(e)
             print(f"[{account_id}] [{unit.listing_label}] 业务运行报错: {err}")
-            results.append(
-                _listing_result(
-                    unit=unit,
-                    status="retryable" if retryable else "failed",
-                    reason=reason,
-                    error=err,
-                    retryable=retryable,
-                    legacy_status="failed",
-                )
-            )
-            if "连接已断开" in err or "disconnect" in err.lower():
-                break
+            shot = ""
             try:
                 safe_set = (unit.image_set or "default").replace("/", "_")
                 shot = _error_screenshot_path(
@@ -1287,4 +1415,21 @@ def run_listing_uploads(
                 print(f"[{account_id}] 已保存报错截图：{shot}", flush=True)
             except Exception:
                 pass
+            results.append(
+                _finish_listing(
+                    run_id,
+                    account_id,
+                    unit,
+                    status="retryable" if retryable else "failed",
+                    reason=reason,
+                    error=err,
+                    retryable=retryable,
+                    legacy_status="failed",
+                    phase="upload",
+                    step="exception",
+                    screenshot_path=shot,
+                )
+            )
+            if "连接已断开" in err or "disconnect" in err.lower():
+                break
     return results

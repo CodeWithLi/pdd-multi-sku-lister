@@ -70,3 +70,30 @@ class FailureRawItem(BaseModel):
     source_run_id: str
     account_id: str
     item: dict[str, Any]
+
+
+class ListingFailureDetailOut(BaseModel):
+    detail_id: str
+    failure_item_id: str = ""
+    source_run_id: str = ""
+    account_id: str = ""
+    listing_label: str = ""
+    product_code: str = ""
+    image_set: str = ""
+    family_code: str = ""
+    merchant_code: str = ""
+    phase: str = ""
+    step: str = ""
+    severity: str = "error"
+    reason_code: str = ""
+    message: str = ""
+    error: str = ""
+    detail: dict[str, Any] = Field(default_factory=dict)
+    screenshot_path: str = ""
+    page_url: str = ""
+    created_at: datetime | None = None
+
+
+class ListingFailureDetailListResponse(BaseModel):
+    items: list[ListingFailureDetailOut] = Field(default_factory=list)
+    total: int = 0

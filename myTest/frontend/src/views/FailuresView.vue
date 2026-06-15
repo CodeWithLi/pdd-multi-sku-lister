@@ -4,12 +4,16 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import { api } from '@/api/client'
 import PageHeader from '@/components/PageHeader.vue'
 import { listingStatusLabel, listingStatusType, runStatusLabel } from '@/utils/labels'
-import type { Account, FailureItem, QueueStatus } from '@/types'
+import type { Account, FailureItem, ListingFailureDetail, QueueStatus } from '@/types'
 
 const loading = ref(false)
 const queueLoading = ref(false)
 const failures = ref<FailureItem[]>([])
 const selectedItems = ref<FailureItem[]>([])
+const detailVisible = ref(false)
+const detailLoading = ref(false)
+const detailItems = ref<ListingFailureDetail[]>([])
+const detailTitle = ref('')
 const accounts = ref<Account[]>([])
 const queue = ref<QueueStatus | null>(null)
 const total = ref(0)
@@ -243,6 +247,49 @@ function onSelectionChange(rows: FailureItem[]) {
   selectedItems.value = rows
 }
 
+function phaseLabel(phase: string) {
+  const map: Record<string, string> = {
+    preflight: '上架前校验',
+    upload: '页面上架',
+    price_fill: '价格表填写',
+    preview: '预览图',
+    submit: '提交',
+    post_submit: '提交后核验',
+    listing: '任务',
+  }
+  return map[phase] || phase || '-'
+}
+
+function formatDetailJson(detail: Record<string, unknown>) {
+  if (!detail || Object.keys(detail).length === 0) return ''
+  try {
+    return JSON.stringify(detail, null, 2)
+  } catch {
+    return String(detail)
+  }
+}
+
+async function showFailureDetails(row: FailureItem) {
+  detailTitle.value = `${row.listing_label} — 失败明细`
+  detailVisible.value = true
+  detailLoading.value = true
+  detailItems.value = []
+  try {
+    const resp = await api.failureDetails(row.item_id)
+    detailItems.value = resp.items
+    if (!resp.items.length && row.source_run_id) {
+      const byRun = await api.failureDetailsByRun(row.source_run_id)
+      detailItems.value = byRun.items.filter(
+        (d) => d.listing_label === row.listing_label || d.product_code === row.product_code,
+      )
+    }
+  } catch (e) {
+    ElMessage.error(e instanceof Error ? e.message : '加载失败明细失败')
+  } finally {
+    detailLoading.value = false
+  }
+}
+
 onMounted(() => {
   loadMeta()
   refreshAll()
@@ -442,8 +489,9 @@ onMounted(() => {
         <el-table-column label="更新时间" width="165">
           <template #default="{ row }">{{ formatTime(row.updated_at) }}</template>
         </el-table-column>
-        <el-table-column label="操作" width="220" fixed="right">
+        <el-table-column label="操作" width="260" fixed="right">
           <template #default="{ row }">
+            <el-button link type="primary" @click="showFailureDetails(row)">明细</el-button>
             <el-button link type="primary" @click="retryItems([row])">重跑</el-button>
             <el-button link @click="markItems([row], 'handled')">已处理</el-button>
             <el-button link type="warning" @click="markItems([row], 'ignored')">忽略</el-button>
@@ -466,6 +514,32 @@ onMounted(() => {
         @size-change="onSizeChange"
       />
     </el-card>
+
+    <el-dialog v-model="detailVisible" :title="detailTitle" width="820px" destroy-on-close>
+      <div v-loading="detailLoading">
+        <el-empty v-if="!detailLoading && !detailItems.length" description="暂无失败明细（旧任务可能未写入，可重跑一次后查看）" />
+        <el-timeline v-else>
+          <el-timeline-item
+            v-for="item in detailItems"
+            :key="item.detail_id"
+            :type="item.severity === 'warning' ? 'warning' : 'danger'"
+            :timestamp="formatTime(item.created_at)"
+            placement="top"
+          >
+            <div class="detail-head">
+              <el-tag size="small">{{ phaseLabel(item.phase) }}</el-tag>
+              <span class="detail-step">{{ item.step }}</span>
+              <el-tag v-if="item.reason_code" size="small" type="info">{{ item.reason_code }}</el-tag>
+            </div>
+            <div class="detail-message">{{ item.message || item.error || '-' }}</div>
+            <div v-if="item.error && item.message" class="detail-error muted">技术信息：{{ item.error }}</div>
+            <div v-if="item.screenshot_path" class="detail-meta muted">截图：{{ item.screenshot_path }}</div>
+            <div v-if="item.page_url" class="detail-meta muted">页面：{{ item.page_url }}</div>
+            <pre v-if="formatDetailJson(item.detail)" class="detail-json">{{ formatDetailJson(item.detail) }}</pre>
+          </el-timeline-item>
+        </el-timeline>
+      </div>
+    </el-dialog>
   </div>
 </template>
 
@@ -561,5 +635,42 @@ onMounted(() => {
 .pager {
   margin-top: 14px;
   justify-content: flex-end;
+}
+
+.detail-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+
+.detail-step {
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.detail-message {
+  font-size: 14px;
+  color: #0f172a;
+  line-height: 1.5;
+}
+
+.detail-error,
+.detail-meta {
+  margin-top: 4px;
+  font-size: 12px;
+}
+
+.detail-json {
+  margin-top: 8px;
+  padding: 8px 10px;
+  background: #f8fafc;
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  font-size: 12px;
+  max-height: 200px;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-all;
 }
 </style>

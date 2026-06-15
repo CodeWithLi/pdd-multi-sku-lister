@@ -120,6 +120,19 @@ class CampaignTaskResponse(BaseModel):
     result: dict[str, Any] = Field(default_factory=dict)
 
 
+class TrafficPromotionCreateRequest(BaseModel):
+    account_id: str
+    pdd_product_ids: list[str] = Field(..., min_length=1, description="已发布商品的拼多多商品 ID")
+    published_mapping_ids: list[str] = Field(default_factory=list)
+
+
+class TrafficTaskResponse(BaseModel):
+    run_id: str
+    status: RunStatus
+    message: str = ""
+    result: dict[str, Any] = Field(default_factory=dict)
+
+
 class DelistBatchTaskRequest(BaseModel):
     account_ids: list[str] = Field(..., min_length=1)
     dry_run: bool | None = None

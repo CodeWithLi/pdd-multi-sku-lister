@@ -60,6 +60,20 @@ async def browser_listing_node(state: ListingState) -> dict:
             and (not retry_image_set or unit.image_set == retry_image_set)
         ]
     if not units:
+        run_id = str(state.get("run_id") or "")
+        if run_id:
+            from pdd_agent.api.services.listing_failure_log import record_listing_failure_detail
+
+            record_listing_failure_detail(
+                source_run_id=run_id,
+                account_id=account_id,
+                listing_label="",
+                phase="listing",
+                step="browser_start",
+                severity="error",
+                reason_code="no_valid_units",
+                message="无有效上架单元（preflight 后 units 为空）",
+            )
         return {"errors": ["no valid listing units"], "finished": True}
 
     category = state.get("category_keyword") or settings.listing.category_keyword

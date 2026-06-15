@@ -6,6 +6,7 @@ import type {
   AccountUpdatePayload,
   BatchTaskResponse,
   CampaignTaskResponse,
+  TrafficTaskResponse,
   MarketingActivityListResponse,
   ConfigSummary,
   HealthResponse,
@@ -13,6 +14,7 @@ import type {
   FailureListResponse,
   FailureRetryResponse,
   FailureSyncResponse,
+  ListingFailureDetailListResponse,
   ListingTaskResponse,
   ListingTargetOption,
   LoginBatchCheckResponse,
@@ -167,6 +169,13 @@ export const api = {
   }) =>
     http.post<CampaignTaskResponse>('/tasks/campaign/limited-time-setup', body).then((r) => r.data),
 
+  trafficPromotionCreate: (body: {
+    account_id: string
+    pdd_product_ids: string[]
+    published_mapping_ids?: string[]
+  }) =>
+    http.post<TrafficTaskResponse>('/tasks/traffic/promotion-create', body).then((r) => r.data),
+
   runs: (params: {
     page?: number
     page_size?: number
@@ -230,6 +239,16 @@ export const api = {
 
   retryFailures: (body: { item_ids: string[]; category_keyword?: string }) =>
     http.post<FailureRetryResponse>('/failures/retry', body).then((r) => r.data),
+
+  failureDetails: (itemId: string, limit = 200) =>
+    http
+      .get<ListingFailureDetailListResponse>(`/failures/${itemId}/details`, { params: { limit } })
+      .then((r) => r.data),
+
+  failureDetailsByRun: (runId: string, limit = 500) =>
+    http
+      .get<ListingFailureDetailListResponse>(`/failures/details/by-run/${runId}`, { params: { limit } })
+      .then((r) => r.data),
 
   publishedProducts: (params: {
     page?: number

@@ -1697,4 +1697,12 @@ def fill_multi_spec_rows(
         print(f"[{account_id}] [警告] 仍有预览图未上传，提交可能失败", flush=True)
 
     _log_step(account_id, f"全部 {len(skus)} 个 SKU 流程合计", total_start)
-    return verified >= need_upload
+    return {
+        "previews_ok": verified >= need_upload,
+        "price_filled": filled,
+        "price_total": len(skus),
+        "price_failed": failed,
+        "preview_uploaded": uploaded,
+        "preview_need": need_upload,
+        "preview_verified": verified,
+    }

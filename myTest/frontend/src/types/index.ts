@@ -170,6 +170,13 @@ export interface CampaignTaskResponse {
   result?: Record<string, unknown>
 }
 
+export interface TrafficTaskResponse {
+  run_id: string
+  status: RunStatus
+  message?: string
+  result?: Record<string, unknown>
+}
+
 export interface MarketingActivityOption {
   activity_id: string
   name: string
@@ -283,6 +290,33 @@ export interface FailureListResponse {
   page: number
   page_size: number
   summary: Record<string, number>
+}
+
+export interface ListingFailureDetail {
+  detail_id: string
+  failure_item_id: string
+  source_run_id: string
+  account_id: string
+  listing_label: string
+  product_code: string
+  image_set: string
+  family_code: string
+  merchant_code: string
+  phase: string
+  step: string
+  severity: string
+  reason_code: string
+  message: string
+  error: string
+  detail: Record<string, unknown>
+  screenshot_path: string
+  page_url: string
+  created_at: string | null
+}
+
+export interface ListingFailureDetailListResponse {
+  items: ListingFailureDetail[]
+  total: number
 }
 
 export interface FailureRetryResponse {

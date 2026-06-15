@@ -65,3 +65,16 @@ class CampaignState(TypedDict, total=False):
     errors: Annotated[list[str], operator.add]
     phase: str
     finished: bool
+
+
+class TrafficState(TypedDict, total=False):
+    """推广投流子图状态。"""
+
+    account_id: str
+    traffic_type: str
+    pdd_product_ids: list[str]
+    published_mapping_ids: list[str]
+    results: Annotated[list[dict[str, Any]], operator.add]
+    errors: Annotated[list[str], operator.add]
+    phase: str
+    finished: bool

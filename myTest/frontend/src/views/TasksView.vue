@@ -95,6 +95,32 @@ function updateCheckedProducts(selector: string, codes: string[]) {
   checkedProductsBySet.value = { ...checkedProductsBySet.value, [selector]: codes }
 }
 
+function selectAllMaterialGroups() {
+  productCodes.value = productOptions.value.map((item) => item.selector)
+  syncCheckedProductsForSets(productCodes.value)
+}
+
+function clearAllMaterialGroups() {
+  productCodes.value = []
+  checkedProductsBySet.value = {}
+}
+
+function selectAllListingProducts() {
+  const next: Record<string, string[]> = { ...checkedProductsBySet.value }
+  for (const group of selectedSetGroups.value) {
+    next[group.selector] = [...group.product_codes]
+  }
+  checkedProductsBySet.value = next
+}
+
+function clearAllListingProducts() {
+  const next: Record<string, string[]> = { ...checkedProductsBySet.value }
+  for (const group of selectedSetGroups.value) {
+    next[group.selector] = []
+  }
+  checkedProductsBySet.value = next
+}
+
 watch(productCodes, (sets) => syncCheckedProductsForSets(sets))
 
 async function loadQueueStatus() {
@@ -346,7 +372,16 @@ onMounted(() => {
               批量任务会先打开一家店，随机等待该区间后再打开下一家。
             </div>
 
-            <el-form-item label="素材分组" required>
+            <el-form-item required>
+              <template #label>
+                <span class="form-label-with-actions">
+                  <span>素材分组</span>
+                  <span class="label-actions">
+                    <el-button link type="primary" size="small" @click="selectAllMaterialGroups">全选</el-button>
+                    <el-button link size="small" @click="clearAllMaterialGroups">取消全选</el-button>
+                  </span>
+                </span>
+              </template>
               <el-select v-model="productCodes" multiple filterable style="width: 100%" placeholder="选择如 BD046/第一套">
                 <el-option
                   v-for="item in productOptions"
@@ -357,7 +392,16 @@ onMounted(() => {
               </el-select>
             </el-form-item>
 
-            <el-form-item v-if="selectedSetGroups.length" label="上架商品" required>
+            <el-form-item v-if="selectedSetGroups.length" required>
+              <template #label>
+                <span class="form-label-with-actions">
+                  <span>上架商品</span>
+                  <span class="label-actions">
+                    <el-button link type="primary" size="small" @click="selectAllListingProducts">全选</el-button>
+                    <el-button link size="small" @click="clearAllListingProducts">取消全选</el-button>
+                  </span>
+                </span>
+              </template>
               <div class="product-pick-panel">
                 <div v-for="group in selectedSetGroups" :key="group.selector" class="product-pick-group">
                   <div class="product-pick-group-title">{{ group.selector }}</div>
@@ -546,5 +590,23 @@ onMounted(() => {
 
 .product-pick-group :deep(.el-checkbox) {
   margin-right: 18px;
+}
+
+.form-label-with-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.label-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.label-actions :deep(.el-button) {
+  padding: 0 4px;
+  height: auto;
+  font-size: 13px;
 }
 </style>

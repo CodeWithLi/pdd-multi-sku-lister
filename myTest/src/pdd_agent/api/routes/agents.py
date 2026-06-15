@@ -10,7 +10,7 @@ _AGENTS = [
     {"id": "listing", "enabled": True, "description": "多规格商品上架"},
     {"id": "delist", "enabled": True, "description": "在售商品扫描与批量下架"},
     {"id": "campaign", "enabled": True, "description": "营销活动报名与限时限量购设置"},
-    {"id": "traffic", "enabled": False, "description": "推广投流（占位）"},
+    {"id": "traffic", "enabled": True, "description": "推广投流：推广概况 → 新建推广"},
 ]
 
 

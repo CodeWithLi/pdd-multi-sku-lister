@@ -16,6 +16,7 @@ from pdd_agent.db.models import (
     AccountLockORM,
     AccountORM,
     FailureItemORM,
+    ListingFailureDetailORM,
     LoginStatusORM,
     ProductStyleColorORM,
     PublishedProductORM,
@@ -577,6 +578,81 @@ def update_failure_decision(
         session.flush()
         session.expunge(row)
         return row
+
+
+def insert_listing_failure_detail(
+    *,
+    detail_id: str,
+    failure_item_id: str = "",
+    source_run_id: str = "",
+    account_id: str = "",
+    listing_label: str = "",
+    product_code: str = "",
+    image_set: str = "",
+    family_code: str = "",
+    merchant_code: str = "",
+    phase: str = "",
+    step: str = "",
+    severity: str = "error",
+    reason_code: str = "",
+    message: str = "",
+    error: str = "",
+    detail: dict | None = None,
+    screenshot_path: str = "",
+    page_url: str = "",
+) -> ListingFailureDetailORM | None:
+    if not is_database_available():
+        return None
+    with session_scope() as session:
+        row = ListingFailureDetailORM(
+            detail_id=detail_id,
+            failure_item_id=failure_item_id,
+            source_run_id=source_run_id,
+            account_id=account_id,
+            listing_label=listing_label,
+            product_code=product_code,
+            image_set=image_set,
+            family_code=family_code,
+            merchant_code=merchant_code,
+            phase=phase,
+            step=step,
+            severity=severity,
+            reason_code=reason_code,
+            message=message,
+            error=error,
+            detail=detail or {},
+            screenshot_path=screenshot_path,
+            page_url=page_url,
+        )
+        session.add(row)
+        session.flush()
+        session.expunge(row)
+        return row
+
+
+def list_listing_failure_details(
+    *,
+    failure_item_id: str = "",
+    source_run_id: str = "",
+    limit: int = 200,
+) -> list[ListingFailureDetailORM]:
+    if not is_database_available():
+        return []
+    limit = max(1, min(limit, 1000))
+    with session_scope() as session:
+        query = session.query(ListingFailureDetailORM)
+        if failure_item_id:
+            query = query.filter(ListingFailureDetailORM.failure_item_id == failure_item_id)
+        if source_run_id:
+            query = query.filter(ListingFailureDetailORM.source_run_id == source_run_id)
+        rows = list(
+            query.order_by(ListingFailureDetailORM.created_at.asc(), ListingFailureDetailORM.detail_id.asc())
+            .limit(limit)
+            .all()
+        )
+        for row in rows:
+            session.expunge(row)
+        return rows
 
 
 def _published_mapping_id(account_id: str, product_code: str, image_set: str) -> str:

@@ -110,6 +110,34 @@ class QueueControlORM(Base):
     )
 
 
+class ListingFailureDetailORM(Base):
+    """上架失败明细：阶段、原因码与上下文，供人工排查。"""
+
+    __tablename__ = "listing_failure_details"
+
+    detail_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    failure_item_id: Mapped[str] = mapped_column(String(128), default="", index=True, nullable=False)
+    source_run_id: Mapped[str] = mapped_column(String(64), default="", index=True, nullable=False)
+    account_id: Mapped[str] = mapped_column(String(64), default="", index=True, nullable=False)
+    listing_label: Mapped[str] = mapped_column(String(255), default="", nullable=False)
+    product_code: Mapped[str] = mapped_column(String(64), default="", nullable=False)
+    image_set: Mapped[str] = mapped_column(String(255), default="", nullable=False)
+    family_code: Mapped[str] = mapped_column(String(128), default="", nullable=False)
+    merchant_code: Mapped[str] = mapped_column(String(128), default="", nullable=False)
+    phase: Mapped[str] = mapped_column(String(64), default="", nullable=False)
+    step: Mapped[str] = mapped_column(String(64), default="", nullable=False)
+    severity: Mapped[str] = mapped_column(String(16), default="error", nullable=False)
+    reason_code: Mapped[str] = mapped_column(String(64), default="", index=True, nullable=False)
+    message: Mapped[str] = mapped_column(Text, default="", nullable=False)
+    error: Mapped[str] = mapped_column(Text, default="", nullable=False)
+    detail: Mapped[dict | None] = mapped_column(MySQLJSON, nullable=True)
+    screenshot_path: Mapped[str] = mapped_column(String(512), default="", nullable=False)
+    page_url: Mapped[str] = mapped_column(String(512), default="", nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, server_default=func.now(), index=True, nullable=False
+    )
+
+
 class FailureItemORM(Base):
     """Manual workflow state for failed listing items."""
 

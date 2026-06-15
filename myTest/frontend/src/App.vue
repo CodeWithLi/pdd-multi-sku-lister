@@ -10,6 +10,7 @@ import {
   DocumentCopy,
   Document,
   Discount,
+  TrendCharts,
   Key,
   Setting,
   Warning,
@@ -42,6 +43,7 @@ const navGroups: NavGroup[] = [
     items: [
       { path: '/tasks', label: '上架 / 下架', icon: Goods },
       { path: '/campaign', label: '活动', icon: Discount },
+      { path: '/traffic', label: '推广', icon: TrendCharts },
       { path: '/catalog', label: '素材检查', icon: FolderOpened },
     ],
   },
