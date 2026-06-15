@@ -4,6 +4,8 @@
 services:
   mysql:
     image: mysql:8.0
+    profiles:
+      - bundled-mysql
     container_name: pdd-mysql
     restart: unless-stopped
     environment:
@@ -35,7 +37,7 @@ services:
     env_file:
       - .env
     environment:
-      DATABASE_URL: mysql+pymysql://${MYSQL_USER:-pdd}:${MYSQL_PASSWORD:-changeme_pdd}@mysql:3306/${MYSQL_DATABASE:-pdd_agent_platform}?charset=utf8mb4
+      DATABASE_URL: ${DATABASE_URL:-mysql+pymysql://${MYSQL_USER:-pdd}:${MYSQL_PASSWORD:-changeme_pdd}@mysql:3306/${MYSQL_DATABASE:-pdd_agent_platform}?charset=utf8mb4}
       PLAYWRIGHT_HEADLESS: ${PLAYWRIGHT_HEADLESS:-true}
       PDD_DATA_DIR: /app/data
       PDD_CONFIG_PATH: /app/config/settings.yaml
@@ -45,7 +47,10 @@ services:
     depends_on:
       mysql:
         condition: service_healthy
+        required: false
     shm_size: "1gb"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     healthcheck:
       test:
         [

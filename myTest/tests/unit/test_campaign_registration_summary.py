@@ -3,6 +3,32 @@
 from pdd_agent.api.services.task_runner import _activity_registration_summary_line
 
 
+def test_registration_summary_submitted_when_product_not_in_validation_rows():
+    item = {
+        "status": "success",
+        "step": "register_completed",
+        "product_ids": ["965182969751", "965180544666"],
+        "finalize_result": {
+            "status": "success",
+            "confirm_submit": {"clicked": True},
+            "submit_verification": {"verified": True},
+            "price_filter": {
+                "status": "success",
+                "action": "continue_submit",
+                "validation": {"results": []},
+                "filter_result": {
+                    "removed_product_ids": ["965180544666"],
+                    "partial_product_ids": ["965180544666"],
+                    "kept_product_ids": ["965182969751"],
+                },
+            },
+        },
+    }
+    msg = _activity_registration_summary_line(item)
+    assert "报名已提交" in msg
+    assert "1/" in msg or "1 个" in msg
+
+
 def test_registration_summary_submitted_after_partial_product_removed():
     item = {
         "status": "success",

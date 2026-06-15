@@ -668,10 +668,8 @@ def validate_spec_prices(
             activity_price = 0.0
 
         row = row_by_pdd_id.get(page_product_id) if page_product_id else None
-        if row is None:
+        if row is None and len(published_rows) == 1:
             row = default_row
-        if row is None and published_rows:
-            row = published_rows[0]
 
         if row is None:
             results.append(
@@ -682,6 +680,7 @@ def validate_spec_prices(
                     "should_remove": True,
                     "reason": "published_product_not_found",
                     "page_product_id": page_product_id,
+                    "pdd_product_id": page_product_id,
                 }
             )
             failed += 1
@@ -730,7 +729,8 @@ def validate_spec_prices(
                 "skipped": True,
                 "should_remove": True,
                 "reason": skip_reason,
-                "pdd_product_id": row.pdd_product_id,
+                "page_product_id": page_product_id,
+                "pdd_product_id": page_product_id or row.pdd_product_id,
                 "product_code": row.product_code,
                 "spec_code": _sku_product_code(sku) if sku else "",
                 "match_method": match_method,
@@ -758,7 +758,8 @@ def validate_spec_prices(
             "skipped": False,
             "should_remove": not valid,
             "reason": reason_code,
-            "pdd_product_id": row.pdd_product_id,
+            "page_product_id": page_product_id,
+            "pdd_product_id": page_product_id or row.pdd_product_id,
             "product_code": row.product_code,
             "spec_code": _sku_product_code(sku) if sku else floor_info.get("combo_folder") or "",
             "match_method": match_method,
@@ -2041,4 +2042,15 @@ def filter_price_confirm_page(
         }
     if filter_summary:
         print(f"[{account_id}] 活动价筛选完成：\n{filter_summary}", flush=True)
+    kept_ids = [
+        str(pid).strip()
+        for pid in (filter_result.get("kept_product_ids") or [])
+        if str(pid).strip()
+    ]
+    removed_id_set = {
+        str(pid).strip()
+        for pid in (filter_result.get("removed_product_ids") or [])
+        if str(pid).strip()
+    }
+    result["submitted_product_ids"] = [pid for pid in kept_ids if pid not in removed_id_set]
     return result

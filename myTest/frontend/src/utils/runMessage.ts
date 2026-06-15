@@ -183,10 +183,11 @@ function mergeScrapeMeta(
 }
 
 function mapValidationRow(row: Record<string, unknown>): ActivitySpecLookupRow {
+  const productId = String(row.pdd_product_id || row.page_product_id || '')
   return {
     spec_name: String(row.spec_name || ''),
     activity_price: String(row.activity_price ?? ''),
-    pdd_product_id: String(row.pdd_product_id || ''),
+    pdd_product_id: productId,
     product_code: String(row.product_code || ''),
     spec_code: String(row.spec_code || row.combo_folder || ''),
     parent_code: String(row.parent_code || ''),
@@ -517,49 +518,41 @@ function resolveProductOutcome(
     }
   }
 
-  if (ctx.removedIds.has(pid) || ctx.partialIds.has(pid)) {
-    if (ctx.partialIds.has(pid) && failed > 0) {
-      return {
-        ...base,
-        outcome: 'removed',
-        outcome_label: '已剔除',
-        detail:
-          passed > 0
-            ? `${failed} 条规格不合格（共 ${total} 条），有一不合格即整商品剔除，未参与报名`
-            : '全部规格不合格，整商品已删除',
-      }
-    }
-  }
-
-  if (ctx.removedIds.has(pid) || (passed === 0 && failed > 0)) {
-    const removedBySpec = specs.some((row) => row.spec_code && ctx.removedSpecCodes.has(row.spec_code))
-    if (removedBySpec || ctx.removedIds.has(pid)) {
-      return {
-        ...base,
-        outcome: 'removed',
-        outcome_label: '未报名',
-        detail: '全部规格不合格或已删除，未参与最终提交',
-      }
+  if (ctx.removedIds.has(pid) || (ctx.partialIds.has(pid) && failed > 0)) {
+    return {
+      ...base,
+      outcome: 'removed',
+      outcome_label: '已剔除',
+      detail:
+        ctx.partialIds.has(pid) && failed > 0
+          ? `${failed} 条规格不合格（共 ${total} 条），有一不合格即整商品剔除，未参与报名`
+          : '全部规格不合格或已整商品剔除，未参与报名',
     }
   }
 
   if (ctx.submitted === true) {
-    if (passed > 0) {
-      return {
-        ...base,
-        outcome: 'submitted',
-        outcome_label: '已提交报名',
-        detail:
-          failed > 0
-            ? `共 ${total} 条规格，${passed} 条合格并已提交`
-            : `共 ${passed} 条规格全部合格并已提交`,
-      }
-    }
     return {
       ...base,
-      outcome: 'removed',
-      outcome_label: '未报名',
-      detail: '无合格规格参与提交',
+      outcome: 'submitted',
+      outcome_label: '已提交报名',
+      detail:
+        passed > 0
+          ? failed > 0
+            ? `共 ${total} 条规格，${passed} 条合格并已提交`
+            : `共 ${passed} 条规格全部合格并已提交`
+          : '该商品未被剔除且已随任务提交，请到拼多多报名记录核对',
+    }
+  }
+
+  if (passed === 0 && failed > 0) {
+    const removedBySpec = specs.some((row) => row.spec_code && ctx.removedSpecCodes.has(row.spec_code))
+    if (removedBySpec) {
+      return {
+        ...base,
+        outcome: 'removed',
+        outcome_label: '已剔除',
+        detail: '全部规格不合格或已删除，未参与最终提交',
+      }
     }
   }
 
@@ -645,9 +638,9 @@ export function extractActivityRegistrationSummary(
 
   if (submitted === true) {
     if (submittedCount <= 0) {
-      headline = '未有任何商品完成报名'
-      headline_type = 'danger'
-      notes.push('任务虽执行完成，但没有商品带着合格规格提交到拼多多。')
+      headline = '报名结果待后台核对'
+      headline_type = 'warning'
+      notes.push('拼多多可能已受理报名，但本工具未能从规格明细匹配到已提交商品，请到报名记录核对。')
     } else if (blockedCount > 0 || removedCount > 0) {
       headline = `报名已提交：${submittedCount}/${selectedCount || submittedCount} 个商品`
       headline_type = 'warning'

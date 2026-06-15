@@ -1,0 +1,7 @@
+# 使用已有 MySQL（不启动内置 mysql 容器）
+# 用法：docker compose -f docker-compose.yml -f docker-compose.external-db.yml up -d --build
+
+services:
+  backend:
+    extra_hosts:
+      - "host.docker.internal:host-gateway"

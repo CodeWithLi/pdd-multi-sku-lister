@@ -225,13 +225,18 @@ def _activity_registration_summary_line(item: dict[str, Any]) -> str:
 
         keys = product_ids or list(by_product.keys())
         for pid in keys:
-            rows = by_product.get(pid, [])
-            passed = sum(1 for row in rows if row.get("valid") is True and not row.get("should_remove"))
-            failed = sum(1 for row in rows if row.get("should_remove") or row.get("valid") is False)
-            if pid in removed_ids or (failed > 0 and passed == 0):
+            if pid in removed_ids:
                 removed_products += 1
-            elif passed > 0:
+            elif submitted:
                 submitted_products += 1
+            else:
+                rows = by_product.get(pid, [])
+                passed = sum(1 for row in rows if row.get("valid") is True and not row.get("should_remove"))
+                failed = sum(1 for row in rows if row.get("should_remove") or row.get("valid") is False)
+                if failed > 0 and passed == 0:
+                    removed_products += 1
+                elif passed > 0:
+                    submitted_products += 1
 
         if submitted_products <= 0:
             return "未有任何商品完成报名"
