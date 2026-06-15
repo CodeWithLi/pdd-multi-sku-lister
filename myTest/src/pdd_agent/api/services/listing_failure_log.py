@@ -44,6 +44,7 @@ REASON_LABELS: dict[str, str] = {
     "price_fill_by_index_failed": "按行号填写价格表失败",
     "catalog_parse_warning": "素材目录解析警告",
     "no_valid_units": "无有效上架单元",
+    "slot_alignment_failed": "槽位对齐失败（兄弟款图数不一致或结构不齐）",
 }
 
 

@@ -24,7 +24,11 @@ logger = get_logger(__name__)
 async def preflight_node(state: ListingState) -> dict:
     settings = load_yaml_settings()
     codes = state.get("product_codes") or []
-    report = run_preflight(codes, settings)
+    report = run_preflight(
+        codes,
+        settings,
+        slot_alignment_test=bool(state.get("slot_alignment_test")),
+    )
     run_id = str(state.get("run_id") or "")
     account_id = str(state.get("account_id") or "")
     if run_id:
@@ -98,6 +102,7 @@ async def browser_listing_node(state: ListingState) -> dict:
             }
     defaults = settings.multi_spec.defaults
     run_id = str(state.get("run_id") or "")
+    slot_alignment_test = bool(state.get("slot_alignment_test"))
 
     def _job(dp):
         return run_listing_uploads(
@@ -109,6 +114,7 @@ async def browser_listing_node(state: ListingState) -> dict:
             platform_listing_code=platform_listing_code,
             defaults=defaults,
             run_id=run_id,
+            slot_alignment_test=slot_alignment_test,
         )
 
     try:

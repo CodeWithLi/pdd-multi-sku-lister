@@ -2,6 +2,7 @@
 import { computed, onMounted, reactive, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
+import type { ElTable } from 'element-plus'
 import { api } from '@/api/client'
 import PageHeader from '@/components/PageHeader.vue'
 import type {
@@ -24,8 +25,11 @@ const loading = ref(false)
 const detailLoading = ref(false)
 const delistingId = ref('')
 const deletingId = ref('')
+const batchWorking = ref(false)
 const lookupId = ref('')
 const items = ref<PublishedProduct[]>([])
+const selectedRows = ref<PublishedProduct[]>([])
+const tableRef = ref<InstanceType<typeof ElTable>>()
 const accounts = ref<Account[]>([])
 const total = ref(0)
 const page = ref(1)
@@ -65,6 +69,10 @@ const addForm = reactive({
 const catalogImageSets = ref<string[]>([])
 
 const activeSkuRows = computed(() => activeUnit.value?.skus ?? [])
+const selectedCount = computed(() => selectedRows.value.length)
+const selectedDelistable = computed(() =>
+  selectedRows.value.filter((row) => row.pdd_product_id && row.status !== 'delisted'),
+)
 
 function formatTime(t: string | null) {
   if (!t) return '-'
@@ -191,6 +199,110 @@ async function lookupPublishedGoods(row: PublishedProduct) {
     ElMessage.error(e instanceof Error ? e.message : '提交反查任务失败')
   } finally {
     lookupId.value = ''
+  }
+}
+
+function onSelectionChange(rows: PublishedProduct[]) {
+  selectedRows.value = rows
+}
+
+function clearSelection() {
+  tableRef.value?.clearSelection()
+  selectedRows.value = []
+}
+
+async function batchDelistPublished() {
+  const rows = selectedDelistable.value
+  if (!rows.length) {
+    ElMessage.warning('所选商品均不可下架（已下架或无拼多多商品ID）')
+    return
+  }
+  const skipped = selectedCount.value - rows.length
+  const skipHint = skipped > 0 ? `\n\n另有 ${skipped} 条已下架或无商品ID，将跳过。` : ''
+  try {
+    await ElMessageBox.confirm(
+      `确认批量下架 ${rows.length} 个商品？\n\n系统会按各条记录的拼多多商品ID精准检索，ID不一致不会下架。${skipHint}`,
+      '批量精准下架确认',
+      {
+        confirmButtonText: '确认下架',
+        cancelButtonText: '取消',
+        type: 'warning',
+      },
+    )
+  } catch {
+    return
+  }
+
+  batchWorking.value = true
+  let ok = 0
+  let fail = 0
+  const runIds: string[] = []
+  for (const row of rows) {
+    try {
+      const resp = await api.delistPublishedProduct(row.mapping_id)
+      ok += 1
+      if (resp.run_id) runIds.push(resp.run_id)
+    } catch {
+      fail += 1
+    }
+  }
+  batchWorking.value = false
+  clearSelection()
+  if (fail) {
+    ElMessage.warning(`已提交 ${ok} 个下架任务，${fail} 个失败`)
+  } else {
+    ElMessage.success(`已提交 ${ok} 个精准下架任务`)
+  }
+  if (runIds.length === 1) {
+    router.push({ path: '/runs', query: { id: runIds[0] } })
+  } else if (runIds.length > 1) {
+    router.push({ path: '/runs' })
+  }
+}
+
+async function batchRemovePublished() {
+  const rows = selectedRows.value
+  if (!rows.length) return
+  try {
+    await ElMessageBox.confirm(
+      `确认删除 ${rows.length} 条映射记录？\n\n仅删除数据库 published_products 表中的记录，不会在拼多多后台下架商品。`,
+      '批量删除映射确认',
+      {
+        confirmButtonText: '删除',
+        cancelButtonText: '取消',
+        type: 'warning',
+      },
+    )
+  } catch {
+    return
+  }
+
+  batchWorking.value = true
+  let ok = 0
+  let fail = 0
+  const deletingIds = new Set(rows.map((row) => row.mapping_id))
+  for (const row of rows) {
+    try {
+      await api.deletePublishedProduct(row.mapping_id)
+      ok += 1
+    } catch {
+      fail += 1
+    }
+  }
+  batchWorking.value = false
+  if (detail.value?.published.mapping_id && deletingIds.has(detail.value.published.mapping_id)) {
+    detailVisible.value = false
+    detail.value = null
+  }
+  clearSelection()
+  if (items.value.length <= rows.length && page.value > 1) {
+    page.value -= 1
+  }
+  await loadPublishedProducts()
+  if (fail) {
+    ElMessage.warning(`成功删除 ${ok} 条，失败 ${fail} 条`)
+  } else {
+    ElMessage.success(`已删除 ${ok} 条映射记录`)
   }
 }
 
@@ -500,7 +612,38 @@ onMounted(async () => {
     </el-card>
 
     <el-card shadow="never" class="stat-card">
-      <el-table :data="items" stripe>
+      <div class="batch-bar">
+        <span>已选 {{ selectedCount }} 条</span>
+        <div class="batch-actions">
+          <el-button
+            :disabled="!selectedDelistable.length"
+            :loading="batchWorking"
+            type="danger"
+            plain
+            @click="batchDelistPublished"
+          >
+            批量下架{{ selectedDelistable.length ? ` (${selectedDelistable.length})` : '' }}
+          </el-button>
+          <el-button
+            :disabled="!selectedCount"
+            :loading="batchWorking"
+            type="danger"
+            @click="batchRemovePublished"
+          >
+            批量删除{{ selectedCount ? ` (${selectedCount})` : '' }}
+          </el-button>
+          <el-button :disabled="!selectedCount" @click="clearSelection">取消选择</el-button>
+        </div>
+      </div>
+
+      <el-table
+        ref="tableRef"
+        :data="items"
+        stripe
+        row-key="mapping_id"
+        @selection-change="onSelectionChange"
+      >
+        <el-table-column type="selection" width="44" reserve-selection />
         <el-table-column prop="account_id" label="店铺" width="110" />
         <el-table-column prop="pdd_product_id" label="商品ID" width="130" />
         <el-table-column label="商品/套图" min-width="180">
@@ -855,6 +998,21 @@ onMounted(async () => {
   justify-content: flex-end;
   gap: 8px;
   width: 100%;
+}
+
+.batch-bar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 12px;
+  flex-wrap: wrap;
+}
+
+.batch-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
 }
 
 .strong {

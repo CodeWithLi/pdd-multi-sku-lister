@@ -285,7 +285,7 @@ onBeforeUnmount(stopPolling)
     <el-steps :active="currentStep" align-center class="flow-steps" finish-status="success">
       <el-step title="选店铺" description="左侧配置" />
       <el-step title="勾选商品" description="右侧表格" />
-      <el-step title="启动任务" description="打开新建推广" />
+      <el-step title="启动任务" description="查询商品 ID" />
     </el-steps>
 
     <el-row :gutter="16" class="traffic-layout">
@@ -316,6 +316,7 @@ onBeforeUnmount(stopPolling)
                 <ol class="tip-list">
                   <li>登录商家后台，点击左侧「流量运营 → 推广概况」</li>
                   <li>进入商品推广页，点击蓝色「新建推广」按钮</li>
+                  <li>关闭多余标签页，在「添加推广商品」输入 ID 并查询</li>
                   <li>后续步骤（选品、出价等）待开发</li>
                 </ol>
               </el-collapse-item>
@@ -356,7 +357,7 @@ onBeforeUnmount(stopPolling)
               :loading="isRunning"
               @click="startPromotionCreate"
             >
-              打开推广概况并新建推广
+              打开推广概况并查询商品
             </el-button>
           </el-card>
 

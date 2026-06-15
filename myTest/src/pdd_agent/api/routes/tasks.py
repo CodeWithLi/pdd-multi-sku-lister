@@ -212,6 +212,7 @@ async def tasks_listing(body: ListingTaskRequest):
             dry_run=body.dry_run,
             category_keyword=body.category_keyword,
             platform_listing_code=body.platform_listing_code,
+            slot_alignment_test=body.slot_alignment_test,
         )
         record = TaskRunStore().load(run_id)
         status = record.status if record else RunStatus.SUCCESS
@@ -227,6 +228,7 @@ async def tasks_listing(body: ListingTaskRequest):
         category_keyword=body.category_keyword,
         platform_listing_code=body.platform_listing_code,
         scheduled_at=datetime.now(),
+        slot_alignment_test=body.slot_alignment_test,
     )
     return ListingTaskResponse(
         run_id=run_id,
@@ -314,6 +316,7 @@ async def tasks_listing_batch(body: ListingBatchTaskRequest):
             category_keyword=body.category_keyword,
             platform_listing_code=body.platform_listing_code,
             scheduled_at=scheduled_at,
+            slot_alignment_test=body.slot_alignment_test,
         )
         runs.append(BatchRunItem(account_id=account_id, run_id=run_id, status=RunStatus.PENDING))
 
@@ -605,6 +608,6 @@ async def traffic_promotion_create(
         status=RunStatus.RUNNING,
         message=(
             f"推广新建任务已启动（商品 {len(pdd_product_ids)} 个）；"
-            "将打开推广概况并点击新建推广，完成后在操作记录查看结果"
+            "将打开推广概况、新建推广并查询已选商品 ID，完成后在操作记录查看结果"
         ),
     )

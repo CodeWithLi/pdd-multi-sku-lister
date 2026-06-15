@@ -37,7 +37,7 @@ from pdd_agent.skills.listing.pdd_product_catalog import (
     lookup_catalog_spec,
     resolve_combo_pricing,
 )
-from pdd_agent.skills.listing.spec_labels import enrich_listing_unit_specs
+from pdd_agent.skills.listing.listing_spec_pipeline import apply_unit_listing_specs
 
 RESERVED_DIRS = frozenset({"主图", "详情页"})
 IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".webp"}
@@ -411,6 +411,7 @@ def parse_new_listing_unit(
     defaults: dict[str, str],
     *,
     include_excel_missing_previews: bool = False,
+    slot_alignment_test: bool = False,
 ) -> ListingUnit:
     label = f"{product_code}/{image_set}" if image_set else product_code
     family_code = ""
@@ -462,7 +463,12 @@ def parse_new_listing_unit(
     if not unit.skus:
         unit.warnings.append(f"[{label}] 未解析到任何有效 SKU")
     else:
-        enrich_listing_unit_specs(unit, allow_ai=False)
+        for msg in apply_unit_listing_specs(
+            unit,
+            allow_ai=False,
+            slot_alignment_test=slot_alignment_test,
+        ):
+            unit.warnings.append(msg)
     return unit
 
 
@@ -618,6 +624,7 @@ def parse_listing_target(
     settings: YamlSettings,
     *,
     include_excel_missing_previews: bool = False,
+    slot_alignment_test: bool = False,
 ) -> list[ListingUnit]:
     product_selector = _parse_listing_target_product_selector(target)
     if product_selector:
@@ -636,6 +643,7 @@ def parse_listing_target(
                 catalog,
                 defaults,
                 include_excel_missing_previews=include_excel_missing_previews,
+                slot_alignment_test=slot_alignment_test,
             )
         ]
 
@@ -665,6 +673,7 @@ def parse_listing_target(
                 catalog,
                 defaults,
                 include_excel_missing_previews=include_excel_missing_previews,
+                slot_alignment_test=slot_alignment_test,
             )
         )
     return units

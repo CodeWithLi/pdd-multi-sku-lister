@@ -106,6 +106,7 @@ export const api = {
     dry_run: boolean
     category_keyword: string
     background: boolean
+    slot_alignment_test?: boolean
   }) => http.post<ListingTaskResponse>('/tasks/listing', body).then((r) => r.data),
 
   listingBatch: (body: {
@@ -117,6 +118,7 @@ export const api = {
     max_concurrent_stores?: number
     store_start_delay_min_seconds?: number
     store_start_delay_max_seconds?: number
+    slot_alignment_test?: boolean
   }) => http.post<BatchTaskResponse>('/tasks/listing/batch', body).then((r) => r.data),
 
   retryListingItem: (sourceRunId: string, body: {

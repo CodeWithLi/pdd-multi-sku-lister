@@ -29,6 +29,7 @@ const categoryKeyword = ref('玩偶')
 const listingResult = ref<ListingTaskResponse | null>(null)
 const listingBatchResult = ref<BatchTaskResponse | null>(null)
 const listingBatchEnabled = ref(false)
+const listingSlotAlignmentTest = ref(false)
 const listingConcurrentStores = ref(3)
 const listingStartDelayMin = ref(30)
 const listingStartDelayMax = ref(180)
@@ -225,6 +226,7 @@ async function runListing() {
         max_concurrent_stores: listingConcurrentStores.value,
         store_start_delay_min_seconds: listingStartDelayMin.value,
         store_start_delay_max_seconds: listingStartDelayMax.value,
+        slot_alignment_test: listingSlotAlignmentTest.value,
       })
       success.value = `批量上架任务已提交：${listingBatchResult.value.total} 家店铺，并发 ${listingBatchResult.value.max_concurrent_stores} 家，启动间隔 ${listingBatchResult.value.store_start_delay_min_seconds}-${listingBatchResult.value.store_start_delay_max_seconds} 秒`
       return
@@ -237,6 +239,7 @@ async function runListing() {
       dry_run: isCheck,
       category_keyword: categoryKeyword.value,
       background: !isCheck,
+      slot_alignment_test: listingSlotAlignmentTest.value,
     })
     success.value = isCheck ? '素材检查完成' : '上架任务已提交，可在失败项工作台查看进度'
   } catch (e) {
@@ -323,7 +326,15 @@ onMounted(() => {
         <el-card shadow="never" class="stat-card">
           <el-form label-position="top" class="task-form">
             <el-form-item label="批量店铺">
-              <el-switch v-model="listingBatchEnabled" active-text="开启" inactive-text="关闭" />
+              <div class="batch-toggle-row">
+                <el-switch v-model="listingBatchEnabled" active-text="开启" inactive-text="关闭" />
+                <el-checkbox v-model="listingSlotAlignmentTest" class="slot-align-test">
+                  槽位对齐（试验）
+                </el-checkbox>
+              </div>
+              <div v-if="listingSlotAlignmentTest" class="form-tip">
+                开启后：主款预览图顺序定尺寸名，兄弟款跟槽位不走尺寸并集。不满意可取消勾选，不影响原流程。
+              </div>
             </el-form-item>
 
             <el-form-item v-if="listingBatchEnabled" label="选择店铺" required>
@@ -557,6 +568,17 @@ onMounted(() => {
 <style scoped>
 .task-tabs :deep(.el-tabs__header) {
   margin-bottom: 16px;
+}
+
+.batch-toggle-row {
+  display: flex;
+  align-items: center;
+  gap: 20px;
+  flex-wrap: wrap;
+}
+
+.slot-align-test {
+  margin: 0;
 }
 
 .task-form {

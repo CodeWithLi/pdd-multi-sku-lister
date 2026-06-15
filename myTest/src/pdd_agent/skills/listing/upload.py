@@ -22,7 +22,8 @@ from pdd_agent.skills.listing.multi_spec_page import (
     wait_multi_sku_rows,
 )
 from pdd_agent.skills.listing.page_ai_title import apply_title_after_cover_upload
-from pdd_agent.skills.listing.spec_labels import enrich_listing_unit_specs, ordered_style_names
+from pdd_agent.skills.listing.listing_spec_pipeline import apply_unit_listing_specs
+from pdd_agent.skills.listing.spec_labels import ordered_style_names
 from pdd_agent.skills.listing.title import resolve_listing_title
 from pdd_agent.skills.published.pdd_spec_format import listing_unit_sku_metadata
 
@@ -1045,10 +1046,29 @@ def upload_one_listing(
     defaults: dict[str, str],
     platform_listing_code: str = "",
     run_id: str = "",
+    slot_alignment_test: bool = False,
 ) -> dict[str, Any]:
     """对单个上架单元执行完整发布流程。"""
     label = unit.listing_label
-    enrich_listing_unit_specs(unit, account_id=account_id)
+    spec_errors = apply_unit_listing_specs(
+        unit,
+        account_id=account_id,
+        allow_ai=True,
+        slot_alignment_test=slot_alignment_test,
+    )
+    if spec_errors:
+        return _finish_listing(
+            run_id,
+            account_id,
+            unit,
+            status="retryable",
+            reason="slot_alignment_failed",
+            error=spec_errors[0],
+            retryable=True,
+            legacy_status="skipped",
+            phase="preflight",
+            step="slot_alignment",
+        )
     if run_id:
         from pdd_agent.api.services.listing_failure_log import (
             record_price_fill_summary,
@@ -1382,6 +1402,7 @@ def run_listing_uploads(
     platform_listing_code: str = "",
     defaults: dict[str, str] | None = None,
     run_id: str = "",
+    slot_alignment_test: bool = False,
 ) -> list[dict[str, Any]]:
     """顺序上架多个单元。"""
     from pdd_agent.api.services.run_cancel import is_cancelled
@@ -1410,6 +1431,7 @@ def run_listing_uploads(
                 defaults,
                 platform_listing_code=platform_listing_code,
                 run_id=run_id,
+                slot_alignment_test=slot_alignment_test,
             )
             results.append(item_result)
             if run_id:

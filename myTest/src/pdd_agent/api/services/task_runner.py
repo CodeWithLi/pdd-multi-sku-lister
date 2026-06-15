@@ -213,6 +213,7 @@ async def execute_listing(
     category_keyword: str,
     platform_listing_code: str = "",
     retry_item: dict[str, Any] | None = None,
+    slot_alignment_test: bool = False,
 ) -> dict[str, Any]:
     """执行 listing 子图，更新 RunRecord。"""
     store = TaskRunStore()
@@ -237,6 +238,7 @@ async def execute_listing(
                 "category_keyword": category_keyword,
                 "retry_item": retry_item or {},
                 "run_id": run_id,
+                "slot_alignment_test": slot_alignment_test,
             }
         )
         result = _json_safe(raw)

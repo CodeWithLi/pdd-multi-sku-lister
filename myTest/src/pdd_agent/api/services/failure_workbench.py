@@ -49,6 +49,7 @@ RETRYABLE_REASON_CODES = frozenset({
     "price_fill_by_index_failed",
     "catalog_parse_warning",
     "no_valid_units",
+    "slot_alignment_failed",
 })
 
 

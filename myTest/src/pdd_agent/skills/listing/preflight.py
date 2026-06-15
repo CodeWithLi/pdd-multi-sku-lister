@@ -15,6 +15,7 @@ def run_preflight(
     settings: YamlSettings,
     *,
     include_excel_missing_previews: bool = False,
+    slot_alignment_test: bool = False,
 ) -> PreflightReport:
     """
     批量校验商品编码。
@@ -26,6 +27,7 @@ def run_preflight(
             code,
             settings,
             include_excel_missing_previews=include_excel_missing_previews,
+            slot_alignment_test=slot_alignment_test,
         )
         if not units:
             report.issues.append(
@@ -59,9 +61,14 @@ def run_preflight(
                     )
                 )
             for w in unit.warnings:
-                report.issues.append(
-                    PreflightIssue(level="warning", message=w, listing_label=unit.listing_label)
-                )
+                if "槽位对齐" in w:
+                    report.issues.append(
+                        PreflightIssue(level="error", message=w, listing_label=unit.listing_label)
+                    )
+                else:
+                    report.issues.append(
+                        PreflightIssue(level="warning", message=w, listing_label=unit.listing_label)
+                    )
     return report
 
 

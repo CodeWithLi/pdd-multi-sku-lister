@@ -123,6 +123,7 @@ class TaskQueueWorker:
                     category_keyword=str(payload.get("category_keyword") or "玩偶"),
                     platform_listing_code=str(payload.get("platform_listing_code") or ""),
                     retry_item=dict(payload.get("retry_item") or {}),
+                    slot_alignment_test=bool(payload.get("slot_alignment_test")),
                 )
             elif row.agent == AgentKind.DELIST.value:
                 result = await execute_delist(
@@ -165,6 +166,7 @@ def enqueue_listing_task(
     scheduled_at,
     platform_listing_code: str = "",
     retry_item: dict | None = None,
+    slot_alignment_test: bool = False,
 ):
     return enqueue_task(
         agent=AgentKind.LISTING.value,
@@ -176,6 +178,7 @@ def enqueue_listing_task(
             "category_keyword": category_keyword,
             "platform_listing_code": platform_listing_code,
             "retry_item": dict(retry_item or {}),
+            "slot_alignment_test": bool(slot_alignment_test),
         },
         scheduled_at=scheduled_at,
     )
