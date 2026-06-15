@@ -173,7 +173,7 @@ def pick_sub_preview_image(unit: ListingUnit, model_code: str) -> Path | None:
     return None
 
 
-def build_sub_category_cache(unit: ListingUnit, account_id: str = "") -> dict[str, str]:
+def build_sub_category_cache(unit: ListingUnit, account_id: str = "", *, allow_ai: bool = True) -> dict[str, str]:
     """为单元内所有子配件编码解析尺寸子类（规则优先，弱匹配走 AI）。"""
     catalog = get_pdd_product_catalog()
     cache: dict[str, str] = {}
@@ -194,6 +194,12 @@ def build_sub_category_cache(unit: ListingUnit, account_id: str = "") -> dict[st
             cache[model_norm] = ruled
             continue
 
+        if not allow_ai:
+            from pdd_agent.skills.listing.pdd_product_catalog import infer_sub_product_category
+
+            cache[model_norm] = infer_sub_product_category(entry)
+            continue
+
         image = pick_sub_preview_image(unit, model_norm)
         print(
             f"{prefix}[{unit.listing_label}] AI识别尺寸子类：{model_norm} ← "
@@ -206,7 +212,7 @@ def build_sub_category_cache(unit: ListingUnit, account_id: str = "") -> dict[st
     return cache
 
 
-def resolve_style_colors(unit: ListingUnit, account_id: str = "") -> dict[str, str]:
+def resolve_style_colors(unit: ListingUnit, account_id: str = "", *, allow_ai: bool = True) -> dict[str, str]:
     catalog = get_pdd_product_catalog()
     colors: dict[str, str] = {}
     prefix = f"[{account_id}] " if account_id else ""
@@ -229,6 +235,23 @@ def resolve_style_colors(unit: ListingUnit, account_id: str = "") -> dict[str, s
                 flush=True,
             )
             colors[style_code] = reconciled
+            continue
+        if not allow_ai:
+            if entry:
+                color = catalog_style_label(entry)
+                colors[style_code] = color
+                upsert_cached_style_color(
+                    style_code,
+                    color,
+                    source="catalog",
+                    image_path=image_str,
+                )
+                print(
+                    f"{prefix}[{unit.listing_label}] 商品表款式颜色：{style_code} → {color}",
+                    flush=True,
+                )
+            else:
+                colors[style_code] = style_code
             continue
         if image:
             print(f"{prefix}[{unit.listing_label}] AI识别款式颜色：{style_code} ← {image.name}", flush=True)
@@ -311,7 +334,13 @@ def _fallback_distinct_size_label(sku: SkuCombo, base_label: str, catalog: dict)
     return f"{base_label}-{sku.model_code}"
 
 
-def disambiguate_size_labels(unit: ListingUnit, catalog: dict, account_id: str = "") -> None:
+def disambiguate_size_labels(
+    unit: ListingUnit,
+    catalog: dict,
+    account_id: str = "",
+    *,
+    allow_ai: bool = True,
+) -> None:
     """
     同款式下若多个子配件落到同一尺寸名，先附加商品类型，仍冲突则 AI 识图区分。
     仅在同一 style_code 内消歧，避免子编码张冠李戴。
@@ -346,7 +375,11 @@ def disambiguate_size_labels(unit: ListingUnit, catalog: dict, account_id: str =
                     f"{typed_label} × {len(typed_group)}，AI 区分…",
                     flush=True,
                 )
-                ai_map = disambiguate_conflicting_size_labels_ai(style_code, typed_group, catalog)
+                ai_map = (
+                    disambiguate_conflicting_size_labels_ai(style_code, typed_group, catalog)
+                    if allow_ai
+                    else {}
+                )
                 for sku in typed_group:
                     code = sku.model_code.strip().upper()
                     if ai_map.get(code):
@@ -370,7 +403,7 @@ def disambiguate_size_labels(unit: ListingUnit, catalog: dict, account_id: str =
                     )
 
 
-def enrich_listing_unit_specs(unit: ListingUnit, account_id: str = "") -> None:
+def enrich_listing_unit_specs(unit: ListingUnit, account_id: str = "", *, allow_ai: bool = True) -> None:
     """将 SKU 的款式/尺寸名改为 AI 颜色 + 商品表分组尺寸（全品类通用）。"""
     if not unit.skus:
         return
@@ -378,8 +411,8 @@ def enrich_listing_unit_specs(unit: ListingUnit, account_id: str = "") -> None:
         return
 
     catalog = get_pdd_product_catalog()
-    sub_category_cache = build_sub_category_cache(unit, account_id=account_id)
-    style_colors = resolve_style_colors(unit, account_id=account_id)
+    sub_category_cache = build_sub_category_cache(unit, account_id=account_id, allow_ai=allow_ai)
+    style_colors = resolve_style_colors(unit, account_id=account_id, allow_ai=allow_ai)
     style_colors = disambiguate_style_colors(style_colors, catalog)
     persist_style_color_cache(unit, style_colors, source="final")
 
@@ -389,7 +422,7 @@ def enrich_listing_unit_specs(unit: ListingUnit, account_id: str = "") -> None:
         if sku.model_name not in seen_sizes:
             seen_sizes.append(sku.model_name)
 
-    disambiguate_size_labels(unit, catalog, account_id=account_id)
+    disambiguate_size_labels(unit, catalog, account_id=account_id, allow_ai=allow_ai)
 
     unit.style_codes = list(dict.fromkeys(sku.style_code for sku in unit.skus))
     unit.model_codes = list(dict.fromkeys(sku.model_name for sku in unit.skus))

@@ -1101,7 +1101,15 @@ def upload_one_listing(
     sku_rows = wait_multi_sku_rows(page, account_id, unit.skus)
 
     print(f"[{account_id}] [{label}] 开始填写价格表...")
-    previews_ok = fill_multi_spec_rows(page, account_id, unit.skus, defaults, rows=sku_rows)
+    previews_ok = fill_multi_spec_rows(
+        page,
+        account_id,
+        unit.skus,
+        defaults,
+        rows=sku_rows,
+        style_names=style_names,
+        size_names=size_names,
+    )
 
     pcode = (platform_listing_code or "").strip() or unit.merchant_code
     if not _fill_global_product_code(page, account_id, label, pcode):

@@ -361,10 +361,14 @@ def test_enrich_listing_unit_specs_dedupes_duplicate_display_rows(monkeypatch):
     }
 
     monkeypatch.setattr(spec_labels, "get_pdd_product_catalog", lambda: catalog)
-    monkeypatch.setattr(spec_labels, "resolve_style_colors", lambda unit, account_id="": {"BD719A": "蓝色"})
+    monkeypatch.setattr(
+        spec_labels,
+        "resolve_style_colors",
+        lambda unit, account_id="", allow_ai=True: {"BD719A": "蓝色"},
+    )
     monkeypatch.setattr(spec_labels, "disambiguate_style_colors", lambda colors, catalog: colors)
     monkeypatch.setattr(spec_labels, "persist_style_color_cache", lambda *args, **kwargs: None)
-    monkeypatch.setattr(spec_labels, "build_sub_category_cache", lambda unit, account_id="": {})
+    monkeypatch.setattr(spec_labels, "build_sub_category_cache", lambda unit, account_id="", allow_ai=True: {})
 
     enrich_listing_unit_specs(unit)
 

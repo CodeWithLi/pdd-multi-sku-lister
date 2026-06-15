@@ -462,7 +462,7 @@ def parse_new_listing_unit(
     if not unit.skus:
         unit.warnings.append(f"[{label}] 未解析到任何有效 SKU")
     else:
-        enrich_listing_unit_specs(unit)
+        enrich_listing_unit_specs(unit, allow_ai=False)
     return unit
 
 

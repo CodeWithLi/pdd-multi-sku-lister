@@ -901,8 +901,11 @@ def get_cached_style_color(product_code: str, image_path: str | None = None) -> 
             return None
         if row.source == "manual":
             return row.color_label
-        if image_path:
-            path = Path(image_path)
+        check_path = image_path
+        if not check_path and row.image_path:
+            check_path = row.image_path
+        if check_path:
+            path = Path(check_path)
             if path.is_file():
                 mtime = path.stat().st_mtime
                 if row.image_mtime and abs(row.image_mtime - mtime) > 0.5:
@@ -918,6 +921,12 @@ def upsert_cached_style_color(
     image_path: str | None = None,
 ) -> None:
     if not is_database_available():
+        from pdd_agent.core.logging import get_logger
+
+        get_logger(__name__).warning(
+            "款式颜色未写入缓存（数据库不可用）code=%s",
+            product_code,
+        )
         return
     code = _norm_product_code(product_code)
     label = str(color_label or "").strip()

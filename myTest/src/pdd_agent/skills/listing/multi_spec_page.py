@@ -990,12 +990,36 @@ function cellHasDataInput(td) {
     return false;
 }
 
+function normSpecLabel(text) {
+    let t = String(text || '');
+    const pairs = [
+        ['（', '('], ['）', ')'], ['＋', '+'],
+        ['\u00a0', ''], [' ', ''],
+    ];
+    for (const [a, b] of pairs) t = t.split(a).join(b);
+    return t.trim();
+}
+
 function normCellText(td) {
-    return (td.textContent || td.innerText || '').replace(/\\s+/g, ' ').trim();
+    const raw = (td.textContent || td.innerText || '').replace(/\\s+/g, ' ').trim();
+    return normSpecLabel(raw) || raw;
 }
 
 function styleSizeKey(style, size) {
-    return (style || '') + '\\0' + (size || '');
+    return normSpecLabel(style) + '\\0' + normSpecLabel(size);
+}
+
+function findStyleSizeHit(style, size) {
+    const map = buildStyleSizeRowMap();
+    const key = styleSizeKey(style, size);
+    if (map[key]) return map[key];
+    const ns = normSpecLabel(style);
+    const nm = normSpecLabel(size);
+    for (const k of Object.keys(map)) {
+        const parts = k.split('\\0');
+        if (parts[0] === ns && parts[1] === nm) return map[k];
+    }
+    return null;
 }
 
 function buildStyleSizeRowMap() {
@@ -1027,6 +1051,21 @@ function buildStyleSizeRowMap() {
     }
     return map;
 }
+
+function dumpStyleSizeMap() {
+    const map = buildStyleSizeRowMap();
+    const out = [];
+    for (const k of Object.keys(map)) {
+        const parts = k.split('\\0');
+        out.push({
+            style: parts[0] || '',
+            size: parts[1] || '',
+            idx: map[k].idx,
+        });
+    }
+    out.sort((a, b) => (a.idx || 0) - (b.idx || 0));
+    return JSON.stringify(out);
+}
 """
 
 _SKU_TABLE_SCROLL_JS = (
@@ -1051,9 +1090,8 @@ function getSkuScrollTargets() {
 }
 
 function scrollFindStyleSizeRow(style, size) {
-    const key = styleSizeKey(style, size);
     function tryFind() {
-        const hit = buildStyleSizeRowMap()[key];
+        const hit = findStyleSizeHit(style, size);
         if (!hit || !hit.tr) return null;
         try {
             hit.tr.scrollIntoView({block: 'center', behavior: 'instant'});
@@ -1143,11 +1181,11 @@ _FILL_ONE_BY_STYLE_SIZE_JS = (
 const style = arguments[0] || '';
 const size = arguments[1] || '';
 const vals = JSON.parse(arguments[2]);
-let hit = buildStyleSizeRowMap()[styleSizeKey(style, size)];
+let hit = findStyleSizeHit(style, size);
 if (!hit || !hit.tr) {
     const found = scrollFindStyleSizeRow(style, size);
     if (!found || !found.found) return 0;
-    hit = buildStyleSizeRowMap()[styleSizeKey(style, size)];
+    hit = findStyleSizeHit(style, size);
 }
 if (!hit || !hit.tr) return 0;
 return fillRowReliable(hit.tr, vals);
@@ -1158,17 +1196,14 @@ _FILL_SKUS_BY_STYLE_SIZE_JS = (
     _SKU_TABLE_SCROLL_JS
     + """
 const items = JSON.parse(arguments[0]);
-let rowMap = buildStyleSizeRowMap();
 let ok = 0;
 const failed = [];
 for (const item of items) {
-    const key = styleSizeKey(item.style, item.size);
-    let hit = rowMap[key];
+    let hit = findStyleSizeHit(item.style, item.size);
     if (!hit || !hit.tr) {
         const found = scrollFindStyleSizeRow(item.style, item.size);
         if (found && found.found) {
-            rowMap = buildStyleSizeRowMap();
-            hit = rowMap[key];
+            hit = findStyleSizeHit(item.style, item.size);
         }
     }
     if (!hit || !hit.tr) {
@@ -1186,17 +1221,14 @@ _BUILD_STYLE_SIZE_ROW_MAP_JS = (
     _SKU_TABLE_SCROLL_JS
     + """
 const pairs = JSON.parse(arguments[0]);
-let rowMap = buildStyleSizeRowMap();
 const out = [];
 for (let i = 0; i < pairs.length; i++) {
     const p = pairs[i];
-    const key = styleSizeKey(p.style, p.size);
-    let hit = rowMap[key];
+    let hit = findStyleSizeHit(p.style, p.size);
     if (!hit || !hit.tr) {
         const found = scrollFindStyleSizeRow(p.style, p.size);
         if (found && found.found) {
-            rowMap = buildStyleSizeRowMap();
-            hit = rowMap[key];
+            hit = findStyleSizeHit(p.style, p.size);
         }
     }
     out.push(hit ? hit.idx : i);
@@ -1205,24 +1237,127 @@ return JSON.stringify(out);
 """
 )
 
-_DIAGNOSE_FILL_JS = """
+_DIAGNOSE_FILL_JS = (
+    _JS_FILL_HELPERS
+    + _STYLE_SIZE_MAP_JS
+    + """
+let inputsInFirst = 0;
+const rows = getAllDataRows();
+if (rows[0]) {
+    inputsInFirst = rowInputs(rows[0]).length;
+}
 const trs = document.querySelectorAll(
     '.sku-table tr[data-testid="beast-core-table-body-tr"]'
 );
 const marked = document.querySelectorAll('tr[data-pdd-sku-row]');
-let inputsInFirst = 0;
-if (trs[0]) {
-    inputsInFirst = [...trs[0].querySelectorAll('input')].filter(i => {
-        const t = (i.type || '').toLowerCase();
-        return !['file','hidden','checkbox','radio','button','submit'].includes(t);
-    }).length;
-}
 return JSON.stringify({
     tableRows: trs.length,
     markedRows: marked.length,
-    inputsInFirst: inputsInFirst
+    dataRows: rows.length,
+    inputsInFirst: inputsInFirst,
+    pageSpecs: JSON.parse(dumpStyleSizeMap())
 });
 """
+)
+
+
+_DUMP_STYLE_SIZE_MAP_JS = _SKU_TABLE_SCROLL_JS + "return dumpStyleSizeMap();"
+
+
+def _spec_order_row_index(
+    style_name: str,
+    model_name: str,
+    style_names: list[str],
+    size_names: list[str],
+) -> int | None:
+    if style_name not in style_names or model_name not in size_names:
+        return None
+    return style_names.index(style_name) * len(size_names) + size_names.index(model_name)
+
+
+def _log_price_table_spec_map(
+    page,
+    account_id: str,
+    style_names: list[str],
+    size_names: list[str],
+) -> None:
+    print(
+        f"[{account_id}] 录入规格顺序：款式={style_names} | 尺寸={size_names}",
+        flush=True,
+    )
+    try:
+        raw = page.run_js(_DUMP_STYLE_SIZE_MAP_JS) or "[]"
+        rows = json.loads(raw) if isinstance(raw, str) else raw
+        if isinstance(rows, list):
+            print(f"[{account_id}] 价格表页面读到的规格行（共 {len(rows)} 行）：", flush=True)
+            for row in rows:
+                if not isinstance(row, dict):
+                    continue
+                print(
+                    f"[{account_id}]   行#{int(row.get('idx', -1)) + 1} "
+                    f"{row.get('style', '')} / {row.get('size', '')}",
+                    flush=True,
+                )
+    except Exception as exc:
+        print(f"[{account_id}] 价格表规格行读取失败：{_safe_exc(exc)}", flush=True)
+
+
+def _fill_skus_by_spec_order(
+    page,
+    account_id: str,
+    skus: list,
+    style_names: list[str],
+    size_names: list[str],
+    defaults: dict,
+) -> tuple[int, list[dict]]:
+    """按录入规格顺序（款式×尺寸）用行号填表，与预览图索引一致。"""
+    ok = 0
+    failed: list[dict] = []
+    print(
+        f"[{account_id}] 填表策略：按录入顺序索引（{len(style_names)} 款 × {len(size_names)} 尺寸）",
+        flush=True,
+    )
+    for sku in skus:
+        label = f"{sku.style_name} / {sku.model_name}"
+        idx = _spec_order_row_index(sku.style_name, sku.model_name, style_names, size_names)
+        if idx is None:
+            print(
+                f"[{account_id}]  填表跳过：{label}（不在录入规格列表中）编码={sku.combo_folder}",
+                flush=True,
+            )
+            failed.append(
+                {
+                    "style": sku.style_name,
+                    "size": sku.model_name,
+                    "reason": "index_not_found",
+                }
+            )
+            continue
+        row_data = {
+            "inventory": getattr(sku, "inventory", None) or defaults.get("inventory", "10"),
+            "group_price": getattr(sku, "group_price", None) or defaults.get("group_price", "199.9"),
+            "single_price": getattr(sku, "single_price", None) or defaults.get("single_price", "299.9"),
+            "sku_code": sku.combo_folder,
+        }
+        print(
+            f"[{account_id}]  填表行 #{idx + 1} ← {label} | 编码={sku.combo_folder} | "
+            f"库存={row_data['inventory']} 拼团={row_data['group_price']} 单买={row_data['single_price']}",
+            flush=True,
+        )
+        success = _fill_row_by_index(page, idx, row_data)
+        if success:
+            ok += 1
+            print(f"[{account_id}]    → 文字字段填写成功", flush=True)
+        else:
+            print(f"[{account_id}]    → 文字字段填写失败（行无输入框或 JS 填值失败）", flush=True)
+            failed.append(
+                {
+                    "style": sku.style_name,
+                    "size": sku.model_name,
+                    "reason": "fill_by_index_failed",
+                }
+            )
+    return ok, failed
 
 
 def _sku_fill_items(skus: list, defaults: dict) -> list[dict]:
@@ -1260,7 +1395,8 @@ def _diagnose_fill_state(page, account_id: str):
         info = json.loads(raw) if isinstance(raw, str) else raw
         print(
             f"[{account_id}] 填表诊断：表格行={info.get('tableRows')} "
-            f"标记行={info.get('markedRows')} 首行输入框={info.get('inputsInFirst')}",
+            f"标记行={info.get('markedRows')} 数据行={info.get('dataRows')} "
+            f"首行输入框={info.get('inputsInFirst')}",
             flush=True,
         )
     except Exception as exc:
@@ -1380,6 +1516,8 @@ def fill_multi_spec_rows(
     skus: list,
     defaults: dict,
     rows: list | None = None,
+    style_names: list[str] | None = None,
+    size_names: list[str] | None = None,
 ) -> bool:
     """先批量填文字字段，再逐个上传预览图。返回预览图是否全部就绪。"""
     total_start = _now()
@@ -1404,19 +1542,52 @@ def fill_multi_spec_rows(
     _scroll_sku_table_to_load(page, unique_rows)
     _remark_sku_rows(page)
     time.sleep(0.35)
-    row_indices = _compute_row_indices(skus, rows, page=page)
-    _log_step(account_id, "匹配价格表行索引", t)
+    _log_price_table_spec_map(page, account_id, style_names or [], size_names or [])
 
     t = _now()
-    filled, failed = _fill_skus_by_style_size(page, skus, defaults)
+    if style_names and size_names:
+        filled, failed = _fill_skus_by_spec_order(
+            page, account_id, skus, style_names, size_names, defaults
+        )
+    else:
+        filled, failed = _fill_skus_by_style_size(page, skus, defaults)
     if failed:
         for item in failed:
             print(
-                f"[{account_id}] 批量填表未命中：{item.get('style')} / {item.get('size')} "
+                f"[{account_id}] 按序填表未命中：{item.get('style')} / {item.get('size')} "
                 f"({item.get('reason')})",
                 flush=True,
             )
-    _log_step(account_id, f"批量填写库存/价格/编码 {filled}/{len(skus)} 行", t)
+    _log_step(account_id, f"按序填写库存/价格/编码 {filled}/{len(skus)} 行", t)
+
+    if failed:
+        t = _now()
+        text_filled, text_failed = _fill_skus_by_style_size(page, skus, defaults)
+        if text_failed:
+            for item in text_failed:
+                print(
+                    f"[{account_id}] 文字匹配补填未命中：{item.get('style')} / {item.get('size')} "
+                    f"({item.get('reason')})",
+                    flush=True,
+                )
+        if text_filled > filled:
+            filled = text_filled
+        _log_step(account_id, f"文字匹配补填后 {filled}/{len(skus)} 行", t)
+        failed = text_failed
+
+    row_indices = (
+        [
+            _spec_order_row_index(s.style_name, s.model_name, style_names, size_names)
+            if style_names and size_names
+            else None
+            for s in skus
+        ]
+    )
+    if style_names and size_names:
+        row_indices = [i if i is not None else j for j, i in enumerate(row_indices)]
+    else:
+        row_indices = _compute_row_indices(skus, rows, page=page)
+    _log_step(account_id, "匹配价格表行索引", t)
 
     if failed or filled < len(skus):
         _diagnose_fill_state(page, account_id)
@@ -1437,7 +1608,15 @@ def fill_multi_spec_rows(
             }
             try:
                 t = _now()
-                ok = _fill_row_by_style_size(page, sku.style_name, sku.model_name, row_data)
+                ok = False
+                if style_names and size_names:
+                    idx = _spec_order_row_index(
+                        sku.style_name, sku.model_name, style_names, size_names
+                    )
+                    if idx is not None:
+                        ok = _fill_row_by_index(page, idx, row_data)
+                if not ok:
+                    ok = _fill_row_by_style_size(page, sku.style_name, sku.model_name, row_data)
                 if ok:
                     if (sku.style_name, sku.model_name) in failed_keys:
                         refilled += 1
@@ -1467,10 +1646,11 @@ def fill_multi_spec_rows(
     for i, sku in enumerate(skus):
         label = f"{sku.style_name} / {sku.model_name}"
         row_idx = row_indices[i] if i < len(row_indices) else i
-        if sku.style_name and sku.model_name:
-            found_idx = _ensure_style_size_row_visible(page, sku.style_name, sku.model_name)
-            if found_idx is not None:
-                row_idx = found_idx
+        if not (style_names and size_names):
+            if sku.style_name and sku.model_name:
+                found_idx = _ensure_style_size_row_visible(page, sku.style_name, sku.model_name)
+                if found_idx is not None:
+                    row_idx = found_idx
         if not sku.preview_image:
             continue
         sku_start = _now()
