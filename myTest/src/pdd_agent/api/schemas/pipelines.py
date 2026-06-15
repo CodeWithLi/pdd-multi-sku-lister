@@ -16,6 +16,7 @@ class IntegratedPipelineStartRequest(BaseModel):
     activity_delay_hours: float = Field(default=24.0, ge=0)
     demo_mode: bool = False
     platform_listing_code: str = ""
+    slot_alignment_test: bool = False
 
 
 class IntegratedPipelineStepInfo(BaseModel):
@@ -37,6 +38,7 @@ class IntegratedPipelineResponse(BaseModel):
     auto_promotion: bool
     activity_delay_hours: float
     demo_mode: bool
+    slot_alignment_test: bool = False
     listing_run_id: str = ""
     campaign_run_id: str = ""
     traffic_run_id: str = ""

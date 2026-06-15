@@ -30,6 +30,7 @@ const categoryKeyword = ref('玩偶')
 const autoPromotion = ref(true)
 const demoMode = ref(true)
 const activityDelayHours = ref(24)
+const slotAlignmentTest = ref(false)
 
 let pollTimer: ReturnType<typeof setInterval> | null = null
 
@@ -145,6 +146,7 @@ async function startPipeline() {
       auto_promotion: autoPromotion.value,
       activity_delay_hours: demoMode.value ? 0 : activityDelayHours.value,
       demo_mode: demoMode.value,
+      slot_alignment_test: slotAlignmentTest.value,
     })
     activePipeline.value = result
     success.value = demoMode.value
@@ -405,6 +407,15 @@ onUnmounted(stopPolling)
   margin-left: 10px;
   color: var(--el-text-color-secondary);
   font-size: 12px;
+}
+.slot-align-test {
+  margin: 0;
+}
+.form-tip {
+  margin-top: 8px;
+  color: var(--el-text-color-secondary);
+  font-size: 12px;
+  line-height: 1.5;
 }
 .msg {
   margin-top: 12px;

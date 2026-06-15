@@ -119,6 +119,7 @@ def pipeline_to_dict(row) -> dict[str, Any]:
         "auto_promotion": bool(row.auto_promotion),
         "activity_delay_hours": float(row.activity_delay_hours or 24.0),
         "demo_mode": bool(row.demo_mode),
+        "slot_alignment_test": bool((row.meta or {}).get("slot_alignment_test")),
         "listing_run_id": row.listing_run_id or "",
         "campaign_run_id": row.campaign_run_id or "",
         "traffic_run_id": row.traffic_run_id or "",
@@ -142,6 +143,7 @@ def start_integrated_pipeline(
     activity_delay_hours: float = 24.0,
     demo_mode: bool = False,
     platform_listing_code: str = "",
+    slot_alignment_test: bool = False,
 ) -> dict[str, Any]:
     account_id = str(account_id or "").strip()
     activity_id = str(activity_id or "").strip()
@@ -167,6 +169,7 @@ def start_integrated_pipeline(
         meta={
             "category_keyword": category_keyword,
             "platform_listing_code": platform_listing_code,
+            "slot_alignment_test": bool(slot_alignment_test),
         },
     )
     enqueue_task(
@@ -179,6 +182,7 @@ def start_integrated_pipeline(
             "category_keyword": category_keyword,
             "platform_listing_code": platform_listing_code,
             "pipeline_id": pipeline_id,
+            "slot_alignment_test": bool(slot_alignment_test),
         },
         scheduled_at=datetime.now(),
     )

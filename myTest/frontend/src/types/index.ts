@@ -479,6 +479,7 @@ export interface IntegratedPipeline {
   auto_promotion: boolean
   activity_delay_hours: number
   demo_mode: boolean
+  slot_alignment_test?: boolean
   listing_run_id: string
   campaign_run_id: string
   traffic_run_id: string
@@ -505,4 +506,5 @@ export interface IntegratedPipelineStartPayload {
   activity_delay_hours?: number
   demo_mode?: boolean
   platform_listing_code?: string
+  slot_alignment_test?: boolean
 }

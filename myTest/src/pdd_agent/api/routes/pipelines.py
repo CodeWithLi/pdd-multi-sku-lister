@@ -32,6 +32,7 @@ def start_integrated(body: IntegratedPipelineStartRequest):
             activity_delay_hours=body.activity_delay_hours,
             demo_mode=body.demo_mode,
             platform_listing_code=body.platform_listing_code,
+            slot_alignment_test=body.slot_alignment_test,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
