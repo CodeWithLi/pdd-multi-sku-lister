@@ -314,10 +314,10 @@ onBeforeUnmount(stopPolling)
             <el-collapse class="tip-collapse">
               <el-collapse-item title="当前自动化步骤" name="flow">
                 <ol class="tip-list">
-                  <li>登录商家后台，点击左侧「流量运营 → 推广概况」</li>
-                  <li>进入商品推广页，点击蓝色「新建推广」按钮</li>
-                  <li>关闭多余标签页，在「添加推广商品」输入 ID 并查询</li>
-                  <li>后续步骤（选品、出价等）待开发</li>
+                  <li>进入 yingxiao 推广平台「商品推广」，点击「+ 新建推广」</li>
+                  <li>在「添加推广商品」输入 ID 并查询；无结果会报错</li>
+                  <li>有结果则依次点击每行「推广设置」小笔，打开净目标投产比弹层</li>
+                  <li>探测出价（10→20→30…）获取建议价，填入后点「确定」</li>
                 </ol>
               </el-collapse-item>
             </el-collapse>
