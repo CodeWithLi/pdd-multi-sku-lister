@@ -13,6 +13,7 @@ from pdd_agent.api.routes.health import router as health_router
 from pdd_agent.api.routes.login import router as login_router
 from pdd_agent.api.routes.published_products import router as published_products_router
 from pdd_agent.api.routes.style_colors import router as style_colors_router
+from pdd_agent.api.routes.pipelines import router as pipelines_router
 from pdd_agent.api.routes.queue import router as queue_router
 from pdd_agent.api.routes.runs import router as runs_router
 from pdd_agent.api.routes.tasks import router as tasks_router
@@ -70,6 +71,7 @@ def create_app() -> FastAPI:
     app.include_router(config_router, prefix="/api")
     app.include_router(catalog_router, prefix="/api")
     app.include_router(tasks_router, prefix="/api")
+    app.include_router(pipelines_router, prefix="/api")
     app.include_router(queue_router, prefix="/api")
     app.include_router(failures_router, prefix="/api")
     app.include_router(login_router, prefix="/api")

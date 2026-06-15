@@ -190,6 +190,36 @@ class PublishedProductORM(Base):
     )
 
 
+class IntegratedPipelineORM(Base):
+    """上架 → 活动 → 推广 整合链路。"""
+
+    __tablename__ = "integrated_pipelines"
+
+    pipeline_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    account_id: Mapped[str] = mapped_column(String(64), index=True, nullable=False)
+    status: Mapped[str] = mapped_column(String(32), index=True, nullable=False)
+    current_step: Mapped[str] = mapped_column(String(48), index=True, nullable=False)
+    product_codes: Mapped[list[str]] = mapped_column(MySQLJSON, default=list, nullable=False)
+    activity_id: Mapped[str] = mapped_column(String(32), default="", nullable=False)
+    auto_promotion: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    activity_delay_hours: Mapped[float] = mapped_column(Float, default=24.0, nullable=False)
+    demo_mode: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    listing_run_id: Mapped[str] = mapped_column(String(64), default="", index=True, nullable=False)
+    campaign_run_id: Mapped[str] = mapped_column(String(64), default="", index=True, nullable=False)
+    traffic_run_id: Mapped[str] = mapped_column(String(64), default="", index=True, nullable=False)
+    pdd_product_ids: Mapped[list[str]] = mapped_column(MySQLJSON, default=list, nullable=False)
+    mapping_ids: Mapped[list[str]] = mapped_column(MySQLJSON, default=list, nullable=False)
+    scheduled_activity_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    error: Mapped[str] = mapped_column(Text, default="", nullable=False)
+    meta: Mapped[dict] = mapped_column(MySQLJSON, default=dict, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, server_default=func.now(), nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, server_default=func.now(), onupdate=func.now(), nullable=False
+    )
+
+
 class AccountLockORM(Base):
     """店铺 Profile 运行锁。"""
 

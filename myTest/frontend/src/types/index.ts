@@ -459,3 +459,50 @@ export interface AgentInfo {
   enabled: boolean
   description: string
 }
+
+export interface IntegratedPipelineStepInfo {
+  key: string
+  label: string
+  status: string
+  run_id: string
+  scheduled_at: string | null
+  detail: string
+}
+
+export interface IntegratedPipeline {
+  pipeline_id: string
+  account_id: string
+  status: string
+  current_step: string
+  product_codes: string[]
+  activity_id: string
+  auto_promotion: boolean
+  activity_delay_hours: number
+  demo_mode: boolean
+  listing_run_id: string
+  campaign_run_id: string
+  traffic_run_id: string
+  pdd_product_ids: string[]
+  mapping_ids: string[]
+  scheduled_activity_at: string | null
+  error: string
+  steps: IntegratedPipelineStepInfo[]
+  created_at: string | null
+  updated_at: string | null
+}
+
+export interface IntegratedPipelineListResponse {
+  items: IntegratedPipeline[]
+  total: number
+}
+
+export interface IntegratedPipelineStartPayload {
+  account_id: string
+  product_codes: string[]
+  activity_id: string
+  category_keyword?: string
+  auto_promotion?: boolean
+  activity_delay_hours?: number
+  demo_mode?: boolean
+  platform_listing_code?: string
+}

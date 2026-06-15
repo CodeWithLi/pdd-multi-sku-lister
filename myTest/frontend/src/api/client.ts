@@ -10,6 +10,9 @@ import type {
   MarketingActivityListResponse,
   ConfigSummary,
   HealthResponse,
+  IntegratedPipeline,
+  IntegratedPipelineListResponse,
+  IntegratedPipelineStartPayload,
   DelistTaskResponse,
   FailureListResponse,
   FailureRetryResponse,
@@ -312,6 +315,15 @@ export const api = {
 
   agents: () =>
     http.get<{ agents: { id: string; enabled: boolean; description: string }[] }>('/agents').then((r) => r.data),
+
+  startIntegratedPipeline: (body: IntegratedPipelineStartPayload) =>
+    http.post<IntegratedPipeline>('/pipelines/integrated', body).then((r) => r.data),
+
+  listIntegratedPipelines: (limit = 20) =>
+    http.get<IntegratedPipelineListResponse>('/pipelines/integrated', { params: { limit } }).then((r) => r.data),
+
+  getIntegratedPipeline: (pipelineId: string) =>
+    http.get<IntegratedPipeline>(`/pipelines/integrated/${pipelineId}`).then((r) => r.data),
 }
 
 export default http

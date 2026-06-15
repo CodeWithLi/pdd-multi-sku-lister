@@ -16,6 +16,7 @@ from pdd_agent.db.models import (
     AccountLockORM,
     AccountORM,
     FailureItemORM,
+    IntegratedPipelineORM,
     ListingFailureDetailORM,
     LoginStatusORM,
     ProductStyleColorORM,
@@ -1154,3 +1155,106 @@ def delete_style_color(product_code: str) -> bool:
             return False
         session.delete(row)
         return True
+
+
+def create_integrated_pipeline(
+    *,
+    pipeline_id: str,
+    account_id: str,
+    product_codes: list[str],
+    activity_id: str,
+    auto_promotion: bool,
+    activity_delay_hours: float,
+    demo_mode: bool,
+    listing_run_id: str,
+    meta: dict | None = None,
+) -> IntegratedPipelineORM:
+    row = IntegratedPipelineORM(
+        pipeline_id=pipeline_id,
+        account_id=account_id,
+        status="running",
+        current_step="listing_queued",
+        product_codes=list(product_codes),
+        activity_id=activity_id,
+        auto_promotion=auto_promotion,
+        activity_delay_hours=float(activity_delay_hours),
+        demo_mode=bool(demo_mode),
+        listing_run_id=listing_run_id,
+        meta=dict(meta or {}),
+    )
+    with session_scope() as session:
+        session.add(row)
+        session.flush()
+        session.expunge(row)
+    return row
+
+
+def get_integrated_pipeline(pipeline_id: str) -> IntegratedPipelineORM | None:
+    if not is_database_available():
+        return None
+    with session_scope() as session:
+        row = session.get(IntegratedPipelineORM, pipeline_id)
+        if row:
+            session.expunge(row)
+        return row
+
+
+def list_integrated_pipelines(*, limit: int = 50) -> list[IntegratedPipelineORM]:
+    if not is_database_available():
+        return []
+    with session_scope() as session:
+        rows = session.scalars(
+            select(IntegratedPipelineORM)
+            .order_by(IntegratedPipelineORM.created_at.desc())
+            .limit(max(1, min(limit, 200)))
+        ).all()
+        for row in rows:
+            session.expunge(row)
+        return list(rows)
+
+
+def update_integrated_pipeline(
+    pipeline_id: str,
+    *,
+    status: str | None = None,
+    current_step: str | None = None,
+    listing_run_id: str | None = None,
+    campaign_run_id: str | None = None,
+    traffic_run_id: str | None = None,
+    pdd_product_ids: list[str] | None = None,
+    mapping_ids: list[str] | None = None,
+    scheduled_activity_at: datetime | None = None,
+    error: str | None = None,
+    meta_patch: dict | None = None,
+) -> IntegratedPipelineORM | None:
+    if not is_database_available():
+        return None
+    with session_scope() as session:
+        row = session.get(IntegratedPipelineORM, pipeline_id)
+        if not row:
+            return None
+        if status is not None:
+            row.status = status
+        if current_step is not None:
+            row.current_step = current_step
+        if listing_run_id is not None:
+            row.listing_run_id = listing_run_id
+        if campaign_run_id is not None:
+            row.campaign_run_id = campaign_run_id
+        if traffic_run_id is not None:
+            row.traffic_run_id = traffic_run_id
+        if pdd_product_ids is not None:
+            row.pdd_product_ids = list(pdd_product_ids)
+        if mapping_ids is not None:
+            row.mapping_ids = list(mapping_ids)
+        if scheduled_activity_at is not None:
+            row.scheduled_activity_at = scheduled_activity_at
+        if error is not None:
+            row.error = error
+        if meta_patch:
+            merged = dict(row.meta or {})
+            merged.update(meta_patch)
+            row.meta = merged
+        session.flush()
+        session.expunge(row)
+        return row

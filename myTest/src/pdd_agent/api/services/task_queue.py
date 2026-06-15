@@ -5,7 +5,12 @@ from __future__ import annotations
 import asyncio
 from typing import Any
 
-from pdd_agent.api.services.task_runner import execute_delist, execute_listing
+from pdd_agent.api.services.task_runner import (
+    execute_campaign_marketing_activity_register,
+    execute_delist,
+    execute_listing,
+    execute_traffic_promotion_create,
+)
 from pdd_agent.core.config import load_yaml_settings
 from pdd_agent.core.logging import get_logger
 from pdd_agent.db.repositories import (
@@ -106,6 +111,7 @@ class TaskQueueWorker:
 
     async def _run_task(self, row) -> None:
         payload: dict[str, Any] = dict(row.payload or {})
+        pipeline_id = str(payload.get("pipeline_id") or "").strip()
         logger.info(
             "queue task started task_id=%s agent=%s account=%s run_id=%s",
             row.task_id,
@@ -113,6 +119,7 @@ class TaskQueueWorker:
             row.account_id,
             row.run_id,
         )
+        result: dict[str, Any] = {}
         try:
             if row.agent == AgentKind.LISTING.value:
                 result = await execute_listing(
@@ -132,6 +139,20 @@ class TaskQueueWorker:
                     dry_run=payload.get("dry_run"),
                     delist_params=dict(payload.get("delist_params") or {}),
                 )
+            elif row.agent == AgentKind.CAMPAIGN.value:
+                result = await execute_campaign_marketing_activity_register(
+                    run_id=row.run_id,
+                    account_id=row.account_id,
+                    activity_id=str(payload.get("activity_id") or ""),
+                    pdd_product_ids=list(payload.get("pdd_product_ids") or []),
+                )
+            elif row.agent == AgentKind.TRAFFIC.value:
+                result = await execute_traffic_promotion_create(
+                    run_id=row.run_id,
+                    account_id=row.account_id,
+                    pdd_product_ids=list(payload.get("pdd_product_ids") or []),
+                    published_mapping_ids=list(payload.get("published_mapping_ids") or []),
+                )
             else:
                 raise ValueError(f"unsupported queued agent: {row.agent}")
 
@@ -142,6 +163,17 @@ class TaskQueueWorker:
             success = bool(record and record.status == RunStatus.SUCCESS)
             error = "" if success else str(result.get("error") or result.get("errors") or "")
             finish_queue_task(row.task_id, success=success, error=error)
+            if pipeline_id:
+                from pdd_agent.api.services.pipeline_service import on_queue_task_finished
+
+                on_queue_task_finished(
+                    agent=row.agent,
+                    pipeline_id=pipeline_id,
+                    run_id=row.run_id,
+                    success=success,
+                    result=result if isinstance(result, dict) else {},
+                    error=error,
+                )
         except asyncio.CancelledError:
             from pdd_agent.api.services.run_cancel import clear_cancel, request_cancel
 
@@ -167,18 +199,68 @@ def enqueue_listing_task(
     platform_listing_code: str = "",
     retry_item: dict | None = None,
     slot_alignment_test: bool = False,
+    pipeline_id: str = "",
 ):
+    payload = {
+        "product_codes": list(product_codes),
+        "dry_run": dry_run,
+        "category_keyword": category_keyword,
+        "platform_listing_code": platform_listing_code,
+        "retry_item": dict(retry_item or {}),
+        "slot_alignment_test": bool(slot_alignment_test),
+    }
+    if pipeline_id:
+        payload["pipeline_id"] = pipeline_id
     return enqueue_task(
         agent=AgentKind.LISTING.value,
         run_id=run_id,
         account_id=account_id,
+        payload=payload,
+        scheduled_at=scheduled_at,
+    )
+
+
+def enqueue_campaign_pipeline_task(
+    *,
+    run_id: str,
+    account_id: str,
+    activity_id: str,
+    pdd_product_ids: list[str],
+    scheduled_at,
+    pipeline_id: str,
+):
+    return enqueue_task(
+        agent=AgentKind.CAMPAIGN.value,
+        run_id=run_id,
+        account_id=account_id,
         payload={
-            "product_codes": list(product_codes),
-            "dry_run": dry_run,
-            "category_keyword": category_keyword,
-            "platform_listing_code": platform_listing_code,
-            "retry_item": dict(retry_item or {}),
-            "slot_alignment_test": bool(slot_alignment_test),
+            "pipeline_id": pipeline_id,
+            "campaign_type": "marketing_activity_register",
+            "activity_id": activity_id,
+            "pdd_product_ids": list(pdd_product_ids),
+        },
+        scheduled_at=scheduled_at,
+    )
+
+
+def enqueue_traffic_pipeline_task(
+    *,
+    run_id: str,
+    account_id: str,
+    pdd_product_ids: list[str],
+    published_mapping_ids: list[str],
+    scheduled_at,
+    pipeline_id: str,
+):
+    return enqueue_task(
+        agent=AgentKind.TRAFFIC.value,
+        run_id=run_id,
+        account_id=account_id,
+        payload={
+            "pipeline_id": pipeline_id,
+            "traffic_type": "promotion_create",
+            "pdd_product_ids": list(pdd_product_ids),
+            "published_mapping_ids": list(published_mapping_ids),
         },
         scheduled_at=scheduled_at,
     )

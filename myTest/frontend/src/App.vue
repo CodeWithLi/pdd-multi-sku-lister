@@ -3,6 +3,7 @@ import { computed, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import {
   ArrowDown,
+  Connection,
   DataBoard,
   Shop,
   FolderOpened,
@@ -34,6 +35,7 @@ const route = useRoute()
 const router = useRouter()
 
 const topItem: NavItem = { path: '/', label: '工作台', icon: DataBoard }
+const pipelineItem: NavItem = { path: '/pipeline', label: '整合链路', icon: Connection }
 const bottomItem: NavItem = { path: '/settings', label: '系统设置', icon: Setting }
 
 const navGroups: NavGroup[] = [
@@ -75,6 +77,7 @@ const navGroups: NavGroup[] = [
 
 const allItems = computed(() => [
   topItem,
+  pipelineItem,
   ...navGroups.flatMap((g) => g.items),
   bottomItem,
 ])
@@ -160,6 +163,15 @@ function go(path: string) {
         >
           <el-icon class="nav-icon"><component :is="topItem.icon" /></el-icon>
           <span class="nav-label">{{ topItem.label }}</span>
+        </button>
+
+        <button
+          class="nav-item pipeline-item"
+          :class="{ active: active === pipelineItem.path }"
+          @click="go(pipelineItem.path)"
+        >
+          <el-icon class="nav-icon"><component :is="pipelineItem.icon" /></el-icon>
+          <span class="nav-label">{{ pipelineItem.label }}</span>
         </button>
 
         <section v-for="group in navGroups" :key="group.key" class="nav-group">
