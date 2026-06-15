@@ -1360,6 +1360,18 @@ def upload_one_listing(
     )
 
 
+def _persist_unit_progress(run_id: str, item: dict[str, Any]) -> None:
+    if not run_id:
+        return
+    from pdd_agent.api.services.task_runner import _compact_value_for_storage
+    from pdd_agent.storage import TaskRunStore
+
+    compacted = _compact_value_for_storage(item)
+    if not isinstance(compacted, dict):
+        compacted = item
+    TaskRunStore().append_listing_result(run_id, compacted)
+
+
 def run_listing_uploads(
     page: DpPage,
     account_id: str,
@@ -1390,17 +1402,18 @@ def run_listing_uploads(
             print(f"\n[{account_id}] 等待 5 秒后上架下一单元 [{unit.listing_label}]...\n")
             time.sleep(5)
         try:
-            results.append(
-                upload_one_listing(
-                    page,
-                    account_id,
-                    unit,
-                    product_info,
-                    defaults,
-                    platform_listing_code=platform_listing_code,
-                    run_id=run_id,
-                )
+            item_result = upload_one_listing(
+                page,
+                account_id,
+                unit,
+                product_info,
+                defaults,
+                platform_listing_code=platform_listing_code,
+                run_id=run_id,
             )
+            results.append(item_result)
+            if run_id:
+                _persist_unit_progress(run_id, item_result)
         except Exception as e:
             err = _safe_exc(e)
             reason, retryable = _classify_exception(e)
@@ -1415,21 +1428,22 @@ def run_listing_uploads(
                 print(f"[{account_id}] 已保存报错截图：{shot}", flush=True)
             except Exception:
                 pass
-            results.append(
-                _finish_listing(
-                    run_id,
-                    account_id,
-                    unit,
-                    status="retryable" if retryable else "failed",
-                    reason=reason,
-                    error=err,
-                    retryable=retryable,
-                    legacy_status="failed",
-                    phase="upload",
-                    step="exception",
-                    screenshot_path=shot,
-                )
+            exc_result = _finish_listing(
+                run_id,
+                account_id,
+                unit,
+                status="retryable" if retryable else "failed",
+                reason=reason,
+                error=err,
+                retryable=retryable,
+                legacy_status="failed",
+                phase="upload",
+                step="exception",
+                screenshot_path=shot,
             )
+            results.append(exc_result)
+            if run_id:
+                _persist_unit_progress(run_id, exc_result)
             if "连接已断开" in err or "disconnect" in err.lower():
                 break
     return results

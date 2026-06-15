@@ -6,7 +6,7 @@ import uuid
 from datetime import datetime
 from typing import Any
 
-from pdd_agent.api.services.failure_workbench import make_failure_item_id
+from pdd_agent.api.services.failure_workbench import make_failure_item_id, upsert_live_failure_item
 from pdd_agent.core.logging import get_logger
 from pdd_agent.db.repositories import insert_listing_failure_detail, list_listing_failure_details
 from pdd_agent.db.session import is_database_available
@@ -127,6 +127,18 @@ def record_listing_failure_detail(
             listing_label,
             reason_code,
         )
+        if source_run_id and listing_label and severity != "warning":
+            upsert_live_failure_item(
+                source_run_id=source_run_id,
+                account_id=account_id,
+                listing_label=listing_label,
+                product_code=product_code,
+                image_set=image_set,
+                merchant_code=merchant_code,
+                reason_code=reason_code,
+                error=msg,
+                severity=severity,
+            )
         return detail_id
     except Exception as exc:
         logger.warning("listing failure insert failed: %s", exc)

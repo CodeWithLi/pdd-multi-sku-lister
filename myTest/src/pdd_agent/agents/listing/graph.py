@@ -25,6 +25,18 @@ async def preflight_node(state: ListingState) -> dict:
     settings = load_yaml_settings()
     codes = state.get("product_codes") or []
     report = run_preflight(codes, settings)
+    run_id = str(state.get("run_id") or "")
+    account_id = str(state.get("account_id") or "")
+    if run_id:
+        from pdd_agent.api.services.listing_failure_log import record_preflight_issue
+
+        for issue in report.issues:
+            if issue.level == "error":
+                record_preflight_issue(
+                    source_run_id=run_id,
+                    account_id=account_id,
+                    issue=issue,
+                )
     logger.info(
         "preflight: units=%s ok=%s errors=%s",
         len(report.units),

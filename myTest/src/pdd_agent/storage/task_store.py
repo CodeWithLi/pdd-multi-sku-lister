@@ -17,6 +17,15 @@ from pdd_agent.db.session import is_database_available, session_scope
 from pdd_agent.domain.enums import AgentKind, RunStatus, TaskPhase
 from pdd_agent.domain.models import RunRecord
 
+_DB_MESSAGE_MAX = 2000
+
+
+def _clamp_message(message: str, limit: int = _DB_MESSAGE_MAX) -> str:
+    text = str(message or "")
+    if len(text) <= limit:
+        return text
+    return f"{text[:limit]}...(共{len(text)}字)"
+
 
 class TaskRunStore:
     """每次 CLI/API 执行任务时创建 RunRecord，便于审计与失败重跑。"""
@@ -165,7 +174,7 @@ class TaskRunStore:
             return
         record.status = status
         if message:
-            record.message = message
+            record.message = _clamp_message(message)
         self.save(record)
 
     def finish(
@@ -183,13 +192,28 @@ class TaskRunStore:
         if record.status == RunStatus.CANCELED:
             return
         record.status = status
-        record.message = message
+        record.message = _clamp_message(message)
         record.finished_at = datetime.now()
         record.phase = TaskPhase.REPORT
         if result is not None:
             record.result = result
         if listing_labels is not None:
             record.listing_labels = listing_labels
+        self.save(record)
+
+    def append_listing_result(self, run_id: str, item: dict[str, Any]) -> None:
+        """上架过程中追加单个单元结果，便于工作台实时同步。"""
+        record = self.load(run_id)
+        if not record:
+            return
+        current = dict(record.result or {})
+        results = list(current.get("results") or [])
+        results.append(dict(item))
+        current["results"] = results
+        record.result = current
+        label = str(item.get("listing_label") or "").strip()
+        if label and label not in record.listing_labels:
+            record.listing_labels = list(record.listing_labels) + [label]
         self.save(record)
 
 

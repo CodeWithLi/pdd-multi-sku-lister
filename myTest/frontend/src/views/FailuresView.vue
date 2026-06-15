@@ -1,9 +1,9 @@
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref } from 'vue'
+import { computed, onMounted, onUnmounted, reactive, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { api } from '@/api/client'
 import PageHeader from '@/components/PageHeader.vue'
-import { listingStatusLabel, listingStatusType, runStatusLabel } from '@/utils/labels'
+import { failureReasonLabel, listingStatusLabel, listingStatusType, runStatusLabel } from '@/utils/labels'
 import type { Account, FailureItem, ListingFailureDetail, QueueStatus } from '@/types'
 
 const loading = ref(false)
@@ -14,6 +14,7 @@ const detailVisible = ref(false)
 const detailLoading = ref(false)
 const detailItems = ref<ListingFailureDetail[]>([])
 const detailTitle = ref('')
+const detailRow = ref<FailureItem | null>(null)
 const accounts = ref<Account[]>([])
 const queue = ref<QueueStatus | null>(null)
 const total = ref(0)
@@ -38,6 +39,17 @@ const accountPaused = computed(() =>
   ),
 )
 const selectedIds = computed(() => selectedItems.value.map((i) => i.item_id))
+const hasRunningTasks = computed(() => (queueCounts.value.running || 0) > 0)
+
+let pollTimer: ReturnType<typeof setInterval> | null = null
+
+function failureReasonText(row: FailureItem) {
+  const code = row.reason || ''
+  const human = failureReasonLabel[code]
+  if (human) return human
+  if (row.error && row.error !== code) return row.error
+  return code || '-'
+}
 
 function formatTime(t: string | null) {
   if (!t) return '-'
@@ -269,11 +281,11 @@ function formatDetailJson(detail: Record<string, unknown>) {
   }
 }
 
-async function showFailureDetails(row: FailureItem) {
-  detailTitle.value = `${row.listing_label} — 失败明细`
-  detailVisible.value = true
-  detailLoading.value = true
-  detailItems.value = []
+async function loadFailureDetails(row: FailureItem, silent = false) {
+  if (!silent) {
+    detailLoading.value = true
+    detailItems.value = []
+  }
   try {
     const resp = await api.failureDetails(row.item_id)
     detailItems.value = resp.items
@@ -284,15 +296,38 @@ async function showFailureDetails(row: FailureItem) {
       )
     }
   } catch (e) {
-    ElMessage.error(e instanceof Error ? e.message : '加载失败明细失败')
+    if (!silent) {
+      ElMessage.error(e instanceof Error ? e.message : '加载失败明细失败')
+    }
   } finally {
-    detailLoading.value = false
+    if (!silent) detailLoading.value = false
   }
+}
+
+async function showFailureDetails(row: FailureItem) {
+  detailTitle.value = `${row.listing_label} — 失败明细`
+  detailRow.value = row
+  detailVisible.value = true
+  await loadFailureDetails(row)
 }
 
 onMounted(() => {
   loadMeta()
   refreshAll()
+  pollTimer = setInterval(async () => {
+    if (document.hidden) return
+    await loadQueue()
+    if (hasRunningTasks.value) {
+      await loadFailures()
+      if (detailVisible.value && detailRow.value) {
+        await loadFailureDetails(detailRow.value, true)
+      }
+    }
+  }, 8000)
+})
+
+onUnmounted(() => {
+  if (pollTimer) clearInterval(pollTimer)
 })
 </script>
 
@@ -305,7 +340,14 @@ onMounted(() => {
       </template>
     </PageHeader>
 
-    <el-alert v-if="error" type="error" :title="error" show-icon closable style="margin-bottom: 16px" @close="error = ''" />
+    <el-alert
+      v-if="hasRunningTasks"
+      type="info"
+      title="有上架任务正在运行：本页每 8 秒自动刷新失败项与明细。"
+      show-icon
+      style="margin-bottom: 12px"
+    />
+    <el-alert v-if="error" type="error" :title="error" show-icon closable style="margin-bottom: 12px" @close="error = ''" />
     <el-alert
       v-if="globalPaused"
       type="warning"
@@ -480,8 +522,8 @@ onMounted(() => {
             </el-tag>
           </template>
         </el-table-column>
-        <el-table-column label="原因" min-width="180" show-overflow-tooltip>
-          <template #default="{ row }">{{ row.reason || row.error || '-' }}</template>
+        <el-table-column label="原因" min-width="220" show-overflow-tooltip>
+          <template #default="{ row }">{{ failureReasonText(row) }}</template>
         </el-table-column>
         <el-table-column label="重跑任务" width="150" show-overflow-tooltip>
           <template #default="{ row }">{{ row.retry_run_id || '-' }}</template>

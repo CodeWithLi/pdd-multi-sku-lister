@@ -55,3 +55,33 @@ export const issueLevelLabel: Record<string, string> = {
   error: '错误',
   warning: '警告',
 }
+
+/** 上架失败 reason_code → 人工可读说明 */
+export const failureReasonLabel: Record<string, string> = {
+  preview_not_ready: '预览图未全部上传',
+  preview_missing: '预览图缺失或未通过校验',
+  platform_listing_code_not_filled: '底部商品编码未填写',
+  platform_listing_code_verify_failed: '底部商品编码与货号不一致',
+  validation_errors: '提交前校验失败（库存/价格等未填完整）',
+  validation_incomplete: '提交前信息不完整',
+  validation_required: '提交前有必填项未处理',
+  submit_blocked: '提交被页面拦截',
+  submit_uncertain: '提交结果不确定',
+  submit_button_missing: '未找到提交按钮',
+  submit_exception: '点击提交异常',
+  rejected_after_publish: '提交后被平台驳回',
+  published_but_not_found_in_on_sale_or_rejected: '提交后未在售/驳回列表找到',
+  needs_manual_login_or_captcha: '需人工登录或验证码',
+  page_or_material_changed: '页面结构或素材异常',
+  browser_transient_error: '浏览器超时或断开',
+  unexpected_error: '未分类异常',
+  preflight_no_skus: '上架前校验：无有效 SKU',
+  preflight_no_carousel: '上架前校验：主图为空',
+  preflight_no_detail: '上架前校验：详情图为空',
+  preflight_catalog: '上架前校验：商品表或目录问题',
+  image_file_missing: '图片文件不存在或无法打开',
+  price_fill_partial: '价格表未全部填写',
+  price_fill_row_not_found: '价格表找不到规格行',
+  price_fill_by_index_failed: '按行号填价格表失败',
+  no_valid_units: '无有效上架单元',
+}

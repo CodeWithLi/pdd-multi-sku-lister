@@ -28,6 +28,14 @@ from pdd_agent.storage import TaskRunStore
 
 logger = get_logger(__name__)
 
+_DB_MESSAGE_MAX = 2000
+_DB_LARGE_TEXT_MAX = 500
+_LARGE_RESULT_TEXT_KEYS = frozenset({
+    "pdd_product_matched_row_text",
+    "matched_row_text",
+    "row_text",
+})
+
 
 def _json_safe(value: Any) -> Any:
     """把 graph 返回值转为可 JSON 序列化的结构。"""
@@ -40,6 +48,72 @@ def _json_safe(value: Any) -> Any:
     if hasattr(value, "model_dump"):
         return value.model_dump(mode="json")
     return value
+
+
+def _truncate_db_text(value: str, limit: int) -> str:
+    text = str(value or "")
+    if len(text) <= limit:
+        return text
+    return f"{text[:limit]}...(共{len(text)}字)"
+
+
+def _compact_value_for_storage(value: Any, key: str = "") -> Any:
+    """落库前截断页面抓取等超大文本，避免撑爆 run_records。"""
+    if isinstance(value, str):
+        if key in _LARGE_RESULT_TEXT_KEYS:
+            return _truncate_db_text(value, _DB_LARGE_TEXT_MAX)
+        if len(value) > 2000:
+            return _truncate_db_text(value, 2000)
+        return value
+    if isinstance(value, list):
+        return [_compact_value_for_storage(item, "") for item in value]
+    if isinstance(value, dict):
+        return {k: _compact_value_for_storage(v, k) for k, v in value.items()}
+    return value
+
+
+def _compact_run_result_for_storage(result: dict[str, Any]) -> dict[str, Any]:
+    compacted = _compact_value_for_storage(result)
+    return compacted if isinstance(compacted, dict) else result
+
+
+def _summarize_listing_message(result: dict[str, Any]) -> str:
+    """上架任务 message 只存摘要，完整结果在 result 字段。"""
+    errors = result.get("errors") or []
+    if isinstance(errors, list):
+        for item in errors:
+            text = str(item or "").strip()
+            if text:
+                return _truncate_db_text(text, _DB_MESSAGE_MAX)
+    items = [r for r in result.get("results") or [] if isinstance(r, dict)]
+    if not items:
+        return "上架任务完成"
+    success = sum(1 for r in items if str(r.get("status") or "") in {"success", "listed"})
+    failed = sum(1 for r in items if str(r.get("status") or "") == "failed")
+    retryable = sum(1 for r in items if str(r.get("status") or "") == "retryable")
+    parts = [f"共{len(items)}个单元", f"成功{success}", f"可重试{retryable}", f"失败{failed}"]
+    for row in items:
+        if str(row.get("status") or "") in {"success", "listed"}:
+            continue
+        label = str(row.get("listing_label") or "").strip()
+        reason = str(row.get("reason") or row.get("error") or "").strip()
+        if label or reason:
+            parts.append(f"例：{label} {reason}".strip())
+            break
+    return _truncate_db_text("；".join(parts), _DB_MESSAGE_MAX)
+
+
+def _summarize_delist_message(result: dict[str, Any]) -> str:
+    errors = result.get("errors") or []
+    if isinstance(errors, list):
+        for item in errors:
+            text = str(item or "").strip()
+            if text:
+                return _truncate_db_text(text, _DB_MESSAGE_MAX)
+    items = result.get("results")
+    if isinstance(items, list) and items:
+        return _truncate_db_text(f"下架处理 {len(items)} 条", _DB_MESSAGE_MAX)
+    return "下架任务完成"
 
 
 def _summarize_campaign_message(result: dict[str, Any]) -> str:
@@ -195,8 +269,8 @@ async def execute_listing(
         store.finish(
             run_id,
             status,
-            message=str(result.get("results") or result.get("errors") or ""),
-            result=result,
+            message=_summarize_listing_message(result),
+            result=_compact_run_result_for_storage(result),
             listing_labels=labels,
         )
         from pdd_agent.api.services.run_cancel import clear_cancel
@@ -260,7 +334,12 @@ async def execute_delist(
         status = RunStatus.SUCCESS if not result.get("errors") else RunStatus.FAILED
         if status == RunStatus.SUCCESS:
             _sync_single_delist_result(result)
-        store.finish(run_id, status, message=str(result.get("results") or ""), result=result)
+        store.finish(
+            run_id,
+            status,
+            message=_summarize_delist_message(result),
+            result=_compact_run_result_for_storage(result),
+        )
         return result
     except asyncio.CancelledError:
         store.update_status(run_id, RunStatus.CANCELED, "canceled by user")

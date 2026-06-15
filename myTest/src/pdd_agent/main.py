@@ -94,12 +94,19 @@ async def _cmd_run(args) -> None:
                 "category_keyword": args.category,
             }
         )
+        result = _json_safe(result)
+        from pdd_agent.api.services.task_runner import (
+            _compact_run_result_for_storage,
+            _summarize_delist_message,
+            _summarize_listing_message,
+        )
+
         status = RunStatus.SUCCESS if not result.get("errors") else RunStatus.FAILED
         store.finish(
             run.run_id,
             status,
-            str(result.get("results")),
-            result=_json_safe(result),
+            _summarize_listing_message(result),
+            result=_compact_run_result_for_storage(result),
         )
         print(result)
     elif args.agent == "delist":
@@ -117,12 +124,18 @@ async def _cmd_run(args) -> None:
                 },
             }
         )
+        result = _json_safe(result)
+        from pdd_agent.api.services.task_runner import (
+            _compact_run_result_for_storage,
+            _summarize_delist_message,
+        )
+
         status = RunStatus.SUCCESS if not result.get("errors") else RunStatus.FAILED
         store.finish(
             run.run_id,
             status,
-            str(result.get("results")),
-            result=_json_safe(result),
+            _summarize_delist_message(result),
+            result=_compact_run_result_for_storage(result),
         )
         print(result)
 

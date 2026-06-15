@@ -21,6 +21,89 @@ from pdd_agent.storage import TaskRunStore
 
 FAILURE_STATUSES = {"failed", "retryable", "submit_uncertain", "skipped"}
 
+RETRYABLE_REASON_CODES = frozenset({
+    "preview_not_ready",
+    "preview_missing",
+    "platform_listing_code_not_filled",
+    "platform_listing_code_verify_failed",
+    "validation_errors",
+    "validation_incomplete",
+    "validation_required",
+    "submit_blocked",
+    "submit_uncertain",
+    "submit_button_missing",
+    "submit_exception",
+    "listed",
+    "published_but_not_found_in_on_sale_or_rejected",
+    "needs_manual_login_or_captcha",
+    "page_or_material_changed",
+    "browser_transient_error",
+    "unexpected_error",
+    "preflight_no_skus",
+    "preflight_no_carousel",
+    "preflight_no_detail",
+    "preflight_catalog",
+    "image_file_missing",
+    "price_fill_partial",
+    "price_fill_row_not_found",
+    "price_fill_by_index_failed",
+    "catalog_parse_warning",
+    "no_valid_units",
+})
+
+
+def resolve_failure_item_status(reason_code: str) -> tuple[str, bool]:
+    code = str(reason_code or "").strip()
+    if code in {"submit_uncertain", "published_but_not_found_in_on_sale_or_rejected"}:
+        return "submit_uncertain", True
+    if code == "rejected_after_publish":
+        return "failed", False
+    if code in RETRYABLE_REASON_CODES:
+        return "retryable", True
+    return "failed", False
+
+
+def upsert_live_failure_item(
+    *,
+    source_run_id: str,
+    account_id: str,
+    listing_label: str,
+    product_code: str = "",
+    image_set: str = "",
+    merchant_code: str = "",
+    reason_code: str,
+    error: str = "",
+    severity: str = "error",
+) -> None:
+    """任务进行中立即写入失败项工作台（不等整批跑完）。"""
+    if not is_database_available():
+        return
+    if severity == "warning":
+        return
+    label = str(listing_label or "").strip()
+    code = str(product_code or "").strip()
+    if not label and not code:
+        return
+    if not code and label:
+        code = label.split("/", 1)[0]
+    if not label and code:
+        label = code if not image_set else f"{code}/{image_set}"
+    item_status, retryable = resolve_failure_item_status(reason_code)
+    item_id = make_failure_item_id(source_run_id, label, code, str(image_set or ""))
+    upsert_failure_item(
+        item_id=item_id,
+        source_run_id=source_run_id,
+        account_id=account_id,
+        listing_label=label,
+        product_code=code,
+        image_set=str(image_set or ""),
+        merchant_code=str(merchant_code or ""),
+        item_status=item_status,
+        reason=str(reason_code or ""),
+        error=str(error or ""),
+        retryable=retryable,
+    )
+
 
 @dataclass
 class FailureCandidate:
