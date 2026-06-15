@@ -2006,6 +2006,10 @@ def _product_search_modal_locator(page: DpPage):
 
 def _open_product_search_modal(page: DpPage, account_id: str) -> dict[str, Any]:
     """在选择活动商品页点击搜索框，打开「搜索商品」弹窗。"""
+    existing = _product_search_modal_locator(page)
+    if existing is not None:
+        return {"opened": True, "method": "search_modal_already_open"}
+
     loc = _product_pick_page_search_locator(page)
     if loc is None:
         return {"opened": False, "reason": "product_pick_search_input_not_found"}
@@ -2027,14 +2031,240 @@ def _open_product_search_modal(page: DpPage, account_id: str) -> dict[str, Any]:
 
 
 def _modal_contains_products(modal, product_ids: list[str]) -> bool:
+    eligible = _modal_eligible_product_ids(modal, product_ids)
+    return all(product_id in eligible for product_id in product_ids)
+
+
+_TIME_REQUIREMENT_MARKERS: tuple[str, ...] = (
+    "需等待1天",
+    "等待1天",
+    "1天后再试",
+    "等待该时间",
+    "近期有更新规格",
+)
+
+
+def _modal_eligible_product_ids(modal, product_ids: list[str]) -> list[str]:
     try:
-        text = str(modal.inner_text(timeout=2_000) or "")
+        found = modal.evaluate(
+            """
+            (root, ids) => {
+                const table = root.querySelector('table[data-testid="beast-core-table"]') || root.querySelector('table');
+                if (!table) return [];
+                const found = [];
+                for (const row of table.querySelectorAll('tbody tr')) {
+                    const text = (row.innerText || row.textContent || '').replace(/\\s+/g, ' ');
+                    for (const id of ids) {
+                        if (text.includes(id) && !found.includes(id)) found.push(id);
+                    }
+                }
+                return found;
+            }
+            """,
+            product_ids,
+        )
     except Exception:
-        return False
-    return all(product_id in text for product_id in product_ids)
+        return []
+    if not isinstance(found, list):
+        return []
+    return [str(item).strip() for item in found if str(item).strip()]
 
 
-def _fill_product_search_modal_input(modal, product_ids: list[str]) -> dict[str, Any]:
+def _analyze_modal_product_eligibility(modal, product_ids: list[str]) -> dict[str, Any]:
+    """检查搜索弹窗内可报名/不可报名商品，识别「需等待1天」等时间限制。"""
+    try:
+        result = modal.evaluate(
+            """
+            (root, ids, timeMarkers) => {
+                function norm(text) {
+                    return (text || '').replace(/\\s+/g, ' ').trim();
+                }
+                function isVisible(el) {
+                    if (!el || !el.getBoundingClientRect) return false;
+                    const r = el.getBoundingClientRect();
+                    const s = window.getComputedStyle(el);
+                    return r.width > 2 && r.height > 2
+                        && s.display !== 'none'
+                        && s.visibility !== 'hidden'
+                        && parseFloat(s.opacity || '1') > 0.05;
+                }
+                function tableIds(table) {
+                    const found = [];
+                    if (!table) return found;
+                    for (const row of table.querySelectorAll('tbody tr')) {
+                        if (!isVisible(row)) continue;
+                        const text = norm(row.innerText || row.textContent || '');
+                        for (const id of ids) {
+                            if (text.includes(id) && !found.includes(id)) found.push(id);
+                        }
+                    }
+                    return found;
+                }
+                function clickTab(labelPart) {
+                    const nodes = Array.from(root.querySelectorAll('[role="tab"], span, div, a, button'))
+                        .filter(isVisible)
+                        .filter((el) => norm(el.innerText || el.textContent || '').includes(labelPart));
+                    if (!nodes.length) return false;
+                    nodes[0].click();
+                    return true;
+                }
+                function rowReason(rowText) {
+                    const text = norm(rowText);
+                    for (const marker of timeMarkers) {
+                        if (text.includes(marker)) return marker;
+                    }
+                    return '';
+                }
+
+                const eligibleIds = tableIds(
+                    root.querySelector('table[data-testid="beast-core-table"]') || root.querySelector('table')
+                );
+
+                const timeBlocked = [];
+                const otherIneligible = [];
+                const missing = [];
+
+                clickTab('不可报名');
+                const ineligibleTable = root.querySelector('table[data-testid="beast-core-table"]') || root.querySelector('table');
+                const ineligibleRows = ineligibleTable
+                    ? Array.from(ineligibleTable.querySelectorAll('tbody tr')).filter(isVisible)
+                    : [];
+                const bodyText = norm(root.innerText || root.textContent || '');
+
+                for (const id of ids) {
+                    if (eligibleIds.includes(id)) continue;
+                    let matched = false;
+                    for (const row of ineligibleRows) {
+                        const rowText = norm(row.innerText || row.textContent || '');
+                        if (!rowText.includes(id)) continue;
+                        matched = true;
+                        const reason = rowReason(rowText);
+                        const entry = { product_id: id, reason_text: reason || rowText.slice(0, 120) };
+                        if (reason) {
+                            timeBlocked.push(entry);
+                        } else {
+                            otherIneligible.push(entry);
+                        }
+                        break;
+                    }
+                    if (matched) continue;
+                    const idx = bodyText.indexOf(id);
+                    if (idx >= 0) {
+                        const snippet = bodyText.slice(Math.max(0, idx - 20), idx + 160);
+                        const reason = rowReason(snippet);
+                        if (reason) {
+                            timeBlocked.push({ product_id: id, reason_text: reason });
+                            matched = true;
+                        }
+                    }
+                    if (!matched) missing.push(id);
+                }
+
+                clickTab('可报名');
+
+                return {
+                    eligible_ids: eligibleIds,
+                    time_blocked: timeBlocked,
+                    other_ineligible: otherIneligible,
+                    missing_ids: missing,
+                };
+            }
+            """,
+            product_ids,
+            list(_TIME_REQUIREMENT_MARKERS),
+        )
+    except Exception as exc:
+        return {
+            "eligible_ids": _modal_eligible_product_ids(modal, product_ids),
+            "time_blocked": [],
+            "other_ineligible": [],
+            "missing_ids": product_ids,
+            "error": str(exc),
+        }
+    if not isinstance(result, dict):
+        return {
+            "eligible_ids": [],
+            "time_blocked": [],
+            "other_ineligible": [],
+            "missing_ids": product_ids,
+        }
+    result["eligible_ids"] = [
+        str(item).strip()
+        for item in (result.get("eligible_ids") or [])
+        if str(item).strip()
+    ]
+    return result
+
+
+def _format_modal_eligibility_failure(eligibility: dict[str, Any], product_ids: list[str]) -> dict[str, Any]:
+    time_blocked = [
+        item for item in (eligibility.get("time_blocked") or []) if isinstance(item, dict)
+    ]
+    if time_blocked:
+        parts = [
+            f"{item.get('product_id')}（{item.get('reason_text') or '需等待1天'}）"
+            for item in time_blocked
+        ]
+        return {
+            "status": "failed",
+            "step": "product_time_requirement_not_met",
+            "error": "当前商品未满足时间要求，已取消报名：" + "；".join(parts),
+            "eligibility": eligibility,
+        }
+
+    missing = [
+        str(item).strip()
+        for item in (eligibility.get("missing_ids") or [])
+        if str(item).strip()
+    ]
+    other = [
+        item for item in (eligibility.get("other_ineligible") or []) if isinstance(item, dict)
+    ]
+    eligible = eligibility.get("eligible_ids") or []
+    if len(eligible) < len(product_ids):
+        blocked_ids = missing or [
+            str(item.get("product_id") or "").strip()
+            for item in other
+            if str(item.get("product_id") or "").strip()
+        ]
+        detail = "；".join(
+            f"{item.get('product_id')}（{item.get('reason_text') or '不可报名'}）"
+            for item in other
+        ) if other else ", ".join(blocked_ids)
+        return {
+            "status": "failed",
+            "step": "product_not_eligible_for_activity",
+            "error": f"部分商品不可报名活动，已取消操作：{detail or ', '.join(product_ids)}",
+            "eligibility": eligibility,
+        }
+    return {}
+
+
+def _click_modal_cancel_button(modal) -> dict[str, Any]:
+    selectors = (
+        'button[data-testid="beast-core-button"]:has-text("取消")',
+        'button:has-text("取消")',
+    )
+    for selector in selectors:
+        try:
+            buttons = modal.locator(selector)
+            for index in range(buttons.count() - 1, -1, -1):
+                btn = buttons.nth(index)
+                if btn.is_visible():
+                    btn.click(timeout=3_000)
+                    return {"clicked": True, "method": selector}
+        except Exception:
+            continue
+    return {"clicked": False, "reason": "modal_cancel_button_not_found"}
+
+
+def _close_product_search_modal_if_open(page: DpPage) -> None:
+    modal = _product_search_modal_locator(page)
+    if modal is None:
+        return
+    _click_modal_cancel_button(modal)
+    time.sleep(0.5)
+
     query = ",".join(product_ids)
     input_selectors = (
         'input[data-testid="beast-core-input-htmlInput"]',
@@ -2182,19 +2412,26 @@ def _trigger_modal_product_search(modal, product_ids: list[str]) -> dict[str, An
 def _wait_modal_products_loaded(modal, product_ids: list[str], timeout: int = 15) -> dict[str, Any]:
     for _ in range(timeout):
         try:
-            if not _modal_contains_products(modal, product_ids):
-                time.sleep(1)
-                continue
-            rows = modal.locator('table[data-testid="beast-core-table"] tbody tr')
-            if rows.count() > 0:
-                return {"loaded": True, "product_ids": product_ids, "row_count": rows.count()}
-            text = str(modal.inner_text(timeout=2_000) or "")
-            if all(pid in text for pid in product_ids) and "请在上方输入关键词" not in text:
-                return {"loaded": True, "product_ids": product_ids, "method": "text_match"}
+            eligible = _modal_eligible_product_ids(modal, product_ids)
+            if eligible and all(pid in eligible for pid in product_ids):
+                rows = modal.locator('table[data-testid="beast-core-table"] tbody tr')
+                if rows.count() > 0:
+                    return {
+                        "loaded": True,
+                        "product_ids": product_ids,
+                        "eligible_ids": eligible,
+                        "row_count": rows.count(),
+                    }
         except Exception:
             pass
         time.sleep(1)
-    return {"loaded": False, "missing_product_ids": product_ids}
+    eligible = _modal_eligible_product_ids(modal, product_ids)
+    missing = [pid for pid in product_ids if pid not in eligible]
+    return {
+        "loaded": False,
+        "missing_product_ids": missing or product_ids,
+        "eligible_ids": eligible,
+    }
 
 
 def _read_modal_selection_state(modal) -> dict[str, Any]:
@@ -3846,6 +4083,7 @@ def _select_products_in_search_modal(
         return {"status": "failed", "step": "validate_product_ids", "error": "pdd_product_ids 不能为空"}
 
     _dismiss_wrong_tabs_and_focus_product_pick(page, activity_id or "", account_id)
+    _close_product_search_modal_if_open(page)
 
     open_result = _open_product_search_modal(page, account_id)
     if not open_result.get("opened"):
@@ -3871,16 +4109,37 @@ def _select_products_in_search_modal(
     if not query_result.get("clicked"):
         return {"status": "failed", "step": "click_modal_query", **query_result}
 
-    time.sleep(1)
+    time.sleep(1.2)
     modal = _product_search_modal_locator(page)
     if modal is None:
         return {"status": "failed", "step": "find_product_search_modal", "error": "查询后搜索商品弹窗消失"}
 
-    load_result = _wait_modal_products_loaded(modal, product_ids, timeout=15)
+    eligibility = _analyze_modal_product_eligibility(modal, product_ids)
+    failure = _format_modal_eligibility_failure(eligibility, product_ids)
+    if failure:
+        _click_modal_cancel_button(modal)
+        return failure
+
+    eligible_ids = list(eligibility.get("eligible_ids") or product_ids)
+    if not eligible_ids:
+        _click_modal_cancel_button(modal)
+        return {
+            "status": "failed",
+            "step": "product_not_eligible_for_activity",
+            "error": "未找到可报名商品，已取消操作",
+            "eligibility": eligibility,
+        }
+
+    load_result = _wait_modal_products_loaded(modal, eligible_ids, timeout=15)
     if not load_result.get("loaded"):
+        eligibility = _analyze_modal_product_eligibility(modal, product_ids)
+        failure = _format_modal_eligibility_failure(eligibility, product_ids)
+        if failure:
+            _click_modal_cancel_button(modal)
+            return failure
         return {"status": "failed", "step": "wait_modal_products", **load_result}
 
-    select_all_result = _ensure_modal_products_selected(modal, product_ids)
+    select_all_result = _ensure_modal_products_selected(modal, eligible_ids)
     if not select_all_result.get("checked"):
         return {"status": "failed", "step": "click_modal_select_all", **select_all_result}
 
@@ -3894,11 +4153,13 @@ def _select_products_in_search_modal(
         }
 
     time.sleep(1.5)
-    print(f"[{account_id}] 已在搜索商品弹窗确认选择 {len(product_ids)} 个商品", flush=True)
+    print(f"[{account_id}] 已在搜索商品弹窗确认选择 {len(eligible_ids)} 个商品", flush=True)
     return {
         "status": "success",
         "step": "modal_products_confirmed",
-        "product_ids": product_ids,
+        "product_ids": eligible_ids,
+        "requested_product_ids": product_ids,
+        "eligibility": eligibility,
         "open_result": open_result,
         "fill_result": fill_result,
         "query_result": query_result,
@@ -4044,11 +4305,16 @@ def register_marketing_activity(
             page, account_id, product_ids, activity_id=activity_id
         )
         if product_selection.get("status") != "success":
-            _dismiss_wrong_tabs_and_focus_product_pick(page, activity_id, account_id)
-            time.sleep(1.5)
-            product_selection = _select_products_in_search_modal(
-                page, account_id, product_ids, activity_id=activity_id
-            )
+            step = str(product_selection.get("step") or "")
+            if step not in {
+                "product_time_requirement_not_met",
+                "product_not_eligible_for_activity",
+            }:
+                _dismiss_wrong_tabs_and_focus_product_pick(page, activity_id, account_id)
+                time.sleep(1.5)
+                product_selection = _select_products_in_search_modal(
+                    page, account_id, product_ids, activity_id=activity_id
+                )
         if product_selection.get("status") != "success":
             return _fail(
                 product_selection.get("step", "standard_product_selection"),

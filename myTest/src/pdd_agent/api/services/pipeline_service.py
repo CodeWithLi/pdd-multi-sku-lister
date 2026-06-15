@@ -189,7 +189,8 @@ def start_integrated_pipeline(
         activity_id,
         demo_mode,
     )
-    return pipeline_to_dict(row)
+    refreshed = get_integrated_pipeline(pipeline_id)
+    return pipeline_to_dict(refreshed or row)
 
 
 def on_queue_task_finished(

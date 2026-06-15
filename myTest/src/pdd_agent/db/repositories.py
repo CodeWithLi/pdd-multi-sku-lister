@@ -1185,6 +1185,7 @@ def create_integrated_pipeline(
     with session_scope() as session:
         session.add(row)
         session.flush()
+        session.refresh(row)
         session.expunge(row)
     return row
 
