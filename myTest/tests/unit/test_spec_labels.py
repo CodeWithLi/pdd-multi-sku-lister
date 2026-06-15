@@ -391,6 +391,49 @@ def test_resolve_combo_pricing_from_catalog():
     assert sp == "150"
 
 
+def test_build_sub_category_cache_uses_catalog_not_ai(monkeypatch):
+    from pathlib import Path
+
+    from pdd_agent.domain.models import ListingUnit, SkuCombo
+    from pdd_agent.skills.listing import spec_labels
+    from pdd_agent.skills.listing.pdd_product_catalog import PddProductEntry
+    from pdd_agent.skills.listing.spec_labels import build_sub_category_cache
+
+    def fail_ai(*args, **kwargs):
+        raise AssertionError("build_sub_category_cache must not call sub-category AI")
+
+    monkeypatch.setattr("pdd_agent.llm.vision.detect_sub_product_category", fail_ai)
+
+    unit = ListingUnit(product_code="BD720A", image_set="第一套图", root=Path("."))
+    unit.skus = [
+        SkuCombo(
+            style_code="BD720A",
+            style_name="蓝色",
+            model_code="GJ82A",
+            model_name="",
+            combo_folder="BD720A+GJ82A",
+            preview_image=Path("x.jpg"),
+        ),
+        SkuCombo(
+            style_code="BD720A",
+            style_name="蓝色",
+            model_code="YKL001H",
+            model_name="",
+            combo_folder="BD720A+YKL001H",
+            preview_image=Path("y.jpg"),
+        ),
+    ]
+    catalog = {
+        "GJ82A": PddProductEntry("GJ82A", "煤球小猫", "公仔"),
+        "YKL001H": PddProductEntry("YKL001H", "黑色KT猫挂件", "亚克力"),
+    }
+    monkeypatch.setattr(spec_labels, "get_pdd_product_catalog", lambda: catalog)
+
+    cache = build_sub_category_cache(unit, allow_ai=True)
+    assert cache["GJ82A"] == "公仔"
+    assert cache["YKL001H"] == "挂件"
+
+
 def test_resolve_style_colors_uses_db_cache(monkeypatch, tmp_path):
     from pdd_agent.domain.models import ListingUnit
     from pdd_agent.skills.listing import spec_labels

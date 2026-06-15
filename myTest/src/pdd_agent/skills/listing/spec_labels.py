@@ -7,7 +7,6 @@ from pathlib import Path
 from pdd_agent.domain.models import ListingUnit, SkuCombo
 from pdd_agent.llm.vision import (
     detect_product_color,
-    detect_sub_product_category,
     disambiguate_conflicting_size_labels_ai,
     _fallback_color_from_catalog,
 )
@@ -16,8 +15,6 @@ from pdd_agent.skills.listing.pdd_product_catalog import (
     append_product_type_to_size_label,
     get_catalog_entry,
     get_pdd_product_catalog,
-    infer_sub_product_category_rules,
-    is_weak_sub_category,
     meaningful_product_type_for_label,
     resolve_size_label,
 )
@@ -174,7 +171,13 @@ def pick_sub_preview_image(unit: ListingUnit, model_code: str) -> Path | None:
 
 
 def build_sub_category_cache(unit: ListingUnit, account_id: str = "", *, allow_ai: bool = True) -> dict[str, str]:
-    """为单元内所有子配件编码解析尺寸子类（规则优先，弱匹配走 AI）。"""
+    """
+    为单元内子配件解析尺寸子类：仅商品表规则（关键词 → 商品类型 → 规格短名）。
+    AI 不在此阶段调用，避免提前改名导致后续撞名消歧、填表对不上；AI 仅在 disambiguate_size_labels 撞名时使用。
+    allow_ai 保留参数兼容调用方，此处不使用。
+    """
+    from pdd_agent.skills.listing.pdd_product_catalog import infer_sub_product_category
+
     catalog = get_pdd_product_catalog()
     cache: dict[str, str] = {}
     prefix = f"[{account_id}] " if account_id else ""
@@ -189,25 +192,13 @@ def build_sub_category_cache(unit: ListingUnit, account_id: str = "", *, allow_a
         if not entry:
             continue
 
-        ruled = infer_sub_product_category_rules(entry)
-        if ruled and not is_weak_sub_category(ruled):
-            cache[model_norm] = ruled
-            continue
-
-        if not allow_ai:
-            from pdd_agent.skills.listing.pdd_product_catalog import infer_sub_product_category
-
-            cache[model_norm] = infer_sub_product_category(entry)
-            continue
-
-        image = pick_sub_preview_image(unit, model_norm)
-        print(
-            f"{prefix}[{unit.listing_label}] AI识别尺寸子类：{model_norm} ← "
-            f"{entry.color_spec}"
-            f"{' / ' + image.name if image else ''}",
-            flush=True,
-        )
-        cache[model_norm] = detect_sub_product_category(entry, image_path=image)
+        sub_cat = infer_sub_product_category(entry)
+        cache[model_norm] = sub_cat
+        if prefix:
+            print(
+                f"{prefix}[{unit.listing_label}] 商品表尺寸子类：{model_norm} → {sub_cat}（{entry.color_spec}）",
+                flush=True,
+            )
 
     return cache
 
