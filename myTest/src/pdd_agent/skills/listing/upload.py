@@ -1223,8 +1223,11 @@ def run_listing_uploads(
     title_mode: str = "page_ai",
     platform_listing_code: str = "",
     defaults: dict[str, str] | None = None,
+    run_id: str = "",
 ) -> list[dict[str, Any]]:
     """顺序上架多个单元。"""
+    from pdd_agent.api.services.run_cancel import is_cancelled
+
     product_info = {
         "category_keyword": category_keyword,
         "title_mode": title_mode,
@@ -1234,6 +1237,9 @@ def run_listing_uploads(
     results: list[dict[str, Any]] = []
 
     for idx, unit in enumerate(units):
+        if run_id and is_cancelled(run_id):
+            print(f"[{account_id}] 任务已取消，停止上架剩余单元", flush=True)
+            break
         if idx > 0:
             print(f"\n[{account_id}] 等待 5 秒后上架下一单元 [{unit.listing_label}]...\n")
             time.sleep(5)

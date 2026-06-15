@@ -8,7 +8,7 @@ import uuid
 from datetime import datetime, timedelta
 from pathlib import Path
 
-from sqlalchemy import func, select
+from sqlalchemy import case, func, select
 from sqlalchemy.exc import IntegrityError
 
 from pdd_agent.core.config import AccountConfig, YamlSettings
@@ -217,13 +217,65 @@ def count_running_queue_tasks() -> int:
 
 
 def queue_status_counts() -> dict[str, int]:
+    """队列统计：等待/运行=当前活跃；成功/失败=近 24 小时完成数。"""
     if not is_database_available():
         return {}
+    since = datetime.now() - timedelta(hours=24)
     with session_scope() as session:
-        rows = session.execute(
-            select(TaskQueueORM.status, func.count()).group_by(TaskQueueORM.status)
-        ).all()
-        return {str(status): int(count) for status, count in rows}
+        counts: dict[str, int] = {}
+        for status in ("queued", "running", "canceled"):
+            counts[status] = int(
+                session.scalar(
+                    select(func.count()).select_from(TaskQueueORM).where(TaskQueueORM.status == status)
+                )
+                or 0
+            )
+        for status in ("success", "failed"):
+            counts[status] = int(
+                session.scalar(
+                    select(func.count())
+                    .select_from(TaskQueueORM)
+                    .where(TaskQueueORM.status == status, TaskQueueORM.finished_at >= since)
+                )
+                or 0
+            )
+        return counts
+
+
+def list_queue_rows_for_display(*, limit: int = 50, account_id: str = "") -> list[TaskQueueORM]:
+    """优先展示运行中/等待中任务，再补最近完成记录。"""
+    if not is_database_available():
+        return []
+    limit = max(1, min(500, limit))
+    with session_scope() as session:
+        active_stmt = select(TaskQueueORM).where(TaskQueueORM.status.in_(("running", "queued")))
+        if account_id:
+            active_stmt = active_stmt.where(TaskQueueORM.account_id == account_id)
+        active_stmt = active_stmt.order_by(
+            case((TaskQueueORM.status == "running", 0), else_=1),
+            TaskQueueORM.scheduled_at.asc(),
+            TaskQueueORM.created_at.asc(),
+        )
+        active_rows = list(session.scalars(active_stmt).all())
+
+        remaining = limit - len(active_rows)
+        done_rows: list[TaskQueueORM] = []
+        if remaining > 0:
+            done_stmt = select(TaskQueueORM).where(
+                TaskQueueORM.status.in_(("success", "failed", "canceled"))
+            )
+            if account_id:
+                done_stmt = done_stmt.where(TaskQueueORM.account_id == account_id)
+            done_stmt = done_stmt.order_by(
+                TaskQueueORM.finished_at.desc(),
+                TaskQueueORM.created_at.desc(),
+            ).limit(remaining)
+            done_rows = list(session.scalars(done_stmt).all())
+
+        rows = active_rows + done_rows
+        for row in rows:
+            session.expunge(row)
+        return rows
 
 
 def list_queue_rows(*, limit: int = 100, status: str = "", account_id: str = "") -> list[TaskQueueORM]:
@@ -338,9 +390,43 @@ def finish_queue_task(task_id: str, *, success: bool, error: str = "") -> None:
         row = session.get(TaskQueueORM, task_id)
         if not row:
             return
+        if row.status == "canceled":
+            return
         row.status = "success" if success else "failed"
         row.finished_at = datetime.now()
         row.error = error
+
+
+def cancel_running_tasks(*, account_id: str = "") -> list[dict[str, str]]:
+    """将运行中的队列任务标为 canceled，并释放对应店铺锁。"""
+    if not is_database_available():
+        return []
+    with session_scope() as session:
+        stmt = select(TaskQueueORM).where(TaskQueueORM.status == "running")
+        if account_id:
+            stmt = stmt.where(TaskQueueORM.account_id == account_id)
+        rows = list(session.scalars(stmt).all())
+        now = datetime.now()
+        out: list[dict[str, str]] = []
+        account_ids: set[str] = set()
+        for row in rows:
+            row.status = "canceled"
+            row.finished_at = now
+            row.error = "canceled by user"
+            if row.account_id:
+                account_ids.add(row.account_id)
+            out.append(
+                {
+                    "task_id": row.task_id,
+                    "run_id": row.run_id,
+                    "account_id": row.account_id or "",
+                }
+            )
+        for acc in account_ids:
+            lock = session.get(AccountLockORM, acc)
+            if lock:
+                session.delete(lock)
+        return out
 
 
 def cancel_queued_task_by_run_id(run_id: str) -> bool:

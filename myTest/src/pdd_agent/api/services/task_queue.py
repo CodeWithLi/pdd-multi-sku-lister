@@ -29,6 +29,31 @@ class TaskQueueWorker:
         self._stop = asyncio.Event()
         self._main_task: asyncio.Task | None = None
         self._running: set[asyncio.Task] = set()
+        self._task_handles: dict[str, tuple[asyncio.Task, str, str]] = {}
+
+    def cancel_running(self, account_id: str = "") -> list[str]:
+        """取消运行中的队列任务（标记 DB、中止 asyncio 任务、请求浏览器协作退出）。"""
+        from pdd_agent.api.services.run_cancel import request_cancel
+        from pdd_agent.db.repositories import cancel_running_tasks
+
+        rows = cancel_running_tasks(account_id=account_id)
+        run_ids: list[str] = []
+        store = TaskRunStore()
+        for item in rows:
+            run_id = str(item.get("run_id") or "")
+            if not run_id:
+                continue
+            run_ids.append(run_id)
+            request_cancel(run_id)
+            store.update_status(run_id, RunStatus.CANCELED, "canceled by user")
+
+        for task_id, (task, _, acc) in list(self._task_handles.items()):
+            if account_id and acc != account_id:
+                continue
+            if not task.done():
+                task.cancel()
+
+        return run_ids
 
     def start(self) -> None:
         if self._main_task and not self._main_task.done():
@@ -71,7 +96,13 @@ class TaskQueueWorker:
                 break
             task = asyncio.create_task(self._run_task(row))
             self._running.add(task)
-            task.add_done_callback(self._running.discard)
+            self._task_handles[row.task_id] = (task, row.run_id, row.account_id or "")
+
+            def _on_done(t: asyncio.Task, tid: str = row.task_id) -> None:
+                self._running.discard(t)
+                self._task_handles.pop(tid, None)
+
+            task.add_done_callback(_on_done)
 
     async def _run_task(self, row) -> None:
         payload: dict[str, Any] = dict(row.payload or {})
@@ -104,9 +135,21 @@ class TaskQueueWorker:
                 raise ValueError(f"unsupported queued agent: {row.agent}")
 
             record = TaskRunStore().load(row.run_id)
+            if record and record.status == RunStatus.CANCELED:
+                finish_queue_task(row.task_id, success=False, error="canceled by user")
+                return
             success = bool(record and record.status == RunStatus.SUCCESS)
             error = "" if success else str(result.get("error") or result.get("errors") or "")
             finish_queue_task(row.task_id, success=success, error=error)
+        except asyncio.CancelledError:
+            from pdd_agent.api.services.run_cancel import clear_cancel, request_cancel
+
+            request_cancel(row.run_id)
+            TaskRunStore().update_status(row.run_id, RunStatus.CANCELED, "canceled by user")
+            finish_queue_task(row.task_id, success=False, error="canceled by user")
+            clear_cancel(row.run_id)
+            logger.info("queue task canceled task_id=%s run_id=%s", row.task_id, row.run_id)
+            raise
         except Exception as exc:
             logger.exception("queue task failed task_id=%s", row.task_id)
             finish_queue_task(row.task_id, success=False, error=str(exc))

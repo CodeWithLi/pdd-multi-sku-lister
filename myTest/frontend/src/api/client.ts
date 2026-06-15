@@ -204,6 +204,12 @@ export const api = {
   cancelQueuedTasks: (accountId = '') =>
     http.post<QueueCancelResponse>('/queue/cancel-queued', null, { params: { account_id: accountId || undefined } }).then((r) => r.data),
 
+  cancelRunningTasks: (accountId = '') =>
+    http.post<QueueCancelResponse>('/queue/cancel-running', null, { params: { account_id: accountId || undefined } }).then((r) => r.data),
+
+  cancelPendingTasks: (accountId = '') =>
+    http.post<QueueCancelResponse>('/queue/cancel-pending', null, { params: { account_id: accountId || undefined } }).then((r) => r.data),
+
   failures: (params: {
     page?: number
     page_size?: number

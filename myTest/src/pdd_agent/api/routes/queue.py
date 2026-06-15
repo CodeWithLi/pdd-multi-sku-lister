@@ -13,7 +13,7 @@ from pdd_agent.db.repositories import (
     cancel_queued_tasks,
     get_queue_controls,
     is_queue_paused,
-    list_queue_rows,
+    list_queue_rows_for_display,
     queue_status_counts,
     set_queue_pause,
 )
@@ -67,7 +67,7 @@ def _get_queue_status(
         paused=is_queue_paused(account_id=account_id),
         counts=queue_status_counts(),
         controls=[_control_out(c) for c in controls],
-        tasks=[_queue_task_out(t) for t in list_queue_rows(limit=limit, status=status, account_id=account_id)],
+        tasks=[_queue_task_out(t) for t in list_queue_rows_for_display(limit=limit, account_id=account_id)],
     )
 
 
@@ -113,6 +113,30 @@ def resume_account_queue(account_id: str, body: QueuePauseRequest):
 def cancel_all_queued(account_id: str = ""):
     _require_db()
     run_ids = cancel_queued_tasks(account_id=account_id)
+    store = TaskRunStore()
+    for run_id in run_ids:
+        store.update_status(run_id, RunStatus.CANCELED, "canceled by user")
+    return QueueCancelResponse(canceled=len(run_ids), run_ids=run_ids)
+
+
+@router.post("/cancel-running", response_model=QueueCancelResponse)
+def cancel_all_running(account_id: str = ""):
+    _require_db()
+    from pdd_agent.api.app import worker
+
+    run_ids = worker.cancel_running(account_id=account_id)
+    return QueueCancelResponse(canceled=len(run_ids), run_ids=run_ids)
+
+
+@router.post("/cancel-pending", response_model=QueueCancelResponse)
+def cancel_all_pending(account_id: str = ""):
+    """取消运行中 + 等待中的全部队列任务。"""
+    _require_db()
+    from pdd_agent.api.app import worker
+
+    running_ids = worker.cancel_running(account_id=account_id)
+    queued_ids = cancel_queued_tasks(account_id=account_id)
+    run_ids = list(dict.fromkeys(running_ids + queued_ids))
     store = TaskRunStore()
     for run_id in run_ids:
         store.update_status(run_id, RunStatus.CANCELED, "canceled by user")

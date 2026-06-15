@@ -4,6 +4,7 @@ export const runStatusLabel: Record<string, string> = {
   canceled: '已取消',
   running: '进行中',
   pending: '等待中',
+  queued: '排队中',
   needs_human: '需人工处理',
   skipped: '已跳过',
 }

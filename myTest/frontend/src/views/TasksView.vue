@@ -4,7 +4,7 @@ import { useRoute, useRouter } from 'vue-router'
 import { api } from '@/api/client'
 import PageHeader from '@/components/PageHeader.vue'
 import ResultSummary from '@/components/ResultSummary.vue'
-import type { Account, BatchTaskResponse, DelistTaskResponse, ListingTargetOption, ListingTaskResponse } from '@/types'
+import type { Account, BatchTaskResponse, DelistTaskResponse, ListingTargetOption, ListingTaskResponse, QueueStatus } from '@/types'
 
 const route = useRoute()
 const router = useRouter()
@@ -44,8 +44,12 @@ const delistBatchEnabled = ref(false)
 const delistConcurrentStores = ref(3)
 const delistStartDelayMin = ref(30)
 const delistStartDelayMax = ref(180)
+const queueStatus = ref<QueueStatus | null>(null)
 
 const enabledAccounts = computed(() => accounts.value.filter((a) => a.enabled))
+const queuePaused = computed(() =>
+  Boolean(queueStatus.value?.controls.find((c) => c.scope === 'global')?.paused),
+)
 const validProductSelectors = computed(() => new Set(productOptions.value.map((item) => item.selector)))
 
 const selectedSetGroups = computed(() =>
@@ -93,6 +97,14 @@ function updateCheckedProducts(selector: string, codes: string[]) {
 
 watch(productCodes, (sets) => syncCheckedProductsForSets(sets))
 
+async function loadQueueStatus() {
+  try {
+    queueStatus.value = await api.queueStatus({ limit: 5 })
+  } catch {
+    queueStatus.value = null
+  }
+}
+
 async function loadMeta() {
   try {
     const [accs, products, cfg] = await Promise.all([
@@ -124,6 +136,7 @@ async function loadMeta() {
       batchAccountIds.value = accs.map((a) => a.account_id)
       delistBatchAccountIds.value = accs.map((a) => a.account_id)
     }
+    await loadQueueStatus()
   } catch (e) {
     error.value = e instanceof Error ? e.message : '加载失败，请确认后台已启动'
   }
@@ -199,7 +212,7 @@ async function runListing() {
       category_keyword: categoryKeyword.value,
       background: !isCheck,
     })
-    success.value = isCheck ? '素材检查完成' : '上架任务已提交'
+    success.value = isCheck ? '素材检查完成' : '上架任务已提交，可在失败项工作台查看进度'
   } catch (e) {
     error.value = e instanceof Error ? e.message : '操作失败'
   } finally {
@@ -267,11 +280,18 @@ onMounted(() => {
 
     <el-alert v-if="error" type="error" :title="error" show-icon closable style="margin-bottom: 12px" @close="error = ''" />
     <el-alert v-if="success" type="success" :title="success" show-icon closable style="margin-bottom: 12px" @close="success = ''" />
+    <el-alert
+      v-if="queuePaused && listingMode === 'run'"
+      type="warning"
+      title="任务队列当前已暂停：上架任务会加入队列但不会执行，请到失败项工作台点击「恢复队列」。"
+      show-icon
+      style="margin-bottom: 12px"
+    />
 
     <el-tabs v-model="activeTab" class="task-tabs">
       <el-tab-pane label="商品上架" name="listing">
         <div class="section-tip">
-          正式上架会打开浏览器窗口。批量任务建议先用“仅检查”跑一遍，再执行正式上架。
+          正式上架经任务队列执行，开始后会打开浏览器。队列暂停时需先到失败项工作台恢复。
         </div>
 
         <el-card shadow="never" class="stat-card">

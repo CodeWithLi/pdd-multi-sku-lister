@@ -173,6 +173,19 @@ async function cancelQueued(accountId = '') {
   await refreshAll()
 }
 
+async function cancelPending(accountId = '') {
+  await ElMessageBox.confirm(
+    accountId
+      ? `确认停止店铺 ${accountId} 的所有运行中 + 等待中任务？`
+      : '确认停止全部运行中 + 等待中的队列任务？',
+    '停止全部待处理任务',
+    { type: 'warning' },
+  )
+  const resp = await api.cancelPendingTasks(accountId)
+  ElMessage.success(`已停止 ${resp.canceled} 个任务（运行+等待）`)
+  await refreshAll()
+}
+
 function applyFilters() {
   page.value = 1
   loadFailures()
@@ -246,12 +259,21 @@ onMounted(() => {
     </PageHeader>
 
     <el-alert v-if="error" type="error" :title="error" show-icon closable style="margin-bottom: 16px" @close="error = ''" />
+    <el-alert
+      v-if="globalPaused"
+      type="warning"
+      title="任务队列已暂停：等待中的上架任务不会开始，浏览器不会打开。请点击下方「恢复队列」。"
+      show-icon
+      style="margin-bottom: 16px"
+    />
 
     <el-card shadow="never" class="stat-card queue-card" v-loading="queueLoading">
       <div class="queue-head">
         <div>
           <div class="queue-title">任务队列</div>
-          <div class="queue-sub">暂停后不会领取新任务，正在运行的浏览器任务会自然跑完。</div>
+          <div class="queue-sub">
+            「等待中」= 尚未开始执行；「取消运行」不会清等待任务。成功/失败为近 24 小时统计。
+          </div>
         </div>
         <div class="queue-actions">
           <el-button :type="globalPaused ? 'success' : 'warning'" @click="toggleQueuePause">
@@ -260,7 +282,22 @@ onMounted(() => {
           <el-button :disabled="!filters.account_id" :type="accountPaused ? 'success' : 'warning'" plain @click="toggleAccountPause">
             {{ accountPaused ? '恢复当前店铺' : '暂停当前店铺' }}
           </el-button>
-          <el-button :disabled="!filters.account_id" plain @click="cancelQueued(filters.account_id)">取消当前店铺等待</el-button>
+          <el-button
+            :disabled="!((queueCounts.queued || 0) + (queueCounts.running || 0))"
+            type="danger"
+            @click="cancelPending()"
+          >
+            停止全部（运行+等待）
+          </el-button>
+          <el-button
+            :disabled="!filters.account_id || !(queueCounts.running || 0)"
+            type="danger"
+            plain
+            @click="cancelPending(filters.account_id)"
+          >
+            停止当前店铺
+          </el-button>
+          <el-button :disabled="!filters.account_id" plain @click="cancelQueued(filters.account_id)">仅取消等待</el-button>
           <el-button type="danger" plain @click="cancelQueued()">取消全部等待</el-button>
         </div>
       </div>
@@ -281,13 +318,13 @@ onMounted(() => {
         <el-col :span="6">
           <div class="queue-stat success">
             <strong>{{ queueCounts.success || 0 }}</strong>
-            <span>成功</span>
+            <span>近24h成功</span>
           </div>
         </el-col>
         <el-col :span="6">
           <div class="queue-stat danger">
             <strong>{{ queueCounts.failed || 0 }}</strong>
-            <span>失败</span>
+            <span>近24h失败</span>
           </div>
         </el-col>
       </el-row>
@@ -299,7 +336,9 @@ onMounted(() => {
         </el-table-column>
         <el-table-column label="状态" width="90">
           <template #default="{ row }">
-            <el-tag size="small">{{ runStatusLabel[row.status] || row.status }}</el-tag>
+            <el-tag size="small" :type="row.status === 'running' ? 'warning' : row.status === 'queued' ? 'info' : undefined">
+              {{ runStatusLabel[row.status] || row.status }}
+            </el-tag>
           </template>
         </el-table-column>
         <el-table-column label="计划时间" width="165">

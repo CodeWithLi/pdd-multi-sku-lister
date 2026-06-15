@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from typing import Any
 
 from pdd_agent.browser.sync_job import run_browser_job_async
@@ -134,9 +135,13 @@ async def execute_listing(
                 "dry_run": dry_run,
                 "category_keyword": category_keyword,
                 "retry_item": retry_item or {},
+                "run_id": run_id,
             }
         )
         result = _json_safe(raw)
+        record = store.load(run_id)
+        if record and record.status == RunStatus.CANCELED:
+            return {"canceled": True, "results": result.get("results") or []}
         labels = []
         for u in result.get("units") or []:
             if isinstance(u, dict) and u.get("listing_label"):
@@ -156,7 +161,13 @@ async def execute_listing(
             result=result,
             listing_labels=labels,
         )
+        from pdd_agent.api.services.run_cancel import clear_cancel
+
+        clear_cancel(run_id)
         return result
+    except asyncio.CancelledError:
+        store.update_status(run_id, RunStatus.CANCELED, "canceled by user")
+        raise
     except Exception as exc:
         logger.exception("listing job failed run_id=%s", run_id)
         store.finish(run_id, RunStatus.FAILED, str(exc), result={"error": str(exc)})
@@ -213,6 +224,9 @@ async def execute_delist(
             _sync_single_delist_result(result)
         store.finish(run_id, status, message=str(result.get("results") or ""), result=result)
         return result
+    except asyncio.CancelledError:
+        store.update_status(run_id, RunStatus.CANCELED, "canceled by user")
+        raise
     except Exception as exc:
         logger.exception("delist job failed run_id=%s", run_id)
         store.finish(run_id, RunStatus.FAILED, str(exc), result={"error": str(exc)})

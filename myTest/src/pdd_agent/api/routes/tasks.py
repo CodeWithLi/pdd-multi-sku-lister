@@ -196,7 +196,7 @@ async def tasks_listing(body: ListingTaskRequest):
     return ListingTaskResponse(
         run_id=run_id,
         status=RunStatus.PENDING,
-        message="listing task queued; query /api/runs/{run_id} for progress",
+        message="上架任务已加入队列，可在失败项工作台查看进度",
     )
 
 

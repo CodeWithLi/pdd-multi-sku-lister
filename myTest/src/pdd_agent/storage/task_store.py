@@ -161,6 +161,8 @@ class TaskRunStore:
         record = self.load(run_id)
         if not record:
             return
+        if record.status == RunStatus.CANCELED:
+            return
         record.status = status
         if message:
             record.message = message
@@ -177,6 +179,8 @@ class TaskRunStore:
         """标记任务结束并写入终态。"""
         record = self.load(run_id)
         if not record:
+            return
+        if record.status == RunStatus.CANCELED:
             return
         record.status = status
         record.message = message

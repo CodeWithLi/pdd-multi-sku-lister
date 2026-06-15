@@ -71,6 +71,7 @@ async def browser_listing_node(state: ListingState) -> dict:
                 "finished": True,
             }
     defaults = settings.multi_spec.defaults
+    run_id = str(state.get("run_id") or "")
 
     def _job(dp):
         return run_listing_uploads(
@@ -81,6 +82,7 @@ async def browser_listing_node(state: ListingState) -> dict:
             title_mode=settings.listing.title_mode,
             platform_listing_code=platform_listing_code,
             defaults=defaults,
+            run_id=run_id,
         )
 
     try:
