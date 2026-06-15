@@ -2,17 +2,17 @@
 
 from pdd_agent.core.config import MultiSpecConfig, PathsConfig, YamlSettings
 from pdd_agent.skills.listing.catalog import (
+    _parse_combo_code,
     is_image_set_dir,
     list_image_sets,
     list_listing_targets,
     parse_all_listings,
     parse_listing_target,
 )
-from pdd_agent.skills.listing.pdd_product_catalog import get_pdd_product_catalog
+from pdd_agent.skills.listing.pdd_product_catalog import BUNDLE_MODEL_CODE, get_pdd_product_catalog
 
 
 def test_image_set_pattern():
-    """套图目录名匹配规则。"""
     assert is_image_set_dir("第一套")
     assert is_image_set_dir("第一套图")
     assert is_image_set_dir("第二套图")
@@ -100,6 +100,53 @@ def test_listing_target_selector_expands_family_and_image_set(tmp_path, monkeypa
         "BD046C+AXBD001A",
     ]
     assert [p.name for p in single[0].carousel_images] == ["1.png", "2.png", "3.png", "4.png", "5.png"]
+
+
+def test_parse_combo_code_two_part_is_normal_combo():
+    assert _parse_combo_code("BD719A+GJ361A", "BD719A") == ("BD719A", "GJ361A")
+    assert _parse_combo_code("BD719A", "BD719A") == ("BD719A", "BD719A")
+
+
+def test_parse_combo_code_multi_part_is_bundle():
+    assert _parse_combo_code("BD719A+YKL001A+YKL020A+GJ361A", "BD719A") == (
+        "BD719A",
+        BUNDLE_MODEL_CODE,
+    )
+    assert _parse_combo_code("BD719B+YKL001H+YKL020A+GJ318B", "BD719B") == (
+        "BD719B",
+        BUNDLE_MODEL_CODE,
+    )
+
+
+def test_bundle_preview_parsed_as_sku(tmp_path, monkeypatch):
+    """多段 + 规格图按套装入库，combo_folder 保留完整文件名。"""
+    monkeypatch.setattr("pdd_agent.core.config.PROJECT_ROOT", tmp_path)
+    monkeypatch.setattr("pdd_agent.paths.PROJECT_ROOT", tmp_path)
+    get_pdd_product_catalog.cache_clear()
+    root = tmp_path / "data/assets/商品上架规格文件"
+    unit_root = root / "BD719" / "第一套图" / "BD719A"
+    unit_root.mkdir(parents=True)
+    for index in range(1, 10):
+        (unit_root / f"{index}.png").write_bytes(b"img")
+    (unit_root / "BD719A.png").write_bytes(b"preview")
+    (unit_root / "BD719A+GJ361A.png").write_bytes(b"preview")
+    (unit_root / "BD719A+YKL001A+YKL020A+GJ361A.png").write_bytes(b"preview")
+
+    settings = YamlSettings(
+        paths=PathsConfig(assets_root="data/assets/商品上架规格文件"),
+        multi_spec=MultiSpecConfig(excel="missing.xlsx"),
+    )
+    unit = parse_listing_target(
+        "BD719/第一套图/BD719A", settings, include_excel_missing_previews=True
+    )[0]
+    assert [sku.combo_folder for sku in unit.skus] == [
+        "BD719A",
+        "BD719A+GJ361A",
+        "BD719A+YKL001A+YKL020A+GJ361A",
+    ]
+    bundle = next(sku for sku in unit.skus if sku.model_code == BUNDLE_MODEL_CODE)
+    assert bundle.style_code == "BD719A"
+    assert bundle.preview_image.name == "BD719A+YKL001A+YKL020A+GJ361A.png"
 
 
 def test_sibling_spec_merge_ignores_misnamed_preview_files(tmp_path, monkeypatch):

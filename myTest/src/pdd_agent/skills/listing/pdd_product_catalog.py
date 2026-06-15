@@ -27,6 +27,9 @@ class PddProductEntry:
 # 规则无法给出有意义分组时的「弱类型」（如亚克力配件需再推断子类）
 WEAK_SUB_CATEGORIES = frozenset({"", "亚克力", "半成品", "配件"})
 
+# 预览图文件名含 3 段及以上「+」时，型号统一解析为此编码（展示名为 {母商品类型}+套装）
+BUNDLE_MODEL_CODE = "套装"
+
 # 颜色规格关键词 → 尺寸子类（按优先级，先匹配先生效）
 _SUB_CATEGORY_KEYWORDS: tuple[tuple[str, str], ...] = (
     ("挂件", "挂件"),
@@ -271,6 +274,8 @@ def resolve_size_label(
     base_type = base.product_type.strip() or style_code
     if not model_norm or model_norm == style_norm:
         return base_type
+    if model_norm == BUNDLE_MODEL_CODE:
+        return f"{base_type}+{BUNDLE_MODEL_CODE}"
 
     sub = catalog.get(model_norm)
     if not sub:

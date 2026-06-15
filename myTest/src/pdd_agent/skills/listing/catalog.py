@@ -29,6 +29,7 @@ from pdd_agent.core.config import YamlSettings
 from pdd_agent.domain.models import ListingUnit, SkuCombo
 from pdd_agent.skills.base import Skill
 from pdd_agent.skills.listing.pdd_product_catalog import (
+    BUNDLE_MODEL_CODE,
     PddProductEntry,
     default_catalog_path,
     get_pdd_product_catalog,
@@ -173,14 +174,21 @@ def _find_preview_image(combo_dir: Path) -> Path | None:
 
 
 def _parse_combo_code(name: str, default_style_code: str = "") -> tuple[str, str] | None:
+    """解析规格图文件名 → (款式编码, 型号编码)。
+
+    - ``BD719A`` → 单款
+    - ``BD719A+GJ361A`` → 款式 + 子配件
+    - ``BD719A+YKL001A+YKL020A+GJ361A`` → 多段组合按套装处理 → (BD719A, 套装)
+    """
     stem = Path(name).stem.strip()
     if not stem:
         return None
     if "+" in stem:
-        left, right = stem.split("+", 1)
-        left, right = left.strip(), right.strip()
-        if left and right:
-            return left, right
+        parts = [part.strip() for part in stem.split("+") if part.strip()]
+        if len(parts) >= 3:
+            return parts[0], BUNDLE_MODEL_CODE
+        if len(parts) == 2:
+            return parts[0], parts[1]
         return None
     if default_style_code:
         return default_style_code, stem
@@ -330,9 +338,10 @@ def _append_skus_from_previews(
 
         style_key = style_code.strip().upper()
         model_key = model_code.strip().upper()
+        is_bundle = model_key == BUNDLE_MODEL_CODE
         is_combo = model_key != style_key
         style_entry = catalog.get(style_key)
-        model_entry = catalog.get(model_key) if is_combo else style_entry
+        model_entry = catalog.get(model_key) if is_combo and not is_bundle else style_entry
 
         if not catalog:
             if not include_excel_missing_previews:
@@ -343,7 +352,7 @@ def _append_skus_from_previews(
                 unit.warnings.append(f"{prefix} 商品表无款式编码[{style_code}]，不上架 {preview.name}")
                 continue
             unit.warnings.append(f"{prefix} 商品表无款式编码[{style_code}]，仅后台展示不上架 {preview.name}")
-        elif is_combo and not model_entry:
+        elif is_combo and not is_bundle and not model_entry:
             if not include_excel_missing_previews:
                 unit.warnings.append(f"{prefix} 商品表无子编码[{model_code}]，不上架 {preview.name}")
                 continue
@@ -353,7 +362,10 @@ def _append_skus_from_previews(
         model_name = lookup_catalog_spec(model_code, catalog) or model_code
         if catalog and style_entry:
             style_name = style_code
-            model_name = model_code if is_combo else style_code
+            if is_bundle:
+                model_name = BUNDLE_MODEL_CODE
+            else:
+                model_name = model_code if is_combo else style_code
 
         if style_code not in unit.style_codes:
             unit.style_codes.append(style_code)

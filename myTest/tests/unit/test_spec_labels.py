@@ -3,6 +3,7 @@
 from pathlib import Path
 
 from pdd_agent.skills.listing.pdd_product_catalog import (
+    BUNDLE_MODEL_CODE,
     PddProductEntry,
     fallback_sub_category_from_spec,
     infer_sub_product_category,
@@ -68,6 +69,8 @@ def test_resolve_size_label_groups_combo_types():
     assert resolve_size_label("BD716B", "YKL031D", catalog) == "笔袋+套尺"
     assert resolve_size_label("BD716A", "YKL020A", catalog) == "笔袋+磁吸夹"
     assert resolve_size_label("BD716B", "YKL020A", catalog) == "笔袋+磁吸夹"
+    assert resolve_size_label("BD716A", BUNDLE_MODEL_CODE, catalog) == "笔袋+套装"
+    assert resolve_size_label("BD716B", BUNDLE_MODEL_CODE, catalog) == "笔袋+套装"
 
 
 def test_resolve_size_label_uses_sub_category_cache():
