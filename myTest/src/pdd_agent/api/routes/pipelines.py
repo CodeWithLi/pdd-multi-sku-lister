@@ -54,12 +54,14 @@ def start_integrated(body: IntegratedPipelineStartRequest):
             account_id=body.account_id,
             product_codes=body.product_codes,
             activity_id=body.activity_id,
+            activity_ids=body.activity_ids,
             category_keyword=body.category_keyword,
             auto_promotion=body.auto_promotion,
             activity_delay_hours=body.activity_delay_hours,
             demo_mode=body.demo_mode,
             platform_listing_code=body.platform_listing_code,
             slot_alignment_test=body.slot_alignment_test,
+            skip_listing=body.skip_listing,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -92,12 +94,14 @@ def start_integrated_batch(body: IntegratedPipelineBatchStartRequest):
         data = start_integrated_pipeline_batch(
             items=items,
             activity_id=body.activity_id,
+            activity_ids=body.activity_ids,
             category_keyword=body.category_keyword,
             auto_promotion=body.auto_promotion,
             activity_delay_hours=body.activity_delay_hours,
             demo_mode=body.demo_mode,
             platform_listing_code=body.platform_listing_code,
             slot_alignment_test=body.slot_alignment_test,
+            skip_listing=body.skip_listing,
             store_start_delay_min_seconds=body.store_start_delay_min_seconds,
             store_start_delay_max_seconds=body.store_start_delay_max_seconds,
             max_concurrent_stores=body.max_concurrent_stores,

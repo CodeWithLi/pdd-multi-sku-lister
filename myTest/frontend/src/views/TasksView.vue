@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
+import { ElMessageBox } from 'element-plus'
 import { api } from '@/api/client'
 import PageHeader from '@/components/PageHeader.vue'
 import ResultSummary from '@/components/ResultSummary.vue'
@@ -81,6 +82,40 @@ const resolvedListingSelectors = computed(() => {
   }
   return result
 })
+
+const allSelectedAreListed = computed(() => {
+  if (!resolvedListingSelectors.value.length) return false
+  return resolvedListingSelectors.value.every((selector) => {
+    const slash = selector.lastIndexOf('/')
+    if (slash <= 0) return false
+    const setSelector = selector.slice(0, slash)
+    const code = selector.slice(slash + 1)
+    const group = productOptions.value.find((item) => item.selector === setSelector)
+    return !!group && isProductListed(group, code)
+  })
+})
+
+async function confirmRelistIfNeeded(): Promise<boolean> {
+  if (!allSelectedAreListed.value) return true
+  const labels = resolvedListingSelectors.value.join('、')
+  const isCheck = listingMode.value === 'check'
+  try {
+    await ElMessageBox.confirm(
+      isCheck
+        ? `所选商品均已上架：\n${labels}\n\n确定仍要执行素材检查？`
+        : `所选商品均已上架：\n${labels}\n\n确定要重新上架这些商品？`,
+      '已上架商品',
+      {
+        type: 'warning',
+        confirmButtonText: isCheck ? '继续检查' : '重新上架',
+        cancelButtonText: '取消',
+      },
+    )
+    return true
+  } catch {
+    return false
+  }
+}
 
 function filterValidProductCodes(codes: string[]) {
   const valid = validProductSelectors.value
@@ -246,6 +281,7 @@ async function runListing() {
     error.value = '填写上架商品编码后，一次只能上架一个商品'
     return
   }
+  if (!(await confirmRelistIfNeeded())) return
 
   loading.value = true
   error.value = ''

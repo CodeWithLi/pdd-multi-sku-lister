@@ -5,15 +5,23 @@ from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 from pdd_agent.api.services.pipeline_service import (
+    CAMPAIGN_TIME_REQUIREMENT_STEP,
     DEMO_ACTIVITY_DELAY_MINUTES,
     DEMO_ACTIVITY_JITTER_MAX_SECONDS,
     _activity_jitter_max_seconds,
+    _build_multi_activity_detail,
+    _campaign_time_requirement_message,
     _extract_listing_products,
+    _is_campaign_time_requirement_failure,
+    _normalize_pipeline_activity_ids,
+    _on_campaign_finished,
     _resolve_activity_delay,
     cancel_integrated_pipeline,
     on_queue_task_finished,
     resolve_activity_scheduled_at,
     resolve_batch_delay,
+    resolve_published_products_for_pipeline,
+    start_integrated_pipeline,
     start_integrated_pipeline_batch,
 )
 from pdd_agent.domain.enums import AgentKind, RunStatus
@@ -190,4 +198,276 @@ def test_on_queue_task_finished_ignores_canceled_pipeline():
                 result={"results": [{"status": "success", "pdd_product_id": "123"}]},
             )
     update.assert_not_called()
+
+
+def test_resolve_published_products_for_pipeline():
+    row = SimpleNamespace(
+        pdd_product_id="966914511094",
+        mapping_id="map_1",
+        status="on_sale",
+    )
+    with patch(
+        "pdd_agent.api.services.pipeline_service.get_published_product",
+        return_value=row,
+    ):
+        pdd_ids, mapping_ids, missing = resolve_published_products_for_pipeline(
+            "store_A",
+            ["BD713/第一套图/BD713A"],
+        )
+    assert pdd_ids == ["966914511094"]
+    assert mapping_ids == ["map_1"]
+    assert missing == []
+
+
+def test_start_integrated_pipeline_skip_listing_schedules_activity():
+    row = SimpleNamespace(
+        pipeline_id="pipe_skip",
+        account_id="store_A",
+        product_codes=["BD713/第一套图/BD713A"],
+        activity_id="20981",
+        auto_promotion=True,
+        demo_mode=True,
+        activity_delay_hours=24,
+        listing_run_id="listing_run",
+        meta={},
+    )
+    listing_result = {
+        "results": [{"status": "success", "pdd_product_id": "966914511094", "mapping_id": "map_1"}],
+        "listing_skipped": True,
+    }
+    with patch("pdd_agent.api.services.pipeline_service.create_listing_run", return_value="listing_run"):
+        with patch("pdd_agent.api.services.pipeline_service.create_integrated_pipeline", return_value=row):
+            with patch("pdd_agent.api.services.pipeline_service._mark_listing_skipped_success", return_value=listing_result):
+                with patch("pdd_agent.api.services.pipeline_service.update_integrated_pipeline"):
+                    with patch("pdd_agent.api.services.pipeline_service._on_listing_finished") as on_listing:
+                        with patch(
+                            "pdd_agent.api.services.pipeline_service.get_integrated_pipeline",
+                            return_value=row,
+                        ):
+                            with patch("pdd_agent.api.services.pipeline_service.pipeline_to_dict", return_value={"pipeline_id": "pipe_skip", "status": "waiting_activity"}):
+                                result = start_integrated_pipeline(
+                                    account_id="store_A",
+                                    product_codes=["BD713/第一套图/BD713A"],
+                                    activity_id="20981",
+                                    skip_listing=True,
+                                )
+    on_listing.assert_called_once()
+    assert result["status"] == "waiting_activity"
+
+
+def test_normalize_pipeline_activity_ids_dedupes_and_preserves_order():
+    assert _normalize_pipeline_activity_ids("20981", ["21365", "20981"]) == ["21365", "20981"]
+    assert _normalize_pipeline_activity_ids("20981", []) == ["20981"]
+
+
+def test_build_multi_activity_detail_lists_each_activity():
+    row = SimpleNamespace(
+        pipeline_id="pipe_multi",
+        activity_id="20981",
+        campaign_run_id="run_2",
+        scheduled_activity_at=None,
+        meta={
+            "activity_ids": ["20981", "21365"],
+            "campaign_activity_index": 1,
+            "campaign_results": [
+                {
+                    "activity_id": "20981",
+                    "run_id": "run_1",
+                    "success": True,
+                    "skipped": False,
+                    "summary": "报名成功",
+                }
+            ],
+        },
+    )
+    detail = _build_multi_activity_detail(row, campaign_status="running")
+    assert "1/2 20981：成功" in detail
+    assert "2/2 21365：进行中" in detail
+
+
+def test_on_campaign_finished_schedules_second_activity_before_traffic():
+    row = SimpleNamespace(
+        pipeline_id="pipe_multi",
+        account_id="store_A",
+        status="running",
+        auto_promotion=True,
+        pdd_product_ids=["111"],
+        mapping_ids=["m1"],
+        activity_id="20981",
+        campaign_run_id="run_1",
+        meta={
+            "activity_ids": ["20981", "21365"],
+            "campaign_activity_index": 0,
+            "campaign_results": [],
+        },
+    )
+    with patch("pdd_agent.api.services.pipeline_service._summarize_run_message", return_value="ok"):
+        with patch("pdd_agent.api.services.pipeline_service._schedule_pipeline_campaign") as schedule:
+            with patch("pdd_agent.api.services.pipeline_service._enqueue_pipeline_traffic") as enqueue_traffic:
+                _on_campaign_finished(
+                    row,
+                    run_id="run_1",
+                    success=True,
+                    result={"results": [{"status": "success"}]},
+                    error="",
+                )
+    schedule.assert_called_once()
+    assert schedule.call_args.kwargs["activity_index"] == 1
+    enqueue_traffic.assert_not_called()
+
+
+def test_on_campaign_finished_runs_traffic_after_last_activity():
+    row = SimpleNamespace(
+        pipeline_id="pipe_multi",
+        account_id="store_A",
+        status="running",
+        auto_promotion=True,
+        pdd_product_ids=["111"],
+        mapping_ids=["m1"],
+        activity_id="21365",
+        campaign_run_id="run_2",
+        meta={
+            "activity_ids": ["20981", "21365"],
+            "campaign_activity_index": 1,
+            "campaign_results": [
+                {
+                    "activity_id": "20981",
+                    "run_id": "run_1",
+                    "success": True,
+                    "skipped": False,
+                    "summary": "ok",
+                }
+            ],
+        },
+    )
+    with patch("pdd_agent.api.services.pipeline_service._summarize_run_message", return_value="ok"):
+        with patch("pdd_agent.api.services.pipeline_service._schedule_pipeline_campaign") as schedule:
+            with patch("pdd_agent.api.services.pipeline_service.get_integrated_pipeline", return_value=row):
+                with patch("pdd_agent.api.services.pipeline_service._enqueue_pipeline_traffic") as enqueue_traffic:
+                    _on_campaign_finished(
+                        row,
+                        run_id="run_2",
+                        success=True,
+                        result={"results": [{"status": "success"}]},
+                        error="",
+                    )
+    schedule.assert_not_called()
+    enqueue_traffic.assert_called_once()
+
+
+def test_is_campaign_time_requirement_failure_detects_step():
+    result = {
+        "results": [
+            {
+                "status": "failed",
+                "step": CAMPAIGN_TIME_REQUIREMENT_STEP,
+                "error": "当前商品未满足时间要求，已取消报名：123（需等待1天）",
+            }
+        ]
+    }
+    assert _is_campaign_time_requirement_failure(result, "")
+    assert "未满足时间要求" in _campaign_time_requirement_message(result, "")
+
+
+def test_on_campaign_finished_skips_to_traffic_when_time_requirement_not_met():
+    row = SimpleNamespace(
+        pipeline_id="pipe_1",
+        account_id="store_A",
+        status="waiting_activity",
+        auto_promotion=True,
+        pdd_product_ids=["965182969751"],
+        mapping_ids=["m1"],
+        activity_id="20981",
+        meta={"activity_ids": ["20981"], "campaign_activity_index": 0, "campaign_results": []},
+    )
+    result = {
+        "results": [
+            {
+                "status": "failed",
+                "step": CAMPAIGN_TIME_REQUIREMENT_STEP,
+                "error": "当前商品未满足时间要求，已取消报名",
+            }
+        ]
+    }
+
+    with patch("pdd_agent.api.services.pipeline_service._summarize_run_message", return_value="time blocked"):
+        with patch("pdd_agent.api.services.pipeline_service._enqueue_pipeline_traffic") as enqueue_traffic:
+            with patch("pdd_agent.api.services.pipeline_service.update_integrated_pipeline") as update:
+                _on_campaign_finished(
+                    row,
+                    run_id="campaign_run",
+                    success=False,
+                    result=result,
+                    error="",
+                )
+
+    enqueue_traffic.assert_called_once()
+    update.assert_not_called()
+
+
+def test_on_campaign_finished_skips_to_traffic_when_product_not_eligible():
+    row = SimpleNamespace(
+        pipeline_id="pipe_1",
+        account_id="store_A",
+        status="waiting_activity",
+        auto_promotion=True,
+        pdd_product_ids=["966914511094"],
+        mapping_ids=["m1"],
+        activity_id="20981",
+        meta={"activity_ids": ["20981"], "campaign_activity_index": 0, "campaign_results": []},
+    )
+    result = {
+        "results": [
+            {
+                "status": "failed",
+                "step": "product_not_eligible_for_activity",
+                "error": "部分商品不可报名活动，已取消操作：966914511094",
+            }
+        ],
+        "errors": ["部分商品不可报名活动，已取消操作：966914511094"],
+    }
+
+    with patch("pdd_agent.api.services.pipeline_service._summarize_run_message", return_value="not eligible"):
+        with patch("pdd_agent.api.services.pipeline_service._enqueue_pipeline_traffic") as enqueue_traffic:
+            with patch("pdd_agent.api.services.pipeline_service.update_integrated_pipeline") as update:
+                _on_campaign_finished(
+                    row,
+                    run_id="campaign_run",
+                    success=False,
+                    result=result,
+                    error="部分商品不可报名活动，已取消操作：966914511094",
+                )
+
+    enqueue_traffic.assert_called_once()
+    update.assert_not_called()
+
+
+def test_on_campaign_finished_still_fails_on_other_campaign_errors():
+    row = SimpleNamespace(
+        pipeline_id="pipe_1",
+        account_id="store_A",
+        status="waiting_activity",
+        auto_promotion=True,
+        pdd_product_ids=["965182969751"],
+        mapping_ids=["m1"],
+        activity_id="20981",
+        meta={"activity_ids": ["20981"], "campaign_activity_index": 0, "campaign_results": []},
+    )
+
+    with patch("pdd_agent.api.services.pipeline_service._enqueue_pipeline_traffic") as enqueue_traffic:
+        with patch("pdd_agent.api.services.pipeline_service.update_integrated_pipeline") as update:
+            _on_campaign_finished(
+                row,
+                run_id="campaign_run",
+                success=False,
+                result={"results": [{"status": "failed", "step": "filter_activity_prices"}]},
+                error="价格确认页筛选失败",
+            )
+
+    enqueue_traffic.assert_not_called()
+    update.assert_called_once()
+    assert update.call_args.args[0] == "pipe_1"
+    assert update.call_args.kwargs["status"] == "failed"
+    assert update.call_args.kwargs["current_step"] == "activity_failed"
+    assert update.call_args.kwargs["error"] == "价格确认页筛选失败"
 

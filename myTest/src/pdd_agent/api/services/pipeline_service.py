@@ -14,6 +14,7 @@ from pdd_agent.db.repositories import (
     create_integrated_pipeline,
     enqueue_task,
     get_integrated_pipeline,
+    get_published_product,
     list_integrated_pipelines,
     update_integrated_pipeline,
 )
@@ -26,6 +27,14 @@ DEMO_ACTIVITY_DELAY_MINUTES = 2
 DEMO_ACTIVITY_JITTER_MAX_SECONDS = 60
 
 TERMINAL_PIPELINE_STATUSES = frozenset({"completed", "failed", "canceled"})
+CAMPAIGN_TIME_REQUIREMENT_STEP = "product_time_requirement_not_met"
+CAMPAIGN_NOT_ELIGIBLE_STEP = "product_not_eligible_for_activity"
+CAMPAIGN_SKIP_TRAFFIC_STEPS = frozenset(
+    {CAMPAIGN_TIME_REQUIREMENT_STEP, CAMPAIGN_NOT_ELIGIBLE_STEP}
+)
+CAMPAIGN_SKIP_TRAFFIC_OUTCOMES = frozenset(
+    {"time_requirement_not_met", "not_eligible_for_activity", "activity_registration_skipped"}
+)
 
 
 def _batch_id() -> str:
@@ -109,21 +118,369 @@ def _extract_listing_products(result: dict[str, Any]) -> tuple[list[str], list[s
     return list(dict.fromkeys(pdd_ids)), list(dict.fromkeys(mapping_ids))
 
 
+def _campaign_result_items(result: dict[str, Any] | None) -> list[dict[str, Any]]:
+    items: list[dict[str, Any]] = []
+    bucket = (result or {}).get("results")
+    if not isinstance(bucket, list):
+        return items
+    for item in bucket:
+        if isinstance(item, dict):
+            items.append(item)
+    return items
+
+
+def _normalize_campaign_error(error: str | list | None) -> str:
+    if isinstance(error, list):
+        return "; ".join(str(item).strip() for item in error if str(item).strip())
+    return str(error or "").strip()
+
+
+def _should_skip_campaign_for_traffic(result: dict[str, Any] | None, error: str | list | None = "") -> bool:
+    """整合链路：商品暂不可报名活动时跳过活动步骤，继续推广。"""
+    for item in _campaign_result_items(result):
+        if str(item.get("step") or "") in CAMPAIGN_SKIP_TRAFFIC_STEPS:
+            return True
+    text = _normalize_campaign_error(error)
+    return any(
+        marker in text
+        for marker in (
+            "未满足时间要求",
+            "需等待1天",
+            "等待1天",
+            "1天后再试",
+            "部分商品不可报名活动",
+            "不可报名活动",
+        )
+    )
+
+
+def _campaign_skip_outcome(result: dict[str, Any] | None) -> str:
+    for item in _campaign_result_items(result):
+        step = str(item.get("step") or "")
+        if step == CAMPAIGN_TIME_REQUIREMENT_STEP:
+            return "time_requirement_not_met"
+        if step == CAMPAIGN_NOT_ELIGIBLE_STEP:
+            return "not_eligible_for_activity"
+    return "activity_registration_skipped"
+
+
+def _campaign_skip_message(result: dict[str, Any] | None, error: str | list | None = "") -> str:
+    for item in _campaign_result_items(result):
+        if str(item.get("step") or "") in CAMPAIGN_SKIP_TRAFFIC_STEPS:
+            return str(item.get("error") or _normalize_campaign_error(error) or "活动报名未成功").strip()
+    text = _normalize_campaign_error(error)
+    if text:
+        return text
+    return "商品暂不可报名活动，已跳过活动继续推广"
+
+
+def _is_campaign_time_requirement_failure(result: dict[str, Any] | None, error: str = "") -> bool:
+    return _should_skip_campaign_for_traffic(result, error)
+
+
+def _campaign_time_requirement_message(result: dict[str, Any] | None, error: str = "") -> str:
+    return _campaign_skip_message(result, error)
+
+
+def _normalize_pipeline_activity_ids(activity_id: str = "", activity_ids: list[str] | None = None) -> list[str]:
+    ids = [str(item).strip() for item in (activity_ids or []) if str(item).strip()]
+    if ids:
+        return list(dict.fromkeys(ids))
+    legacy = str(activity_id or "").strip()
+    return [legacy] if legacy else []
+
+
+def _pipeline_activity_ids(row) -> list[str]:
+    meta = dict(row.meta or {})
+    ids = meta.get("activity_ids")
+    if isinstance(ids, list):
+        normalized = [str(item).strip() for item in ids if str(item).strip()]
+        if normalized:
+            return list(dict.fromkeys(normalized))
+    activity_id = str(row.activity_id or "").strip()
+    return [activity_id] if activity_id else []
+
+
+def _campaign_activity_index(row) -> int:
+    return max(0, int((row.meta or {}).get("campaign_activity_index") or 0))
+
+
+def _campaign_results(row) -> list[dict[str, Any]]:
+    raw = (row.meta or {}).get("campaign_results")
+    if not isinstance(raw, list):
+        return []
+    return [item for item in raw if isinstance(item, dict)]
+
+
+def _append_campaign_result(
+    meta_patch: dict[str, Any],
+    row,
+    *,
+    activity_id: str,
+    run_id: str,
+    success: bool,
+    skipped: bool,
+    error: str,
+    summary: str,
+) -> None:
+    results = list(_campaign_results(row))
+    results.append(
+        {
+            "activity_id": activity_id,
+            "run_id": run_id,
+            "success": bool(success),
+            "skipped": bool(skipped),
+            "error": str(error or ""),
+            "summary": str(summary or ""),
+        }
+    )
+    meta_patch["campaign_results"] = results
+
+
+def _schedule_pipeline_campaign(
+    row,
+    *,
+    activity_index: int,
+    scheduled_at: datetime,
+    pdd_ids: list[str] | None = None,
+    mapping_ids: list[str] | None = None,
+    meta_patch: dict[str, Any] | None = None,
+) -> str:
+    activity_ids = _pipeline_activity_ids(row)
+    if activity_index < 0 or activity_index >= len(activity_ids):
+        raise ValueError("activity_index out of range")
+    activity_id = activity_ids[activity_index]
+    campaign_run_id = create_campaign_run(row.account_id)
+    resolved_pdd_ids = list(pdd_ids if pdd_ids is not None else (row.pdd_product_ids or []))
+    enqueue_task(
+        agent=AgentKind.CAMPAIGN.value,
+        run_id=campaign_run_id,
+        account_id=row.account_id,
+        payload={
+            "pipeline_id": row.pipeline_id,
+            "campaign_type": "marketing_activity_register",
+            "activity_id": activity_id,
+            "pdd_product_ids": resolved_pdd_ids,
+        },
+        scheduled_at=scheduled_at,
+    )
+    patch = dict(meta_patch or {})
+    patch["campaign_activity_index"] = activity_index
+    is_future = scheduled_at > datetime.now()
+    update_integrated_pipeline(
+        row.pipeline_id,
+        status="waiting_activity" if is_future else "running",
+        current_step="waiting_activity" if is_future else "campaign_queued",
+        pdd_product_ids=resolved_pdd_ids if pdd_ids is not None else None,
+        mapping_ids=list(mapping_ids) if mapping_ids is not None else None,
+        campaign_run_id=campaign_run_id,
+        scheduled_activity_at=scheduled_at,
+        error="",
+        meta_patch=patch,
+    )
+    return campaign_run_id
+
+
+def _enqueue_pipeline_traffic(row, *, meta_patch: dict[str, Any] | None = None) -> None:
+    pdd_ids = list(row.pdd_product_ids or [])
+    mapping_ids = list(row.mapping_ids or [])
+    traffic_run_id = create_traffic_run(row.account_id)
+    enqueue_task(
+        agent=AgentKind.TRAFFIC.value,
+        run_id=traffic_run_id,
+        account_id=row.account_id,
+        payload={
+            "pipeline_id": row.pipeline_id,
+            "traffic_type": "promotion_create",
+            "pdd_product_ids": pdd_ids,
+            "published_mapping_ids": mapping_ids,
+        },
+        scheduled_at=datetime.now(),
+    )
+    update_integrated_pipeline(
+        row.pipeline_id,
+        status="running",
+        current_step="traffic_queued",
+        traffic_run_id=traffic_run_id,
+        error="",
+        meta_patch=dict(meta_patch or {}),
+    )
+
+
+LISTING_SKIPPED_OUTCOME = "skipped_already_listed"
+
+
+def _parse_pipeline_product_selector(selector: str) -> tuple[str, str, str]:
+    """解析 BD713/第一套图/BD713A → (family, image_set, product_code)。"""
+    parts = [part.strip() for part in str(selector or "").split("/") if part.strip()]
+    if len(parts) >= 3:
+        return parts[0], parts[1], parts[-1]
+    if len(parts) == 2:
+        return parts[0], "", parts[1]
+    if len(parts) == 1:
+        return "", "", parts[0]
+    return "", "", ""
+
+
+def resolve_published_products_for_pipeline(
+    account_id: str,
+    selectors: list[str],
+) -> tuple[list[str], list[str], list[str]]:
+    """将整合链路商品选择解析为在售拼多多 ID；返回 (pdd_ids, mapping_ids, missing_selectors)。"""
+    account_id = str(account_id or "").strip()
+    pdd_ids: list[str] = []
+    mapping_ids: list[str] = []
+    missing: list[str] = []
+    for selector in selectors:
+        selector = str(selector or "").strip()
+        if not selector:
+            continue
+        _family, image_set, product_code = _parse_pipeline_product_selector(selector)
+        if not product_code:
+            missing.append(selector)
+            continue
+        row = get_published_product(
+            account_id=account_id,
+            product_code=product_code,
+            image_set=image_set,
+        )
+        if not row or str(row.status or "") != "on_sale":
+            missing.append(selector)
+            continue
+        pdd_product_id = str(row.pdd_product_id or "").strip()
+        mapping_id = str(row.mapping_id or "").strip()
+        if not pdd_product_id or not mapping_id:
+            missing.append(selector)
+            continue
+        pdd_ids.append(pdd_product_id)
+        mapping_ids.append(mapping_id)
+    return (
+        list(dict.fromkeys(pdd_ids)),
+        list(dict.fromkeys(mapping_ids)),
+        missing,
+    )
+
+
+def _mark_listing_skipped_success(
+    *,
+    listing_run_id: str,
+    account_id: str,
+    selectors: list[str],
+) -> dict[str, Any]:
+    pdd_ids, mapping_ids, missing = resolve_published_products_for_pipeline(account_id, selectors)
+    if missing:
+        raise ValueError(f"无法跳过上架，未找到在售记录：{', '.join(missing)}")
+    store = TaskRunStore()
+    store.update_status(listing_run_id, RunStatus.RUNNING)
+    results: list[dict[str, Any]] = []
+    for selector in selectors:
+        _family, image_set, product_code = _parse_pipeline_product_selector(selector)
+        row = get_published_product(
+            account_id=account_id,
+            product_code=product_code,
+            image_set=image_set,
+        )
+        if not row:
+            continue
+        results.append(
+            {
+                "status": "success",
+                "pdd_product_id": str(row.pdd_product_id or "").strip(),
+                "mapping_id": str(row.mapping_id or "").strip(),
+                "listing_label": selector,
+                "skipped_listing": True,
+            }
+        )
+    message = f"跳过上架：复用 {len(pdd_ids)} 个已上架商品"
+    payload = {"results": results, "listing_skipped": True}
+    store.finish(listing_run_id, RunStatus.SUCCESS, message, result=payload)
+    return payload
+
+
+def _campaign_result_status_label(result: dict[str, Any]) -> str:
+    if result.get("skipped"):
+        return "已跳过"
+    if result.get("success"):
+        return "成功"
+    return "失败"
+
+
+def _build_multi_activity_detail(row, *, campaign_status: str) -> str:
+    activity_ids = _pipeline_activity_ids(row)
+    if len(activity_ids) <= 1:
+        return ""
+    results_by_id = {
+        str(item.get("activity_id") or ""): item
+        for item in _campaign_results(row)
+        if str(item.get("activity_id") or "")
+    }
+    current_index = _campaign_activity_index(row)
+    lines: list[str] = []
+    for index, activity_id in enumerate(activity_ids):
+        result = results_by_id.get(activity_id)
+        if result:
+            status_label = _campaign_result_status_label(result)
+            summary = str(result.get("summary") or result.get("error") or "").strip()
+            line = f"{index + 1}/{len(activity_ids)} {activity_id}：{status_label}"
+            if summary:
+                line += f"（{summary}）"
+            lines.append(line)
+            continue
+        if index == current_index and row.campaign_run_id:
+            if campaign_status == "scheduled" and row.scheduled_activity_at:
+                lines.append(
+                    f"{index + 1}/{len(activity_ids)} {activity_id}："
+                    f"计划于 {row.scheduled_activity_at:%Y-%m-%d %H:%M} 报名"
+                )
+            else:
+                lines.append(f"{index + 1}/{len(activity_ids)} {activity_id}：进行中")
+        else:
+            lines.append(f"{index + 1}/{len(activity_ids)} {activity_id}：待报名")
+    return "；".join(lines)
+
+
+def _derive_campaign_status(row, campaign_results: list[dict[str, Any]], activity_ids: list[str]) -> str:
+    if row.current_step == "waiting_activity":
+        return "scheduled"
+    total = len(activity_ids)
+    done = len(campaign_results)
+    if total > 0 and done >= total:
+        if all(item.get("skipped") for item in campaign_results):
+            return "skipped"
+        if all(item.get("success") for item in campaign_results):
+            return "success"
+        if any(item.get("skipped") for item in campaign_results):
+            return "skipped"
+        return "failed"
+    if row.campaign_run_id:
+        record = TaskRunStore().load(row.campaign_run_id)
+        if record:
+            return str(record.status.value if hasattr(record.status, "value") else record.status)
+    return "pending"
+
+
 def _step_infos(row) -> list[dict[str, Any]]:
     pipeline_canceled = row.status == "canceled"
+    meta = dict(row.meta or {})
+    campaign_outcome = str(meta.get("campaign_outcome") or "")
+    campaign_skip_reason = str(meta.get("campaign_skip_reason") or "")
+    listing_outcome = str(meta.get("listing_outcome") or "")
+    listing_skip_reason = str(meta.get("listing_skip_reason") or "")
     listing_status = "pending"
-    if row.listing_run_id:
+    if listing_outcome == LISTING_SKIPPED_OUTCOME:
+        listing_status = "skipped"
+    elif row.listing_run_id:
         record = TaskRunStore().load(row.listing_run_id)
         if record:
             listing_status = str(record.status.value if hasattr(record.status, "value") else record.status)
 
     campaign_status = "pending"
-    if row.current_step == "waiting_activity":
-        campaign_status = "scheduled"
-    elif row.campaign_run_id:
-        record = TaskRunStore().load(row.campaign_run_id)
-        if record:
-            campaign_status = str(record.status.value if hasattr(record.status, "value") else record.status)
+    activity_ids = _pipeline_activity_ids(row)
+    campaign_results = _campaign_results(row)
+    if campaign_outcome in CAMPAIGN_SKIP_TRAFFIC_OUTCOMES and len(campaign_results) >= len(activity_ids):
+        campaign_status = "skipped"
+    else:
+        campaign_status = _derive_campaign_status(row, campaign_results, activity_ids)
 
     traffic_status = "pending"
     if row.traffic_run_id:
@@ -135,13 +492,34 @@ def _step_infos(row) -> list[dict[str, Any]]:
     elif row.status == "completed":
         traffic_status = "skipped"
 
+    activity_detail = (
+        f"计划于 {row.scheduled_activity_at:%Y-%m-%d %H:%M} 自动报名"
+        if row.scheduled_activity_at and campaign_status == "scheduled"
+        else "等待上架完成后预约"
+    )
+    multi_detail = _build_multi_activity_detail(row, campaign_status=campaign_status)
+    if multi_detail:
+        activity_detail = multi_detail
+    elif campaign_outcome in CAMPAIGN_SKIP_TRAFFIC_OUTCOMES:
+        activity_detail = campaign_skip_reason or "商品暂不可报名活动，已跳过活动报名"
+
+    traffic_detail = "全部活动处理完成后自动创建推广" if row.auto_promotion and len(activity_ids) > 1 else (
+        "活动报名成功后自动创建推广" if row.auto_promotion else "未启用"
+    )
+    if campaign_outcome in CAMPAIGN_SKIP_TRAFFIC_OUTCOMES and row.auto_promotion:
+        traffic_detail = "活动未报名，仍继续创建推广"
+
+    listing_detail = "将素材上架到拼多多"
+    if listing_outcome == LISTING_SKIPPED_OUTCOME:
+        listing_detail = listing_skip_reason or "商品已上架，跳过上架步骤"
+
     steps = [
         {
             "key": "listing",
             "label": "上架",
             "status": listing_status,
             "run_id": row.listing_run_id or "",
-            "detail": "将素材上架到拼多多",
+            "detail": listing_detail,
         },
         {
             "key": "activity",
@@ -149,18 +527,14 @@ def _step_infos(row) -> list[dict[str, Any]]:
             "status": campaign_status,
             "run_id": row.campaign_run_id or "",
             "scheduled_at": row.scheduled_activity_at,
-            "detail": (
-                f"计划于 {row.scheduled_activity_at:%Y-%m-%d %H:%M} 自动报名"
-                if row.scheduled_activity_at and campaign_status == "scheduled"
-                else "等待上架完成后预约"
-            ),
+            "detail": activity_detail,
         },
         {
             "key": "traffic",
             "label": "推广",
             "status": traffic_status,
             "run_id": row.traffic_run_id or "",
-            "detail": "活动报名成功后自动创建推广" if row.auto_promotion else "未启用",
+            "detail": traffic_detail,
         },
     ]
     if pipeline_canceled:
@@ -186,6 +560,7 @@ def pipeline_to_dict(row) -> dict[str, Any]:
         "current_step": row.current_step,
         "product_codes": list(row.product_codes or []),
         "activity_id": row.activity_id,
+        "activity_ids": _pipeline_activity_ids(row),
         "auto_promotion": bool(row.auto_promotion),
         "activity_delay_hours": float(row.activity_delay_hours or 24.0),
         "demo_mode": bool(row.demo_mode),
@@ -199,6 +574,11 @@ def pipeline_to_dict(row) -> dict[str, Any]:
         "mapping_ids": list(row.mapping_ids or []),
         "scheduled_activity_at": row.scheduled_activity_at,
         "error": row.error or "",
+        "campaign_outcome": str((row.meta or {}).get("campaign_outcome") or ""),
+        "campaign_skip_reason": str((row.meta or {}).get("campaign_skip_reason") or ""),
+        "listing_outcome": str((row.meta or {}).get("listing_outcome") or ""),
+        "listing_skip_reason": str((row.meta or {}).get("listing_skip_reason") or ""),
+        "campaign_results": _campaign_results(row),
         "steps": _step_infos(row),
         "created_at": row.created_at,
         "updated_at": row.updated_at,
@@ -209,7 +589,8 @@ def start_integrated_pipeline(
     *,
     account_id: str,
     product_codes: list[str],
-    activity_id: str,
+    activity_id: str = "",
+    activity_ids: list[str] | None = None,
     category_keyword: str = "玩偶",
     auto_promotion: bool = True,
     activity_delay_hours: float = 24.0,
@@ -218,16 +599,18 @@ def start_integrated_pipeline(
     slot_alignment_test: bool = False,
     listing_scheduled_at: datetime | None = None,
     batch_id: str = "",
+    skip_listing: bool = False,
 ) -> dict[str, Any]:
     account_id = str(account_id or "").strip()
-    activity_id = str(activity_id or "").strip()
+    normalized_activity_ids = _normalize_pipeline_activity_ids(activity_id, activity_ids)
+    activity_id = normalized_activity_ids[0]
     codes = list(dict.fromkeys(str(code).strip() for code in product_codes if str(code).strip()))
     if not account_id:
         raise ValueError("account_id is required")
     if not codes:
         raise ValueError("product_codes is required")
-    if not activity_id:
-        raise ValueError("activity_id is required")
+    if not normalized_activity_ids:
+        raise ValueError("activity_ids is required")
 
     pipeline_id = _pipeline_id()
     listing_run_id = create_listing_run(account_id)
@@ -235,6 +618,9 @@ def start_integrated_pipeline(
         "category_keyword": category_keyword,
         "platform_listing_code": platform_listing_code,
         "slot_alignment_test": bool(slot_alignment_test),
+        "activity_ids": normalized_activity_ids,
+        "campaign_activity_index": 0,
+        "campaign_results": [],
     }
     if batch_id:
         meta["batch_id"] = batch_id
@@ -249,6 +635,38 @@ def start_integrated_pipeline(
         listing_run_id=listing_run_id,
         meta=meta,
     )
+
+    if skip_listing:
+        skip_reason = f"商品已上架，跳过上架步骤（复用 {len(codes)} 个商品的在售记录）"
+        listing_result = _mark_listing_skipped_success(
+            listing_run_id=listing_run_id,
+            account_id=account_id,
+            selectors=codes,
+        )
+        update_integrated_pipeline(
+            pipeline_id,
+            meta_patch={
+                "listing_outcome": LISTING_SKIPPED_OUTCOME,
+                "listing_skip_reason": skip_reason,
+            },
+        )
+        refreshed = get_integrated_pipeline(pipeline_id)
+        _on_listing_finished(
+            refreshed or row,
+            run_id=listing_run_id,
+            success=True,
+            result=listing_result,
+            error="",
+        )
+        logger.info(
+            "integrated pipeline started with listing skipped pipeline_id=%s account=%s products=%s",
+            pipeline_id,
+            account_id,
+            codes,
+        )
+        refreshed = get_integrated_pipeline(pipeline_id)
+        return pipeline_to_dict(refreshed or row)
+
     enqueue_task(
         agent=AgentKind.LISTING.value,
         run_id=listing_run_id,
@@ -277,7 +695,8 @@ def start_integrated_pipeline(
 def start_integrated_pipeline_batch(
     *,
     items: list[dict[str, Any]],
-    activity_id: str,
+    activity_id: str = "",
+    activity_ids: list[str] | None = None,
     category_keyword: str = "玩偶",
     auto_promotion: bool = True,
     activity_delay_hours: float = 24.0,
@@ -287,11 +706,13 @@ def start_integrated_pipeline_batch(
     store_start_delay_min_seconds: int | None = None,
     store_start_delay_max_seconds: int | None = None,
     max_concurrent_stores: int | None = None,
+    skip_listing: bool = False,
 ) -> dict[str, Any]:
     """批量创建整合链路；各条链路上架任务按启动间隔错开入队。"""
-    activity_id = str(activity_id or "").strip()
-    if not activity_id:
-        raise ValueError("activity_id is required")
+    normalized_activity_ids = _normalize_pipeline_activity_ids(activity_id, activity_ids)
+    activity_id = normalized_activity_ids[0] if normalized_activity_ids else ""
+    if not normalized_activity_ids:
+        raise ValueError("activity_ids is required")
     if not items:
         raise ValueError("items is required")
 
@@ -310,6 +731,7 @@ def start_integrated_pipeline_batch(
             account_id=account_id,
             product_codes=product_codes,
             activity_id=activity_id,
+            activity_ids=normalized_activity_ids,
             category_keyword=category_keyword,
             auto_promotion=auto_promotion,
             activity_delay_hours=activity_delay_hours,
@@ -318,6 +740,7 @@ def start_integrated_pipeline_batch(
             slot_alignment_test=slot_alignment_test,
             listing_scheduled_at=scheduled_at,
             batch_id=batch_id,
+            skip_listing=skip_listing,
         )
         pipelines.append(
             {
@@ -398,48 +821,111 @@ def _on_listing_finished(row, *, run_id: str, success: bool, result: dict[str, A
         activity_delay_hours=float(row.activity_delay_hours or 24.0),
     )
     activity_jitter_seconds = max(0, int((scheduled_at - base_at).total_seconds()))
-    campaign_run_id = create_campaign_run(row.account_id)
-    enqueue_task(
-        agent=AgentKind.CAMPAIGN.value,
-        run_id=campaign_run_id,
-        account_id=row.account_id,
-        payload={
-            "pipeline_id": row.pipeline_id,
-            "campaign_type": "marketing_activity_register",
-            "activity_id": row.activity_id,
-            "pdd_product_ids": pdd_ids,
-        },
+    _schedule_pipeline_campaign(
+        row,
+        activity_index=0,
         scheduled_at=scheduled_at,
-    )
-    update_integrated_pipeline(
-        row.pipeline_id,
-        status="waiting_activity",
-        current_step="waiting_activity",
-        pdd_product_ids=pdd_ids,
+        pdd_ids=pdd_ids,
         mapping_ids=mapping_ids,
-        campaign_run_id=campaign_run_id,
-        scheduled_activity_at=scheduled_at,
-        error="",
         meta_patch={
             "listing_summary": _summarize_run_message(run_id),
             "activity_jitter_seconds": activity_jitter_seconds,
         },
     )
     logger.info(
-        "pipeline %s listing done, activity scheduled at %s pdd_ids=%s",
+        "pipeline %s listing done, activity scheduled at %s pdd_ids=%s activities=%s",
         row.pipeline_id,
         scheduled_at,
         pdd_ids,
+        _pipeline_activity_ids(row),
     )
 
 
+def _format_multi_campaign_skip_reason(
+    row,
+    meta_patch: dict[str, Any],
+    latest_reason: str,
+) -> str:
+    results = meta_patch.get("campaign_results")
+    if not isinstance(results, list):
+        results = _campaign_results(row)
+    skipped_parts = [
+        f"活动 {item.get('activity_id')}: {item.get('summary') or item.get('error')}"
+        for item in results
+        if isinstance(item, dict) and item.get("skipped")
+    ]
+    if skipped_parts:
+        return "；".join(str(part) for part in skipped_parts if part)
+    return latest_reason
+
+
 def _on_campaign_finished(row, *, run_id: str, success: bool, result: dict[str, Any], error: str) -> None:
-    if not success:
+    activity_ids = _pipeline_activity_ids(row)
+    current_index = _campaign_activity_index(row)
+    current_activity_id = (
+        activity_ids[current_index] if current_index < len(activity_ids) else str(row.activity_id or "")
+    )
+    activity_skipped = (not success) and _should_skip_campaign_for_traffic(result, error)
+    campaign_summary = _summarize_run_message(run_id)
+    meta_patch: dict[str, Any] = {"campaign_summary": campaign_summary}
+
+    if not success and not activity_skipped:
+        _append_campaign_result(
+            meta_patch,
+            row,
+            activity_id=current_activity_id,
+            run_id=run_id,
+            success=False,
+            skipped=False,
+            error=error or "活动报名失败",
+            summary=campaign_summary,
+        )
         update_integrated_pipeline(
             row.pipeline_id,
             status="failed",
             current_step="activity_failed",
             error=error or "活动报名失败",
+            meta_patch=meta_patch,
+        )
+        return
+
+    _append_campaign_result(
+        meta_patch,
+        row,
+        activity_id=current_activity_id,
+        run_id=run_id,
+        success=bool(success),
+        skipped=activity_skipped,
+        error=error if activity_skipped else "",
+        summary=campaign_summary,
+    )
+
+    if activity_skipped:
+        skip_reason = _campaign_skip_message(result, error)
+        meta_patch["campaign_outcome"] = _campaign_skip_outcome(result)
+        meta_patch["campaign_skip_reason"] = _format_multi_campaign_skip_reason(row, meta_patch, skip_reason)
+        logger.info(
+            "pipeline %s activity %s skipped (%s)",
+            row.pipeline_id,
+            current_activity_id,
+            meta_patch["campaign_outcome"],
+        )
+
+    next_index = current_index + 1
+    if next_index < len(activity_ids):
+        refreshed = get_integrated_pipeline(row.pipeline_id) or row
+        _schedule_pipeline_campaign(
+            refreshed,
+            activity_index=next_index,
+            scheduled_at=datetime.now(),
+            meta_patch=meta_patch,
+        )
+        logger.info(
+            "pipeline %s scheduled next activity %s (%s/%s)",
+            row.pipeline_id,
+            activity_ids[next_index],
+            next_index + 1,
+            len(activity_ids),
         )
         return
 
@@ -449,33 +935,12 @@ def _on_campaign_finished(row, *, run_id: str, success: bool, result: dict[str, 
             status="completed",
             current_step="completed",
             error="",
-            meta_patch={"campaign_summary": _summarize_run_message(run_id)},
+            meta_patch=meta_patch,
         )
         return
 
-    pdd_ids = list(row.pdd_product_ids or [])
-    mapping_ids = list(row.mapping_ids or [])
-    traffic_run_id = create_traffic_run(row.account_id)
-    enqueue_task(
-        agent=AgentKind.TRAFFIC.value,
-        run_id=traffic_run_id,
-        account_id=row.account_id,
-        payload={
-            "pipeline_id": row.pipeline_id,
-            "traffic_type": "promotion_create",
-            "pdd_product_ids": pdd_ids,
-            "published_mapping_ids": mapping_ids,
-        },
-        scheduled_at=datetime.now(),
-    )
-    update_integrated_pipeline(
-        row.pipeline_id,
-        status="running",
-        current_step="traffic_queued",
-        traffic_run_id=traffic_run_id,
-        error="",
-        meta_patch={"campaign_summary": _summarize_run_message(run_id)},
-    )
+    refreshed = get_integrated_pipeline(row.pipeline_id) or row
+    _enqueue_pipeline_traffic(refreshed, meta_patch=meta_patch)
 
 
 def _on_traffic_finished(row, *, run_id: str, success: bool, error: str) -> None:

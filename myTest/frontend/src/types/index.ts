@@ -499,6 +499,15 @@ export interface IntegratedPipelineStepInfo {
   detail: string
 }
 
+export interface IntegratedPipelineCampaignResult {
+  activity_id: string
+  run_id?: string
+  success?: boolean
+  skipped?: boolean
+  error?: string
+  summary?: string
+}
+
 export interface IntegratedPipeline {
   pipeline_id: string
   account_id: string
@@ -506,6 +515,7 @@ export interface IntegratedPipeline {
   current_step: string
   product_codes: string[]
   activity_id: string
+  activity_ids?: string[]
   auto_promotion: boolean
   activity_delay_hours: number
   demo_mode: boolean
@@ -518,6 +528,11 @@ export interface IntegratedPipeline {
   mapping_ids: string[]
   scheduled_activity_at: string | null
   error: string
+  campaign_outcome?: string
+  campaign_skip_reason?: string
+  listing_outcome?: string
+  listing_skip_reason?: string
+  campaign_results?: IntegratedPipelineCampaignResult[]
   steps: IntegratedPipelineStepInfo[]
   created_at: string | null
   updated_at: string | null
@@ -531,17 +546,20 @@ export interface IntegratedPipelineListResponse {
 export interface IntegratedPipelineStartPayload {
   account_id: string
   product_codes: string[]
-  activity_id: string
+  activity_id?: string
+  activity_ids: string[]
   category_keyword?: string
   auto_promotion?: boolean
   activity_delay_hours?: number
   demo_mode?: boolean
   platform_listing_code?: string
   slot_alignment_test?: boolean
+  skip_listing?: boolean
 }
 
 export interface IntegratedPipelineBatchStartPayload {
-  activity_id: string
+  activity_id?: string
+  activity_ids: string[]
   account_ids: string[]
   product_codes: string[]
   category_keyword?: string
@@ -553,6 +571,7 @@ export interface IntegratedPipelineBatchStartPayload {
   store_start_delay_min_seconds?: number
   store_start_delay_max_seconds?: number
   max_concurrent_stores?: number
+  skip_listing?: boolean
 }
 
 export interface IntegratedPipelineBatchRunItem {

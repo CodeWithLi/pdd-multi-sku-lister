@@ -28,6 +28,15 @@ from pdd_agent.storage import TaskRunStore
 logger = get_logger(__name__)
 
 
+def _extract_queue_task_error(result: dict[str, Any]) -> str:
+    if result.get("error"):
+        return str(result["error"])
+    errors = result.get("errors")
+    if isinstance(errors, list):
+        return "; ".join(str(item).strip() for item in errors if str(item).strip())
+    return str(errors or "")
+
+
 class TaskQueueWorker:
     def __init__(self, poll_seconds: float = 2.0) -> None:
         self._poll_seconds = poll_seconds
@@ -187,7 +196,7 @@ class TaskQueueWorker:
                 finish_queue_task(row.task_id, success=False, error="canceled by user")
                 return
             success = bool(record and record.status == RunStatus.SUCCESS)
-            error = "" if success else str(result.get("error") or result.get("errors") or "")
+            error = "" if success else _extract_queue_task_error(result)
             finish_queue_task(row.task_id, success=success, error=error)
             if pipeline_id:
                 from pdd_agent.api.services.pipeline_service import on_queue_task_finished

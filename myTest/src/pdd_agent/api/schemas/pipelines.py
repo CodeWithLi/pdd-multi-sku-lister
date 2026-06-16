@@ -7,16 +7,35 @@ from datetime import datetime
 from pydantic import BaseModel, Field, model_validator
 
 
+def _normalize_activity_ids(activity_id: str = "", activity_ids: list[str] | None = None) -> list[str]:
+    ids = [str(item).strip() for item in (activity_ids or []) if str(item).strip()]
+    if ids:
+        return list(dict.fromkeys(ids))
+    legacy = str(activity_id or "").strip()
+    return [legacy] if legacy else []
+
+
 class IntegratedPipelineStartRequest(BaseModel):
     account_id: str
     product_codes: list[str] = Field(min_length=1)
-    activity_id: str
+    activity_id: str = ""
+    activity_ids: list[str] = Field(default_factory=list)
     category_keyword: str = "玩偶"
     auto_promotion: bool = True
     activity_delay_hours: float = Field(default=24.0, ge=0)
     demo_mode: bool = False
     platform_listing_code: str = ""
     slot_alignment_test: bool = False
+    skip_listing: bool = False
+
+    @model_validator(mode="after")
+    def validate_activity_ids(self) -> "IntegratedPipelineStartRequest":
+        normalized = _normalize_activity_ids(self.activity_id, self.activity_ids)
+        if not normalized:
+            raise ValueError("activity_ids is required")
+        self.activity_ids = normalized
+        self.activity_id = normalized[0]
+        return self
 
 
 class IntegratedPipelineBatchItem(BaseModel):
@@ -25,13 +44,15 @@ class IntegratedPipelineBatchItem(BaseModel):
 
 
 class IntegratedPipelineBatchStartRequest(BaseModel):
-    activity_id: str
+    activity_id: str = ""
+    activity_ids: list[str] = Field(default_factory=list)
     category_keyword: str = "玩偶"
     auto_promotion: bool = True
     activity_delay_hours: float = Field(default=24.0, ge=0)
     demo_mode: bool = False
     platform_listing_code: str = ""
     slot_alignment_test: bool = False
+    skip_listing: bool = False
     account_ids: list[str] = Field(default_factory=list)
     product_codes: list[str] = Field(default_factory=list)
     items: list[IntegratedPipelineBatchItem] = Field(default_factory=list)
@@ -41,6 +62,11 @@ class IntegratedPipelineBatchStartRequest(BaseModel):
 
     @model_validator(mode="after")
     def validate_batch_items(self) -> "IntegratedPipelineBatchStartRequest":
+        normalized = _normalize_activity_ids(self.activity_id, self.activity_ids)
+        if not normalized:
+            raise ValueError("activity_ids is required")
+        self.activity_ids = normalized
+        self.activity_id = normalized[0]
         if self.items:
             return self
         account_ids = [a.strip() for a in self.account_ids if a and a.strip()]
@@ -61,6 +87,15 @@ class IntegratedPipelineStepInfo(BaseModel):
     detail: str = ""
 
 
+class IntegratedPipelineCampaignResult(BaseModel):
+    activity_id: str
+    run_id: str = ""
+    success: bool = False
+    skipped: bool = False
+    error: str = ""
+    summary: str = ""
+
+
 class IntegratedPipelineResponse(BaseModel):
     pipeline_id: str
     account_id: str
@@ -68,6 +103,7 @@ class IntegratedPipelineResponse(BaseModel):
     current_step: str
     product_codes: list[str]
     activity_id: str
+    activity_ids: list[str] = Field(default_factory=list)
     auto_promotion: bool
     activity_delay_hours: float
     demo_mode: bool
@@ -81,6 +117,11 @@ class IntegratedPipelineResponse(BaseModel):
     mapping_ids: list[str] = []
     scheduled_activity_at: datetime | None = None
     error: str = ""
+    campaign_outcome: str = ""
+    campaign_skip_reason: str = ""
+    listing_outcome: str = ""
+    listing_skip_reason: str = ""
+    campaign_results: list[IntegratedPipelineCampaignResult] = Field(default_factory=list)
     steps: list[IntegratedPipelineStepInfo] = []
     created_at: datetime | None = None
     updated_at: datetime | None = None

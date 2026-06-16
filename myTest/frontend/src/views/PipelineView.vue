@@ -28,7 +28,7 @@ const activePipeline = ref<IntegratedPipeline | null>(null)
 const accountId = ref('')
 const productCodes = ref<string[]>([])
 const checkedProductsBySet = ref<Record<string, string[]>>({})
-const activityId = ref('20981')
+const activityIds = ref<string[]>(['20981'])
 const categoryKeyword = ref('玩偶')
 const autoPromotion = ref(true)
 const demoMode = ref(true)
@@ -70,6 +70,39 @@ const resolvedListingSelectors = computed(() => {
   }
   return result
 })
+
+const allSelectedAreListed = computed(() => {
+  if (!resolvedListingSelectors.value.length) return false
+  return resolvedListingSelectors.value.every((selector) => {
+    const slash = selector.lastIndexOf('/')
+    if (slash <= 0) return false
+    const setSelector = selector.slice(0, slash)
+    const code = selector.slice(slash + 1)
+    const group = productOptions.value.find((item) => item.selector === setSelector)
+    return !!group && isProductListed(group, code)
+  })
+})
+
+async function resolveSkipListing(): Promise<boolean | null> {
+  if (!allSelectedAreListed.value) return false
+  const labels = resolvedListingSelectors.value.join('、')
+  try {
+    await ElMessageBox.confirm(
+      `所选商品均已上架：\n${labels}\n\n是否跳过上架，直接进入活动报名？\n选择「重新上架」将照常执行上架步骤。`,
+      '已上架商品',
+      {
+        type: 'info',
+        confirmButtonText: '跳过上架',
+        cancelButtonText: '重新上架',
+        distinguishCancelAndClose: true,
+      },
+    )
+    return true
+  } catch (action) {
+    if (action === 'cancel') return false
+    return null
+  }
+}
 
 function syncCheckedProductsForSets(setSelectors: string[]) {
   const next: Record<string, string[]> = { ...checkedProductsBySet.value }
@@ -155,6 +188,59 @@ function formatTime(value: string | null | undefined) {
   return date.toLocaleString()
 }
 
+function formatActivityLabel(activityId: string) {
+  const act = activities.value.find((item) => item.activity_id === activityId)
+  if (!act) return activityId
+  const name = act.name?.trim()
+  return name ? `${activityId} · ${name}` : activityId
+}
+
+function formatActivityShortLabel(act: MarketingActivityOption) {
+  const name = (act.name?.trim() || '活动').replace(/\s+/g, ' ')
+  const short = name.length > 22 ? `${name.slice(0, 20)}…` : name
+  return `${act.activity_id} · ${short}`
+}
+
+function selectAllListingProducts() {
+  for (const group of selectedSetGroups.value) {
+    updateCheckedProducts(group.selector, [...group.product_codes])
+  }
+}
+
+function clearAllListingProducts() {
+  for (const group of selectedSetGroups.value) {
+    updateCheckedProducts(group.selector, [])
+  }
+}
+
+function formatActivityList(activityIds: string[] | undefined) {
+  if (!activityIds?.length) return '—'
+  return activityIds.map((id) => formatActivityLabel(id)).join('；')
+}
+
+function campaignResultTagType(result: { success?: boolean; skipped?: boolean }) {
+  if (result.skipped) return 'warning'
+  if (result.success) return 'success'
+  return 'danger'
+}
+
+function campaignResultLabel(result: { success?: boolean; skipped?: boolean }) {
+  if (result.skipped) return '已跳过'
+  if (result.success) return '成功'
+  return '失败'
+}
+
+function pipelineActivitySummary(pipeline: IntegratedPipeline) {
+  const ids = pipeline.activity_ids?.length
+    ? pipeline.activity_ids
+    : pipeline.activity_id
+      ? [pipeline.activity_id]
+      : []
+  if (!ids.length) return '—'
+  if (ids.length === 1) return ids[0]
+  return `${ids.length} 个活动`
+}
+
 function isProductListed(group: ListingTargetOption, code: string) {
   return (group.listed_product_codes || []).includes(code)
 }
@@ -173,6 +259,11 @@ function formatMaterialGroupLabel(item: ListingTargetOption) {
 function onMaterialGroupDropdownVisible(visible: boolean) {
   if (!visible) return
   if (accountId.value) loadListingTargets(accountId.value).catch(() => undefined)
+}
+
+function onAccountChange() {
+  productCodes.value = []
+  checkedProductsBySet.value = {}
 }
 
 async function loadListingTargets(forAccountId = '') {
@@ -195,8 +286,8 @@ async function loadBaseData() {
   if (!batchAccountIds.value.length && enabledAccounts.value.length) {
     batchAccountIds.value = enabledAccounts.value.map((a) => a.account_id)
   }
-  if (!activityId.value && activities.value.length) {
-    activityId.value = activities.value[0].activity_id
+  if (!activityIds.value.length && activities.value.length) {
+    activityIds.value = [activities.value[0].activity_id]
   }
   await loadListingTargets(accountId.value)
 }
@@ -222,17 +313,20 @@ async function startPipeline() {
     error.value = '请至少选择一套图里的一个商品'
     return
   }
-  if (!activityId.value) {
-    error.value = '请选择活动'
+  if (!activityIds.value.length) {
+    error.value = '请至少选择一个活动'
     return
   }
+  const skipListing = await resolveSkipListing()
+  if (skipListing === null) return
   loading.value = true
   try {
     if (pipelineBatchEnabled.value) {
       const result = await api.startIntegratedPipelineBatch({
         account_ids: accountIds,
         product_codes: resolvedListingSelectors.value,
-        activity_id: activityId.value,
+        activity_ids: activityIds.value,
+        activity_id: activityIds.value[0],
         category_keyword: categoryKeyword.value,
         auto_promotion: autoPromotion.value,
         activity_delay_hours: demoMode.value ? 0 : activityDelayHours.value,
@@ -240,8 +334,9 @@ async function startPipeline() {
         slot_alignment_test: slotAlignmentTest.value,
         store_start_delay_min_seconds: startDelayMin.value,
         store_start_delay_max_seconds: startDelayMax.value,
+        skip_listing: skipListing,
       })
-      success.value = `批量整合链路已提交：${result.total} 条，批次 ${result.batch_id}，启动间隔 ${result.store_start_delay_min_seconds}-${result.store_start_delay_max_seconds} 秒`
+      success.value = `批量整合链路已提交：${result.total} 条，批次 ${result.batch_id}，活动 ${activityIds.value.length} 个，启动间隔 ${result.store_start_delay_min_seconds}-${result.store_start_delay_max_seconds} 秒`
       if (result.pipelines.length) {
         const first = await api.getIntegratedPipeline(result.pipelines[0].pipeline_id)
         activePipeline.value = first
@@ -250,17 +345,25 @@ async function startPipeline() {
       const result = await api.startIntegratedPipeline({
         account_id: accountId.value,
         product_codes: resolvedListingSelectors.value,
-        activity_id: activityId.value,
+        activity_ids: activityIds.value,
+        activity_id: activityIds.value[0],
         category_keyword: categoryKeyword.value,
         auto_promotion: autoPromotion.value,
         activity_delay_hours: demoMode.value ? 0 : activityDelayHours.value,
         demo_mode: demoMode.value,
         slot_alignment_test: slotAlignmentTest.value,
+        skip_listing: skipListing,
       })
       activePipeline.value = result
-      success.value = demoMode.value
-        ? `整合链路已启动（演示模式：约 2 分钟后自动报活动）`
-        : `整合链路已启动（${activityDelayHours.value} 小时后自动报活动，含随机抖动分散到期）`
+      const activityCount = activityIds.value.length
+      const activityHint = activityCount > 1 ? `，${activityCount} 个活动将依次报名` : ''
+      success.value = skipListing
+        ? demoMode.value
+          ? `整合链路已启动（跳过上架，约 2 分钟后自动报活动${activityHint}）`
+          : `整合链路已启动（跳过上架，${activityDelayHours.value} 小时后自动报活动${activityHint}）`
+        : demoMode.value
+          ? `整合链路已启动（演示模式：约 2 分钟后自动报活动${activityHint}）`
+          : `整合链路已启动（${activityDelayHours.value} 小时后自动报活动${activityHint}，含随机抖动分散到期）`
     }
     await refreshPipelines()
     startPolling()
@@ -323,171 +426,234 @@ onUnmounted(stopPolling)
       show-icon
       class="tip"
       title="链路说明"
-      description="选好店铺、一套图、活动后点一次即可。上架完成后系统会按设定时间自动报活动；活动成功后再自动创建推广。拼多多要求新上架商品通常隔 1 天才能报活动，正式使用请关闭演示模式并设 24 小时。"
+      description="选好店铺、一套图、一个或多个活动后点一次即可。上架完成后系统会按设定时间自动报活动；多个活动将按顺序依次报名，全部完成后再自动创建推广。拼多多要求新上架商品通常隔 1 天才能报活动，正式使用请关闭演示模式并设 24 小时。"
     />
 
-    <el-row :gutter="16">
-      <el-col :span="14">
-        <el-card shadow="never" class="card">
+    <el-row :gutter="20">
+      <el-col :span="15">
+        <el-card shadow="never" class="stat-card task-card">
           <template #header>新建整合任务</template>
 
-          <el-form label-width="108px">
-            <el-form-item label="批量店铺">
-              <el-switch v-model="pipelineBatchEnabled" active-text="开启" inactive-text="关闭" />
-              <span v-if="pipelineBatchEnabled" class="hint">多店共用下方素材选择，各店按启动间隔错开入队</span>
-            </el-form-item>
-
-            <el-form-item v-if="pipelineBatchEnabled" label="选择店铺" required>
-              <el-select
-                v-model="batchAccountIds"
-                multiple
-                filterable
-                collapse-tags
-                collapse-tags-tooltip
-                placeholder="选择要执行的店铺"
-                style="width: 100%"
-              >
-                <el-option
-                  v-for="acc in enabledAccounts"
-                  :key="acc.account_id"
-                  :label="acc.account_id"
-                  :value="acc.account_id"
-                />
-              </el-select>
-            </el-form-item>
-
-            <el-form-item v-else label="店铺">
-              <el-select v-model="accountId" placeholder="选择店铺" style="width: 100%">
-                <el-option
-                  v-for="acc in enabledAccounts"
-                  :key="acc.account_id"
-                  :label="acc.account_id"
-                  :value="acc.account_id"
-                />
-              </el-select>
-            </el-form-item>
-
-            <el-form-item required class="material-group-item" label-position="top">
-              <template #label>
-                <span class="form-label-with-actions">
-                  <span>素材套图</span>
-                  <span class="label-actions">
-                    <el-button
-                      link
-                      :type="showOnlyUnlistedGroups ? 'default' : 'warning'"
-                      size="small"
-                      @click="showOnlyUnlistedGroups = true"
-                    >
-                      仅未上架{{ unlistedGroupCount ? `(${unlistedGroupCount})` : '' }}
-                    </el-button>
-                    <el-button
-                      link
-                      :type="!showOnlyUnlistedGroups ? 'primary' : 'default'"
-                      size="small"
-                      @click="showOnlyUnlistedGroups = false"
-                    >
-                      全部
-                    </el-button>
-                    <el-button link type="primary" size="small" @click="selectAllMaterialGroups">全选</el-button>
-                    <el-button link size="small" @click="clearAllMaterialGroups">取消全选</el-button>
-                  </span>
-                </span>
-              </template>
-              <el-select
-                v-model="productCodes"
-                multiple
-                collapse-tags
-                collapse-tags-tooltip
-                :placeholder="showOnlyUnlistedGroups ? '仅显示仍有待上架商品的套图' : '选择套图（如 BD720/第一套图）'"
-                style="width: 100%"
-                @visible-change="onMaterialGroupDropdownVisible"
-              >
-                <el-option
-                  v-for="opt in visibleProductOptions"
-                  :key="opt.selector"
-                  :label="formatMaterialGroupLabel(opt)"
-                  :value="opt.selector"
-                >
-                  <span>{{ formatMaterialGroupLabel(opt) }}</span>
-                  <el-tag v-if="opt.is_fully_listed" size="small" type="success" class="listed-tag">已全部上架</el-tag>
-                  <el-tag v-else-if="opt.has_pending_listing" size="small" type="warning" class="listed-tag">
-                    有新商品待上架
-                  </el-tag>
-                </el-option>
-              </el-select>
-              <div v-if="showOnlyUnlistedGroups && !visibleProductOptions.length" class="form-tip">
-                当前店铺暂无未上架套图
-              </div>
-            </el-form-item>
-
-            <el-form-item v-if="selectedSetGroups.length" label="上架商品">
-              <div class="product-picks">
-                <div v-for="group in selectedSetGroups" :key="group.selector" class="pick-group">
-                  <div class="pick-title">
-                    {{ group.selector }}
-                    <el-tag v-if="group.is_fully_listed" size="small" type="success" class="listed-tag">套图已全部上架</el-tag>
-                    <el-tag v-else-if="group.has_pending_listing" size="small" type="warning" class="listed-tag">
-                      待上架 {{ group.unlisted_count ?? 0 }} 个
-                    </el-tag>
-                  </div>
-                  <el-checkbox-group
-                    :model-value="checkedProductsBySet[group.selector] || []"
-                    @update:model-value="(v) => updateCheckedProducts(group.selector, v as string[])"
-                  >
-                    <el-checkbox v-for="code in group.product_codes" :key="code" :label="code" :value="code">
-                      {{ code }}
-                      <el-tag v-if="isProductListed(group, code)" size="small" type="success" class="listed-tag">
-                        已上架
-                      </el-tag>
-                    </el-checkbox>
-                  </el-checkbox-group>
+          <el-form label-position="top" class="pipeline-form">
+            <div class="form-section">
+              <div class="form-section-title">店铺</div>
+              <el-form-item label="批量店铺">
+                <div class="batch-toggle-row">
+                  <el-switch v-model="pipelineBatchEnabled" active-text="开启" inactive-text="关闭" />
                 </div>
-              </div>
-            </el-form-item>
+                <div v-if="pipelineBatchEnabled" class="form-tip">
+                  多店共用下方素材选择，各店按启动间隔错开入队
+                </div>
+              </el-form-item>
 
-            <el-form-item label="活动">
-              <el-select v-model="activityId" placeholder="选择活动" style="width: 100%">
-                <el-option
-                  v-for="act in activities"
-                  :key="act.activity_id"
-                  :label="`${act.activity_id} · ${act.name || '活动'}`"
-                  :value="act.activity_id"
-                />
-              </el-select>
-            </el-form-item>
+              <el-form-item v-if="pipelineBatchEnabled" label="选择店铺" required>
+                <el-select
+                  v-model="batchAccountIds"
+                  multiple
+                  filterable
+                  collapse-tags
+                  collapse-tags-tooltip
+                  placeholder="选择要执行的店铺"
+                  style="width: 100%"
+                >
+                  <el-option
+                    v-for="acc in enabledAccounts"
+                    :key="acc.account_id"
+                    :label="acc.account_id"
+                    :value="acc.account_id"
+                  />
+                </el-select>
+              </el-form-item>
 
-            <el-form-item label="类目关键词">
-              <el-input v-model="categoryKeyword" placeholder="上架类目，默认玩偶" />
-            </el-form-item>
+              <el-form-item v-else label="选择店铺" required>
+                <el-select
+                  v-model="accountId"
+                  placeholder="请选择店铺"
+                  style="width: 100%"
+                  @change="onAccountChange"
+                >
+                  <el-option
+                    v-for="acc in enabledAccounts"
+                    :key="acc.account_id"
+                    :label="acc.account_id"
+                    :value="acc.account_id"
+                  />
+                </el-select>
+              </el-form-item>
 
-            <el-form-item label="槽位对齐">
-              <el-checkbox v-model="slotAlignmentTest" class="slot-align-test">
-                槽位对齐（试验）
-              </el-checkbox>
-              <div v-if="slotAlignmentTest" class="form-tip">
-                开启后：主款预览图顺序定尺寸名，兄弟款跟槽位不走尺寸并集。不满意可取消勾选，不影响原流程。
-              </div>
-            </el-form-item>
+              <el-row v-if="pipelineBatchEnabled" :gutter="16">
+                <el-col :span="12">
+                  <el-form-item label="启动间隔最小秒数">
+                    <el-input-number v-model="startDelayMin" :min="0" :max="3600" style="width: 100%" />
+                  </el-form-item>
+                </el-col>
+                <el-col :span="12">
+                  <el-form-item label="启动间隔最大秒数">
+                    <el-input-number
+                      v-model="startDelayMax"
+                      :min="startDelayMin"
+                      :max="3600"
+                      style="width: 100%"
+                    />
+                  </el-form-item>
+                </el-col>
+              </el-row>
+            </div>
 
-            <el-form-item label="自动推广">
-              <el-switch v-model="autoPromotion" />
-            </el-form-item>
+            <div class="form-section form-section-material">
+              <div class="form-section-title">素材与商品</div>
 
-            <el-form-item label="演示模式">
-              <el-switch v-model="demoMode" />
-              <span class="hint">开启后活动延迟约 2 分钟（便于测试整条链路）</span>
-            </el-form-item>
+              <el-form-item required class="material-form-item">
+                <div class="material-panel">
+                  <div class="material-panel-toolbar">
+                    <el-radio-group v-model="showOnlyUnlistedGroups" size="small" class="filter-segment">
+                      <el-radio-button :label="true">
+                        仅未上架{{ unlistedGroupCount ? ` (${unlistedGroupCount})` : '' }}
+                      </el-radio-button>
+                      <el-radio-button :label="false">全部套图</el-radio-button>
+                    </el-radio-group>
+                    <div class="toolbar-actions">
+                      <el-button size="small" type="primary" plain @click="selectAllMaterialGroups">全选</el-button>
+                      <el-button size="small" @click="clearAllMaterialGroups">清空</el-button>
+                    </div>
+                  </div>
+                  <el-select
+                    v-model="productCodes"
+                    multiple
+                    filterable
+                    collapse-tags
+                    collapse-tags-tooltip
+                    :placeholder="showOnlyUnlistedGroups ? '仅显示仍有待上架商品的套图' : '选择套图（如 BD720/第一套图）'"
+                    style="width: 100%"
+                    @visible-change="onMaterialGroupDropdownVisible"
+                  >
+                    <el-option
+                      v-for="opt in visibleProductOptions"
+                      :key="opt.selector"
+                      :label="formatMaterialGroupLabel(opt)"
+                      :value="opt.selector"
+                    >
+                      <span class="option-main">{{ opt.selector }}</span>
+                      <span class="option-meta">{{ opt.product_count || opt.product_codes.length }} 个商品</span>
+                      <el-tag v-if="opt.is_fully_listed" size="small" type="success" class="listed-tag">已全部上架</el-tag>
+                      <el-tag v-else-if="opt.has_pending_listing" size="small" type="warning" class="listed-tag">
+                        待上架 {{ opt.unlisted_count ?? 0 }}
+                      </el-tag>
+                    </el-option>
+                  </el-select>
+                  <div v-if="showOnlyUnlistedGroups && !visibleProductOptions.length" class="form-tip">
+                    当前店铺暂无未上架套图
+                  </div>
+                  <div v-else-if="productCodes.length" class="selection-summary">
+                    已选 {{ productCodes.length }} 套图
+                  </div>
+                </div>
+              </el-form-item>
 
-            <el-form-item v-if="!demoMode" label="活动延迟">
-              <el-input-number v-model="activityDelayHours" :min="1" :max="168" />
-              <span class="hint">小时（建议 24；到期时间会额外随机抖动，避免集体到期）</span>
-            </el-form-item>
+              <el-form-item v-if="selectedSetGroups.length" required>
+                <template #label>
+                  <span class="form-label-with-actions">
+                    <span>上架商品</span>
+                    <span class="label-actions">
+                      <el-button link type="primary" size="small" @click="selectAllListingProducts">全选</el-button>
+                      <el-button link size="small" @click="clearAllListingProducts">清空</el-button>
+                    </span>
+                  </span>
+                </template>
+                <div class="product-pick-panel">
+                  <div v-for="group in selectedSetGroups" :key="group.selector" class="product-pick-group">
+                    <div class="product-pick-group-title">
+                      {{ group.selector }}
+                      <el-tag v-if="group.is_fully_listed" size="small" type="success" class="listed-tag">套图已全部上架</el-tag>
+                      <el-tag v-else-if="group.has_pending_listing" size="small" type="warning" class="listed-tag">
+                        待上架 {{ group.unlisted_count ?? 0 }} 个
+                      </el-tag>
+                      <el-tag v-else-if="(group.listed_count || 0) > 0" size="small" type="info" class="listed-tag">
+                        已上架 {{ group.listed_count }}/{{ group.product_codes.length }}
+                      </el-tag>
+                    </div>
+                    <el-checkbox-group
+                      :model-value="checkedProductsBySet[group.selector] || []"
+                      @update:model-value="(v) => updateCheckedProducts(group.selector, v as string[])"
+                    >
+                      <el-checkbox v-for="code in group.product_codes" :key="code" :label="code" :value="code">
+                        {{ code }}
+                        <el-tag v-if="isProductListed(group, code)" size="small" type="success" class="listed-tag">
+                          已上架
+                        </el-tag>
+                      </el-checkbox>
+                    </el-checkbox-group>
+                  </div>
+                </div>
+              </el-form-item>
+            </div>
 
-            <el-form-item>
-              <el-button type="primary" :loading="loading" @click="startPipeline">
-                {{ pipelineBatchEnabled ? '批量启动整合链路' : '一键启动整合链路' }}
-              </el-button>
-            </el-form-item>
+            <div class="form-section">
+              <div class="form-section-title">活动与推广</div>
+
+              <el-form-item label="营销活动" required>
+                <el-select
+                  v-model="activityIds"
+                  multiple
+                  filterable
+                  collapse-tags
+                  collapse-tags-tooltip
+                  :max-collapse-tags="2"
+                  placeholder="选择一个或多个活动"
+                  style="width: 100%"
+                >
+                  <el-option
+                    v-for="act in activities"
+                    :key="act.activity_id"
+                    :label="formatActivityShortLabel(act)"
+                    :value="act.activity_id"
+                  />
+                </el-select>
+                <div v-if="activityIds.length > 1" class="form-tip">
+                  已选 {{ activityIds.length }} 个活动，将按顺序依次报名，全部完成后再推广
+                </div>
+              </el-form-item>
+
+              <el-row :gutter="16">
+                <el-col :span="12">
+                  <el-form-item label="类目关键词">
+                    <el-input v-model="categoryKeyword" placeholder="上架类目，默认玩偶" />
+                  </el-form-item>
+                </el-col>
+                <el-col :span="12">
+                  <el-form-item label="活动延迟" v-if="!demoMode">
+                    <el-input-number v-model="activityDelayHours" :min="1" :max="168" style="width: 100%" />
+                    <div class="form-tip">建议 24 小时，到期会随机抖动</div>
+                  </el-form-item>
+                </el-col>
+              </el-row>
+
+              <el-form-item label="高级选项">
+                <div class="option-row">
+                  <el-checkbox v-model="slotAlignmentTest" class="slot-align-test">
+                    槽位对齐（试验）
+                  </el-checkbox>
+                  <div class="switch-row">
+                    <span class="switch-label">自动推广</span>
+                    <el-switch v-model="autoPromotion" />
+                  </div>
+                  <div class="switch-row">
+                    <span class="switch-label">演示模式</span>
+                    <el-switch v-model="demoMode" />
+                  </div>
+                </div>
+                <div v-if="slotAlignmentTest" class="form-tip">
+                  开启后：主款预览图顺序定尺寸名，兄弟款跟槽位不走尺寸并集。
+                </div>
+                <div v-if="demoMode" class="form-tip">
+                  演示模式：活动约 2 分钟后执行，便于测试整条链路。
+                </div>
+              </el-form-item>
+            </div>
+
+            <el-button type="primary" size="large" class="submit-btn" :loading="loading" @click="startPipeline">
+              {{ pipelineBatchEnabled ? '批量启动整合链路' : '一键启动整合链路' }}
+            </el-button>
           </el-form>
 
           <el-alert v-if="error" type="error" :title="error" show-icon :closable="false" class="msg" />
@@ -495,8 +661,8 @@ onUnmounted(stopPolling)
         </el-card>
       </el-col>
 
-      <el-col :span="10">
-        <el-card v-if="activePipeline" shadow="never" class="card">
+      <el-col :span="9">
+        <el-card v-if="activePipeline" shadow="never" class="stat-card side-card">
           <template #header>
             <div class="card-head">
               <span>当前链路</span>
@@ -517,6 +683,9 @@ onUnmounted(stopPolling)
           </template>
           <p class="meta">ID：{{ activePipeline.pipeline_id }}</p>
           <p v-if="activePipeline.batch_id" class="meta">批次：{{ activePipeline.batch_id }}</p>
+          <p v-if="activePipeline.activity_ids?.length || activePipeline.activity_id" class="meta">
+            活动：{{ formatActivityList(activePipeline.activity_ids?.length ? activePipeline.activity_ids : [activePipeline.activity_id]) }}
+          </p>
           <p v-if="activePipeline.scheduled_activity_at" class="meta">
             活动计划时间：{{ formatTime(activePipeline.scheduled_activity_at) }}
           </p>
@@ -524,13 +693,19 @@ onUnmounted(stopPolling)
             拼多多商品：{{ activePipeline.pdd_product_ids.join(', ') }}
           </p>
           <p v-if="activePipeline.error" class="error-text">{{ activePipeline.error }}</p>
+          <p v-if="activePipeline.listing_skip_reason" class="warn-text">
+            上架：{{ activePipeline.listing_skip_reason }}
+          </p>
+          <p v-if="activePipeline.campaign_skip_reason" class="warn-text">
+            活动：{{ activePipeline.campaign_skip_reason }}
+          </p>
 
           <el-steps direction="vertical" :active="3" class="steps">
             <el-step v-for="step in activePipeline.steps" :key="step.key" :title="step.label">
               <template #description>
                 <div class="step-desc">
                   <el-tag size="small" :type="stepTagType(step.status)">{{ step.status }}</el-tag>
-                  <span>{{ step.detail }}</span>
+                  <span class="step-detail-text">{{ step.detail }}</span>
                   <el-button
                     v-if="step.run_id"
                     link
@@ -541,12 +716,39 @@ onUnmounted(stopPolling)
                     查看记录
                   </el-button>
                 </div>
+                <div
+                  v-if="step.key === 'activity' && (activePipeline.campaign_results?.length || 0) > 1"
+                  class="campaign-results"
+                >
+                  <div
+                    v-for="item in activePipeline.campaign_results"
+                    :key="`${item.activity_id}-${item.run_id || ''}`"
+                    class="campaign-result-row"
+                  >
+                    <span class="campaign-result-id">{{ formatActivityLabel(item.activity_id) }}</span>
+                    <el-tag size="small" :type="campaignResultTagType(item)">
+                      {{ campaignResultLabel(item) }}
+                    </el-tag>
+                    <el-button
+                      v-if="item.run_id"
+                      link
+                      type="primary"
+                      size="small"
+                      @click="openRun(item.run_id)"
+                    >
+                      记录
+                    </el-button>
+                    <span v-if="item.summary || item.error" class="campaign-result-summary">
+                      {{ item.summary || item.error }}
+                    </span>
+                  </div>
+                </div>
               </template>
             </el-step>
           </el-steps>
         </el-card>
 
-        <el-card shadow="never" class="card">
+        <el-card shadow="never" class="stat-card side-card">
           <template #header>
             <div class="card-head">
               <span>最近链路</span>
@@ -557,6 +759,11 @@ onUnmounted(stopPolling)
             <el-table-column prop="pipeline_id" label="ID" min-width="140" show-overflow-tooltip />
             <el-table-column prop="account_id" label="店铺" width="90" />
             <el-table-column prop="batch_id" label="批次" min-width="120" show-overflow-tooltip />
+            <el-table-column label="活动" width="90">
+              <template #default="{ row }">
+                {{ pipelineActivitySummary(row) }}
+              </template>
+            </el-table-column>
             <el-table-column prop="status" label="状态" width="110">
               <template #default="{ row }">
                 <el-tag size="small" :type="pipelineTagType(row.status)">{{ row.status }}</el-tag>
@@ -590,99 +797,236 @@ onUnmounted(stopPolling)
   flex-direction: column;
   gap: 16px;
 }
+
 .tip {
   margin-bottom: 4px;
 }
-.card {
+
+.task-card {
+  margin-bottom: 0;
+}
+
+.side-card {
   margin-bottom: 16px;
 }
-.card-head {
+
+.side-card:last-child {
+  margin-bottom: 0;
+}
+
+.pipeline-form {
+  max-width: 100%;
+}
+
+.form-section {
+  padding: 16px 18px;
+  margin-bottom: 16px;
+  border: 1px solid var(--border-color);
+  border-radius: 12px;
+  background: #fafbfd;
+}
+
+.form-section-material {
+  background: #fff;
+  border-color: #e2e8f0;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.8);
+}
+
+.form-section-title {
+  margin: 0 0 14px;
+  font-size: 13px;
+  font-weight: 700;
+  color: #475569;
+  letter-spacing: 0.02em;
+  text-transform: none;
+}
+
+.form-section :deep(.el-form-item:last-child) {
+  margin-bottom: 0;
+}
+
+.batch-toggle-row {
+  display: flex;
+  align-items: center;
+  gap: 20px;
+  flex-wrap: wrap;
+}
+
+.material-form-item :deep(.el-form-item__label) {
+  display: none;
+}
+
+.material-panel {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 14px 16px;
+  border: 1px solid var(--border-color);
+  border-radius: 10px;
+  background: linear-gradient(180deg, #f8fafc 0%, #fff 100%);
+}
+
+.material-panel-toolbar {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 8px;
+  gap: 12px;
+  flex-wrap: wrap;
 }
-.card-head-actions {
+
+.filter-segment :deep(.el-radio-button__inner) {
+  padding: 7px 14px;
+  font-size: 13px;
+}
+
+.toolbar-actions {
   display: inline-flex;
   align-items: center;
   gap: 8px;
 }
-.product-picks {
+
+.selection-summary {
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.option-main {
+  font-weight: 500;
+  margin-right: 8px;
+}
+
+.option-meta {
+  font-size: 12px;
+  color: var(--text-muted);
+  margin-right: 8px;
+}
+
+.product-pick-panel {
+  width: 100%;
   display: flex;
   flex-direction: column;
   gap: 12px;
-  width: 100%;
 }
-.pick-group {
-  padding: 10px 12px;
-  border: 1px solid var(--el-border-color-light);
+
+.product-pick-group {
+  padding: 12px 14px;
+  border: 1px solid var(--border-color);
   border-radius: 8px;
+  background: #fff;
 }
-.pick-title {
-  font-weight: 600;
+
+.product-pick-group-title {
   margin-bottom: 8px;
+  font-size: 13px;
+  font-weight: 600;
+  color: #334155;
   display: flex;
   align-items: center;
   flex-wrap: wrap;
   gap: 8px;
 }
+
+.product-pick-group :deep(.el-checkbox) {
+  margin-right: 18px;
+}
+
 .listed-tag {
   margin-left: 6px;
 }
+
 .form-label-with-actions {
   display: inline-flex;
   align-items: center;
   gap: 12px;
   width: 100%;
 }
+
 .label-actions {
   display: inline-flex;
   align-items: center;
   gap: 4px;
-  flex-wrap: wrap;
 }
+
 .label-actions :deep(.el-button) {
   padding: 0 4px;
   height: auto;
   font-size: 13px;
 }
-.material-group-item :deep(.el-form-item__label) {
-  width: 100% !important;
-  justify-content: flex-start;
-  padding-bottom: 4px;
-}
-.material-group-item :deep(.el-form-item__content) {
-  margin-left: 0 !important;
-}
+
 .form-tip {
   margin-top: 8px;
-  color: var(--el-text-color-secondary);
+  color: var(--text-secondary);
   font-size: 12px;
   line-height: 1.5;
 }
-.hint {
-  margin-left: 10px;
-  color: var(--el-text-color-secondary);
-  font-size: 12px;
+
+.option-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 20px 28px;
+  width: 100%;
 }
+
+.switch-row {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.switch-label {
+  font-size: 13px;
+  color: #475569;
+}
+
 .slot-align-test {
   margin: 0;
 }
+
+.submit-btn {
+  width: 100%;
+  margin-top: 4px;
+}
+
+.card-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.card-head-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
 .msg {
   margin-top: 12px;
 }
+
 .meta {
   margin: 0 0 8px;
-  color: var(--el-text-color-secondary);
+  color: var(--text-secondary);
   font-size: 13px;
 }
+
 .error-text {
   color: var(--el-color-danger);
   margin-bottom: 12px;
 }
+
+.warn-text {
+  color: var(--el-color-warning);
+  margin-bottom: 12px;
+  font-size: 13px;
+}
+
 .steps {
   margin-top: 8px;
 }
+
 .step-desc {
   display: flex;
   flex-wrap: wrap;
@@ -690,8 +1034,40 @@ onUnmounted(stopPolling)
   gap: 8px;
   margin-top: 4px;
 }
-.pipeline-item.active,
-.nav-item.active {
-  /* sidebar highlight handled globally */
+
+.step-detail-text {
+  flex: 1 1 100%;
+  line-height: 1.5;
+}
+
+.campaign-results {
+  margin-top: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  width: 100%;
+}
+
+.campaign-result-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  border: 1px solid var(--el-border-color-lighter);
+  border-radius: 6px;
+  background: var(--el-fill-color-blank);
+}
+
+.campaign-result-id {
+  font-size: 12px;
+  color: var(--el-text-color-primary);
+}
+
+.campaign-result-summary {
+  flex: 1 1 100%;
+  font-size: 12px;
+  color: var(--el-text-color-secondary);
+  line-height: 1.4;
 }
 </style>
