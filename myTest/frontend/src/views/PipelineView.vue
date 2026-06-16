@@ -73,33 +73,72 @@ const resolvedListingSelectors = computed(() => {
 
 const allSelectedAreListed = computed(() => {
   if (!resolvedListingSelectors.value.length) return false
-  return resolvedListingSelectors.value.every((selector) => {
-    const slash = selector.lastIndexOf('/')
-    if (slash <= 0) return false
-    const setSelector = selector.slice(0, slash)
-    const code = selector.slice(slash + 1)
-    const group = productOptions.value.find((item) => item.selector === setSelector)
-    return !!group && isProductListed(group, code)
-  })
+  return resolvedListingSelectors.value.every(isSelectorListed)
 })
 
-async function resolveSkipListing(): Promise<boolean | null> {
-  if (!allSelectedAreListed.value) return false
-  const labels = resolvedListingSelectors.value.join('、')
+const listedSelectors = computed(() => resolvedListingSelectors.value.filter(isSelectorListed))
+
+const unlistedSelectors = computed(() =>
+  resolvedListingSelectors.value.filter((selector) => !isSelectorListed(selector)),
+)
+
+function isSelectorListed(selector: string) {
+  const slash = selector.lastIndexOf('/')
+  if (slash <= 0) return false
+  const setSelector = selector.slice(0, slash)
+  const code = selector.slice(slash + 1)
+  const group = productOptions.value.find((item) => item.selector === setSelector)
+  return !!group && isProductListed(group, code)
+}
+
+interface ListingIntent {
+  skipListing: boolean
+  listingSkipSelectors: string[]
+}
+
+async function resolveListingIntent(): Promise<ListingIntent | null> {
+  const listed = listedSelectors.value
+  const unlisted = unlistedSelectors.value
+  if (!listed.length) {
+    return { skipListing: false, listingSkipSelectors: [] }
+  }
+
+  if (!unlisted.length) {
+    const labels = resolvedListingSelectors.value.join('、')
+    try {
+      await ElMessageBox.confirm(
+        `所选商品均已上架：\n${labels}\n\n是否跳过上架，直接进入活动报名？\n选择「重新上架」将照常执行上架步骤。`,
+        '已上架商品',
+        {
+          type: 'info',
+          confirmButtonText: '跳过上架',
+          cancelButtonText: '重新上架',
+          distinguishCancelAndClose: true,
+        },
+      )
+      return { skipListing: true, listingSkipSelectors: [] }
+    } catch (action) {
+      if (action === 'cancel') return { skipListing: false, listingSkipSelectors: [] }
+      return null
+    }
+  }
+
+  const listedText = listed.join('\n')
+  const unlistedText = unlisted.join('\n')
   try {
     await ElMessageBox.confirm(
-      `所选商品均已上架：\n${labels}\n\n是否跳过上架，直接进入活动报名？\n选择「重新上架」将照常执行上架步骤。`,
-      '已上架商品',
+      `所选同时包含已上架与未上架商品：\n\n已上架：\n${listedText}\n\n待上架：\n${unlistedText}\n\n请选择如何处理已上架商品。`,
+      '含已上架商品',
       {
-        type: 'info',
-        confirmButtonText: '跳过上架',
-        cancelButtonText: '重新上架',
+        type: 'warning',
+        confirmButtonText: '仅上架未上架',
+        cancelButtonText: '全部重新上架',
         distinguishCancelAndClose: true,
       },
     )
-    return true
+    return { skipListing: false, listingSkipSelectors: listed }
   } catch (action) {
-    if (action === 'cancel') return false
+    if (action === 'cancel') return { skipListing: false, listingSkipSelectors: [] }
     return null
   }
 }
@@ -317,8 +356,9 @@ async function startPipeline() {
     error.value = '请至少选择一个活动'
     return
   }
-  const skipListing = await resolveSkipListing()
-  if (skipListing === null) return
+  const listingIntent = await resolveListingIntent()
+  if (!listingIntent) return
+  const { skipListing, listingSkipSelectors } = listingIntent
   loading.value = true
   try {
     if (pipelineBatchEnabled.value) {
@@ -335,6 +375,7 @@ async function startPipeline() {
         store_start_delay_min_seconds: startDelayMin.value,
         store_start_delay_max_seconds: startDelayMax.value,
         skip_listing: skipListing,
+        listing_skip_selectors: listingSkipSelectors,
       })
       success.value = `批量整合链路已提交：${result.total} 条，批次 ${result.batch_id}，活动 ${activityIds.value.length} 个，启动间隔 ${result.store_start_delay_min_seconds}-${result.store_start_delay_max_seconds} 秒`
       if (result.pipelines.length) {
@@ -353,17 +394,21 @@ async function startPipeline() {
         demo_mode: demoMode.value,
         slot_alignment_test: slotAlignmentTest.value,
         skip_listing: skipListing,
+        listing_skip_selectors: listingSkipSelectors,
       })
       activePipeline.value = result
       const activityCount = activityIds.value.length
       const activityHint = activityCount > 1 ? `，${activityCount} 个活动将依次报名` : ''
+      const partialHint = listingSkipSelectors.length
+        ? `（已上架 ${listingSkipSelectors.length} 个跳过上架）`
+        : ''
       success.value = skipListing
         ? demoMode.value
           ? `整合链路已启动（跳过上架，约 2 分钟后自动报活动${activityHint}）`
           : `整合链路已启动（跳过上架，${activityDelayHours.value} 小时后自动报活动${activityHint}）`
         : demoMode.value
-          ? `整合链路已启动（演示模式：约 2 分钟后自动报活动${activityHint}）`
-          : `整合链路已启动（${activityDelayHours.value} 小时后自动报活动${activityHint}，含随机抖动分散到期）`
+          ? `整合链路已启动（演示模式：约 2 分钟后自动报活动${activityHint}${partialHint}）`
+          : `整合链路已启动（${activityDelayHours.value} 小时后自动报活动${activityHint}${partialHint}，含随机抖动分散到期）`
     }
     await refreshPipelines()
     startPolling()

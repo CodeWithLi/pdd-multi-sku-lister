@@ -62,6 +62,7 @@ def start_integrated(body: IntegratedPipelineStartRequest):
             platform_listing_code=body.platform_listing_code,
             slot_alignment_test=body.slot_alignment_test,
             skip_listing=body.skip_listing,
+            listing_skip_selectors=body.listing_skip_selectors,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -102,6 +103,7 @@ def start_integrated_batch(body: IntegratedPipelineBatchStartRequest):
             platform_listing_code=body.platform_listing_code,
             slot_alignment_test=body.slot_alignment_test,
             skip_listing=body.skip_listing,
+            listing_skip_selectors=body.listing_skip_selectors,
             store_start_delay_min_seconds=body.store_start_delay_min_seconds,
             store_start_delay_max_seconds=body.store_start_delay_max_seconds,
             max_concurrent_stores=body.max_concurrent_stores,

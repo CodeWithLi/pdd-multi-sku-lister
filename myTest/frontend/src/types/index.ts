@@ -555,6 +555,7 @@ export interface IntegratedPipelineStartPayload {
   platform_listing_code?: string
   slot_alignment_test?: boolean
   skip_listing?: boolean
+  listing_skip_selectors?: string[]
 }
 
 export interface IntegratedPipelineBatchStartPayload {
@@ -572,6 +573,7 @@ export interface IntegratedPipelineBatchStartPayload {
   store_start_delay_max_seconds?: number
   max_concurrent_stores?: number
   skip_listing?: boolean
+  listing_skip_selectors?: string[]
 }
 
 export interface IntegratedPipelineBatchRunItem {

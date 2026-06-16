@@ -85,35 +85,71 @@ const resolvedListingSelectors = computed(() => {
 
 const allSelectedAreListed = computed(() => {
   if (!resolvedListingSelectors.value.length) return false
-  return resolvedListingSelectors.value.every((selector) => {
-    const slash = selector.lastIndexOf('/')
-    if (slash <= 0) return false
-    const setSelector = selector.slice(0, slash)
-    const code = selector.slice(slash + 1)
-    const group = productOptions.value.find((item) => item.selector === setSelector)
-    return !!group && isProductListed(group, code)
-  })
+  return resolvedListingSelectors.value.every(isSelectorListed)
 })
 
-async function confirmRelistIfNeeded(): Promise<boolean> {
-  if (!allSelectedAreListed.value) return true
-  const labels = resolvedListingSelectors.value.join('、')
+const listedSelectors = computed(() => resolvedListingSelectors.value.filter(isSelectorListed))
+
+const unlistedSelectors = computed(() =>
+  resolvedListingSelectors.value.filter((selector) => !isSelectorListed(selector)),
+)
+
+function isSelectorListed(selector: string) {
+  const slash = selector.lastIndexOf('/')
+  if (slash <= 0) return false
+  const setSelector = selector.slice(0, slash)
+  const code = selector.slice(slash + 1)
+  const group = productOptions.value.find((item) => item.selector === setSelector)
+  return !!group && isProductListed(group, code)
+}
+
+async function confirmRelistIfNeeded(): Promise<string[] | null> {
+  const all = resolvedListingSelectors.value
+  const listed = listedSelectors.value
+  const unlisted = unlistedSelectors.value
   const isCheck = listingMode.value === 'check'
+
+  if (!listed.length) return all
+
+  if (!unlisted.length) {
+    const labels = all.join('、')
+    try {
+      await ElMessageBox.confirm(
+        isCheck
+          ? `所选商品均已上架：\n${labels}\n\n确定仍要执行素材检查？`
+          : `所选商品均已上架：\n${labels}\n\n确定要重新上架这些商品？`,
+        '已上架商品',
+        {
+          type: 'warning',
+          confirmButtonText: isCheck ? '继续检查' : '重新上架',
+          cancelButtonText: '取消',
+        },
+      )
+      return all
+    } catch {
+      return null
+    }
+  }
+
+  const listedText = listed.join('\n')
+  const unlistedText = unlisted.join('\n')
   try {
     await ElMessageBox.confirm(
       isCheck
-        ? `所选商品均已上架：\n${labels}\n\n确定仍要执行素材检查？`
-        : `所选商品均已上架：\n${labels}\n\n确定要重新上架这些商品？`,
-      '已上架商品',
+        ? `所选同时包含已上架与未上架商品：\n\n已上架：\n${listedText}\n\n待检查：\n${unlistedText}\n\n请选择如何处理已上架商品。`
+        : `所选同时包含已上架与未上架商品：\n\n已上架：\n${listedText}\n\n待上架：\n${unlistedText}\n\n请选择如何处理已上架商品。`,
+      '含已上架商品',
       {
         type: 'warning',
-        confirmButtonText: isCheck ? '继续检查' : '重新上架',
-        cancelButtonText: '取消',
+        confirmButtonText: isCheck ? '仅检查未上架' : '仅上架未上架',
+        cancelButtonText: isCheck ? '全部检查' : '全部重新上架',
+        distinguishCancelAndClose: true,
       },
     )
-    return true
-  } catch {
-    return false
+    return unlisted
+  } catch (action) {
+    if (action === 'cancel') return all
+    return null
   }
 }
 
@@ -281,7 +317,8 @@ async function runListing() {
     error.value = '填写上架商品编码后，一次只能上架一个商品'
     return
   }
-  if (!(await confirmRelistIfNeeded())) return
+  const listingSelectors = await confirmRelistIfNeeded()
+  if (!listingSelectors?.length) return
 
   loading.value = true
   error.value = ''
@@ -293,7 +330,7 @@ async function runListing() {
     if (listingBatchEnabled.value) {
       listingBatchResult.value = await api.listingBatch({
         account_ids: accountIds,
-        product_codes: resolvedListingSelectors.value,
+        product_codes: listingSelectors,
         platform_listing_code: platformListingCode.value.trim(),
         dry_run: isCheck,
         category_keyword: categoryKeyword.value,
@@ -308,7 +345,7 @@ async function runListing() {
 
     listingResult.value = await api.listing({
       account_id: accountIds[0],
-      product_codes: resolvedListingSelectors.value,
+      product_codes: listingSelectors,
       platform_listing_code: platformListingCode.value.trim(),
       dry_run: isCheck,
       category_keyword: categoryKeyword.value,

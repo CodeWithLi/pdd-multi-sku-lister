@@ -13,6 +13,7 @@ from pdd_agent.api.services.pipeline_service import (
     _campaign_time_requirement_message,
     _extract_listing_products,
     _is_campaign_time_requirement_failure,
+    _merge_skipped_listing_products,
     _normalize_pipeline_activity_ids,
     _on_campaign_finished,
     _resolve_activity_delay,
@@ -253,6 +254,60 @@ def test_start_integrated_pipeline_skip_listing_schedules_activity():
                                 )
     on_listing.assert_called_once()
     assert result["status"] == "waiting_activity"
+
+
+def test_start_integrated_pipeline_partial_listing_skip_enqueues_unlisted_only():
+    row = SimpleNamespace(
+        pipeline_id="pipe_partial",
+        account_id="store_A",
+        product_codes=["BD720/第一套图/BD720A", "BD720/第一套图/BD720B"],
+        activity_id="20981",
+        auto_promotion=True,
+        demo_mode=True,
+        activity_delay_hours=24,
+        listing_run_id="listing_run",
+        meta={},
+    )
+    with patch("pdd_agent.api.services.pipeline_service.create_listing_run", return_value="listing_run"):
+        with patch("pdd_agent.api.services.pipeline_service.create_integrated_pipeline", return_value=row):
+            with patch("pdd_agent.api.services.pipeline_service.update_integrated_pipeline"):
+                with patch("pdd_agent.api.services.pipeline_service.enqueue_task") as enqueue:
+                    with patch(
+                        "pdd_agent.api.services.pipeline_service.get_integrated_pipeline",
+                        return_value=row,
+                    ):
+                        with patch(
+                            "pdd_agent.api.services.pipeline_service.pipeline_to_dict",
+                            return_value={"pipeline_id": "pipe_partial", "status": "running"},
+                        ):
+                            start_integrated_pipeline(
+                                account_id="store_A",
+                                product_codes=["BD720/第一套图/BD720A", "BD720/第一套图/BD720B"],
+                                activity_id="20981",
+                                listing_skip_selectors=["BD720/第一套图/BD720A"],
+                            )
+    enqueue.assert_called_once()
+    payload = enqueue.call_args.kwargs["payload"]
+    assert payload["product_codes"] == ["BD720/第一套图/BD720B"]
+
+
+def test_merge_skipped_listing_products():
+    row = SimpleNamespace(
+        account_id="store_A",
+        meta={"listing_skip_selectors": ["BD720/第一套图/BD720A"]},
+    )
+    with patch(
+        "pdd_agent.api.services.pipeline_service.resolve_published_products_for_pipeline",
+        return_value=(["966914511094"], ["map_1"], []),
+    ):
+        pdd_ids, mapping_ids, missing = _merge_skipped_listing_products(
+            row,
+            pdd_ids=["111"],
+            mapping_ids=["map_new"],
+        )
+    assert pdd_ids == ["111", "966914511094"]
+    assert mapping_ids == ["map_new", "map_1"]
+    assert missing == []
 
 
 def test_normalize_pipeline_activity_ids_dedupes_and_preserves_order():

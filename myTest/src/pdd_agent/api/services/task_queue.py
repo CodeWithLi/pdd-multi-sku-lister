@@ -194,6 +194,17 @@ class TaskQueueWorker:
             record = TaskRunStore().load(row.run_id)
             if record and record.status == RunStatus.CANCELED:
                 finish_queue_task(row.task_id, success=False, error="canceled by user")
+                if pipeline_id:
+                    from pdd_agent.api.services.pipeline_service import on_queue_task_finished
+
+                    on_queue_task_finished(
+                        agent=row.agent,
+                        pipeline_id=pipeline_id,
+                        run_id=row.run_id,
+                        success=False,
+                        result=result if isinstance(result, dict) else {},
+                        error="canceled by user",
+                    )
                 return
             success = bool(record and record.status == RunStatus.SUCCESS)
             error = "" if success else _extract_queue_task_error(result)

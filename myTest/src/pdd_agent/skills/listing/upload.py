@@ -165,6 +165,19 @@ def _classify_exception(exc: Exception) -> tuple[str, bool]:
         return "needs_manual_login_or_captcha", True
     if any(k in err for k in ("分类", "类目", "SKU", "规格", "预览图", "上传")):
         return "page_or_material_changed", True
+    if any(
+        k in low
+        for k in (
+            "target closed",
+            "browser has been closed",
+            "context or browser has been closed",
+            "target page, context or browser has been closed",
+            "page closed",
+            "browser closed",
+            "browser context closed",
+        )
+    ):
+        return "browser_manually_closed", False
     if "timeout" in low or "超时" in err or "disconnect" in low or "连接已断开" in err:
         return "browser_transient_error", True
     return "unexpected_error", False
@@ -1466,6 +1479,6 @@ def run_listing_uploads(
             results.append(exc_result)
             if run_id:
                 _persist_unit_progress(run_id, exc_result)
-            if "连接已断开" in err or "disconnect" in err.lower():
+            if reason == "browser_manually_closed" or "连接已断开" in err or "disconnect" in err.lower():
                 break
     return results

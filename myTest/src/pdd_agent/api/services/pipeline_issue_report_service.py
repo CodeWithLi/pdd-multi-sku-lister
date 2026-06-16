@@ -45,7 +45,8 @@ ISSUE_TITLE_MAP: dict[str, str] = {
     "published_but_not_found_in_on_sale_or_rejected": "提交后未找到商品",
     "needs_manual_login_or_captcha": "需人工登录/验证码",
     "page_or_material_changed": "页面或素材异常",
-    "browser_transient_error": "浏览器超时或断开",
+    "browser_transient_error": "浏览器超时或连接异常",
+    "browser_manually_closed": "浏览器被手动关闭",
     "unexpected_error": "未分类异常",
     "preflight_no_skus": "SKU 编码无效或找不到",
     "preflight_no_carousel": "主图为空",
@@ -77,7 +78,7 @@ ISSUE_TITLE_MAP: dict[str, str] = {
     "traffic_failed": "推广步骤失败",
     "pipeline_canceled": "链路被用户取消",
     "queue_exception": "队列执行异常",
-    "browser_closed": "浏览器异常关闭",
+    "browser_closed": "浏览器被手动关闭",
     "skip_listing_lookup_failed": "跳过上架时找不到在售记录",
     "task_canceled": "任务被取消",
 }
@@ -133,9 +134,18 @@ def _detect_browser_closed(error: str) -> bool:
     return any(hint in low for hint in BROWSER_CLOSED_HINTS)
 
 
+def _normalize_listing_reason(reason: str, error: str) -> str:
+    code = str(reason or "").strip()
+    if code == "browser_manually_closed" or _detect_browser_closed(error):
+        return "browser_manually_closed"
+    if code:
+        return code
+    return _infer_reason_from_error(error)
+
+
 def _infer_reason_from_error(error: str) -> str:
     if _detect_browser_closed(error):
-        return "browser_closed"
+        return "browser_manually_closed"
     low = str(error or "").lower()
     if "sku" in low and ("not found" in low or "找不到" in error or "无效" in error):
         return "sku_not_found"
@@ -241,17 +251,21 @@ def _ingest_listing_items(
         status = str(item.get("status") or "").lower()
         if status not in {"failed", "retryable", "error"}:
             continue
-        reason = str(item.get("reason") or item.get("reason_code") or "").strip()
-        step = str(item.get("step") or item.get("phase") or "").strip()
         error = str(item.get("error") or "").strip()
+        reason = _normalize_listing_reason(
+            str(item.get("reason") or item.get("reason_code") or "").strip(),
+            error or top_error,
+        )
+        step = str(item.get("step") or item.get("phase") or "").strip()
         if not reason and error:
             reason = _infer_reason_from_error(error)
         title = _human_title(reason, step or "上架失败")
+        severity = "critical" if reason in {"browser_manually_closed", "browser_closed"} else "error"
         issue_id = record_pipeline_issue(
             **base,
             stage="listing",
             chain_step=step or "listing_item_failed",
-            severity="error",
+            severity=severity,
             reason_code=reason or "listing_failed",
             title=title,
             message=_compose_message(title, error, str(item.get("message") or "")),
@@ -269,11 +283,12 @@ def _ingest_listing_items(
         if not text:
             continue
         reason = _infer_reason_from_error(text)
+        severity = "critical" if reason in {"browser_manually_closed", "browser_closed"} else "error"
         issue_id = record_pipeline_issue(
             **base,
             stage="listing",
             chain_step="listing_graph_error",
-            severity="error",
+            severity=severity,
             reason_code=reason,
             title=_human_title(reason, "上架图执行错误"),
             message=text,
@@ -468,7 +483,7 @@ def ingest_queue_task_outcome(
             AgentKind.TRAFFIC.value: "traffic",
         }.get(agent, "orchestration")
         chain_step = f"{stage}_failed"
-        severity = "critical" if reason == "browser_closed" else "error"
+        severity = "critical" if reason in {"browser_manually_closed", "browser_closed"} else "error"
         issue_id = record_pipeline_issue(
             **base,
             stage=stage,

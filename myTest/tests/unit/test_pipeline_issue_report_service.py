@@ -111,7 +111,7 @@ def test_ingest_browser_closed_critical(mock_record):
         error="Target page, context or browser has been closed",
     )
     kwargs = mock_record.call_args.kwargs
-    assert kwargs["reason_code"] == "browser_closed"
+    assert kwargs["reason_code"] == "browser_manually_closed"
     assert kwargs["severity"] == "critical"
 
 
