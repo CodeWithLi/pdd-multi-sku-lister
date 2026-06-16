@@ -15,6 +15,10 @@ from pdd_agent.skills.delist.time_utils import (
     extract_product_id_from_text,
     format_datetime,
 )
+from pdd_agent.skills.listing.goods_list_capture import (
+    enrich_capture_from_goods_list,
+    parse_goods_list_row_meta,
+)
 from pdd_agent.skills.listing.multi_spec_page import (
     _safe_exc,
     add_style_and_model_specs,
@@ -26,12 +30,6 @@ from pdd_agent.skills.listing.listing_spec_pipeline import apply_unit_listing_sp
 from pdd_agent.skills.listing.spec_labels import ordered_style_names
 from pdd_agent.skills.listing.title import resolve_listing_title
 from pdd_agent.skills.published.pdd_spec_format import listing_unit_sku_metadata
-
-
-def _unit_spec_metadata(unit: ListingUnit) -> dict[str, Any]:
-    d = PROJECT_ROOT / "data" / "runs" / "screenshots"
-    d.mkdir(parents=True, exist_ok=True)
-    return str(d / filename)
 
 
 def _unit_spec_metadata(unit: ListingUnit) -> dict[str, Any]:
@@ -923,11 +921,14 @@ def _parse_goods_list_matches(
         product_id = extract_product_id_from_text(text)
         if not product_id:
             continue
+        row_meta = parse_goods_list_row_meta(text)
         matches.append(
             {
                 "pdd_product_id": product_id or "",
                 "row_text": text.strip(),
                 "title_matched": True,
+                "matched_created_at": row_meta.get("matched_created_at") or "",
+                "list_status": row_meta.get("list_status") or "",
             }
         )
     return matches
@@ -940,6 +941,7 @@ def _capture_result(
     pdd_product_id: str = "",
     matched_created_at: str = "",
     matched_row_text: str = "",
+    list_status: str = "",
     message: str = "",
 ) -> dict[str, Any]:
     return {
@@ -948,6 +950,7 @@ def _capture_result(
         "pdd_product_id": pdd_product_id,
         "matched_created_at": matched_created_at,
         "matched_row_text": matched_row_text,
+        "list_status": list_status,
         "message": message,
     }
 
@@ -978,7 +981,9 @@ def _search_goods_tab(
         status="captured",
         tab=tab_key,
         pdd_product_id=str(selected.get("pdd_product_id") or ""),
+        matched_created_at=str(selected.get("matched_created_at") or ""),
         matched_row_text=str(selected.get("row_text") or ""),
+        list_status=str(selected.get("list_status") or ""),
     )
 
 
@@ -1046,9 +1051,49 @@ def _attach_capture_fields(result: dict[str, Any], capture: dict[str, Any]) -> d
     result["pdd_product_matched_tab"] = capture.get("tab") or ""
     result["pdd_product_matched_created_at"] = capture.get("matched_created_at") or ""
     result["pdd_product_matched_row_text"] = capture.get("matched_row_text") or ""
-    if capture.get("message"):
+    result["pdd_product_list_status"] = capture.get("list_status") or ""
+    result["pdd_product_link"] = capture.get("product_link") or ""
+    if capture.get("message") and capture.get("status") != "captured":
         result["pdd_product_capture_message"] = capture["message"]
     return result
+
+
+def _schedule_feishu_pdd_upload_log(
+    *,
+    account_id: str,
+    unit: ListingUnit,
+    title: str,
+    merchant_code: str,
+    capture: dict[str, Any],
+    verified_at: datetime,
+) -> None:
+    try:
+        from pdd_agent.integrations.feishu.config import load_feishu_config
+        from pdd_agent.integrations.feishu.pdd_upload_sync import schedule_pdd_upload_log
+
+        cfg = load_feishu_config()
+        if not cfg.pdd_upload_log.enabled:
+            return
+        product_id = str(capture.get("pdd_product_id") or "").strip()
+        if not product_id:
+            return
+        fallback_link = cfg.product_link_template.format(pdd_product_id=product_id)
+        schedule_pdd_upload_log(
+            account_id=account_id,
+            listing_label=unit.listing_label,
+            title=title,
+            merchant_code=merchant_code,
+            product_id=product_id,
+            product_link=str(capture.get("product_link") or fallback_link),
+            list_status=str(capture.get("list_status") or "销售中"),
+            created_at_raw=str(capture.get("matched_created_at") or ""),
+            verified_at=verified_at,
+        )
+    except Exception as exc:
+        print(
+            f"[{account_id}] [{unit.listing_label}] 飞书 PDD 上传日志调度失败：{_safe_exc(exc)}",
+            flush=True,
+        )
 
 
 def upload_one_listing(
@@ -1325,6 +1370,24 @@ def upload_one_listing(
             listing_info.get("title", ""),
         )
         if capture["status"] == "captured" and capture.get("pdd_product_id"):
+            try:
+                from pdd_agent.integrations.feishu.config import load_feishu_config
+
+                feishu_cfg = load_feishu_config()
+                fallback_link = feishu_cfg.product_link_template.format(
+                    pdd_product_id=capture["pdd_product_id"]
+                )
+            except Exception:
+                fallback_link = ""
+            capture = enrich_capture_from_goods_list(
+                page,
+                capture,
+                merchant_code=pcode,
+                title=listing_info.get("title", ""),
+                fallback_link=fallback_link,
+            )
+            capture["list_status"] = capture.get("list_status") or "销售中"
+            verified_at = datetime.now()
             result = _listing_result(
                 unit=unit,
                 status="success",
@@ -1339,6 +1402,14 @@ def upload_one_listing(
                 from pdd_agent.api.services.task_runner import persist_published_item
 
                 persist_published_item(run_id, account_id, result)
+            _schedule_feishu_pdd_upload_log(
+                account_id=account_id,
+                unit=unit,
+                title=listing_info.get("title", ""),
+                merchant_code=pcode,
+                capture=capture,
+                verified_at=verified_at,
+            )
             return result
         if capture["status"] == "rejected":
             result = _finish_listing(

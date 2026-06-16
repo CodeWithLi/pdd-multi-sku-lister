@@ -42,7 +42,19 @@ from pdd_agent.skills.listing.listing_spec_pipeline import apply_unit_listing_sp
 RESERVED_DIRS = frozenset({"主图", "详情页"})
 IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".webp"}
 PREVIEW_NAMES = ("预览图.png", "预览图.jpg", "预览图.jpeg", "预览图.webp")
-IMAGE_SET_PATTERN = re.compile(r"^第.+套(图)?$")
+"""
+套图目录命名历史上并不统一：
+- 第X套 / 第X套图
+- X套 / X套图
+- 套图X
+- 以及一些后缀：第X套-改版 / 第X套（备用） 等
+
+这里尽量宽松匹配，只要“看起来像套图目录”就纳入 listing targets，
+避免前端只显示第一套的问题。
+"""
+IMAGE_SET_PATTERN = re.compile(
+    r"^(?:第?\s*[一二三四五六七八九十\d]+\s*套(?:图)?|套图\s*[一二三四五六七八九十\d]+)(?:[\s\-_（(].*)?$"
+)
 
 
 @dataclass(frozen=True)
@@ -72,9 +84,13 @@ def _image_set_sort_key(name: str):
         "九": 9,
         "十": 10,
     }
-    match = re.search(r"第([一二三四五六七八九十\d]+)套", name)
+    raw = str(name or "").strip()
+    # 支持：第X套 / X套 / 套图X / 第X套-改版 / 第X套（备用）
+    match = re.search(r"(?:第\s*)?([一二三四五六七八九十\d]+)\s*套", raw)
     if not match:
-        return (1, name)
+        match = re.search(r"套图\s*([一二三四五六七八九十\d]+)", raw)
+    if not match:
+        return (1, raw)
     token = match.group(1)
     if token.isdigit():
         return (0, int(token))

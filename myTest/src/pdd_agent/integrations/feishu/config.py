@@ -48,6 +48,38 @@ class FeishuFieldNames(BaseModel):
     image_set: str = "套图"
 
 
+class PddUploadLogFieldNames(BaseModel):
+    """PDD每日上传商品日志 表列名。"""
+
+    date: str = "日期"
+    link: str = "商品链接"
+    title: str = "宝贝标题"
+    merchant_code: str = "商品编码"
+    created_at: str = "创建时间"
+    status: str = "状态"
+    product_id: str = "商品id"
+
+
+class PddUploadLogConfig(BaseModel):
+    enabled: bool = Field(
+        default=False,
+        description="上架核验成功后是否异步写入 PDD 上传日志表",
+    )
+    table_id: str = Field(
+        default="",
+        description="PDD每日上传商品日志 table_id",
+    )
+    table_name: str = Field(
+        default="PDD每日上传商品日志",
+        description="表名（仅文档用途，写入时用 table_id）",
+    )
+    dedupe_field: str = Field(
+        default="商品id",
+        description="幂等去重字段名",
+    )
+    field_names: PddUploadLogFieldNames = Field(default_factory=PddUploadLogFieldNames)
+
+
 class FeishuYamlConfig(BaseModel):
     """config/feishu.yaml 结构。"""
 
@@ -98,6 +130,7 @@ class FeishuYamlConfig(BaseModel):
         default_factory=lambda: ["在售", "已下架", "未知"],
         description="「状态」单选字段选项",
     )
+    pdd_upload_log: PddUploadLogConfig = Field(default_factory=PddUploadLogConfig)
 
 
 class FeishuConfig(BaseModel):
@@ -120,6 +153,7 @@ class FeishuConfig(BaseModel):
     )
     dedupe_field: str = "映射ID"
     status_options: list[str] = Field(default_factory=lambda: ["在售", "已下架", "未知"])
+    pdd_upload_log: PddUploadLogConfig = Field(default_factory=PddUploadLogConfig)
 
 
 def load_feishu_config(path: Path | None = None) -> FeishuConfig:
@@ -139,6 +173,10 @@ def load_feishu_config(path: Path | None = None) -> FeishuConfig:
     else:
         dedupe_field = field_names.mapping_id
 
+    pdd_upload_log = yaml_cfg.pdd_upload_log
+    if "pdd_upload_log" in raw and isinstance(raw.get("pdd_upload_log"), dict):
+        pdd_upload_log = PddUploadLogConfig.model_validate(raw["pdd_upload_log"])
+
     return FeishuConfig(
         app_id=env.feishu_app_id or yaml_cfg.app_id,
         app_secret=env.feishu_app_secret or yaml_cfg.app_secret,
@@ -157,6 +195,7 @@ def load_feishu_config(path: Path | None = None) -> FeishuConfig:
         merchant_goods_url_template=yaml_cfg.merchant_goods_url_template,
         dedupe_field=dedupe_field,
         status_options=list(yaml_cfg.status_options),
+        pdd_upload_log=pdd_upload_log,
     )
 
 
