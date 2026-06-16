@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import httpx
 from fastapi import APIRouter, HTTPException, Query
 
 from pdd_agent.api.schemas.feishu_bitable import (
@@ -52,6 +53,11 @@ def _request(method: str, path: str, *, params=None, json=None) -> dict:
             "payload_msg": (exc.payload or {}).get("msg") if isinstance(exc.payload, dict) else "",
         }
         raise HTTPException(status_code=502, detail=detail) from exc
+    except httpx.HTTPError as exc:
+        raise HTTPException(
+            status_code=502,
+            detail={"message": f"飞书网络异常: {exc}", "code": None, "payload_msg": ""},
+        ) from exc
 
 
 @router.get("/health")

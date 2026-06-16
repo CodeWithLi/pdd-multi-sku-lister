@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import { api } from '@/api/client'
 import PageHeader from '@/components/PageHeader.vue'
@@ -14,7 +14,10 @@ interface FieldItem {
   field_id: string
   field_name: string
   type: number
+  property?: Record<string, unknown>
 }
+
+const READONLY_FIELD_TYPES = new Set([17, 18, 20, 21, 1001, 1002, 1003, 1004])
 
 interface RecordItem {
   record_id: string
@@ -51,13 +54,19 @@ const error = ref('')
 
 const tables = ref<TableItem[]>([])
 const fields = ref<FieldItem[]>([])
+const recordFields = ref<FieldItem[]>([])
+const recordFieldsTableId = ref('')
+const recordFormLoading = ref(false)
 const createTableName = ref('')
 const renameTableName = ref('')
 const createFieldName = ref('')
 const createFieldType = ref(1)
 const createFieldPropertyJson = ref('')
-const createRecordJson = ref('{\n  "商品编码": "BD001A",\n  "状态": "在售"\n}')
-const deleteRecordIds = ref('')
+const createRecordJson = ref('')
+const recordFormValues = ref<Record<string, unknown>>({})
+const deletableRecords = ref<RecordItem[]>([])
+const selectedDeleteIds = ref<string[]>([])
+const deletePreviewFields = ref<FieldItem[]>([])
 
 const dataDialogVisible = ref(false)
 const dataDialogLoading = ref(false)
@@ -78,6 +87,17 @@ const dataDialogColumns = computed(() =>
     minWidth: f.field_name.length > 6 ? 140 : 110,
   })),
 )
+const writableFields = computed(() => recordFields.value.filter((f) => !READONLY_FIELD_TYPES.has(f.type)))
+const recordFormReady = computed(
+  () => recordFieldsTableId.value === tableId.value.trim() && writableFields.value.length > 0,
+)
+const deletePreviewColumns = computed(() =>
+  deletePreviewFields.value.slice(0, 4).map((f) => ({
+    prop: f.field_name,
+    label: f.field_name,
+    minWidth: 120,
+  })),
+)
 
 function tokenParam() {
   return appToken.value.trim() || health.value?.default_app_token?.trim() || ''
@@ -90,6 +110,108 @@ function extractList<T = unknown>(resp: unknown, key: string): T[] {
 
 function fieldTypeLabel(type: number) {
   return FIELD_TYPE_LABEL[type] || String(type)
+}
+
+function parseFieldItem(x: {
+  field_id?: string
+  field_name?: string
+  type?: number
+  property?: Record<string, unknown>
+}): FieldItem {
+  return {
+    field_id: String(x.field_id || ''),
+    field_name: String(x.field_name || ''),
+    type: Number(x.type || 0),
+    property: x.property || undefined,
+  }
+}
+
+function getSelectOptions(field: FieldItem): string[] {
+  const options = field.property?.options
+  if (!Array.isArray(options)) return []
+  return options
+    .map((item) => String((item as { name?: string }).name || ''))
+    .filter(Boolean)
+}
+
+function isDateTimeField(field: FieldItem): boolean {
+  const formatter = String(field.property?.date_formatter || '')
+  if (!formatter) return true
+  return /H|h|m|s/.test(formatter)
+}
+
+function urlFormValue(fieldName: string) {
+  const raw = recordFormValues.value[fieldName]
+  if (raw && typeof raw === 'object') return raw as { link: string; text: string }
+  return { link: '', text: '' }
+}
+
+function setUrlFormValue(fieldName: string, key: 'link' | 'text', value: string) {
+  const current = urlFormValue(fieldName)
+  recordFormValues.value[fieldName] = { ...current, [key]: value }
+}
+
+function initRecordFormValues() {
+  const next: Record<string, unknown> = {}
+  for (const field of writableFields.value) {
+    if (field.type === 4) next[field.field_name] = []
+    else if (field.type === 7) next[field.field_name] = false
+    else if (field.type === 2) next[field.field_name] = undefined
+    else if (field.type === 15) next[field.field_name] = { link: '', text: '' }
+    else next[field.field_name] = ''
+  }
+  recordFormValues.value = next
+}
+
+function resetRecordForm() {
+  initRecordFormValues()
+  ElMessage.success('表单已清空')
+}
+
+function serializeFieldValue(field: FieldItem, raw: unknown): unknown {
+  switch (field.type) {
+    case 2:
+      if (raw === '' || raw === null || raw === undefined) return undefined
+      return Number(raw)
+    case 5:
+      if (!raw) return undefined
+      if (typeof raw === 'number') return raw
+      if (typeof raw === 'string') {
+        const ms = Number(raw)
+        return Number.isFinite(ms) ? ms : new Date(raw).getTime()
+      }
+      if (raw instanceof Date) return raw.getTime()
+      return undefined
+    case 4:
+      return Array.isArray(raw) ? raw.filter(Boolean) : []
+    case 7:
+      return Boolean(raw)
+    case 15: {
+      if (!raw || typeof raw !== 'object') return undefined
+      const obj = raw as { link?: string; text?: string }
+      const link = String(obj.link || '').trim()
+      if (!link) return undefined
+      const text = String(obj.text || link).trim() || link
+      return { link, text }
+    }
+    case 3:
+      return raw ? String(raw) : undefined
+    default: {
+      const text = String(raw ?? '').trim()
+      return text || undefined
+    }
+  }
+}
+
+function buildRecordPayload(): Record<string, unknown> {
+  const payload: Record<string, unknown> = {}
+  for (const field of writableFields.value) {
+    const value = serializeFieldValue(field, recordFormValues.value[field.field_name])
+    if (value === undefined || value === null || value === '') continue
+    if (Array.isArray(value) && !value.length) continue
+    payload[field.field_name] = value
+  }
+  return payload
 }
 
 function formatCellValue(val: unknown): string {
@@ -128,6 +250,16 @@ function truncateToken(token: string, len = 12) {
 function selectTable(row: TableItem) {
   tableId.value = row.table_id
   fields.value = []
+  recordFields.value = []
+  recordFieldsTableId.value = ''
+  recordFormValues.value = {}
+  deletableRecords.value = []
+  selectedDeleteIds.value = []
+  if (activeTab.value === 'fields') {
+    void run(loadFields)
+  } else if (activeTab.value === 'records') {
+    void run(loadRecordFormFields)
+  }
 }
 
 async function loadHealth() {
@@ -151,15 +283,45 @@ async function loadTables() {
   }
 }
 
+async function fetchTableFields(id: string): Promise<FieldItem[] | null> {
+  const resp = await api.feishuBitableListFields(id, tokenParam())
+  if (tableId.value.trim() !== id) return null
+  return extractList<{
+    field_id?: string
+    field_name?: string
+    type?: number
+    property?: Record<string, unknown>
+  }>(resp, 'items').map(parseFieldItem)
+}
+
 async function loadFields() {
   const id = tableId.value.trim()
   if (!id) return ElMessage.warning('请先在左侧选择一个数据表')
-  const resp = await api.feishuBitableListFields(id, tokenParam())
-  fields.value = extractList<{ field_id?: string; field_name?: string; type?: number }>(resp, 'items').map((x) => ({
-    field_id: String(x.field_id || ''),
-    field_name: String(x.field_name || ''),
-    type: Number(x.type || 0),
-  }))
+  const items = await fetchTableFields(id)
+  if (!items) return
+  fields.value = items
+}
+
+async function loadRecordFormFields() {
+  const id = tableId.value.trim()
+  if (!id) return ElMessage.warning('请先在左侧选择一个数据表')
+  recordFormLoading.value = true
+  recordFields.value = []
+  recordFieldsTableId.value = ''
+  recordFormValues.value = {}
+  try {
+    const items = await fetchTableFields(id)
+    if (!items) return
+    recordFields.value = items
+    recordFieldsTableId.value = id
+    if (!writableFields.value.length) {
+      ElMessage.warning('当前表没有可填写的字段，请先在「字段管理」中新增字段')
+      return
+    }
+    initRecordFormValues()
+  } finally {
+    recordFormLoading.value = false
+  }
 }
 
 async function fetchRecordsForTable(
@@ -195,14 +357,12 @@ async function openDataDialog(row?: TableItem) {
   dataDialogTotal.value = 0
   try {
     const fieldResp = await api.feishuBitableListFields(target.table_id, tokenParam())
-    dataDialogFields.value = extractList<{ field_id?: string; field_name?: string; type?: number }>(
-      fieldResp,
-      'items',
-    ).map((x) => ({
-      field_id: String(x.field_id || ''),
-      field_name: String(x.field_name || ''),
-      type: Number(x.type || 0),
-    }))
+    dataDialogFields.value = extractList<{
+      field_id?: string
+      field_name?: string
+      type?: number
+      property?: Record<string, unknown>
+    }>(fieldResp, 'items').map(parseFieldItem)
     const { items, nextToken } = await fetchRecordsForTable(target.table_id, { reset: true })
     dataDialogRecords.value = items
     dataDialogNextToken.value = nextToken
@@ -261,8 +421,9 @@ async function createTable() {
 
 async function renameTable() {
   const id = tableId.value.trim()
+  if (!id) return ElMessage.warning('请先在左侧选择一个数据表')
   const name = renameTableName.value.trim()
-  if (!id || !name) return ElMessage.warning('请选择数据表并填写新名称')
+  if (!name) return ElMessage.warning('请填写新的表名')
   await api.feishuBitableUpdateTable(id, { app_token: tokenParam() || undefined, name })
   ElMessage.success('表名已更新')
   renameTableName.value = ''
@@ -271,8 +432,9 @@ async function renameTable() {
 
 async function createField() {
   const id = tableId.value.trim()
+  if (!id) return ElMessage.warning('请先在左侧选择一个数据表')
   const fieldName = createFieldName.value.trim()
-  if (!id || !fieldName) return ElMessage.warning('请选择数据表并填写字段名')
+  if (!fieldName) return ElMessage.warning('请先填写字段名（上方输入框）')
   let property: Record<string, unknown> | null = null
   if (createFieldPropertyJson.value.trim()) {
     try {
@@ -292,11 +454,42 @@ async function createField() {
   createFieldName.value = ''
   createFieldPropertyJson.value = ''
   await loadFields()
+  if (activeTab.value === 'records') {
+    await loadRecordFormFields()
+  }
 }
 
-async function createRecord() {
+async function submitRecordForm() {
   const id = tableId.value.trim()
   if (!id) return ElMessage.warning('请先在左侧选择一个数据表')
+  if (!recordFormReady.value) {
+    return ElMessage.warning('表单字段与当前表不一致，请稍候或点击「重新加载表单」')
+  }
+  const payload = buildRecordPayload()
+  if (!Object.keys(payload).length) {
+    return ElMessage.warning('请至少填写一个字段')
+  }
+  await api.feishuBitableBatchCreateRecords({
+    app_token: tokenParam() || undefined,
+    table_id: id,
+    records: [payload],
+  })
+  ElMessage.success('记录已提交')
+  initRecordFormValues()
+  if (dataDialogVisible.value && dataDialogTable.value?.table_id === id) {
+    await refreshDataDialog()
+  }
+  if (deletableRecords.value.length) {
+    await loadRecordsForDelete()
+  }
+}
+
+async function createRecordFromJson() {
+  const id = tableId.value.trim()
+  if (!id) return ElMessage.warning('请先在左侧选择一个数据表')
+  if (!createRecordJson.value.trim()) {
+    return ElMessage.warning('请输入 JSON')
+  }
   let parsed: Record<string, unknown> | Record<string, unknown>[]
   try {
     parsed = JSON.parse(createRecordJson.value)
@@ -311,9 +504,32 @@ async function createRecord() {
     records: rows,
   })
   ElMessage.success(`已新增 ${rows.length} 条记录`)
+  createRecordJson.value = ''
   if (dataDialogVisible.value && dataDialogTable.value?.table_id === id) {
     await refreshDataDialog()
   }
+}
+
+async function loadRecordsForDelete() {
+  const id = tableId.value.trim()
+  if (!id) return ElMessage.warning('请先在左侧选择一个数据表')
+  const fieldResp = await api.feishuBitableListFields(id, tokenParam())
+  deletePreviewFields.value = extractList<{
+    field_id?: string
+    field_name?: string
+    type?: number
+    property?: Record<string, unknown>
+  }>(fieldResp, 'items')
+    .map(parseFieldItem)
+    .filter((f) => !READONLY_FIELD_TYPES.has(f.type))
+    .slice(0, 4)
+  const { items } = await fetchRecordsForTable(id, { reset: true })
+  deletableRecords.value = items
+  selectedDeleteIds.value = []
+}
+
+function onDeleteSelectionChange(rows: RecordItem[]) {
+  selectedDeleteIds.value = rows.map((r) => r.record_id)
 }
 
 async function removeField(fieldId: string) {
@@ -322,21 +538,20 @@ async function removeField(fieldId: string) {
   await loadFields()
 }
 
-async function removeRecords() {
+async function removeSelectedRecords() {
   const id = tableId.value.trim()
   if (!id) return ElMessage.warning('请先在左侧选择一个数据表')
-  const ids = deleteRecordIds.value
-    .split(',')
-    .map((x) => x.trim())
-    .filter(Boolean)
-  if (!ids.length) return ElMessage.warning('请输入要删除的 record_id')
+  if (!selectedDeleteIds.value.length) {
+    return ElMessage.warning('请先勾选要删除的记录')
+  }
   await api.feishuBitableBatchDeleteRecords({
     app_token: tokenParam() || undefined,
     table_id: id,
-    record_ids: ids,
+    record_ids: selectedDeleteIds.value,
   })
-  ElMessage.success(`已删除 ${ids.length} 条记录`)
-  deleteRecordIds.value = ''
+  ElMessage.success(`已删除 ${selectedDeleteIds.value.length} 条记录`)
+  selectedDeleteIds.value = []
+  await loadRecordsForDelete()
   if (dataDialogVisible.value && dataDialogTable.value?.table_id === id) {
     await refreshDataDialog()
   }
@@ -352,6 +567,8 @@ async function run<T>(fn: () => Promise<T>) {
     if (msg.includes('91402') || msg.includes('NOTEXIST')) {
       error.value =
         '无法访问「技术系统」：app_token 不正确或 OAuth 账号无权限。请检查 feishu.yaml 并重新授权。'
+    } else if (msg.includes('网络') || msg.includes('502') || msg.includes('500') || msg.includes('SSL')) {
+      error.value = `飞书接口暂时不可用：${msg}。请稍后点击「重新加载表单」重试。`
     } else {
       error.value = msg
     }
@@ -364,8 +581,20 @@ async function initPage() {
   await run(async () => {
     await loadHealth()
     await loadTables()
+    if (!tableId.value.trim()) return
+    if (activeTab.value === 'fields') {
+      await loadFields()
+    } else if (activeTab.value === 'records') {
+      await loadRecordFormFields()
+    }
   })
 }
+
+watch(activeTab, (tab) => {
+  if (!tableId.value.trim()) return
+  if (tab === 'fields' && !fields.value.length) void run(loadFields)
+  if (tab === 'records') void run(loadRecordFormFields)
+})
 
 onMounted(initPage)
 </script>
@@ -478,11 +707,13 @@ onMounted(initPage)
           <el-tabs v-model="activeTab" class="workspace-tabs">
             <el-tab-pane label="字段管理" name="fields">
               <div class="tab-toolbar">
-                <el-input v-model="createFieldName" placeholder="字段名" style="width: 160px" />
+                <el-input v-model="createFieldName" placeholder="新字段名，如：商品编码" style="width: 200px" />
                 <el-select v-model="createFieldType" style="width: 120px">
                   <el-option v-for="(label, type) in FIELD_TYPE_LABEL" :key="type" :label="label" :value="Number(type)" />
                 </el-select>
-                <el-button type="primary" @click="run(createField)">新增字段</el-button>
+                <el-button type="primary" :disabled="!createFieldName.trim()" @click="run(createField)">
+                  新增字段
+                </el-button>
               </div>
               <el-input
                 v-model="createFieldPropertyJson"
@@ -491,7 +722,7 @@ onMounted(initPage)
                 class="property-input"
                 placeholder='可选 property JSON，如 {"formatter":"0.00"}'
               />
-              <el-table :data="fields" size="small" stripe empty-text="点击「刷新字段」加载列定义">
+              <el-table :data="fields" size="small" stripe empty-text="暂无字段，可在上方新增">
                 <el-table-column prop="field_name" label="字段名" min-width="140" />
                 <el-table-column label="类型" width="100">
                   <template #default="{ row }">{{ fieldTypeLabel(row.type) }}</template>
@@ -506,26 +737,188 @@ onMounted(initPage)
             </el-tab-pane>
 
             <el-tab-pane label="写入记录" name="records">
-              <div class="record-layout">
-                <div class="record-block">
-                  <div class="block-title">新增记录（JSON）</div>
-                  <el-input
-                    v-model="createRecordJson"
-                    type="textarea"
-                    :rows="10"
-                    placeholder='{"商品编码":"BD001A"} 或 [{"商品编码":"A"},{"商品编码":"B"}]'
-                  />
-                  <el-button type="primary" class="block-action" @click="run(createRecord)">提交</el-button>
+              <div v-loading="recordFormLoading" class="record-write-panel">
+                <div class="record-section-head">
+                  <div>
+                    <div class="block-title">新增记录 · {{ selectedTableName }}</div>
+                    <p class="block-desc">
+                      切换左侧数据表后会自动加载该表的字段。当前
+                      <template v-if="recordFormReady">{{ writableFields.length }} 个可填字段</template>
+                      <template v-else>正在加载或加载失败</template>
+                    </p>
+                  </div>
+                  <el-button @click="run(loadRecordFormFields)">重新加载表单</el-button>
                 </div>
-                <div class="record-block">
-                  <div class="block-title">删除记录</div>
-                  <el-input
-                    v-model="deleteRecordIds"
-                    type="textarea"
-                    :rows="10"
-                    placeholder="record_id，多个用英文逗号分隔"
-                  />
-                  <el-button type="danger" class="block-action" @click="run(removeRecords)">批量删除</el-button>
+
+                <el-empty
+                  v-if="!recordFormLoading && !recordFormReady"
+                  description="未能加载字段，请点击「重新加载表单」；若表为空请先在「字段管理」里新增列"
+                  :image-size="72"
+                />
+
+                <el-form v-else-if="recordFormReady" label-position="top" class="record-form" @submit.prevent>
+                  <el-row :gutter="16">
+                    <el-col
+                      v-for="field in writableFields"
+                      :key="field.field_id"
+                      :xs="24"
+                      :sm="12"
+                      :lg="field.type === 15 ? 24 : 12"
+                    >
+                      <el-form-item>
+                        <template #label>
+                          <span class="field-label">{{ field.field_name }}</span>
+                          <span class="field-type-tag">{{ fieldTypeLabel(field.type) }}</span>
+                        </template>
+
+                        <el-input
+                          v-if="field.type === 1 || field.type === 13"
+                          v-model="recordFormValues[field.field_name]"
+                          :placeholder="`请输入${field.field_name}`"
+                          clearable
+                        />
+
+                        <el-input-number
+                          v-else-if="field.type === 2"
+                          v-model="recordFormValues[field.field_name]"
+                          :controls="true"
+                          class="full-width-input"
+                        />
+
+                        <el-select
+                          v-else-if="field.type === 3"
+                          v-model="recordFormValues[field.field_name]"
+                          :placeholder="`请选择${field.field_name}`"
+                          clearable
+                          filterable
+                          class="full-width-input"
+                        >
+                          <el-option
+                            v-for="opt in getSelectOptions(field)"
+                            :key="opt"
+                            :label="opt"
+                            :value="opt"
+                          />
+                        </el-select>
+
+                        <el-select
+                          v-else-if="field.type === 4"
+                          v-model="recordFormValues[field.field_name]"
+                          multiple
+                          collapse-tags
+                          collapse-tags-tooltip
+                          :placeholder="`请选择${field.field_name}`"
+                          class="full-width-input"
+                        >
+                          <el-option
+                            v-for="opt in getSelectOptions(field)"
+                            :key="opt"
+                            :label="opt"
+                            :value="opt"
+                          />
+                        </el-select>
+
+                        <el-date-picker
+                          v-else-if="field.type === 5"
+                          v-model="recordFormValues[field.field_name]"
+                          :type="isDateTimeField(field) ? 'datetime' : 'date'"
+                          value-format="x"
+                          :placeholder="`选择${field.field_name}`"
+                          class="full-width-input"
+                        />
+
+                        <div v-else-if="field.type === 7" class="checkbox-row">
+                          <el-switch v-model="recordFormValues[field.field_name]" />
+                          <span class="checkbox-hint">{{ recordFormValues[field.field_name] ? '是' : '否' }}</span>
+                        </div>
+
+                        <div v-else-if="field.type === 15" class="url-field-row">
+                          <el-input
+                            :model-value="urlFormValue(field.field_name).link"
+                            placeholder="链接地址"
+                            clearable
+                            @update:model-value="(v: string) => setUrlFormValue(field.field_name, 'link', v)"
+                          />
+                          <el-input
+                            :model-value="urlFormValue(field.field_name).text"
+                            placeholder="显示文字（可选）"
+                            clearable
+                            @update:model-value="(v: string) => setUrlFormValue(field.field_name, 'text', v)"
+                          />
+                        </div>
+
+                        <el-input
+                          v-else
+                          v-model="recordFormValues[field.field_name]"
+                          :placeholder="`请输入${field.field_name}`"
+                          clearable
+                        />
+                      </el-form-item>
+                    </el-col>
+                  </el-row>
+
+                  <div class="form-actions">
+                    <el-button @click="resetRecordForm">清空表单</el-button>
+                    <el-button type="primary" @click="run(submitRecordForm)">提交记录</el-button>
+                  </div>
+                </el-form>
+
+                <el-collapse class="advanced-collapse">
+                  <el-collapse-item title="JSON 批量写入" name="json">
+                    <el-input
+                      v-model="createRecordJson"
+                      type="textarea"
+                      :rows="6"
+                      placeholder='单条 {"商品编码":"BD001A"} 或批量 [{"商品编码":"A"},{"商品编码":"B"}]'
+                    />
+                    <el-button type="primary" class="block-action" @click="run(createRecordFromJson)">JSON 提交</el-button>
+                  </el-collapse-item>
+                </el-collapse>
+              </div>
+
+              <el-divider />
+
+              <div class="record-delete-panel">
+                <div class="record-section-head">
+                  <div>
+                    <div class="block-title">删除记录</div>
+                    <p class="block-desc">加载记录后勾选要删的行，无需手动复制 record_id。</p>
+                  </div>
+                  <el-button @click="run(loadRecordsForDelete)">加载记录</el-button>
+                </div>
+
+                <el-table
+                  v-if="deletableRecords.length"
+                  :data="deletableRecords"
+                  size="small"
+                  stripe
+                  max-height="320"
+                  @selection-change="onDeleteSelectionChange"
+                >
+                  <el-table-column type="selection" width="48" />
+                  <el-table-column
+                    v-for="col in deletePreviewColumns"
+                    :key="col.prop"
+                    :label="col.label"
+                    :min-width="col.minWidth"
+                    show-overflow-tooltip
+                  >
+                    <template #default="{ row }">
+                      {{ formatCellValue(row.fields?.[col.prop]) }}
+                    </template>
+                  </el-table-column>
+                  <el-table-column prop="record_id" label="record_id" min-width="160" show-overflow-tooltip />
+                </el-table>
+                <el-empty v-else description="点击「加载记录」后可勾选删除" :image-size="64" />
+
+                <div v-if="deletableRecords.length" class="form-actions">
+                  <el-button
+                    type="danger"
+                    :disabled="!selectedDeleteIds.length"
+                    @click="run(removeSelectedRecords)"
+                  >
+                    删除选中（{{ selectedDeleteIds.length }}）
+                  </el-button>
                 </div>
               </div>
             </el-tab-pane>
@@ -816,6 +1209,82 @@ onMounted(initPage)
   gap: 16px;
 }
 
+.record-write-panel,
+.record-delete-panel {
+  padding-top: 4px;
+}
+
+.record-section-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 14px;
+}
+
+.block-desc {
+  margin: 6px 0 0;
+  font-size: 12px;
+  color: #94a3b8;
+  line-height: 1.5;
+}
+
+.record-form {
+  padding: 4px 2px 0;
+}
+
+.field-label {
+  font-weight: 600;
+  color: #334155;
+}
+
+.field-type-tag {
+  margin-left: 8px;
+  font-size: 11px;
+  color: #94a3b8;
+  font-weight: 400;
+}
+
+.full-width-input {
+  width: 100%;
+}
+
+.checkbox-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 32px;
+}
+
+.checkbox-hint {
+  font-size: 13px;
+  color: #64748b;
+}
+
+.url-field-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+
+.form-actions {
+  display: flex;
+  gap: 10px;
+  margin-top: 8px;
+  padding-top: 12px;
+  border-top: 1px solid #f1f5f9;
+}
+
+.advanced-collapse {
+  margin-top: 16px;
+  border-top: 1px dashed #e2e8f0;
+}
+
+.advanced-collapse :deep(.el-collapse-item__header) {
+  font-size: 13px;
+  color: #64748b;
+}
+
 .record-block {
   border: 1px solid #f1f5f9;
   border-radius: 10px;
@@ -874,7 +1343,7 @@ onMounted(initPage)
     position: static;
   }
 
-  .record-layout {
+  .url-field-row {
     grid-template-columns: 1fr;
   }
 }

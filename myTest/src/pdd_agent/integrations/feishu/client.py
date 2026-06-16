@@ -12,6 +12,14 @@ from pdd_agent.integrations.feishu.config import FeishuConfig
 
 FEISHU_API_BASE = "https://open.feishu.cn/open-apis"
 FEISHU_OAUTH_AUTHORIZE_URL = "https://accounts.feishu.cn/open-apis/authen/v1/authorize"
+_NETWORK_RETRY_ATTEMPTS = 3
+_NETWORK_RETRYABLE = (
+    httpx.ConnectError,
+    httpx.ReadTimeout,
+    httpx.WriteTimeout,
+    httpx.RemoteProtocolError,
+    httpx.NetworkError,
+)
 
 
 class FeishuAPIError(RuntimeError):
@@ -133,10 +141,33 @@ class FeishuClient:
         url = path if path.startswith("http") else f"{FEISHU_API_BASE}{path}"
         headers = {"Authorization": f"Bearer {token}"}
 
-        with httpx.Client(timeout=self._timeout) as client:
-            resp = client.request(method, url, headers=headers, params=params, json=json)
-            data = resp.json()
-            status_code = resp.status_code
+        last_network_error: Exception | None = None
+        for attempt in range(_NETWORK_RETRY_ATTEMPTS):
+            try:
+                with httpx.Client(timeout=self._timeout, trust_env=True) as client:
+                    resp = client.request(method, url, headers=headers, params=params, json=json)
+                try:
+                    data = resp.json()
+                except ValueError as exc:
+                    raise FeishuAPIError(
+                        f"飞书 API 返回非 JSON 响应: HTTP {resp.status_code}",
+                        payload={"status_code": resp.status_code, "text": resp.text[:200]},
+                    ) from exc
+                status_code = resp.status_code
+                break
+            except _NETWORK_RETRYABLE as exc:
+                last_network_error = exc
+                if attempt + 1 >= _NETWORK_RETRY_ATTEMPTS:
+                    raise FeishuAPIError(
+                        f"飞书网络连接失败（已重试 {_NETWORK_RETRY_ATTEMPTS} 次）: {exc}",
+                        payload={"error": str(exc)},
+                    ) from exc
+                time.sleep(0.6 * (attempt + 1))
+        else:
+            raise FeishuAPIError(
+                f"飞书网络连接失败: {last_network_error}",
+                payload={"error": str(last_network_error)},
+            )
 
         code = int(data.get("code", -1))
         if code in {99991663, 99991668} and retry_on_token:
