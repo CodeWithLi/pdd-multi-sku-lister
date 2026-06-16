@@ -1077,14 +1077,15 @@ def _schedule_feishu_pdd_upload_log(
         product_id = str(capture.get("pdd_product_id") or "").strip()
         if not product_id:
             return
-        fallback_link = cfg.product_link_template.format(pdd_product_id=product_id)
+        raw_link = str(capture.get("product_link") or "").strip()
         schedule_pdd_upload_log(
             account_id=account_id,
             listing_label=unit.listing_label,
             title=title,
             merchant_code=merchant_code,
             product_id=product_id,
-            product_link=str(capture.get("product_link") or fallback_link),
+            product_link=raw_link,
+            product_link_method=str(capture.get("product_link_method") or ""),
             list_status=str(capture.get("list_status") or "销售中"),
             created_at_raw=str(capture.get("matched_created_at") or ""),
             verified_at=verified_at,
@@ -1370,24 +1371,24 @@ def upload_one_listing(
             listing_info.get("title", ""),
         )
         if capture["status"] == "captured" and capture.get("pdd_product_id"):
-            try:
-                from pdd_agent.integrations.feishu.config import load_feishu_config
-
-                feishu_cfg = load_feishu_config()
-                fallback_link = feishu_cfg.product_link_template.format(
-                    pdd_product_id=capture["pdd_product_id"]
-                )
-            except Exception:
-                fallback_link = ""
             capture = enrich_capture_from_goods_list(
                 page,
                 capture,
                 merchant_code=pcode,
                 title=listing_info.get("title", ""),
-                fallback_link=fallback_link,
             )
             capture["list_status"] = capture.get("list_status") or "销售中"
             verified_at = datetime.now()
+            link_method = str(capture.get("product_link_method") or "")
+            product_link = str(capture.get("product_link") or "")
+            link_ok = bool(capture.get("product_link_ok"))
+            link_note = "弹窗完整链接" if link_ok else "未抓到完整链接"
+            print(
+                f"[{account_id}] [{label}] 飞书数据采集：product_id={capture.get('pdd_product_id')} "
+                f"status={capture.get('list_status')} created_at={capture.get('matched_created_at') or '-'} "
+                f"link_method={link_method or link_note} link={product_link or '(空)'}",
+                flush=True,
+            )
             result = _listing_result(
                 unit=unit,
                 status="success",

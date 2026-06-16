@@ -109,6 +109,7 @@ def list_listing_target_options(*, account_id: str = "") -> list[ListingTargetOp
                 unlisted_count=len(unlisted_codes),
                 is_fully_listed=bool(current_codes) and not unlisted_codes,
                 has_pending_listing=bool(unlisted_codes),
+                is_material_ready=bool(current_codes),
             )
         )
     return options

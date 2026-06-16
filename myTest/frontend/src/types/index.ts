@@ -104,6 +104,7 @@ export interface ListingTargetOption {
   unlisted_count?: number
   is_fully_listed?: boolean
   has_pending_listing?: boolean
+  is_material_ready?: boolean
 }
 
 export interface ListedAssetFolder {

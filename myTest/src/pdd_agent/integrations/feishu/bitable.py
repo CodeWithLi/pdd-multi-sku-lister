@@ -110,6 +110,43 @@ def batch_create_records(
     return [str(item.get("record_id") or "") for item in created]
 
 
+_FIELD_LOOKUP_CACHE: dict[tuple[str, str], dict[str, str]] = {}
+
+
+def _table_field_lookup(client: FeishuClient, app_token: str, table_id: str) -> dict[str, str]:
+    key = (app_token, table_id)
+    cached = _FIELD_LOOKUP_CACHE.get(key)
+    if cached is not None:
+        return cached
+    fields = list_fields(client, app_token, table_id)
+    lookup = {
+        str(item.get("field_name") or ""): str(item.get("field_name") or "")
+        for item in fields
+        if str(item.get("field_name") or "").strip()
+    }
+    _FIELD_LOOKUP_CACHE[key] = lookup
+    return lookup
+
+
+def resolve_table_field_name(
+    client: FeishuClient,
+    app_token: str,
+    table_id: str,
+    configured_name: str,
+) -> str:
+    """将配置中的列名解析为飞书表内真实列名（大小写不敏感兜底）。"""
+    name = str(configured_name or "").strip()
+    if not name:
+        return ""
+    lookup = _table_field_lookup(client, app_token, table_id)
+    if name in lookup:
+        return name
+    for real_name in lookup:
+        if real_name.lower() == name.lower():
+            return real_name
+    return name
+
+
 def search_records_by_field(
     client: FeishuClient,
     app_token: str,
@@ -120,12 +157,13 @@ def search_records_by_field(
     page_size: int = 20,
 ) -> list[dict[str, Any]]:
     """按单字段精确匹配查已有记录（用于幂等去重）。"""
+    resolved_name = resolve_table_field_name(client, app_token, table_id, field_name)
     body = {
         "filter": {
             "conjunction": "and",
             "conditions": [
                 {
-                    "field_name": field_name,
+                    "field_name": resolved_name,
                     "operator": "is",
                     "value": [value],
                 }
@@ -139,3 +177,16 @@ def search_records_by_field(
         json=body,
     )
     return list(data.get("data", {}).get("items") or [])
+
+
+def map_fields_to_table_names(
+    client: FeishuClient,
+    app_token: str,
+    table_id: str,
+    fields: dict[str, Any],
+) -> dict[str, Any]:
+    """把 fields 的 key 映射为飞书表真实列名。"""
+    mapped: dict[str, Any] = {}
+    for key, value in fields.items():
+        mapped[resolve_table_field_name(client, app_token, table_id, key)] = value
+    return mapped

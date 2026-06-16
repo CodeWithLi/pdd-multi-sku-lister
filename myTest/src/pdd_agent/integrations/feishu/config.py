@@ -57,7 +57,7 @@ class PddUploadLogFieldNames(BaseModel):
     merchant_code: str = "商品编码"
     created_at: str = "创建时间"
     status: str = "状态"
-    product_id: str = "商品id"
+    product_id: str = "商品ID"
 
 
 class PddUploadLogConfig(BaseModel):
@@ -74,7 +74,7 @@ class PddUploadLogConfig(BaseModel):
         description="表名（仅文档用途，写入时用 table_id）",
     )
     dedupe_field: str = Field(
-        default="商品id",
+        default="商品ID",
         description="幂等去重字段名",
     )
     field_names: PddUploadLogFieldNames = Field(default_factory=PddUploadLogFieldNames)
@@ -212,6 +212,23 @@ def save_table_id_to_config(table_id: str, path: Path | None = None) -> None:
         with open(cfg_path, encoding="utf-8") as f:
             data = yaml.safe_load(f) or {}
     data["table_id"] = table_id
+    cfg_path.parent.mkdir(parents=True, exist_ok=True)
+    with open(cfg_path, "w", encoding="utf-8") as f:
+        yaml.dump(data, f, allow_unicode=True, default_flow_style=False, sort_keys=False)
+
+
+def save_pdd_upload_table_id_to_config(table_id: str, path: Path | None = None) -> None:
+    """解析到 PDD 上传日志表后，把 table_id 写回 feishu.yaml。"""
+    cfg_path = path or Path(os.getenv("FEISHU_CONFIG_PATH", DEFAULT_FEISHU_CONFIG_PATH))
+    data: dict = {}
+    if cfg_path.is_file():
+        with open(cfg_path, encoding="utf-8") as f:
+            data = yaml.safe_load(f) or {}
+    pdd_raw = data.get("pdd_upload_log")
+    if not isinstance(pdd_raw, dict):
+        pdd_raw = {}
+    pdd_raw["table_id"] = table_id
+    data["pdd_upload_log"] = pdd_raw
     cfg_path.parent.mkdir(parents=True, exist_ok=True)
     with open(cfg_path, "w", encoding="utf-8") as f:
         yaml.dump(data, f, allow_unicode=True, default_flow_style=False, sort_keys=False)

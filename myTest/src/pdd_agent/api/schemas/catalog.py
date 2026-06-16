@@ -51,6 +51,7 @@ class ListingTargetOptionOut(BaseModel):
     unlisted_count: int = 0
     is_fully_listed: bool = False
     has_pending_listing: bool = False
+    is_material_ready: bool = True
 
 
 class ProductDetailOut(BaseModel):

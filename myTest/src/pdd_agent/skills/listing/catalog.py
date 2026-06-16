@@ -270,8 +270,6 @@ def _new_layout_listing_targets(assets_root: Path) -> list[ListingTargetOption]:
                     ]
                 )
             )
-            if not codes:
-                continue
             targets.append(
                 ListingTargetOption(
                     selector=f"{family_dir.name}/{set_dir.name}",

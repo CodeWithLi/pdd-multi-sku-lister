@@ -48,9 +48,9 @@ status_options:
 # 上架核验成功（20s 后在售）后异步写入「PDD每日上传商品日志」
 pdd_upload_log:
   enabled: true
-  table_id: tbldwkpLuvBVwc9
+  table_id: tbldwkpLiuvBWwe9
   table_name: PDD每日上传商品日志
-  dedupe_field: 商品id
+  dedupe_field: 商品ID
   field_names:
     date: 日期
     link: 商品链接
@@ -58,4 +58,4 @@ pdd_upload_log:
     merchant_code: 商品编码
     created_at: 创建时间
     status: 状态
-    product_id: 商品id
+    product_id: 商品ID

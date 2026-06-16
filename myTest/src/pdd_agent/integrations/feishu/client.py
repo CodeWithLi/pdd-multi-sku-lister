@@ -29,6 +29,9 @@ class FeishuAPIError(RuntimeError):
         self.payload = payload
 
 
+_USER_TOKEN_EXPIRED_CODES = frozenset({99991663, 99991668, 99991677})
+
+
 class FeishuClient:
     def __init__(self, config: FeishuConfig, *, timeout: float = 30.0) -> None:
         self._config = config
@@ -115,13 +118,85 @@ class FeishuClient:
         self._user_token_expire_at = time.time() + int(data.get("expires_in", 0))
         return data
 
-    def get_user_access_token(self) -> str:
+    def _apply_user_token_payload(self, data: dict[str, Any]) -> str:
+        from pdd_agent.integrations.feishu.config import save_oauth_tokens_to_config
+
+        token = str(data.get("access_token") or "")
+        if not token:
+            raise FeishuAPIError("刷新 user_access_token 失败：响应缺少 access_token", payload=data)
+
+        expires_in = int(data.get("expires_in", 0))
+        refresh_token = str(data.get("refresh_token") or self._config.refresh_token or "")
+        refresh_expires_in = int(data.get("refresh_token_expires_in") or 0)
+        now = time.time()
+
+        save_oauth_tokens_to_config(
+            user_access_token=token,
+            expires_in=expires_in,
+            refresh_token=refresh_token,
+            refresh_token_expires_in=refresh_expires_in,
+        )
+
+        self._user_token = token
+        self._user_token_expire_at = now + expires_in
+        self._config.user_access_token = token
+        self._config.user_access_token_expires_at = int(now + expires_in)
+        if refresh_token:
+            self._config.refresh_token = refresh_token
+        if refresh_expires_in:
+            self._config.refresh_token_expires_at = int(now + refresh_expires_in)
+        return token
+
+    def refresh_user_access_token(self) -> str:
+        self._ensure_config()
+        refresh_token = str(self._config.refresh_token or "").strip()
+        if not refresh_token:
+            raise FeishuAPIError("缺少 refresh_token，请重新 OAuth 授权")
+
+        refresh_expire_at = float(self._config.refresh_token_expires_at or 0)
+        if refresh_expire_at and time.time() >= refresh_expire_at - 60:
+            raise FeishuAPIError("refresh_token 已过期，请重新 OAuth 授权")
+
+        url = f"{FEISHU_API_BASE}/authen/v2/oauth/token"
+        body = {
+            "grant_type": "refresh_token",
+            "client_id": self._config.app_id,
+            "client_secret": self._config.app_secret,
+            "refresh_token": refresh_token,
+        }
+        with httpx.Client(timeout=self._timeout) as client:
+            resp = client.post(url, json=body)
+            data = resp.json()
+        if int(data.get("code", -1)) != 0:
+            raise FeishuAPIError(
+                f"刷新 user_access_token 失败: {data.get('error_description') or data.get('msg') or data.get('error')}",
+                code=int(data.get("code", -1)),
+                payload=data,
+            )
+        return self._apply_user_token_payload(data)
+
+    def get_user_access_token(self, *, allow_refresh: bool = True) -> str:
         now = time.time()
         if self._user_token and now < self._user_token_expire_at - 60:
             return self._user_token
-        fallback = str(self._config.user_access_token or "")
-        if fallback:
-            return fallback
+
+        cfg_token = str(self._config.user_access_token or "")
+        cfg_expire_at = float(self._config.user_access_token_expires_at or 0)
+        if cfg_token and cfg_expire_at and now < cfg_expire_at - 60:
+            self._user_token = cfg_token
+            self._user_token_expire_at = cfg_expire_at
+            return cfg_token
+
+        if allow_refresh and str(self._config.refresh_token or "").strip():
+            try:
+                return self.refresh_user_access_token()
+            except FeishuAPIError:
+                if cfg_token:
+                    return cfg_token
+                raise
+
+        if cfg_token:
+            return cfg_token
         raise FeishuAPIError(
             "未配置 user_access_token，请先在测试页完成 OAuth 授权并交换 code",
         )
@@ -170,12 +245,23 @@ class FeishuClient:
             )
 
         code = int(data.get("code", -1))
-        if code in {99991663, 99991668} and retry_on_token:
+        if code in _USER_TOKEN_EXPIRED_CODES and retry_on_token:
             if use_user_token:
-                raise FeishuAPIError(
-                    "user_access_token 失效，请重新 OAuth 授权",
-                    code=code,
-                    payload=data,
+                try:
+                    self.refresh_user_access_token()
+                except FeishuAPIError as exc:
+                    raise FeishuAPIError(
+                        "user_access_token 失效且自动刷新失败，请重新 OAuth 授权",
+                        code=code,
+                        payload=data,
+                    ) from exc
+                return self.request(
+                    method,
+                    path,
+                    params=params,
+                    json=json,
+                    retry_on_token=False,
+                    prefer_user_token=use_user_token,
                 )
             self.get_tenant_access_token(force_refresh=True)
             return self.request(

@@ -16,6 +16,11 @@ def test_image_set_pattern():
     assert is_image_set_dir("第一套")
     assert is_image_set_dir("第一套图")
     assert is_image_set_dir("第二套图")
+    assert is_image_set_dir("2套")
+    assert is_image_set_dir("2套图")
+    assert is_image_set_dir("套图2")
+    assert is_image_set_dir("第2套-改版")
+    assert is_image_set_dir("第二套（备用）")
     assert not is_image_set_dir("BD046A")
     assert not is_image_set_dir("主图")
 
@@ -100,6 +105,37 @@ def test_listing_target_selector_expands_family_and_image_set(tmp_path, monkeypa
         "BD046C+AXBD001A",
     ]
     assert [p.name for p in single[0].carousel_images] == ["1.png", "2.png", "3.png", "4.png", "5.png"]
+
+
+def test_listing_targets_include_all_image_sets(tmp_path, monkeypatch):
+    monkeypatch.setattr("pdd_agent.core.config.PROJECT_ROOT", tmp_path)
+    monkeypatch.setattr("pdd_agent.paths.PROJECT_ROOT", tmp_path)
+    get_pdd_product_catalog.cache_clear()
+    root = tmp_path / "data/assets/商品上架规格文件"
+    for image_set in ["第一套", "第二套", "套图3"]:
+        unit_root = root / "BD720" / image_set / "BD720A"
+        unit_root.mkdir(parents=True)
+        if image_set == "第一套":
+            for index in range(1, 10):
+                (unit_root / f"{index}.png").write_bytes(b"img")
+            (unit_root / "BD720A.png").write_bytes(b"preview")
+        # 第二套 / 套图3 故意留空目录，也应出现在 targets 中
+
+    settings = YamlSettings(
+        paths=PathsConfig(assets_root="data/assets/商品上架规格文件"),
+        multi_spec=MultiSpecConfig(excel="missing.xlsx"),
+    )
+
+    targets = list_listing_targets(settings)
+    assert [item.selector for item in targets] == [
+        "BD720/第一套",
+        "BD720/第二套",
+        "BD720/套图3",
+    ]
+    by_set = {item.image_set: item for item in targets}
+    assert list(by_set["第一套"].product_codes) == ["BD720A"]
+    assert list(by_set["第二套"].product_codes) == []
+    assert list(by_set["套图3"].product_codes) == []
 
 
 def test_parse_combo_code_two_part_is_normal_combo():
