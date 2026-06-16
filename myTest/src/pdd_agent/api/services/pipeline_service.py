@@ -23,10 +23,9 @@ from pdd_agent.storage import TaskRunStore
 logger = get_logger(__name__)
 
 DEMO_ACTIVITY_DELAY_MINUTES = 2
-
-
-DEMO_ACTIVITY_DELAY_MINUTES = 2
 DEMO_ACTIVITY_JITTER_MAX_SECONDS = 60
+
+TERMINAL_PIPELINE_STATUSES = frozenset({"completed", "failed", "canceled"})
 
 
 def _batch_id() -> str:
@@ -111,6 +110,7 @@ def _extract_listing_products(result: dict[str, Any]) -> tuple[list[str], list[s
 
 
 def _step_infos(row) -> list[dict[str, Any]]:
+    pipeline_canceled = row.status == "canceled"
     listing_status = "pending"
     if row.listing_run_id:
         record = TaskRunStore().load(row.listing_run_id)
@@ -135,7 +135,7 @@ def _step_infos(row) -> list[dict[str, Any]]:
     elif row.status == "completed":
         traffic_status = "skipped"
 
-    return [
+    steps = [
         {
             "key": "listing",
             "label": "上架",
@@ -163,6 +163,17 @@ def _step_infos(row) -> list[dict[str, Any]]:
             "detail": "活动报名成功后自动创建推广" if row.auto_promotion else "未启用",
         },
     ]
+    if pipeline_canceled:
+        for step in steps:
+            if step["status"] not in {"success", "completed", "skipped"}:
+                step["status"] = "canceled"
+                if step["key"] == "activity" and row.scheduled_activity_at:
+                    step["detail"] = "已取消，不再自动报名"
+                elif step["key"] == "traffic":
+                    step["detail"] = "已取消"
+                elif step["key"] == "listing":
+                    step["detail"] = "已取消"
+    return steps
 
 
 def pipeline_to_dict(row) -> dict[str, Any]:
@@ -346,6 +357,8 @@ def on_queue_task_finished(
     row = get_integrated_pipeline(pipeline_id)
     if not row:
         return
+    if row.status in TERMINAL_PIPELINE_STATUSES:
+        return
 
     result = result if isinstance(result, dict) else {}
     if agent == AgentKind.LISTING.value:
@@ -497,3 +510,38 @@ def list_pipelines(*, limit: int = 50, batch_id: str = "") -> dict[str, Any]:
     rows = list_integrated_pipelines(limit=limit, batch_id=batch_id)
     items = [pipeline_to_dict(row) for row in rows]
     return {"items": items, "total": len(items)}
+
+
+def cancel_integrated_pipeline(pipeline_id: str) -> dict[str, Any]:
+    """取消整合链路：停止排队/运行中的子任务，后续步骤不再执行。"""
+    pipeline_id = str(pipeline_id or "").strip()
+    if not pipeline_id:
+        raise ValueError("pipeline_id is required")
+
+    row = get_integrated_pipeline(pipeline_id)
+    if not row:
+        raise ValueError("pipeline not found")
+    if row.status in TERMINAL_PIPELINE_STATUSES:
+        raise ValueError(f"pipeline already {row.status}")
+
+    run_ids = [rid for rid in (row.listing_run_id, row.campaign_run_id, row.traffic_run_id) if rid]
+    pending_run_ids: list[str] = []
+    store = TaskRunStore()
+    for run_id in run_ids:
+        record = store.load(run_id)
+        if record and record.status in {RunStatus.PENDING, RunStatus.RUNNING}:
+            pending_run_ids.append(run_id)
+
+    from pdd_agent.api.app import worker
+
+    worker.cancel_run_ids(run_ids)
+
+    update_integrated_pipeline(
+        pipeline_id,
+        status="canceled",
+        current_step="canceled",
+        error="用户取消",
+    )
+    logger.info("integrated pipeline canceled pipeline_id=%s canceled_runs=%s", pipeline_id, pending_run_ids)
+    refreshed = get_integrated_pipeline(pipeline_id)
+    return pipeline_to_dict(refreshed or row)

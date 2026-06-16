@@ -2265,6 +2265,8 @@ def _close_product_search_modal_if_open(page: DpPage) -> None:
     _click_modal_cancel_button(modal)
     time.sleep(0.5)
 
+
+def _fill_product_search_modal_input(modal, product_ids: list[str]) -> dict[str, Any]:
     query = ",".join(product_ids)
     input_selectors = (
         'input[data-testid="beast-core-input-htmlInput"]',

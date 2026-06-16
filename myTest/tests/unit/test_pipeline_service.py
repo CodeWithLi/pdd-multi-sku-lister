@@ -1,7 +1,8 @@
 """整合链路服务单元测试。"""
 
 from datetime import datetime, timedelta
-from unittest.mock import patch
+from types import SimpleNamespace
+from unittest.mock import MagicMock, patch
 
 from pdd_agent.api.services.pipeline_service import (
     DEMO_ACTIVITY_DELAY_MINUTES,
@@ -9,10 +10,13 @@ from pdd_agent.api.services.pipeline_service import (
     _activity_jitter_max_seconds,
     _extract_listing_products,
     _resolve_activity_delay,
+    cancel_integrated_pipeline,
+    on_queue_task_finished,
     resolve_activity_scheduled_at,
     resolve_batch_delay,
     start_integrated_pipeline_batch,
 )
+from pdd_agent.domain.enums import AgentKind, RunStatus
 
 
 def test_extract_listing_products_from_success_results():
@@ -111,4 +115,79 @@ def test_start_integrated_pipeline_batch_staggers_listing_schedule():
     assert captured[0] is not None
     assert captured[1] is not None
     assert captured[1] == captured[0] + timedelta(seconds=10)
+
+
+def test_cancel_integrated_pipeline_marks_canceled_and_stops_queue_tasks():
+    row = SimpleNamespace(
+        pipeline_id="pipe_1",
+        account_id="store_A",
+        status="waiting_activity",
+        current_step="waiting_activity",
+        product_codes=[],
+        activity_id="20981",
+        auto_promotion=True,
+        activity_delay_hours=24.0,
+        demo_mode=False,
+        meta={},
+        listing_run_id="listing_run",
+        campaign_run_id="campaign_run",
+        traffic_run_id="",
+        pdd_product_ids=[],
+        mapping_ids=[],
+        scheduled_activity_at=None,
+        error="",
+        created_at=None,
+        updated_at=None,
+    )
+    updated_row = SimpleNamespace(**{**row.__dict__, "status": "canceled", "current_step": "canceled", "error": "用户取消"})
+    worker = MagicMock()
+    worker.cancel_run_ids.return_value = ["campaign_run"]
+
+    with patch(
+        "pdd_agent.api.services.pipeline_service.get_integrated_pipeline",
+        side_effect=[row, updated_row],
+    ):
+        with patch("pdd_agent.api.services.pipeline_service.update_integrated_pipeline") as update:
+            with patch("pdd_agent.api.app.worker", worker):
+                with patch("pdd_agent.api.services.pipeline_service.TaskRunStore") as store_cls:
+                    store = store_cls.return_value
+                    store.load.side_effect = lambda run_id: SimpleNamespace(
+                        status=RunStatus.SUCCESS if run_id == "listing_run" else RunStatus.PENDING
+                    )
+                    result = cancel_integrated_pipeline("pipe_1")
+
+    worker.cancel_run_ids.assert_called_once_with(["listing_run", "campaign_run"])
+    update.assert_called_once_with(
+        "pipe_1",
+        status="canceled",
+        current_step="canceled",
+        error="用户取消",
+    )
+    assert result["status"] == "canceled"
+
+
+def test_on_queue_task_finished_ignores_canceled_pipeline():
+    row = SimpleNamespace(
+        pipeline_id="pipe_1",
+        status="canceled",
+        campaign_run_id="",
+        traffic_run_id="",
+        auto_promotion=True,
+        demo_mode=False,
+        activity_delay_hours=24,
+        activity_id="20981",
+        account_id="store_A",
+        pdd_product_ids=[],
+        mapping_ids=[],
+    )
+    with patch("pdd_agent.api.services.pipeline_service.get_integrated_pipeline", return_value=row):
+        with patch("pdd_agent.api.services.pipeline_service.update_integrated_pipeline") as update:
+            on_queue_task_finished(
+                agent=AgentKind.LISTING.value,
+                pipeline_id="pipe_1",
+                run_id="listing_run",
+                success=True,
+                result={"results": [{"status": "success", "pdd_product_id": "123"}]},
+            )
+    update.assert_not_called()
 

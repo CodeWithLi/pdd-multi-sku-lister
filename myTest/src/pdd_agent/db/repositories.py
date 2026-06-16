@@ -463,6 +463,46 @@ def cancel_queued_task_by_run_id(run_id: str) -> bool:
         return True
 
 
+def cancel_queue_tasks_by_run_ids(run_ids: list[str]) -> list[dict[str, str]]:
+    """取消指定 run_id 的排队中或运行中队列任务。"""
+    ids = [str(run_id or "").strip() for run_id in run_ids if str(run_id or "").strip()]
+    if not ids or not is_database_available():
+        return []
+    with session_scope() as session:
+        stmt = select(TaskQueueORM).where(
+            TaskQueueORM.run_id.in_(ids),
+            TaskQueueORM.status.in_(("queued", "running")),
+        )
+        rows = list(session.scalars(stmt).all())
+        now = datetime.now()
+        out: list[dict[str, str]] = []
+        account_ids: set[str] = set()
+        for row in rows:
+            row.status = "canceled"
+            row.finished_at = now
+            row.error = "canceled by user"
+            if row.account_id:
+                account_ids.add(row.account_id)
+            out.append(
+                {
+                    "task_id": row.task_id,
+                    "run_id": row.run_id,
+                    "account_id": row.account_id or "",
+                }
+            )
+        for acc in account_ids:
+            still_running = session.scalar(
+                select(func.count())
+                .select_from(TaskQueueORM)
+                .where(TaskQueueORM.account_id == acc, TaskQueueORM.status == "running")
+            )
+            if not still_running:
+                lock = session.get(AccountLockORM, acc)
+                if lock:
+                    session.delete(lock)
+        return out
+
+
 def cancel_queued_tasks(*, account_id: str = "") -> list[str]:
     if not is_database_available():
         return []

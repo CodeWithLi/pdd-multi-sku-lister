@@ -349,6 +349,9 @@ export const api = {
 
   getIntegratedPipeline: (pipelineId: string) =>
     http.get<IntegratedPipeline>(`/pipelines/integrated/${pipelineId}`).then((r) => r.data),
+
+  cancelIntegratedPipeline: (pipelineId: string) =>
+    http.post<IntegratedPipeline>(`/pipelines/integrated/${pipelineId}/cancel`).then((r) => r.data),
 }
 
 export default http

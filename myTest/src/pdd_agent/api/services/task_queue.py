@@ -60,6 +60,32 @@ class TaskQueueWorker:
 
         return run_ids
 
+    def cancel_run_ids(self, run_ids: list[str]) -> list[str]:
+        """取消指定 run_id 的队列任务（排队中 + 运行中）。"""
+        from pdd_agent.api.services.run_cancel import request_cancel
+        from pdd_agent.db.repositories import cancel_queue_tasks_by_run_ids
+
+        target = {str(run_id or "").strip() for run_id in run_ids if str(run_id or "").strip()}
+        if not target:
+            return []
+
+        rows = cancel_queue_tasks_by_run_ids(list(target))
+        store = TaskRunStore()
+        canceled: list[str] = []
+        for item in rows:
+            run_id = str(item.get("run_id") or "")
+            if not run_id:
+                continue
+            canceled.append(run_id)
+            request_cancel(run_id)
+            store.update_status(run_id, RunStatus.CANCELED, "canceled by user")
+
+        for task_id, (task, run_id, _) in list(self._task_handles.items()):
+            if run_id in target and not task.done():
+                task.cancel()
+
+        return list(dict.fromkeys(canceled))
+
     def start(self) -> None:
         if self._main_task and not self._main_task.done():
             return

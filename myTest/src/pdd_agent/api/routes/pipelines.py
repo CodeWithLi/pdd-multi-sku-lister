@@ -13,6 +13,7 @@ from pdd_agent.api.schemas.pipelines import (
 )
 from pdd_agent.api.services.config_service import get_account_or_none
 from pdd_agent.api.services.pipeline_service import (
+    cancel_integrated_pipeline,
     get_pipeline,
     list_pipelines,
     start_integrated_pipeline,
@@ -124,4 +125,18 @@ def get_integrated(pipeline_id: str):
     data = get_pipeline(pipeline_id)
     if not data:
         raise HTTPException(status_code=404, detail="pipeline not found")
+    return IntegratedPipelineResponse(**data)
+
+
+@router.post("/integrated/{pipeline_id}/cancel", response_model=IntegratedPipelineResponse)
+def cancel_integrated(pipeline_id: str):
+    if not is_database_available():
+        raise HTTPException(status_code=503, detail="数据库不可用")
+    try:
+        data = cancel_integrated_pipeline(pipeline_id)
+    except ValueError as exc:
+        detail = str(exc)
+        if detail == "pipeline not found":
+            raise HTTPException(status_code=404, detail=detail) from exc
+        raise HTTPException(status_code=400, detail=detail) from exc
     return IntegratedPipelineResponse(**data)

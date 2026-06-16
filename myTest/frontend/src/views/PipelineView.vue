@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import { api } from '@/api/client'
 import PageHeader from '@/components/PageHeader.vue'
 import type {
@@ -12,6 +13,7 @@ import type {
 
 const router = useRouter()
 const loading = ref(false)
+const cancelingId = ref('')
 const polling = ref(false)
 const error = ref('')
 const success = ref('')
@@ -108,8 +110,42 @@ function stepTagType(status: string) {
 function pipelineTagType(status: string) {
   if (status === 'completed') return 'success'
   if (status === 'failed') return 'danger'
+  if (status === 'canceled') return 'info'
   if (status === 'waiting_activity') return 'warning'
   return 'info'
+}
+
+const PIPELINE_TERMINAL_STATUSES = new Set(['completed', 'failed', 'canceled'])
+
+function canCancelPipeline(pipeline: IntegratedPipeline) {
+  return !PIPELINE_TERMINAL_STATUSES.has(pipeline.status)
+}
+
+async function cancelPipeline(pipeline: IntegratedPipeline) {
+  if (!canCancelPipeline(pipeline)) return
+  try {
+    await ElMessageBox.confirm(
+      `确定取消链路 ${pipeline.pipeline_id}？取消后不会再执行后续活动报名与推广。`,
+      '取消整合链路',
+      { type: 'warning', confirmButtonText: '确定取消', cancelButtonText: '保留' },
+    )
+  } catch {
+    return
+  }
+  cancelingId.value = pipeline.pipeline_id
+  try {
+    const updated = await api.cancelIntegratedPipeline(pipeline.pipeline_id)
+    if (activePipeline.value?.pipeline_id === pipeline.pipeline_id) {
+      activePipeline.value = updated
+    }
+    await refreshPipelines()
+    ElMessage.success('整合链路已取消')
+  } catch (e: unknown) {
+    const msg = e instanceof Error ? e.message : '取消失败'
+    ElMessage.error(msg)
+  } finally {
+    cancelingId.value = ''
+  }
 }
 
 function formatTime(value: string | null | undefined) {
@@ -464,7 +500,19 @@ onUnmounted(stopPolling)
           <template #header>
             <div class="card-head">
               <span>当前链路</span>
-              <el-tag :type="pipelineTagType(activePipeline.status)">{{ activePipeline.status }}</el-tag>
+              <div class="card-head-actions">
+                <el-button
+                  v-if="canCancelPipeline(activePipeline)"
+                  link
+                  type="danger"
+                  size="small"
+                  :loading="cancelingId === activePipeline.pipeline_id"
+                  @click="cancelPipeline(activePipeline)"
+                >
+                  取消
+                </el-button>
+                <el-tag :type="pipelineTagType(activePipeline.status)">{{ activePipeline.status }}</el-tag>
+              </div>
             </div>
           </template>
           <p class="meta">ID：{{ activePipeline.pipeline_id }}</p>
@@ -514,9 +562,19 @@ onUnmounted(stopPolling)
                 <el-tag size="small" :type="pipelineTagType(row.status)">{{ row.status }}</el-tag>
               </template>
             </el-table-column>
-            <el-table-column label="操作" width="80">
+            <el-table-column label="操作" width="120">
               <template #default="{ row }">
                 <el-button link type="primary" size="small" @click="activePipeline = row">查看</el-button>
+                <el-button
+                  v-if="canCancelPipeline(row)"
+                  link
+                  type="danger"
+                  size="small"
+                  :loading="cancelingId === row.pipeline_id"
+                  @click="cancelPipeline(row)"
+                >
+                  取消
+                </el-button>
               </template>
             </el-table-column>
           </el-table>
@@ -542,6 +600,11 @@ onUnmounted(stopPolling)
   display: flex;
   align-items: center;
   justify-content: space-between;
+  gap: 8px;
+}
+.card-head-actions {
+  display: inline-flex;
+  align-items: center;
   gap: 8px;
 }
 .product-picks {
