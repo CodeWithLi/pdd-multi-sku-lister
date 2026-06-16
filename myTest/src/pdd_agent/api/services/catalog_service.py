@@ -82,18 +82,36 @@ def list_products() -> list[ProductSummaryOut]:
     return summaries
 
 
-def list_listing_target_options() -> list[ListingTargetOptionOut]:
+def list_listing_target_options(*, account_id: str = "") -> list[ListingTargetOptionOut]:
     settings = load_yaml_settings()
-    return [
-        ListingTargetOptionOut(
-            selector=item.selector,
-            family_code=item.family_code,
-            image_set=item.image_set,
-            product_codes=list(item.product_codes),
-            product_count=len(item.product_codes),
+    from pdd_agent.api.services.listed_folder_service import listed_product_codes_by_set
+
+    listed_by_set: dict[str, list[str]] = {}
+    if account_id:
+        listed_by_set = listed_product_codes_by_set(account_id)
+
+    options: list[ListingTargetOptionOut] = []
+    for item in list_listing_targets(settings):
+        current_codes = list(item.product_codes)
+        listed_set = set(listed_by_set.get(item.selector, []))
+        listed_codes = [code for code in current_codes if code in listed_set]
+        unlisted_codes = [code for code in current_codes if code not in listed_set]
+        options.append(
+            ListingTargetOptionOut(
+                selector=item.selector,
+                family_code=item.family_code,
+                image_set=item.image_set,
+                product_codes=current_codes,
+                product_count=len(current_codes),
+                listed_product_codes=listed_codes,
+                unlisted_product_codes=unlisted_codes,
+                listed_count=len(listed_codes),
+                unlisted_count=len(unlisted_codes),
+                is_fully_listed=bool(current_codes) and not unlisted_codes,
+                has_pending_listing=bool(unlisted_codes),
+            )
         )
-        for item in list_listing_targets(settings)
-    ]
+    return options
 
 
 def get_product_detail(product_code: str) -> ProductDetailOut | None:

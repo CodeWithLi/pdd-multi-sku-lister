@@ -45,6 +45,26 @@ def _create_mysql_database_if_missing(database_url: str) -> None:
         server_engine.dispose()
 
 
+def _ensure_task_queue_claim_index(engine: Engine) -> None:
+    """为已有 task_queue 表补充 claim 复合索引（create_all 不会给旧表加索引）。"""
+    try:
+        inspector = inspect(engine)
+        if "task_queue" not in inspector.get_table_names():
+            return
+        existing = {idx["name"] for idx in inspector.get_indexes("task_queue")}
+        if "ix_task_queue_claim" in existing:
+            return
+        with engine.begin() as conn:
+            conn.execute(
+                text(
+                    "CREATE INDEX ix_task_queue_claim "
+                    "ON task_queue (status, scheduled_at, account_id)"
+                )
+            )
+    except Exception:
+        return
+
+
 def _ensure_published_products_columns(engine: Engine) -> None:
     try:
         inspector = inspect(engine)
@@ -65,6 +85,34 @@ def _ensure_published_products_columns(engine: Engine) -> None:
         with engine.begin() as conn:
             for stmt in statements:
                 conn.execute(text(stmt))
+    except Exception:
+        return
+
+
+def _ensure_listed_folders_backfill(engine: Engine) -> None:
+    try:
+        inspector = inspect(engine)
+        if "listed_asset_folders" not in inspector.get_table_names():
+            return
+        from pdd_agent.api.services.listed_folder_service import ensure_listed_folder_backfill
+        from pdd_agent.core.config import load_yaml_settings
+        from pdd_agent.db.repositories import build_catalog_set_index, prune_listed_folders_against_catalog
+        from pdd_agent.db.repositories import prune_stale_listed_asset_folders
+
+        created = ensure_listed_folder_backfill()
+        pruned_published = prune_stale_listed_asset_folders()
+        catalog_index = build_catalog_set_index(load_yaml_settings())
+        pruned_catalog = prune_listed_folders_against_catalog(catalog_index=catalog_index)
+        if created or pruned_published or pruned_catalog:
+            from pdd_agent.core.logging import get_logger
+
+            logger = get_logger(__name__)
+            if created:
+                logger.info("backfilled %s listed asset folders from published_products", created)
+            if pruned_published:
+                logger.info("pruned %s stale listed asset folders (published products)", pruned_published)
+            if pruned_catalog:
+                logger.info("pruned %s stale listed asset folders (catalog drift)", pruned_catalog)
     except Exception:
         return
 
@@ -93,7 +141,9 @@ def init_database() -> bool:
             future=True,
         )
         Base.metadata.create_all(engine)
+        _ensure_task_queue_claim_index(engine)
         _ensure_published_products_columns(engine)
+        _ensure_listed_folders_backfill(engine)
         _engine = engine
         _sessionmaker = sessionmaker(bind=engine, expire_on_commit=False, future=True)
         _available = True

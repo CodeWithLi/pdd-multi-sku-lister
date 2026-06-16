@@ -11,6 +11,8 @@ import type {
   ConfigSummary,
   HealthResponse,
   IntegratedPipeline,
+  IntegratedPipelineBatchResponse,
+  IntegratedPipelineBatchStartPayload,
   IntegratedPipelineListResponse,
   IntegratedPipelineStartPayload,
   DelistTaskResponse,
@@ -20,6 +22,7 @@ import type {
   ListingFailureDetailListResponse,
   ListingTaskResponse,
   ListingTargetOption,
+  ListedAssetFolderListResponse,
   LoginBatchCheckResponse,
   LoginStatus,
   PlanResponse,
@@ -91,7 +94,22 @@ export const api = {
 
   products: () => http.get<ProductSummary[]>('/catalog/products').then((r) => r.data),
 
-  listingTargets: () => http.get<ListingTargetOption[]>('/catalog/listing-targets').then((r) => r.data),
+  listingTargets: (accountId?: string) =>
+    http
+      .get<ListingTargetOption[]>('/catalog/listing-targets', {
+        params: accountId ? { account_id: accountId } : undefined,
+      })
+      .then((r) => r.data),
+
+  listedFolders: (params?: {
+    account_id?: string
+    family_code?: string
+    image_set?: string
+    product_code?: string
+    source_kind?: string
+    limit?: number
+  }) =>
+    http.get<ListedAssetFolderListResponse>('/listed-folders', { params }).then((r) => r.data),
 
   productDetail: (productCode: string) =>
     http.get<ProductDetail>(`/catalog/products/${productCode}`).then((r) => r.data),
@@ -319,8 +337,15 @@ export const api = {
   startIntegratedPipeline: (body: IntegratedPipelineStartPayload) =>
     http.post<IntegratedPipeline>('/pipelines/integrated', body).then((r) => r.data),
 
-  listIntegratedPipelines: (limit = 20) =>
-    http.get<IntegratedPipelineListResponse>('/pipelines/integrated', { params: { limit } }).then((r) => r.data),
+  startIntegratedPipelineBatch: (body: IntegratedPipelineBatchStartPayload) =>
+    http.post<IntegratedPipelineBatchResponse>('/pipelines/integrated/batch', body).then((r) => r.data),
+
+  listIntegratedPipelines: (limit = 20, batchId = '') =>
+    http
+      .get<IntegratedPipelineListResponse>('/pipelines/integrated', {
+        params: { limit, batch_id: batchId || undefined },
+      })
+      .then((r) => r.data),
 
   getIntegratedPipeline: (pipelineId: string) =>
     http.get<IntegratedPipeline>(`/pipelines/integrated/${pipelineId}`).then((r) => r.data),

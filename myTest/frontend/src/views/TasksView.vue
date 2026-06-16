@@ -15,6 +15,7 @@ const activeTab = ref('listing')
 
 const accounts = ref<Account[]>([])
 const productOptions = ref<ListingTargetOption[]>([])
+const showOnlyUnlistedGroups = ref(false)
 const defaultConcurrentStores = ref(3)
 const defaultStartDelayMin = ref(30)
 const defaultStartDelayMax = ref(180)
@@ -52,6 +53,15 @@ const queuePaused = computed(() =>
   Boolean(queueStatus.value?.controls.find((c) => c.scope === 'global')?.paused),
 )
 const validProductSelectors = computed(() => new Set(productOptions.value.map((item) => item.selector)))
+
+const unlistedGroupCount = computed(
+  () => productOptions.value.filter((item) => !item.is_fully_listed).length,
+)
+
+const visibleProductOptions = computed(() => {
+  if (!showOnlyUnlistedGroups.value) return productOptions.value
+  return productOptions.value.filter((item) => !item.is_fully_listed)
+})
 
 const selectedSetGroups = computed(() =>
   productCodes.value
@@ -97,7 +107,7 @@ function updateCheckedProducts(selector: string, codes: string[]) {
 }
 
 function selectAllMaterialGroups() {
-  productCodes.value = productOptions.value.map((item) => item.selector)
+  productCodes.value = visibleProductOptions.value.map((item) => item.selector)
   syncCheckedProductsForSets(productCodes.value)
 }
 
@@ -124,6 +134,34 @@ function clearAllListingProducts() {
 
 watch(productCodes, (sets) => syncCheckedProductsForSets(sets))
 
+function isProductListed(group: ListingTargetOption, code: string) {
+  return (group.listed_product_codes || []).includes(code)
+}
+
+function formatMaterialGroupLabel(item: ListingTargetOption) {
+  const listed = item.listed_count || 0
+  const unlisted = item.unlisted_count ?? Math.max(0, item.product_count - listed)
+  const base = `${item.selector}（${item.product_count}个商品）`
+  if (item.is_fully_listed) return `${base} · 已全部上架`
+  if (unlisted > 0) return `${base} · 待上架 ${unlisted} 个`
+  if (listed > 0) return `${base} · 已上架 ${listed}/${item.product_count}`
+  return base
+}
+
+function onMaterialGroupDropdownVisible(visible: boolean) {
+  if (!visible) return
+  const accounts = selectedListingAccounts().filter(Boolean)
+  if (accounts.length) loadListingTargets(accounts[0]).catch(() => undefined)
+}
+
+async function loadListingTargets(forAccountId = '') {
+  productOptions.value = await api.listingTargets(forAccountId || undefined)
+}
+
+watch(accountId, (id) => {
+  if (id) loadListingTargets(id).catch(() => undefined)
+})
+
 async function loadQueueStatus() {
   try {
     queueStatus.value = await api.queueStatus({ limit: 5 })
@@ -134,13 +172,11 @@ async function loadQueueStatus() {
 
 async function loadMeta() {
   try {
-    const [accs, products, cfg] = await Promise.all([
+    const [accs, cfg] = await Promise.all([
       api.accounts(true),
-      api.listingTargets(),
       api.runtimeConfig(),
     ])
     accounts.value = accs
-    productOptions.value = products
     categoryKeyword.value = cfg.listing.category_keyword || '玩偶'
     delistMinCreated.value = cfg.delist.min_created_after || delistMinCreated.value
     delistMaxPerRun.value = cfg.delist.max_delist_per_run || delistMaxPerRun.value
@@ -163,6 +199,7 @@ async function loadMeta() {
       batchAccountIds.value = accs.map((a) => a.account_id)
       delistBatchAccountIds.value = accs.map((a) => a.account_id)
     }
+    await loadListingTargets(accountId.value)
     await loadQueueStatus()
   } catch (e) {
     error.value = e instanceof Error ? e.message : '加载失败，请确认后台已启动'
@@ -173,6 +210,7 @@ function onAccountChange(id: string) {
   const acc = accounts.value.find((a) => a.account_id === id)
   productCodes.value = acc ? filterValidProductCodes(acc.product_codes) : []
   syncCheckedProductsForSets(productCodes.value)
+  loadListingTargets(id).catch(() => undefined)
 }
 
 function selectedListingAccounts() {
@@ -388,19 +426,51 @@ onMounted(() => {
                 <span class="form-label-with-actions">
                   <span>素材分组</span>
                   <span class="label-actions">
+                    <el-button
+                      link
+                      :type="showOnlyUnlistedGroups ? 'default' : 'warning'"
+                      size="small"
+                      @click="showOnlyUnlistedGroups = true"
+                    >
+                      仅未上架{{ unlistedGroupCount ? `(${unlistedGroupCount})` : '' }}
+                    </el-button>
+                    <el-button
+                      link
+                      :type="!showOnlyUnlistedGroups ? 'primary' : 'default'"
+                      size="small"
+                      @click="showOnlyUnlistedGroups = false"
+                    >
+                      全部
+                    </el-button>
                     <el-button link type="primary" size="small" @click="selectAllMaterialGroups">全选</el-button>
                     <el-button link size="small" @click="clearAllMaterialGroups">取消全选</el-button>
                   </span>
                 </span>
               </template>
-              <el-select v-model="productCodes" multiple filterable style="width: 100%" placeholder="选择如 BD046/第一套">
+              <el-select
+                v-model="productCodes"
+                multiple
+                filterable
+                style="width: 100%"
+                :placeholder="showOnlyUnlistedGroups ? '仅显示仍有待上架商品的套图' : '选择如 BD046/第一套'"
+                @visible-change="onMaterialGroupDropdownVisible"
+              >
                 <el-option
-                  v-for="item in productOptions"
+                  v-for="item in visibleProductOptions"
                   :key="item.selector"
-                  :label="`${item.selector}（${item.product_count}个商品）`"
+                  :label="formatMaterialGroupLabel(item)"
                   :value="item.selector"
-                />
+                >
+                  <span>{{ formatMaterialGroupLabel(item) }}</span>
+                  <el-tag v-if="item.is_fully_listed" size="small" type="success" class="listed-tag">已全部上架</el-tag>
+                  <el-tag v-else-if="item.has_pending_listing" size="small" type="warning" class="listed-tag">
+                    有新商品待上架
+                  </el-tag>
+                </el-option>
               </el-select>
+              <div v-if="showOnlyUnlistedGroups && !visibleProductOptions.length" class="form-tip">
+                当前店铺暂无未上架套图
+              </div>
             </el-form-item>
 
             <el-form-item v-if="selectedSetGroups.length" required>
@@ -415,7 +485,16 @@ onMounted(() => {
               </template>
               <div class="product-pick-panel">
                 <div v-for="group in selectedSetGroups" :key="group.selector" class="product-pick-group">
-                  <div class="product-pick-group-title">{{ group.selector }}</div>
+                  <div class="product-pick-group-title">
+                    {{ group.selector }}
+                    <el-tag v-if="group.is_fully_listed" size="small" type="success" class="listed-tag">套图已全部上架</el-tag>
+                    <el-tag v-else-if="group.has_pending_listing" size="small" type="warning" class="listed-tag">
+                      待上架 {{ group.unlisted_count ?? 0 }} 个
+                    </el-tag>
+                    <el-tag v-else-if="(group.listed_count || 0) > 0" size="small" type="info" class="listed-tag">
+                      已上架 {{ group.listed_count }}/{{ group.product_codes.length }}
+                    </el-tag>
+                  </div>
                   <el-checkbox-group
                     :model-value="checkedProductsBySet[group.selector] || []"
                     @update:model-value="(val) => updateCheckedProducts(group.selector, val as string[])"
@@ -425,7 +504,12 @@ onMounted(() => {
                       :key="code"
                       :value="code"
                       :label="code"
-                    />
+                    >
+                      {{ code }}
+                      <el-tag v-if="isProductListed(group, code)" size="small" type="success" class="listed-tag">
+                        已上架
+                      </el-tag>
+                    </el-checkbox>
                   </el-checkbox-group>
                 </div>
               </div>
@@ -608,10 +692,18 @@ onMounted(() => {
   font-size: 13px;
   font-weight: 600;
   color: #334155;
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
 }
 
 .product-pick-group :deep(.el-checkbox) {
   margin-right: 18px;
+}
+
+.listed-tag {
+  margin-left: 6px;
 }
 
 .form-label-with-actions {

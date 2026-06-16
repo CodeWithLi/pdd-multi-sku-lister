@@ -54,9 +54,9 @@ def catalog_products():
 
 
 @router.get("/listing-targets", response_model=list[ListingTargetOptionOut])
-def catalog_listing_targets():
-    """列出上架任务可选的素材分组，如 BD046/第一套。"""
-    return list_listing_target_options()
+def catalog_listing_targets(account_id: str = ""):
+    """列出上架任务可选的素材分组；传 account_id 时附带该店已上架商品标记。"""
+    return list_listing_target_options(account_id=account_id.strip())
 
 
 @router.get("/products/{product_code}", response_model=ProductDetailOut)

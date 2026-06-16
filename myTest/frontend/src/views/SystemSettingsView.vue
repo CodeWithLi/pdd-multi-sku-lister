@@ -49,6 +49,7 @@ const form = reactive<RuntimeConfig>({
     max_concurrent_stores: 3,
     store_start_delay_min_seconds: 30,
     store_start_delay_max_seconds: 180,
+    activity_schedule_jitter_max_seconds: 1800,
   },
 })
 
@@ -268,6 +269,15 @@ onMounted(load)
                 </el-form-item>
               </el-col>
             </el-row>
+            <el-form-item label="活动预约抖动上限（秒）">
+              <el-input-number
+                v-model="form.batch.activity_schedule_jitter_max_seconds"
+                :min="0"
+                :max="7200"
+                style="width: 100%"
+              />
+              <div class="form-tip">整合链路上架完成后，活动任务在基础延迟上再随机 0～该值 秒，避免几百条同时到期。默认 1800（30 分钟）。</div>
+            </el-form-item>
             <div class="form-tip">批量任务会先启动一家店，再随机等待这个区间后启动下一家。</div>
           </el-form>
         </el-card>

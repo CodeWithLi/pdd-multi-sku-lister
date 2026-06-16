@@ -102,6 +102,7 @@ class BatchConfigIn(BaseModel):
     max_concurrent_stores: int = Field(default=3, ge=1, le=5)
     store_start_delay_min_seconds: int = Field(default=30, ge=0, le=3600)
     store_start_delay_max_seconds: int = Field(default=180, ge=0, le=3600)
+    activity_schedule_jitter_max_seconds: int = Field(default=1800, ge=0, le=7200)
 
     @model_validator(mode="after")
     def validate_delay_range(self) -> "BatchConfigIn":

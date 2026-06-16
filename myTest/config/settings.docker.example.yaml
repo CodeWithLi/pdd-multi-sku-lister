@@ -38,6 +38,7 @@ batch:
   max_concurrent_stores: 1
   store_start_delay_min_seconds: 30
   store_start_delay_max_seconds: 180
+  activity_schedule_jitter_max_seconds: 1800
 
 accounts:
   - account_id: store_A

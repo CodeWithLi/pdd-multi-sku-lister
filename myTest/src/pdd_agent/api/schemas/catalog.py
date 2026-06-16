@@ -45,6 +45,12 @@ class ListingTargetOptionOut(BaseModel):
     image_set: str = ""
     product_codes: list[str] = Field(default_factory=list)
     product_count: int = 0
+    listed_product_codes: list[str] = Field(default_factory=list)
+    unlisted_product_codes: list[str] = Field(default_factory=list)
+    listed_count: int = 0
+    unlisted_count: int = 0
+    is_fully_listed: bool = False
+    has_pending_listing: bool = False
 
 
 class ProductDetailOut(BaseModel):

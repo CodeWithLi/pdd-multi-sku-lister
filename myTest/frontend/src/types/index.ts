@@ -55,6 +55,7 @@ export interface RuntimeConfig {
     max_concurrent_stores: number
     store_start_delay_min_seconds: number
     store_start_delay_max_seconds: number
+    activity_schedule_jitter_max_seconds: number
   }
 }
 
@@ -97,6 +98,35 @@ export interface ListingTargetOption {
   image_set: string
   product_codes: string[]
   product_count: number
+  listed_product_codes?: string[]
+  unlisted_product_codes?: string[]
+  listed_count?: number
+  unlisted_count?: number
+  is_fully_listed?: boolean
+  has_pending_listing?: boolean
+}
+
+export interface ListedAssetFolder {
+  record_id: string
+  account_id: string
+  folder_selector: string
+  family_code: string
+  image_set: string
+  product_code: string
+  listing_label: string
+  asset_path: string
+  source_run_id: string
+  source_kind: string
+  pipeline_id: string
+  pdd_product_id: string
+  listed_at: string | null
+  created_at: string | null
+  updated_at: string | null
+}
+
+export interface ListedAssetFolderListResponse {
+  items: ListedAssetFolder[]
+  total: number
 }
 
 export interface SkuCombo {
@@ -480,6 +510,7 @@ export interface IntegratedPipeline {
   activity_delay_hours: number
   demo_mode: boolean
   slot_alignment_test?: boolean
+  batch_id?: string
   listing_run_id: string
   campaign_run_id: string
   traffic_run_id: string
@@ -507,4 +538,36 @@ export interface IntegratedPipelineStartPayload {
   demo_mode?: boolean
   platform_listing_code?: string
   slot_alignment_test?: boolean
+}
+
+export interface IntegratedPipelineBatchStartPayload {
+  activity_id: string
+  account_ids: string[]
+  product_codes: string[]
+  category_keyword?: string
+  auto_promotion?: boolean
+  activity_delay_hours?: number
+  demo_mode?: boolean
+  platform_listing_code?: string
+  slot_alignment_test?: boolean
+  store_start_delay_min_seconds?: number
+  store_start_delay_max_seconds?: number
+  max_concurrent_stores?: number
+}
+
+export interface IntegratedPipelineBatchRunItem {
+  account_id: string
+  pipeline_id: string
+  listing_run_id: string
+  listing_scheduled_at: string
+}
+
+export interface IntegratedPipelineBatchResponse {
+  batch_id: string
+  total: number
+  max_concurrent_stores: number
+  store_start_delay_min_seconds: number
+  store_start_delay_max_seconds: number
+  pipelines: IntegratedPipelineBatchRunItem[]
+  message: string
 }

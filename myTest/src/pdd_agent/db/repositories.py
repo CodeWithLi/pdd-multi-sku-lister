@@ -22,6 +22,7 @@ from pdd_agent.db.models import (
     ProductStyleColorORM,
     PublishedProductORM,
     QueueControlORM,
+    ListedAssetFolderORM,
     TaskQueueORM,
 )
 from pdd_agent.db.session import is_database_available, session_scope
@@ -341,6 +342,23 @@ def set_queue_pause(*, paused: bool, reason: str = "", account_id: str = "") -> 
             )
 
 
+def _busy_account_ids_for_claim(session) -> set[str]:
+    running_accounts = set(
+        session.scalars(
+            select(TaskQueueORM.account_id).where(TaskQueueORM.status == "running")
+        ).all()
+    )
+    paused_accounts = set(
+        session.scalars(
+            select(QueueControlORM.account_id).where(
+                QueueControlORM.scope == "account",
+                QueueControlORM.paused.is_(True),
+            )
+        ).all()
+    )
+    return {acc for acc in running_accounts | paused_accounts if acc}
+
+
 def claim_due_task(max_concurrent: int) -> TaskQueueORM | None:
     if not is_database_available():
         return None
@@ -356,33 +374,29 @@ def claim_due_task(max_concurrent: int) -> TaskQueueORM | None:
         if running_count >= max_concurrent:
             return None
 
-        running_accounts = set(
-            session.scalars(
-                select(TaskQueueORM.account_id).where(TaskQueueORM.status == "running")
-            ).all()
-        )
+        exclude_accounts = _busy_account_ids_for_claim(session)
 
         stmt = (
             select(TaskQueueORM)
             .where(TaskQueueORM.status == "queued")
             .where(TaskQueueORM.scheduled_at <= datetime.now())
             .order_by(TaskQueueORM.scheduled_at.asc(), TaskQueueORM.created_at.asc())
-            .limit(20)
+            .limit(1)
+            .with_for_update(skip_locked=True)
         )
-        for row in session.scalars(stmt).all():
-            if row.account_id in running_accounts:
-                continue
-            account_control = session.get(QueueControlORM, ("account", row.account_id))
-            if account_control and account_control.paused:
-                continue
-            row.status = "running"
-            row.started_at = datetime.now()
-            row.attempts += 1
-            row.error = ""
-            session.flush()
-            session.expunge(row)
-            return row
-        return None
+        if exclude_accounts:
+            stmt = stmt.where(TaskQueueORM.account_id.notin_(exclude_accounts))
+
+        row = session.scalar(stmt)
+        if not row:
+            return None
+        row.status = "running"
+        row.started_at = datetime.now()
+        row.attempts += 1
+        row.error = ""
+        session.flush()
+        session.expunge(row)
+        return row
 
 
 def finish_queue_task(task_id: str, *, success: bool, error: str = "") -> None:
@@ -789,6 +803,18 @@ def update_published_product_status(mapping_id: str, status: str) -> PublishedPr
         if not row:
             return None
         row.status = status
+        if str(status or "").strip() == "delisted":
+            listed_id = _listed_folder_record_id(
+                row.account_id,
+                build_folder_selector(
+                    family_code=row.family_code,
+                    image_set=row.image_set,
+                    product_code=row.product_code,
+                ),
+            )
+            listed_row = session.get(ListedAssetFolderORM, listed_id)
+            if listed_row:
+                session.delete(listed_row)
         session.flush()
         session.expunge(row)
         return row
@@ -827,6 +853,17 @@ def delete_published_product(mapping_id: str) -> bool:
         row = session.get(PublishedProductORM, mapping_id)
         if not row:
             return False
+        listed_id = _listed_folder_record_id(
+            row.account_id,
+            build_folder_selector(
+                family_code=row.family_code,
+                image_set=row.image_set,
+                product_code=row.product_code,
+            ),
+        )
+        listed_row = session.get(ListedAssetFolderORM, listed_id)
+        if listed_row:
+            session.delete(listed_row)
         session.delete(row)
         return True
 
@@ -867,6 +904,319 @@ def search_published_products(
         for row in rows:
             session.expunge(row)
         return rows, total
+
+
+def build_folder_selector(*, family_code: str, image_set: str, product_code: str) -> str:
+    """标准化素材文件夹 selector，如 BD720/第一套图/BD720A。"""
+    family = str(family_code or "").strip()
+    image = str(image_set or "").strip()
+    product = str(product_code or "").strip()
+    if family and image and product:
+        return f"{family}/{image}/{product}"
+    if family and image:
+        return f"{family}/{image}"
+    if product and image:
+        return f"{product}/{image}"
+    return product or family
+
+
+def _listed_folder_record_id(account_id: str, folder_selector: str) -> str:
+    raw = "|".join([account_id.strip(), folder_selector.strip()])
+    return hashlib.sha1(raw.encode("utf-8")).hexdigest()[:32]
+
+
+def get_queue_task_by_run_id(run_id: str) -> TaskQueueORM | None:
+    if not is_database_available():
+        return None
+    run_id = str(run_id or "").strip()
+    if not run_id:
+        return None
+    with session_scope() as session:
+        row = session.scalar(
+            select(TaskQueueORM)
+            .where(TaskQueueORM.run_id == run_id)
+            .order_by(TaskQueueORM.created_at.desc())
+            .limit(1)
+        )
+        if row:
+            session.expunge(row)
+        return row
+
+
+def upsert_listed_asset_folder(
+    *,
+    account_id: str,
+    folder_selector: str,
+    family_code: str = "",
+    image_set: str = "",
+    product_code: str = "",
+    listing_label: str = "",
+    asset_path: str = "",
+    source_run_id: str = "",
+    source_kind: str = "listing",
+    pipeline_id: str = "",
+    pdd_product_id: str = "",
+    listed_at: datetime | None = None,
+) -> ListedAssetFolderORM | None:
+    if not is_database_available():
+        return None
+    account_id = str(account_id or "").strip()
+    folder_selector = str(folder_selector or "").strip()
+    if not account_id or not folder_selector:
+        return None
+    record_id = _listed_folder_record_id(account_id, folder_selector)
+    now = listed_at or datetime.now()
+    with session_scope() as session:
+        row = session.get(ListedAssetFolderORM, record_id)
+        data = {
+            "account_id": account_id,
+            "folder_selector": folder_selector,
+            "family_code": str(family_code or "").strip(),
+            "image_set": str(image_set or "").strip(),
+            "product_code": str(product_code or "").strip(),
+            "listing_label": str(listing_label or "").strip(),
+            "asset_path": str(asset_path or "").strip(),
+            "source_run_id": str(source_run_id or "").strip(),
+            "source_kind": str(source_kind or "listing").strip() or "listing",
+            "pipeline_id": str(pipeline_id or "").strip(),
+            "pdd_product_id": str(pdd_product_id or "").strip(),
+            "listed_at": now,
+        }
+        if row:
+            for key, value in data.items():
+                setattr(row, key, value)
+            row.updated_at = datetime.now()
+        else:
+            row = ListedAssetFolderORM(
+                record_id=record_id,
+                created_at=datetime.now(),
+                updated_at=datetime.now(),
+                **data,
+            )
+            session.add(row)
+        session.flush()
+        session.refresh(row)
+        session.expunge(row)
+        return row
+
+
+def list_listed_asset_folders(
+    *,
+    account_id: str = "",
+    family_code: str = "",
+    image_set: str = "",
+    product_code: str = "",
+    source_kind: str = "",
+    limit: int = 200,
+) -> list[ListedAssetFolderORM]:
+    if not is_database_available():
+        return []
+    limit = max(1, min(5000, limit))
+    with session_scope() as session:
+        query = session.query(ListedAssetFolderORM)
+        if account_id:
+            query = query.filter(ListedAssetFolderORM.account_id == account_id)
+        if family_code:
+            query = query.filter(ListedAssetFolderORM.family_code == family_code)
+        if image_set:
+            query = query.filter(ListedAssetFolderORM.image_set == image_set)
+        if product_code:
+            query = query.filter(ListedAssetFolderORM.product_code == product_code)
+        if source_kind:
+            query = query.filter(ListedAssetFolderORM.source_kind == source_kind)
+        rows = list(
+            query.order_by(ListedAssetFolderORM.listed_at.desc(), ListedAssetFolderORM.created_at.desc())
+            .limit(limit)
+            .all()
+        )
+        for row in rows:
+            session.expunge(row)
+        return rows
+
+
+def delete_listed_asset_folder_for_product(
+    *,
+    account_id: str,
+    product_code: str,
+    family_code: str = "",
+    image_set: str = "",
+    folder_selector: str = "",
+) -> bool:
+    """移除单个商品文件夹的上架记录。"""
+    if not is_database_available():
+        return False
+    account_id = str(account_id or "").strip()
+    if not account_id:
+        return False
+    selector = str(folder_selector or "").strip() or build_folder_selector(
+        family_code=family_code,
+        image_set=image_set,
+        product_code=product_code,
+    )
+    if not selector:
+        return False
+    record_id = _listed_folder_record_id(account_id, selector)
+    with session_scope() as session:
+        row = session.get(ListedAssetFolderORM, record_id)
+        if not row:
+            return False
+        session.delete(row)
+        return True
+
+
+def build_catalog_set_index(settings) -> dict[str, frozenset[str]]:
+    """实时扫描素材目录：套图 selector -> 当前磁盘上的商品编码集合。"""
+    from pdd_agent.skills.listing.catalog import list_listing_targets
+
+    return {item.selector: frozenset(item.product_codes) for item in list_listing_targets(settings)}
+
+
+def prune_listed_folders_against_catalog(
+    *,
+    catalog_index: dict[str, frozenset[str]],
+    account_id: str = "",
+    limit: int = 5000,
+) -> int:
+    """清理素材目录已不存在或商品已从套图移除的上架记录。"""
+    if not is_database_available():
+        return 0
+    removed = 0
+    rows = list_listed_asset_folders(account_id=account_id, limit=limit)
+    for row in rows:
+        if row.family_code and row.image_set:
+            set_selector = f"{row.family_code}/{row.image_set}"
+        elif row.image_set:
+            set_selector = row.image_set
+        else:
+            parts = str(row.folder_selector or "").split("/")
+            set_selector = "/".join(parts[:2]) if len(parts) >= 2 else str(row.folder_selector or "")
+
+        current_codes = catalog_index.get(set_selector)
+        product_code = str(row.product_code or "").strip()
+        should_remove = current_codes is None or product_code not in current_codes
+        if not should_remove:
+            continue
+        if delete_listed_asset_folder_for_product(
+            account_id=row.account_id,
+            product_code=row.product_code,
+            family_code=row.family_code,
+            image_set=row.image_set,
+            folder_selector=row.folder_selector,
+        ):
+            removed += 1
+    return removed
+
+
+def get_listed_product_codes_for_set(
+    account_id: str,
+    *,
+    catalog_index: dict[str, frozenset[str]] | None = None,
+) -> dict[str, list[str]]:
+    """按套图 selector 汇总已上架商品编码（仅保留仍存在于当前素材目录的商品）。"""
+    rows = list_listed_asset_folders(account_id=account_id, limit=5000)
+    grouped: dict[str, set[str]] = {}
+    for row in rows:
+        product_code = str(row.product_code or "").strip()
+        if not product_code:
+            continue
+        if row.family_code and row.image_set:
+            set_selector = f"{row.family_code}/{row.image_set}"
+        elif row.image_set:
+            set_selector = row.image_set
+        else:
+            set_selector = row.folder_selector.rsplit("/", 1)[0] if "/" in row.folder_selector else row.folder_selector
+
+        if catalog_index is not None:
+            current_codes = catalog_index.get(set_selector)
+            if current_codes is None or product_code not in current_codes:
+                continue
+
+        grouped.setdefault(set_selector, set()).add(product_code)
+    return {key: sorted(codes) for key, codes in grouped.items()}
+
+
+def count_listed_asset_folders() -> int:
+    if not is_database_available():
+        return 0
+    with session_scope() as session:
+        return int(
+            session.scalar(select(func.count()).select_from(ListedAssetFolderORM)) or 0
+        )
+
+
+def prune_stale_listed_asset_folders(*, limit: int = 5000) -> int:
+    """清理已无 on_sale 已发布商品对应的上架文件夹记录。"""
+    if not is_database_available():
+        return 0
+    removed = 0
+    rows = list_listed_asset_folders(limit=limit)
+    for row in rows:
+        published = get_published_product(
+            account_id=row.account_id,
+            product_code=row.product_code,
+            image_set=row.image_set,
+        )
+        if published and (published.status or "") == "on_sale":
+            continue
+        if delete_listed_asset_folder_for_product(
+            account_id=row.account_id,
+            product_code=row.product_code,
+            family_code=row.family_code,
+            image_set=row.image_set,
+            folder_selector=row.folder_selector,
+        ):
+            removed += 1
+    return removed
+
+
+def backfill_listed_folders_from_published_products(*, limit: int = 5000) -> int:
+    """从 published_products 补录已上架文件夹（仅当 listed_asset_folders 为空时调用）。"""
+    if not is_database_available():
+        return 0
+    if count_listed_asset_folders() > 0:
+        return 0
+    with session_scope() as session:
+        rows = list(
+            session.scalars(
+                select(PublishedProductORM)
+                .where(PublishedProductORM.status == "on_sale")
+                .order_by(PublishedProductORM.updated_at.desc())
+                .limit(max(1, min(limit, 5000)))
+            ).all()
+        )
+    created = 0
+    for row in rows:
+        folder_selector = build_folder_selector(
+            family_code=row.family_code,
+            image_set=row.image_set,
+            product_code=row.product_code,
+        )
+        if not folder_selector:
+            continue
+        pipeline_id = ""
+        source_kind = "listing"
+        task = get_queue_task_by_run_id(row.source_run_id)
+        if task:
+            pipeline_id = str((task.payload or {}).get("pipeline_id") or "").strip()
+            if pipeline_id:
+                source_kind = "integrated_pipeline"
+        saved = upsert_listed_asset_folder(
+            account_id=row.account_id,
+            folder_selector=folder_selector,
+            family_code=row.family_code,
+            image_set=row.image_set,
+            product_code=row.product_code,
+            listing_label=row.listing_label,
+            asset_path="",
+            source_run_id=row.source_run_id,
+            source_kind=source_kind,
+            pipeline_id=pipeline_id,
+            pdd_product_id=row.pdd_product_id,
+            listed_at=row.published_at or row.updated_at,
+        )
+        if saved:
+            created += 1
+    return created
 
 
 def _lock_owner_alive(owner: str) -> bool:
@@ -1200,15 +1550,16 @@ def get_integrated_pipeline(pipeline_id: str) -> IntegratedPipelineORM | None:
         return row
 
 
-def list_integrated_pipelines(*, limit: int = 50) -> list[IntegratedPipelineORM]:
+def list_integrated_pipelines(*, limit: int = 50, batch_id: str = "") -> list[IntegratedPipelineORM]:
     if not is_database_available():
         return []
+    batch_id = str(batch_id or "").strip()
     with session_scope() as session:
-        rows = session.scalars(
-            select(IntegratedPipelineORM)
-            .order_by(IntegratedPipelineORM.created_at.desc())
-            .limit(max(1, min(limit, 200)))
-        ).all()
+        stmt = select(IntegratedPipelineORM).order_by(IntegratedPipelineORM.created_at.desc())
+        if batch_id:
+            stmt = stmt.where(IntegratedPipelineORM.meta["batch_id"].as_string() == batch_id)
+        stmt = stmt.limit(max(1, min(limit, 200)))
+        rows = session.scalars(stmt).all()
         for row in rows:
             session.expunge(row)
         return list(rows)

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from sqlalchemy import Boolean, DateTime, Float, Integer, String, Text, func
+from sqlalchemy import Boolean, DateTime, Float, Index, Integer, String, Text, func
 from sqlalchemy.dialects.mysql import JSON as MySQLJSON
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -75,6 +75,9 @@ class TaskQueueORM(Base):
     """持久任务队列。"""
 
     __tablename__ = "task_queue"
+    __table_args__ = (
+        Index("ix_task_queue_claim", "status", "scheduled_at", "account_id"),
+    )
 
     task_id: Mapped[str] = mapped_column(String(64), primary_key=True)
     run_id: Mapped[str] = mapped_column(String(64), index=True, nullable=False)
@@ -182,6 +185,35 @@ class PublishedProductORM(Base):
     spec_metadata: Mapped[dict | None] = mapped_column(MySQLJSON, nullable=True)
     status: Mapped[str] = mapped_column(String(32), default="on_sale", nullable=False)
     published_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, server_default=func.now(), nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, server_default=func.now(), onupdate=func.now(), nullable=False
+    )
+
+
+class ListedAssetFolderORM(Base):
+    """已上架素材文件夹（普通上架与整合链路共用）。"""
+
+    __tablename__ = "listed_asset_folders"
+    __table_args__ = (
+        Index("ix_listed_asset_folders_account_selector", "account_id", "folder_selector"),
+    )
+
+    record_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    account_id: Mapped[str] = mapped_column(String(64), index=True, nullable=False)
+    folder_selector: Mapped[str] = mapped_column(String(512), index=True, nullable=False)
+    family_code: Mapped[str] = mapped_column(String(64), index=True, default="", nullable=False)
+    image_set: Mapped[str] = mapped_column(String(255), default="", nullable=False)
+    product_code: Mapped[str] = mapped_column(String(64), index=True, default="", nullable=False)
+    listing_label: Mapped[str] = mapped_column(String(255), index=True, default="", nullable=False)
+    asset_path: Mapped[str] = mapped_column(String(512), default="", nullable=False)
+    source_run_id: Mapped[str] = mapped_column(String(64), index=True, default="", nullable=False)
+    source_kind: Mapped[str] = mapped_column(String(32), index=True, default="listing", nullable=False)
+    pipeline_id: Mapped[str] = mapped_column(String(64), index=True, default="", nullable=False)
+    pdd_product_id: Mapped[str] = mapped_column(String(64), index=True, default="", nullable=False)
+    listed_at: Mapped[datetime] = mapped_column(DateTime, index=True, nullable=False)
     created_at: Mapped[datetime] = mapped_column(
         DateTime, server_default=func.now(), nullable=False
     )
