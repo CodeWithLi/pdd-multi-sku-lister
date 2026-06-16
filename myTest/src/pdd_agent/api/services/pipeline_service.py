@@ -791,6 +791,21 @@ def on_queue_task_finished(
     elif agent == AgentKind.TRAFFIC.value:
         _on_traffic_finished(row, run_id=run_id, success=success, error=error)
 
+    try:
+        from pdd_agent.api.services.pipeline_issue_report_service import ingest_queue_task_outcome
+
+        ingest_queue_task_outcome(
+            pipeline_row=row,
+            pipeline_id=pipeline_id,
+            agent=agent,
+            run_id=run_id,
+            success=success,
+            result=result,
+            error=error,
+        )
+    except Exception:
+        logger.warning("pipeline issue ingest failed pipeline_id=%s", pipeline_id, exc_info=True)
+
 
 def _on_listing_finished(row, *, run_id: str, success: bool, result: dict[str, Any], error: str) -> None:
     if not success:
@@ -810,6 +825,21 @@ def _on_listing_finished(row, *, run_id: str, success: bool, result: dict[str, A
             current_step="listing_failed",
             error="上架完成但未获取到拼多多商品 ID",
         )
+        try:
+            from pdd_agent.api.services.pipeline_issue_report_service import ingest_orchestration_issue
+
+            ingest_orchestration_issue(
+                pipeline_row=row,
+                pipeline_id=row.pipeline_id,
+                chain_step="listing_no_pdd_ids",
+                reason_code="listing_no_pdd_ids",
+                message="上架步骤显示成功，但未获取到拼多多商品 ID，链路无法继续",
+                run_id=run_id,
+                context={"result_summary": _summarize_run_message(run_id)},
+                source_location="pipeline_service._on_listing_finished",
+            )
+        except Exception:
+            logger.warning("pipeline issue ingest failed pipeline_id=%s", row.pipeline_id, exc_info=True)
         return
 
     scheduled_at = resolve_activity_scheduled_at(
@@ -1007,6 +1037,16 @@ def cancel_integrated_pipeline(pipeline_id: str) -> dict[str, Any]:
         current_step="canceled",
         error="用户取消",
     )
+    try:
+        from pdd_agent.api.services.pipeline_issue_report_service import ingest_pipeline_canceled
+
+        ingest_pipeline_canceled(
+            pipeline_row=row,
+            pipeline_id=pipeline_id,
+            pending_run_ids=pending_run_ids,
+        )
+    except Exception:
+        logger.warning("pipeline issue ingest failed pipeline_id=%s", pipeline_id, exc_info=True)
     logger.info("integrated pipeline canceled pipeline_id=%s canceled_runs=%s", pipeline_id, pending_run_ids)
     refreshed = get_integrated_pipeline(pipeline_id)
     return pipeline_to_dict(refreshed or row)

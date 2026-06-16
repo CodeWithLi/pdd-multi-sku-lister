@@ -252,6 +252,32 @@ class IntegratedPipelineORM(Base):
     )
 
 
+class IntegratedPipelineIssueReportORM(Base):
+    """整合链路专用报错记录（独立于 listing_failure_details / run_records 日志）。"""
+
+    __tablename__ = "integrated_pipeline_issue_reports"
+
+    issue_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    pipeline_id: Mapped[str] = mapped_column(String(64), index=True, nullable=False)
+    batch_id: Mapped[str] = mapped_column(String(64), index=True, default="", nullable=False)
+    account_id: Mapped[str] = mapped_column(String(64), index=True, nullable=False)
+    stage: Mapped[str] = mapped_column(String(32), index=True, nullable=False)
+    chain_step: Mapped[str] = mapped_column(String(64), index=True, default="", nullable=False)
+    severity: Mapped[str] = mapped_column(String(16), index=True, default="error", nullable=False)
+    reason_code: Mapped[str] = mapped_column(String(64), index=True, default="", nullable=False)
+    title: Mapped[str] = mapped_column(String(255), default="", nullable=False)
+    message: Mapped[str] = mapped_column(Text, default="", nullable=False)
+    error_text: Mapped[str] = mapped_column(Text, default="", nullable=False)
+    context: Mapped[dict | None] = mapped_column(MySQLJSON, nullable=True)
+    run_id: Mapped[str] = mapped_column(String(64), index=True, default="", nullable=False)
+    activity_id: Mapped[str] = mapped_column(String(32), default="", index=True, nullable=False)
+    product_selector: Mapped[str] = mapped_column(String(512), default="", index=True, nullable=False)
+    source_location: Mapped[str] = mapped_column(String(255), default="", nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, server_default=func.now(), index=True, nullable=False
+    )
+
+
 class AccountLockORM(Base):
     """店铺 Profile 运行锁。"""
 

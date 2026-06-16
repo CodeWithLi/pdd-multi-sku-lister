@@ -15,6 +15,9 @@ import type {
   IntegratedPipelineBatchStartPayload,
   IntegratedPipelineListResponse,
   IntegratedPipelineStartPayload,
+  PipelineIssueListResponse,
+  PipelineIssueReport,
+  PipelineIssueSummaryResponse,
   DelistTaskResponse,
   FailureListResponse,
   FailureRetryResponse,
@@ -352,6 +355,23 @@ export const api = {
 
   cancelIntegratedPipeline: (pipelineId: string) =>
     http.post<IntegratedPipeline>(`/pipelines/integrated/${pipelineId}/cancel`).then((r) => r.data),
+
+  pipelineIssues: (params: {
+    page?: number
+    page_size?: number
+    pipeline_id?: string
+    batch_id?: string
+    account_id?: string
+    stage?: string
+    severity?: string
+    keyword?: string
+  } = {}) => http.get<PipelineIssueListResponse>('/pipeline-issues', { params }).then((r) => r.data),
+
+  getPipelineIssue: (issueId: string) =>
+    http.get<PipelineIssueReport>(`/pipeline-issues/${issueId}`).then((r) => r.data),
+
+  pipelineIssueSummary: (pipelineId: string) =>
+    http.get<PipelineIssueSummaryResponse>(`/pipeline-issues/summary/${pipelineId}`).then((r) => r.data),
 }
 
 export default http

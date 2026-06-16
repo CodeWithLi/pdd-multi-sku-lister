@@ -14,6 +14,7 @@ const router = createRouter({
     { path: '/published-products', name: 'published-products', component: () => import('@/views/PublishedProductsView.vue'), meta: { title: '已发布商品' } },
     { path: '/style-colors', name: 'style-colors', component: () => import('@/views/StyleColorsView.vue'), meta: { title: '款式颜色' } },
     { path: '/failures', name: 'failures', component: () => import('@/views/FailuresView.vue'), meta: { title: '失败项工作台' } },
+    { path: '/pipeline-issues', name: 'pipeline-issues', component: () => import('@/views/PipelineIssueReportsView.vue'), meta: { title: '链路报错' } },
     { path: '/settings', name: 'settings', component: () => import('@/views/SystemSettingsView.vue'), meta: { title: '系统设置' } },
     { path: '/runs', name: 'runs', component: () => import('@/views/RunsView.vue'), meta: { title: '操作记录' } },
   ],

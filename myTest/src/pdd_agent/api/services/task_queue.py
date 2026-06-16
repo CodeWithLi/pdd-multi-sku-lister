@@ -216,11 +216,40 @@ class TaskQueueWorker:
             TaskRunStore().update_status(row.run_id, RunStatus.CANCELED, "canceled by user")
             finish_queue_task(row.task_id, success=False, error="canceled by user")
             clear_cancel(row.run_id)
+            if pipeline_id:
+                try:
+                    from pdd_agent.api.services.pipeline_issue_report_service import ingest_orchestration_issue
+                    from pdd_agent.db.repositories import get_integrated_pipeline
+
+                    ingest_orchestration_issue(
+                        pipeline_row=get_integrated_pipeline(pipeline_id),
+                        pipeline_id=pipeline_id,
+                        chain_step="task_canceled",
+                        reason_code="task_canceled",
+                        message=f"整合链路子任务被取消（{row.agent}）",
+                        severity="warning",
+                        run_id=row.run_id,
+                        context={"agent": row.agent},
+                        source_location="task_queue._run_task",
+                    )
+                except Exception:
+                    logger.warning("pipeline issue ingest failed pipeline_id=%s", pipeline_id, exc_info=True)
             logger.info("queue task canceled task_id=%s run_id=%s", row.task_id, row.run_id)
             raise
         except Exception as exc:
             logger.exception("queue task failed task_id=%s", row.task_id)
             finish_queue_task(row.task_id, success=False, error=str(exc))
+            if pipeline_id:
+                from pdd_agent.api.services.pipeline_service import on_queue_task_finished
+
+                on_queue_task_finished(
+                    agent=row.agent,
+                    pipeline_id=pipeline_id,
+                    run_id=row.run_id,
+                    success=False,
+                    result={"error": str(exc)},
+                    error=str(exc),
+                )
 
 
 def enqueue_listing_task(

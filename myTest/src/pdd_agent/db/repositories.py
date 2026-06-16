@@ -16,6 +16,7 @@ from pdd_agent.db.models import (
     AccountLockORM,
     AccountORM,
     FailureItemORM,
+    IntegratedPipelineIssueReportORM,
     IntegratedPipelineORM,
     ListingFailureDetailORM,
     LoginStatusORM,
@@ -1650,3 +1651,126 @@ def update_integrated_pipeline(
         session.flush()
         session.expunge(row)
         return row
+
+
+def insert_pipeline_issue_report(
+    *,
+    issue_id: str,
+    pipeline_id: str,
+    batch_id: str = "",
+    account_id: str = "",
+    stage: str = "",
+    chain_step: str = "",
+    severity: str = "error",
+    reason_code: str = "",
+    title: str = "",
+    message: str = "",
+    error_text: str = "",
+    context: dict | None = None,
+    run_id: str = "",
+    activity_id: str = "",
+    product_selector: str = "",
+    source_location: str = "",
+) -> IntegratedPipelineIssueReportORM | None:
+    if not is_database_available():
+        return None
+    with session_scope() as session:
+        row = IntegratedPipelineIssueReportORM(
+            issue_id=issue_id,
+            pipeline_id=pipeline_id,
+            batch_id=batch_id or "",
+            account_id=account_id or "",
+            stage=stage or "orchestration",
+            chain_step=chain_step or "",
+            severity=severity or "error",
+            reason_code=reason_code or "",
+            title=title or "",
+            message=message or "",
+            error_text=error_text or "",
+            context=context if isinstance(context, dict) else None,
+            run_id=run_id or "",
+            activity_id=activity_id or "",
+            product_selector=product_selector or "",
+            source_location=source_location or "",
+        )
+        session.add(row)
+        session.flush()
+        session.expunge(row)
+        return row
+
+
+def get_pipeline_issue_report(issue_id: str) -> IntegratedPipelineIssueReportORM | None:
+    if not is_database_available():
+        return None
+    with session_scope() as session:
+        row = session.get(IntegratedPipelineIssueReportORM, issue_id)
+        if row:
+            session.expunge(row)
+        return row
+
+
+def search_pipeline_issue_reports(
+    *,
+    page: int = 1,
+    page_size: int = 50,
+    pipeline_id: str = "",
+    batch_id: str = "",
+    account_id: str = "",
+    stage: str = "",
+    severity: str = "",
+    keyword: str = "",
+) -> tuple[list[IntegratedPipelineIssueReportORM], int]:
+    if not is_database_available():
+        return [], 0
+    page = max(1, page)
+    page_size = max(1, min(200, page_size))
+    with session_scope() as session:
+        query = session.query(IntegratedPipelineIssueReportORM)
+        if pipeline_id:
+            query = query.filter(IntegratedPipelineIssueReportORM.pipeline_id == pipeline_id)
+        if batch_id:
+            query = query.filter(IntegratedPipelineIssueReportORM.batch_id == batch_id)
+        if account_id:
+            query = query.filter(IntegratedPipelineIssueReportORM.account_id == account_id)
+        if stage:
+            query = query.filter(IntegratedPipelineIssueReportORM.stage == stage)
+        if severity:
+            query = query.filter(IntegratedPipelineIssueReportORM.severity == severity)
+        if keyword:
+            pattern = f"%{keyword}%"
+            query = query.filter(
+                (IntegratedPipelineIssueReportORM.title.like(pattern))
+                | (IntegratedPipelineIssueReportORM.message.like(pattern))
+                | (IntegratedPipelineIssueReportORM.error_text.like(pattern))
+                | (IntegratedPipelineIssueReportORM.product_selector.like(pattern))
+                | (IntegratedPipelineIssueReportORM.reason_code.like(pattern))
+            )
+        total = int(query.order_by(None).count())
+        rows = (
+            query.order_by(
+                IntegratedPipelineIssueReportORM.created_at.desc(),
+                IntegratedPipelineIssueReportORM.issue_id.desc(),
+            )
+            .offset((page - 1) * page_size)
+            .limit(page_size)
+            .all()
+        )
+        for row in rows:
+            session.expunge(row)
+        return rows, total
+
+
+def count_pipeline_issue_reports(
+    *,
+    pipeline_id: str = "",
+    severity: str = "",
+) -> int:
+    if not is_database_available():
+        return 0
+    with session_scope() as session:
+        query = session.query(func.count(IntegratedPipelineIssueReportORM.issue_id))
+        if pipeline_id:
+            query = query.filter(IntegratedPipelineIssueReportORM.pipeline_id == pipeline_id)
+        if severity:
+            query = query.filter(IntegratedPipelineIssueReportORM.severity == severity)
+        return int(query.scalar() or 0)

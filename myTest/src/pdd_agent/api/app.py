@@ -15,6 +15,7 @@ from pdd_agent.api.routes.published_products import router as published_products
 from pdd_agent.api.routes.style_colors import router as style_colors_router
 from pdd_agent.api.routes.listed_folders import router as listed_folders_router
 from pdd_agent.api.routes.pipelines import router as pipelines_router
+from pdd_agent.api.routes.pipeline_issues import router as pipeline_issues_router
 from pdd_agent.api.routes.queue import router as queue_router
 from pdd_agent.api.routes.runs import router as runs_router
 from pdd_agent.api.routes.tasks import router as tasks_router
@@ -73,6 +74,7 @@ def create_app() -> FastAPI:
     app.include_router(catalog_router, prefix="/api")
     app.include_router(tasks_router, prefix="/api")
     app.include_router(pipelines_router, prefix="/api")
+    app.include_router(pipeline_issues_router, prefix="/api")
     app.include_router(listed_folders_router, prefix="/api")
     app.include_router(queue_router, prefix="/api")
     app.include_router(failures_router, prefix="/api")

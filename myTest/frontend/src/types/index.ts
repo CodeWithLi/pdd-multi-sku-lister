@@ -590,3 +590,39 @@ export interface IntegratedPipelineBatchResponse {
   pipelines: IntegratedPipelineBatchRunItem[]
   message: string
 }
+
+export interface PipelineIssueReport {
+  issue_id: string
+  pipeline_id: string
+  batch_id: string
+  account_id: string
+  stage: string
+  stage_label: string
+  chain_step: string
+  severity: 'error' | 'warning' | 'critical' | string
+  reason_code: string
+  title: string
+  message: string
+  error_text: string
+  context: Record<string, unknown>
+  run_id: string
+  activity_id: string
+  product_selector: string
+  source_location: string
+  created_at: string | null
+}
+
+export interface PipelineIssueListResponse {
+  items: PipelineIssueReport[]
+  total: number
+  page: number
+  page_size: number
+}
+
+export interface PipelineIssueSummaryResponse {
+  pipeline_id: string
+  total: number
+  error: number
+  warning: number
+  critical: number
+}
