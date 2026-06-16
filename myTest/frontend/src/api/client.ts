@@ -49,6 +49,7 @@ import type {
   RunListResponse,
   RunInterpretResponse,
   RuntimeConfig,
+  FeishuBitableHealth,
 } from '@/types'
 
 const http = axios.create({
@@ -372,6 +373,72 @@ export const api = {
 
   pipelineIssueSummary: (pipelineId: string) =>
     http.get<PipelineIssueSummaryResponse>(`/pipeline-issues/summary/${pipelineId}`).then((r) => r.data),
+
+  feishuBitableHealth: () =>
+    http.get<FeishuBitableHealth>('/feishu-bitable/health').then((r) => r.data),
+
+  feishuBitableCreateApp: (body: { name: string; folder_token?: string; time_zone?: string }) =>
+    http.post('/feishu-bitable/apps', body).then((r) => r.data),
+
+  feishuBitableListTables: (appToken = '') =>
+    http
+      .get('/feishu-bitable/tables', {
+        params: { app_token: appToken || undefined },
+      })
+      .then((r) => r.data),
+
+  feishuBitableCreateTable: (body: { app_token?: string; name: string }) =>
+    http.post('/feishu-bitable/tables', body).then((r) => r.data),
+
+  feishuBitableUpdateTable: (tableId: string, body: { app_token?: string; name: string }) =>
+    http.patch(`/feishu-bitable/tables/${tableId}`, body).then((r) => r.data),
+
+  feishuBitableDeleteTable: (tableId: string, appToken = '') =>
+    http
+      .delete(`/feishu-bitable/tables/${tableId}`, {
+        params: { app_token: appToken || undefined },
+      })
+      .then((r) => r.data),
+
+  feishuBitableListFields: (tableId: string, appToken = '') =>
+    http
+      .get(`/feishu-bitable/tables/${tableId}/fields`, {
+        params: { app_token: appToken || undefined },
+      })
+      .then((r) => r.data),
+
+  feishuBitableCreateField: (body: {
+    app_token?: string
+    table_id: string
+    field_name: string
+    type: number
+    property?: Record<string, unknown> | null
+  }) =>
+    http.post('/feishu-bitable/fields', body).then((r) => r.data),
+
+  feishuBitableDeleteField: (fieldId: string, tableId: string, appToken = '') =>
+    http
+      .delete(`/feishu-bitable/fields/${fieldId}`, {
+        params: { table_id: tableId, app_token: appToken || undefined },
+      })
+      .then((r) => r.data),
+
+  feishuBitableListRecords: (
+    tableId: string,
+    params: { app_token?: string; page_size?: number; page_token?: string },
+  ) => http.get(`/feishu-bitable/tables/${tableId}/records`, { params }).then((r) => r.data),
+
+  feishuBitableBatchCreateRecords: (body: {
+    app_token?: string
+    table_id: string
+    records: Record<string, unknown>[]
+  }) => http.post('/feishu-bitable/records/batch-create', body).then((r) => r.data),
+
+  feishuBitableBatchDeleteRecords: (body: {
+    app_token?: string
+    table_id: string
+    record_ids: string[]
+  }) => http.post('/feishu-bitable/records/batch-delete', body).then((r) => r.data),
 }
 
 export default http

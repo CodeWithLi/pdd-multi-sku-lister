@@ -9,6 +9,7 @@ from pdd_agent.api.routes.agents import router as agents_router
 from pdd_agent.api.routes.catalog import router as catalog_router
 from pdd_agent.api.routes.config import router as config_router
 from pdd_agent.api.routes.failures import router as failures_router
+from pdd_agent.api.routes.feishu_bitable import router as feishu_bitable_router
 from pdd_agent.api.routes.health import router as health_router
 from pdd_agent.api.routes.login import router as login_router
 from pdd_agent.api.routes.published_products import router as published_products_router
@@ -78,6 +79,7 @@ def create_app() -> FastAPI:
     app.include_router(listed_folders_router, prefix="/api")
     app.include_router(queue_router, prefix="/api")
     app.include_router(failures_router, prefix="/api")
+    app.include_router(feishu_bitable_router, prefix="/api")
     app.include_router(login_router, prefix="/api")
     app.include_router(published_products_router, prefix="/api")
     app.include_router(style_colors_router, prefix="/api")

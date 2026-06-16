@@ -17,6 +17,7 @@ import {
   Warning,
   CircleClose,
   Brush,
+  Grid,
 } from '@element-plus/icons-vue'
 import type { Component } from 'vue'
 
@@ -64,6 +65,7 @@ const navGroups: NavGroup[] = [
     items: [
       { path: '/published-products', label: '已发布商品', icon: DocumentCopy },
       { path: '/style-colors', label: '款式颜色', icon: Brush },
+      { path: '/feishu-bitable', label: '飞书多维表格', icon: Grid },
     ],
   },
   {

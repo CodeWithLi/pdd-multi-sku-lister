@@ -1,0 +1,46 @@
+# 飞书多维表格集成配置
+# 复制：cp config/feishu.example.yaml config/feishu.yaml
+
+app_id: ""
+app_secret: ""
+oauth_redirect_uri: "http://127.0.0.1:5174/oauth/callback"
+oauth_scope: "offline_access bitable:app"
+use_user_access_token: true
+user_access_token: ""
+user_access_token_expires_at: 0
+refresh_token: ""
+refresh_token_expires_at: 0
+
+# 浏览器地址 https://xxx.feishu.cn/base/{app_token}?table={table_id}
+bitable_app_token: ""
+table_id: ""
+
+# 新建表时使用；若已有表（如截图 tblan7b1NAj8MFFN）直接填 table_id 即可
+table_name: "拼多多每日上架商品日志"
+
+# 列名与「技术支持」Base 保持一致（截图里是「宝贝标签」不是「宝贝标题」）
+field_names:
+  date: "日期"
+  link: "商品链接"
+  title: "宝贝标签"
+  price: "一口价"
+  merchant_code: "商家编码"
+  sku_count: "规格数"
+  published_at: "发布时间"
+  status: "状态"
+  mapping_id: "映射ID"
+  account_id: "店铺"
+  pdd_product_id: "拼多多商品ID"
+  product_code: "商品编码"
+  image_set: "套图"
+
+merchant_goods_url_template: "https://mms.pinduoduo.com/goods/goods_detail?goods_id={pdd_product_id}"
+product_link_template: "https://mobile.yangkeduo.com/goods.html?goods_id={pdd_product_id}"
+
+# 已有表没有「映射ID」列时留空 ""，测试阶段可关闭去重
+dedupe_field: ""
+
+status_options:
+  - 在售
+  - 已下架
+  - 未知

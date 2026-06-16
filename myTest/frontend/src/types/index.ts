@@ -628,3 +628,13 @@ export interface PipelineIssueSummaryResponse {
   warning: number
   critical: number
 }
+
+export interface FeishuBitableHealth {
+  ok: boolean
+  auth_mode: string
+  configured: boolean
+  default_app_token: string
+  default_table_id?: string
+  default_table_name?: string
+  user_token_ready?: boolean
+}
