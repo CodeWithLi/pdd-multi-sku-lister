@@ -22,6 +22,7 @@ class IntegratedPipelineStartRequest(BaseModel):
     activity_ids: list[str] = Field(default_factory=list)
     category_keyword: str = "玩偶"
     auto_promotion: bool = True
+    auto_limited_time_setup: bool = True
     activity_delay_hours: float = Field(default=24.0, ge=0)
     demo_mode: bool = False
     platform_listing_code: str = ""
@@ -49,6 +50,7 @@ class IntegratedPipelineBatchStartRequest(BaseModel):
     activity_ids: list[str] = Field(default_factory=list)
     category_keyword: str = "玩偶"
     auto_promotion: bool = True
+    auto_limited_time_setup: bool = True
     activity_delay_hours: float = Field(default=24.0, ge=0)
     demo_mode: bool = False
     platform_listing_code: str = ""
@@ -107,6 +109,7 @@ class IntegratedPipelineResponse(BaseModel):
     activity_id: str
     activity_ids: list[str] = Field(default_factory=list)
     auto_promotion: bool
+    auto_limited_time_setup: bool = True
     activity_delay_hours: float
     demo_mode: bool
     slot_alignment_test: bool = False

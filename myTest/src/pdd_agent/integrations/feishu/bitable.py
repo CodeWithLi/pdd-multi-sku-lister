@@ -110,6 +110,31 @@ def batch_create_records(
     return [str(item.get("record_id") or "") for item in created]
 
 
+def batch_update_records(
+    client: FeishuClient,
+    app_token: str,
+    table_id: str,
+    records: list[dict[str, Any]],
+) -> list[str]:
+    """批量更新记录。records 每项含 record_id + fields。"""
+    if not records:
+        return []
+    payload = [
+        {"record_id": str(item["record_id"]), "fields": dict(item["fields"] or {})}
+        for item in records
+        if str(item.get("record_id") or "").strip()
+    ]
+    if not payload:
+        return []
+    data = client.request(
+        "POST",
+        f"/bitable/v1/apps/{app_token}/tables/{table_id}/records/batch_update",
+        json={"records": payload},
+    )
+    updated = data.get("data", {}).get("records") or []
+    return [str(item.get("record_id") or "") for item in updated]
+
+
 _FIELD_LOOKUP_CACHE: dict[tuple[str, str], dict[str, str]] = {}
 
 

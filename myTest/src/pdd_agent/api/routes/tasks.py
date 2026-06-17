@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import random
 import uuid
 from datetime import datetime, timedelta
@@ -47,16 +48,95 @@ from pdd_agent.api.services.task_runner import (
 from pdd_agent.skills.campaign.marketing_activities import KNOWN_MARKETING_ACTIVITIES
 from pdd_agent.core.config import load_yaml_settings
 from pdd_agent.db.session import is_database_available
-from pdd_agent.db.repositories import cancel_queued_task_by_run_id
+from pdd_agent.db.repositories import cancel_queued_task_by_run_id, get_queue_task_by_run_id
 from pdd_agent.domain.enums import AgentKind, RunStatus
 from pdd_agent.storage import TaskRunStore
 
 router = APIRouter(prefix="/tasks", tags=["tasks"])
 _ACTIVE_CAMPAIGN_RUNS: dict[str, str] = {}
 _ACTIVE_TRAFFIC_RUNS: dict[str, str] = {}
+_STALE_RUN_MESSAGE = "任务已中断或未实际执行（可能因服务重启），已自动结束，请重新启动"
 
 
-def _dedupe_account_ids(account_ids: list[str]) -> list[str]:
+def _campaign_run_is_live(account_id: str, run_id: str) -> bool:
+    """判断活动任务是否仍在后台/队列中真实执行。"""
+    run_id = str(run_id or "").strip()
+    account_id = str(account_id or "").strip()
+    if not run_id or not account_id:
+        return False
+    if _ACTIVE_CAMPAIGN_RUNS.get(account_id) == run_id:
+        return True
+    task = get_queue_task_by_run_id(run_id)
+    return bool(task and str(task.status or "").strip().lower() == "running")
+
+
+def _traffic_run_is_live(account_id: str, run_id: str) -> bool:
+    run_id = str(run_id or "").strip()
+    account_id = str(account_id or "").strip()
+    if not run_id or not account_id:
+        return False
+    if _ACTIVE_TRAFFIC_RUNS.get(account_id) == run_id:
+        return True
+    task = get_queue_task_by_run_id(run_id)
+    return bool(task and str(task.status or "").strip().lower() == "running")
+
+
+def _finalize_stale_run(run_id: str, message: str = _STALE_RUN_MESSAGE) -> None:
+    record = TaskRunStore().load(run_id)
+    if record and record.status in {RunStatus.PENDING, RunStatus.RUNNING}:
+        TaskRunStore().finish(run_id, RunStatus.FAILED, message)
+
+
+def _find_running_campaign_run(account_id: str) -> str:
+    active_run_id = _ACTIVE_CAMPAIGN_RUNS.get(account_id)
+    if active_run_id:
+        if _campaign_run_is_live(account_id, active_run_id):
+            return active_run_id
+        _finalize_stale_run(active_run_id)
+        _ACTIVE_CAMPAIGN_RUNS.pop(account_id, None)
+
+    store = TaskRunStore()
+    started_from = datetime.now() - timedelta(minutes=30)
+    records, _ = store.search_runs(
+        page=1,
+        page_size=20,
+        account_id=account_id,
+        agent=AgentKind.CAMPAIGN.value,
+        started_from=started_from,
+    )
+    for record in records:
+        if record.status not in {RunStatus.PENDING, RunStatus.RUNNING}:
+            continue
+        if _campaign_run_is_live(account_id, record.run_id):
+            return record.run_id
+        _finalize_stale_run(record.run_id)
+    return ""
+
+
+def _find_running_traffic_run(account_id: str) -> str:
+    active_run_id = _ACTIVE_TRAFFIC_RUNS.get(account_id)
+    if active_run_id:
+        if _traffic_run_is_live(account_id, active_run_id):
+            return active_run_id
+        _finalize_stale_run(active_run_id)
+        _ACTIVE_TRAFFIC_RUNS.pop(account_id, None)
+
+    store = TaskRunStore()
+    started_from = datetime.now() - timedelta(minutes=30)
+    records, _ = store.search_runs(
+        page=1,
+        page_size=20,
+        account_id=account_id,
+        agent=AgentKind.TRAFFIC.value,
+        started_from=started_from,
+    )
+    for record in records:
+        if record.status not in {RunStatus.PENDING, RunStatus.RUNNING}:
+            continue
+        if _traffic_run_is_live(account_id, record.run_id):
+            return record.run_id
+        _finalize_stale_run(record.run_id)
+    return ""
     return list(dict.fromkeys(a.strip() for a in account_ids if a and a.strip()))
 
 
@@ -98,44 +178,8 @@ def _mark_queued(run_id: str) -> None:
     TaskRunStore().update_status(run_id, RunStatus.PENDING, "queued")
 
 
-def _find_running_campaign_run(account_id: str) -> str:
-    active_run_id = _ACTIVE_CAMPAIGN_RUNS.get(account_id)
-    if active_run_id:
-        return active_run_id
-
-    store = TaskRunStore()
-    started_from = datetime.now() - timedelta(minutes=30)
-    records, _ = store.search_runs(
-        page=1,
-        page_size=20,
-        account_id=account_id,
-        agent=AgentKind.CAMPAIGN.value,
-        started_from=started_from,
-    )
-    for record in records:
-        if record.status in {RunStatus.PENDING, RunStatus.RUNNING}:
-            return record.run_id
-    return ""
-
-
-def _find_running_traffic_run(account_id: str) -> str:
-    active_run_id = _ACTIVE_TRAFFIC_RUNS.get(account_id)
-    if active_run_id:
-        return active_run_id
-
-    store = TaskRunStore()
-    started_from = datetime.now() - timedelta(minutes=30)
-    records, _ = store.search_runs(
-        page=1,
-        page_size=20,
-        account_id=account_id,
-        agent=AgentKind.TRAFFIC.value,
-        started_from=started_from,
-    )
-    for record in records:
-        if record.status in {RunStatus.PENDING, RunStatus.RUNNING}:
-            return record.run_id
-    return ""
+def _dedupe_account_ids(account_ids: list[str]) -> list[str]:
+    return list(dict.fromkeys(a.strip() for a in account_ids if a and a.strip()))
 
 
 async def _execute_campaign_limited_time_setup_guarded(**kwargs):
@@ -143,6 +187,9 @@ async def _execute_campaign_limited_time_setup_guarded(**kwargs):
     run_id = str(kwargs.get("run_id") or "")
     try:
         return await execute_campaign_limited_time_setup(**kwargs)
+    except asyncio.CancelledError:
+        TaskRunStore().finish(run_id, RunStatus.CANCELED, "任务被中断（服务关闭或取消）")
+        raise
     finally:
         if account_id and _ACTIVE_CAMPAIGN_RUNS.get(account_id) == run_id:
             _ACTIVE_CAMPAIGN_RUNS.pop(account_id, None)
@@ -153,6 +200,9 @@ async def _execute_campaign_marketing_activity_register_guarded(**kwargs):
     run_id = str(kwargs.get("run_id") or "")
     try:
         return await execute_campaign_marketing_activity_register(**kwargs)
+    except asyncio.CancelledError:
+        TaskRunStore().finish(run_id, RunStatus.CANCELED, "任务被中断（服务关闭或取消）")
+        raise
     finally:
         if account_id and _ACTIVE_CAMPAIGN_RUNS.get(account_id) == run_id:
             _ACTIVE_CAMPAIGN_RUNS.pop(account_id, None)
@@ -163,6 +213,9 @@ async def _execute_campaign_marketing_activity_search_guarded(**kwargs):
     run_id = str(kwargs.get("run_id") or "")
     try:
         return await execute_campaign_marketing_activity_search(**kwargs)
+    except asyncio.CancelledError:
+        TaskRunStore().finish(run_id, RunStatus.CANCELED, "任务被中断（服务关闭或取消）")
+        raise
     finally:
         if account_id and _ACTIVE_CAMPAIGN_RUNS.get(account_id) == run_id:
             _ACTIVE_CAMPAIGN_RUNS.pop(account_id, None)
@@ -173,6 +226,9 @@ async def _execute_traffic_promotion_create_guarded(**kwargs):
     run_id = str(kwargs.get("run_id") or "")
     try:
         return await execute_traffic_promotion_create(**kwargs)
+    except asyncio.CancelledError:
+        TaskRunStore().finish(run_id, RunStatus.CANCELED, "任务被中断（服务关闭或取消）")
+        raise
     finally:
         if account_id and _ACTIVE_TRAFFIC_RUNS.get(account_id) == run_id:
             _ACTIVE_TRAFFIC_RUNS.pop(account_id, None)

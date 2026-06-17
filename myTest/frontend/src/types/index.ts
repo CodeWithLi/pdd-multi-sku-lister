@@ -518,6 +518,7 @@ export interface IntegratedPipeline {
   activity_id: string
   activity_ids?: string[]
   auto_promotion: boolean
+  auto_limited_time_setup?: boolean
   activity_delay_hours: number
   demo_mode: boolean
   slot_alignment_test?: boolean
@@ -551,6 +552,7 @@ export interface IntegratedPipelineStartPayload {
   activity_ids: string[]
   category_keyword?: string
   auto_promotion?: boolean
+  auto_limited_time_setup?: boolean
   activity_delay_hours?: number
   demo_mode?: boolean
   platform_listing_code?: string
@@ -566,6 +568,7 @@ export interface IntegratedPipelineBatchStartPayload {
   product_codes: string[]
   category_keyword?: string
   auto_promotion?: boolean
+  auto_limited_time_setup?: boolean
   activity_delay_hours?: number
   demo_mode?: boolean
   platform_listing_code?: string

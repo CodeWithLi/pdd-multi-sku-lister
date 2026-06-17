@@ -58,6 +58,10 @@ class PddUploadLogFieldNames(BaseModel):
     created_at: str = "创建时间"
     status: str = "状态"
     product_id: str = "商品ID"
+    limited_time_status: str = "限时限量购状态"
+    activity_20981: str = "618报名"
+    activity_21365: str = "21365限量七折"
+    promotion_status: str = "推广状态"
 
 
 class PddUploadLogConfig(BaseModel):
@@ -76,6 +80,53 @@ class PddUploadLogConfig(BaseModel):
     dedupe_field: str = Field(
         default="商品ID",
         description="幂等去重字段名",
+    )
+    status_options: list[str] = Field(
+        default_factory=lambda: ["已上架", "报错上架失败"],
+        description="「状态」单选字段选项（须与飞书表一致）",
+    )
+    limited_time_status_options: list[str] = Field(
+        default_factory=lambda: ["成功", "失败"],
+        description="「限时限量购状态」单选字段选项（须与飞书表一致）",
+    )
+    update_limited_time_status: bool = Field(
+        default=True,
+        description="限时限量购完成后按商品ID回写飞书「限时限量购状态」",
+    )
+    limited_time_lookup_retries: int = Field(
+        default=6,
+        ge=1,
+        le=20,
+        description="按商品ID查飞书记录的重试次数（应对上架日志异步写入延迟）",
+    )
+    limited_time_lookup_interval_seconds: float = Field(
+        default=5.0,
+        ge=0.5,
+        le=30.0,
+        description="每次查飞书记录的间隔秒数",
+    )
+    activity_status_options: list[str] = Field(
+        default_factory=lambda: ["成功", "失败"],
+        description="活动报名状态单选字段选项（618报名 / 21365限量七折 等，须与飞书表一致）",
+    )
+    update_activity_register_status: bool = Field(
+        default=True,
+        description="活动报名完成后按商品ID回写飞书对应活动列（20981→618报名，21365→21365限量七折）",
+    )
+    activity_register_fields: dict[str, str] = Field(
+        default_factory=lambda: {
+            "20981": "618报名",
+            "21365": "21365限量七折",
+        },
+        description="活动 ID → 飞书列名",
+    )
+    promotion_status_options: list[str] = Field(
+        default_factory=lambda: ["成功", "失败"],
+        description="「推广状态」单选字段选项（须与飞书表一致）",
+    )
+    update_promotion_status: bool = Field(
+        default=True,
+        description="推广任务完成后按商品ID回写飞书「推广状态」",
     )
     field_names: PddUploadLogFieldNames = Field(default_factory=PddUploadLogFieldNames)
 

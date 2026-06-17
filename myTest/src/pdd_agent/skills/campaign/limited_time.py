@@ -506,7 +506,7 @@ def _click_create(page: DpPage, account_id: str) -> bool:
                 getattr(page, "_page").wait_for_load_state("domcontentloaded", timeout=5_000)
             except Exception:
                 pass
-            if _wait_activity_settings(page, account_id, timeout=8):
+            if _wait_activity_settings(page, account_id, timeout=12):
                 print(f"[{account_id}] 已点击立即创建并进入活动设置页", flush=True)
                 return True
             print(
@@ -520,15 +520,27 @@ def _click_create(page: DpPage, account_id: str) -> bool:
     return False
 
 
-def _wait_activity_settings(page: DpPage, account_id: str, timeout: int = 20) -> bool:
-    for _ in range(timeout):
+def _wait_activity_settings(page: DpPage, account_id: str, timeout: int = 30) -> bool:
+    markers = (
+        "活动类型",
+        "活动名称",
+        "选择商品",
+        "自动创建",
+        "惊喜优惠",
+        "同步设置",
+        "促销维度",
+    )
+    for attempt in range(timeout):
         text = _body_text(page)
-        if "活动设置" in text and (
-            "活动类型" in text or "活动名称" in text or "选择商品" in text or "自动创建" in text
-        ):
+        if "活动设置" in text and any(marker in text for marker in markers):
             return True
+        if attempt == timeout // 2:
+            print(
+                f"[{account_id}] 仍在等待活动设置页… url={page.url} text_len={len(text)}",
+                flush=True,
+            )
         time.sleep(1)
-    print(f"[{account_id}] 未确认进入活动设置页", flush=True)
+    print(f"[{account_id}] 未确认进入活动设置页 url={page.url}", flush=True)
     return False
 
 

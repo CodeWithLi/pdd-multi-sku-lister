@@ -402,11 +402,11 @@ async function startPipeline() {
         : ''
       success.value = skipListing
         ? demoMode.value
-          ? `整合链路已启动（跳过上架，约 2 分钟后自动报活动${activityHint}）`
-          : `整合链路已启动（跳过上架，${activityDelayHours.value} 小时后自动报活动${activityHint}）`
+          ? `整合链路已启动（跳过上架，先限时限量购再约 2 分钟后报活动${activityHint}）`
+          : `整合链路已启动（跳过上架，先限时限量购再 ${activityDelayHours.value} 小时后报活动${activityHint}）`
         : demoMode.value
-          ? `整合链路已启动（演示模式：约 2 分钟后自动报活动${activityHint}${partialHint}）`
-          : `整合链路已启动（${activityDelayHours.value} 小时后自动报活动${activityHint}${partialHint}，含随机抖动分散到期）`
+          ? `整合链路已启动（演示：上架后限时限量购 → 约 2 分钟后报活动${activityHint}${partialHint}）`
+          : `整合链路已启动（上架 → 限时限量购 → ${activityDelayHours.value} 小时后报活动${activityHint}${partialHint}）`
     }
     await refreshPipelines()
     startPolling()
@@ -657,7 +657,17 @@ onUnmounted(stopPolling)
             </div>
 
             <div class="form-section">
-              <div class="form-section-title">活动与推广</div>
+              <div class="form-section-head">
+                <div class="form-section-title">活动与推广</div>
+                <div class="limited-time-inline">
+                  <span class="limited-time-label">限时限量购</span>
+                  <el-tag size="small" type="warning" effect="plain">必选</el-tag>
+                  <span class="limited-time-hint muted">先于活动报名</span>
+                </div>
+              </div>
+              <p class="form-tip limited-time-tip">
+                链路顺序：上架 → 限时限量购 → 活动报名 → 推广。已选活动时，限时限量购会在浏览器中先于活动报名自动执行。
+              </p>
 
               <el-form-item label="营销活动" required>
                 <el-select
@@ -678,7 +688,7 @@ onUnmounted(stopPolling)
                   />
                 </el-select>
                 <div v-if="activityIds.length > 1" class="form-tip">
-                  已选 {{ activityIds.length }} 个活动，将按顺序依次报名，全部完成后再推广
+                  已选 {{ activityIds.length }} 个活动，限时限量购完成后将按顺序依次报名，全部完成后再推广
                 </div>
               </el-form-item>
 
@@ -714,7 +724,7 @@ onUnmounted(stopPolling)
                   开启后：主款预览图顺序定尺寸名，兄弟款跟槽位不走尺寸并集。
                 </div>
                 <div v-if="demoMode" class="form-tip">
-                  演示模式：活动约 2 分钟后执行，便于测试整条链路。
+                  演示模式：限时限量购上架后立即执行，活动约 2 分钟后执行，便于测试整条链路。
                 </div>
               </el-form-item>
             </div>
@@ -768,7 +778,7 @@ onUnmounted(stopPolling)
             活动：{{ activePipeline.campaign_skip_reason }}
           </p>
 
-          <el-steps direction="vertical" :active="3" class="steps">
+          <el-steps direction="vertical" :active="activePipeline.steps.length" class="steps">
             <el-step v-for="step in activePipeline.steps" :key="step.key" :title="step.label">
               <template #description>
                 <div class="step-desc">
@@ -900,13 +910,48 @@ onUnmounted(stopPolling)
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.8);
 }
 
+.form-section-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 14px;
+  flex-wrap: wrap;
+}
+
 .form-section-title {
-  margin: 0 0 14px;
+  margin: 0;
   font-size: 13px;
   font-weight: 700;
   color: #475569;
   letter-spacing: 0.02em;
   text-transform: none;
+}
+
+.limited-time-inline {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 12px;
+  border: 1px solid #fcd34d;
+  border-radius: 8px;
+  background: #fffbeb;
+}
+
+.limited-time-label {
+  font-size: 13px;
+  font-weight: 600;
+  color: #b45309;
+  white-space: nowrap;
+}
+
+.limited-time-hint {
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.limited-time-tip {
+  margin: -6px 0 12px;
 }
 
 .form-section :deep(.el-form-item:last-child) {

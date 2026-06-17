@@ -7,8 +7,17 @@ from datetime import datetime
 from pdd_agent.integrations.feishu.config import FeishuConfig, PddUploadLogConfig
 from pdd_agent.integrations.feishu.pdd_upload_sync import (
     build_pdd_upload_log_fields,
+    extract_product_ids_for_limited_time_status,
     format_pdd_upload_log_context,
+    map_activity_register_status_to_feishu,
+    map_limited_time_status_to_feishu,
+    map_promotion_status_to_feishu,
+    map_pdd_upload_status_to_feishu,
+    push_pdd_upload_activity_register_status,
+    push_pdd_upload_limited_time_status,
     push_pdd_upload_log,
+    push_pdd_upload_promotion_status,
+    resolve_activity_register_field_name,
 )
 from pdd_agent.skills.listing.goods_list_capture import (
     extract_list_status_from_text,
@@ -46,6 +55,13 @@ def test_is_plain_goods_template_link():
     assert is_plain_goods_template_link("", pid) is False
 
 
+def test_map_pdd_upload_status_to_feishu():
+    assert map_pdd_upload_status_to_feishu("销售中") == "已上架"
+    assert map_pdd_upload_status_to_feishu("") == "已上架"
+    assert map_pdd_upload_status_to_feishu("已驳回") == "报错上架失败"
+    assert map_pdd_upload_status_to_feishu("已上架") == "已上架"
+
+
 def test_build_pdd_upload_log_fields_maps_seven_columns():
     cfg = FeishuConfig(
         app_id="x",
@@ -73,7 +89,7 @@ def test_build_pdd_upload_log_fields_maps_seven_columns():
 
     assert fields["宝贝标题"] == "可爱草莓软糯造型毛绒零钱包"
     assert fields["商品编码"] == "BD737A"
-    assert fields["状态"] == "销售中"
+    assert fields["状态"] == "已上架"
     assert fields["商品ID"] == "966965874378"
     assert isinstance(fields["日期"], int)
     assert isinstance(fields["创建时间"], int)
@@ -168,3 +184,240 @@ def test_format_pdd_upload_log_context_includes_link_source():
     assert "product_id=967050860402" in text
     assert "link_source=弹窗抓取(modal_text)" in text
     assert "yangkeduo.com" in text
+
+
+def test_map_limited_time_status_to_feishu():
+    assert map_limited_time_status_to_feishu(success=True) == "成功"
+    assert map_limited_time_status_to_feishu(success=False) == "失败"
+
+
+def test_extract_product_ids_for_limited_time_status_prefers_input_list():
+    ids = extract_product_ids_for_limited_time_status(
+        ["967058176181", "967084305452"],
+        {"results": [{"selected_pdd_product_ids": ["999"]}]},
+    )
+    assert ids == ["967058176181", "967084305452"]
+
+
+def test_extract_product_ids_for_limited_time_status_from_result():
+    ids = extract_product_ids_for_limited_time_status(
+        [],
+        {
+            "results": [
+                {"selected_pdd_product_ids": ["967058176181", "967084305452"]},
+            ]
+        },
+    )
+    assert ids == ["967058176181", "967084305452"]
+
+
+def test_push_pdd_upload_limited_time_status_updates_by_product_id(monkeypatch):
+    from pdd_agent.integrations.feishu import pdd_upload_sync
+
+    class FakeClient:
+        def __init__(self, config):
+            self.config = config
+
+    captured_updates: list[dict] = []
+
+    def fake_search(client, app_token, table_id, *, field_name, value):
+        if value == "967058176181":
+            return [{"record_id": "rec_967058", "fields": {"商品ID": value}}]
+        return []
+
+    def fake_batch_update(client, app_token, table_id, updates):
+        captured_updates.extend(updates)
+        return [item["record_id"] for item in updates]
+
+    monkeypatch.setattr(pdd_upload_sync, "FeishuClient", FakeClient)
+    monkeypatch.setattr(pdd_upload_sync, "search_records_by_field", fake_search)
+    monkeypatch.setattr(pdd_upload_sync, "batch_update_records", fake_batch_update)
+    monkeypatch.setattr(
+        pdd_upload_sync,
+        "resolve_pdd_upload_table_id",
+        lambda cfg, client, save_table_id=True: ("tbldwkpLiuvBWwe9", "test"),
+    )
+    monkeypatch.setattr(
+        pdd_upload_sync,
+        "map_fields_to_table_names",
+        lambda client, app_token, table_id, fields: fields,
+    )
+    monkeypatch.setattr(pdd_upload_sync.time, "sleep", lambda *_args, **_kwargs: None)
+
+    cfg = FeishuConfig(
+        app_id="x",
+        app_secret="y",
+        bitable_app_token="z",
+        pdd_upload_log=PddUploadLogConfig(
+            enabled=True,
+            table_id="tbldwkpLiuvBWwe9",
+            update_limited_time_status=True,
+            limited_time_lookup_retries=1,
+        ),
+    )
+
+    result = push_pdd_upload_limited_time_status(
+        account_id="store_A",
+        product_ids=["967058176181", "967084305452"],
+        success=True,
+        config=cfg,
+    )
+
+    assert result.get("updated") is True
+    assert result.get("status") == "成功"
+    assert result.get("missing_product_ids") == ["967084305452"]
+    assert len(captured_updates) == 1
+    assert captured_updates[0]["record_id"] == "rec_967058"
+    assert captured_updates[0]["fields"]["限时限量购状态"] == "成功"
+
+
+def test_map_activity_register_status_to_feishu():
+    assert map_activity_register_status_to_feishu(success=True) == "成功"
+    assert map_activity_register_status_to_feishu(success=False) == "失败"
+
+
+def test_resolve_activity_register_field_name():
+    cfg = FeishuConfig(
+        app_id="x",
+        app_secret="y",
+        bitable_app_token="z",
+        pdd_upload_log=PddUploadLogConfig(
+            enabled=True,
+            activity_register_fields={"20981": "618报名", "21365": "21365限量七折"},
+        ),
+    )
+    assert resolve_activity_register_field_name("20981", cfg) == "618报名"
+    assert resolve_activity_register_field_name("21365", cfg) == "21365限量七折"
+    assert resolve_activity_register_field_name("99999", cfg) == ""
+
+
+def test_push_pdd_upload_activity_register_status_updates_field(monkeypatch):
+    from pdd_agent.integrations.feishu import pdd_upload_sync
+
+    class FakeClient:
+        def __init__(self, config):
+            self.config = config
+
+    captured_updates: list[dict] = []
+
+    def fake_search(client, app_token, table_id, *, field_name, value):
+        if value == "965182969751":
+            return [{"record_id": "rec_act", "fields": {"商品ID": value}}]
+        return []
+
+    def fake_batch_update(client, app_token, table_id, updates):
+        captured_updates.extend(updates)
+        return [item["record_id"] for item in updates]
+
+    monkeypatch.setattr(pdd_upload_sync, "FeishuClient", FakeClient)
+    monkeypatch.setattr(pdd_upload_sync, "search_records_by_field", fake_search)
+    monkeypatch.setattr(pdd_upload_sync, "batch_update_records", fake_batch_update)
+    monkeypatch.setattr(
+        pdd_upload_sync,
+        "resolve_pdd_upload_table_id",
+        lambda cfg, client, save_table_id=True: ("tbldwkpLiuvBWwe9", "test"),
+    )
+    monkeypatch.setattr(
+        pdd_upload_sync,
+        "map_fields_to_table_names",
+        lambda client, app_token, table_id, fields: fields,
+    )
+    monkeypatch.setattr(pdd_upload_sync.time, "sleep", lambda *_args, **_kwargs: None)
+
+    cfg = FeishuConfig(
+        app_id="x",
+        app_secret="y",
+        bitable_app_token="z",
+        pdd_upload_log=PddUploadLogConfig(
+            enabled=True,
+            table_id="tbldwkpLiuvBWwe9",
+            update_activity_register_status=True,
+            activity_register_fields={"20981": "618报名"},
+            limited_time_lookup_retries=1,
+        ),
+    )
+
+    ok = push_pdd_upload_activity_register_status(
+        account_id="store_A",
+        activity_id="20981",
+        product_ids=["965182969751"],
+        success=True,
+        config=cfg,
+    )
+    assert ok.get("updated") is True
+    assert ok.get("status") == "成功"
+    assert captured_updates[0]["fields"]["618报名"] == "成功"
+
+    fail = push_pdd_upload_activity_register_status(
+        account_id="store_A",
+        activity_id="20981",
+        product_ids=["965182969751"],
+        success=False,
+        config=cfg,
+    )
+    assert fail.get("status") == "失败"
+
+
+def test_push_pdd_upload_promotion_status_updates_field(monkeypatch):
+    from pdd_agent.integrations.feishu import pdd_upload_sync
+
+    class FakeClient:
+        def __init__(self, config):
+            self.config = config
+
+    captured_updates: list[dict] = []
+
+    def fake_search(client, app_token, table_id, *, field_name, value):
+        if value == "967058176181":
+            return [{"record_id": "rec_promo", "fields": {"商品ID": value}}]
+        return []
+
+    def fake_batch_update(client, app_token, table_id, updates):
+        captured_updates.extend(updates)
+        return [item["record_id"] for item in updates]
+
+    monkeypatch.setattr(pdd_upload_sync, "FeishuClient", FakeClient)
+    monkeypatch.setattr(pdd_upload_sync, "search_records_by_field", fake_search)
+    monkeypatch.setattr(pdd_upload_sync, "batch_update_records", fake_batch_update)
+    monkeypatch.setattr(
+        pdd_upload_sync,
+        "resolve_pdd_upload_table_id",
+        lambda cfg, client, save_table_id=True: ("tbldwkpLiuvBWwe9", "test"),
+    )
+    monkeypatch.setattr(
+        pdd_upload_sync,
+        "map_fields_to_table_names",
+        lambda client, app_token, table_id, fields: fields,
+    )
+    monkeypatch.setattr(pdd_upload_sync.time, "sleep", lambda *_args, **_kwargs: None)
+
+    cfg = FeishuConfig(
+        app_id="x",
+        app_secret="y",
+        bitable_app_token="z",
+        pdd_upload_log=PddUploadLogConfig(
+            enabled=True,
+            table_id="tbldwkpLiuvBWwe9",
+            update_promotion_status=True,
+            limited_time_lookup_retries=1,
+        ),
+    )
+
+    ok = push_pdd_upload_promotion_status(
+        account_id="store_A",
+        product_ids=["967058176181"],
+        success=True,
+        config=cfg,
+    )
+    assert ok.get("updated") is True
+    assert ok.get("status") == "成功"
+    assert captured_updates[0]["fields"]["推广状态"] == "成功"
+
+    fail = push_pdd_upload_promotion_status(
+        account_id="store_A",
+        product_ids=["967058176181"],
+        success=False,
+        config=cfg,
+    )
+    assert fail.get("status") == "失败"
+    assert map_promotion_status_to_feishu(success=False) == "失败"

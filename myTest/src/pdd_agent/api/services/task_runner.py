@@ -142,6 +142,71 @@ def _summarize_campaign_message(result: dict[str, Any]) -> str:
     return "活动任务失败"
 
 
+def _schedule_feishu_limited_time_status(
+    *,
+    account_id: str,
+    selected_product_ids: list[str],
+    result: dict[str, Any],
+    status: RunStatus,
+) -> None:
+    from pdd_agent.integrations.feishu.pdd_upload_sync import (
+        extract_product_ids_for_limited_time_status,
+        schedule_pdd_upload_limited_time_status,
+    )
+
+    product_ids = extract_product_ids_for_limited_time_status(selected_product_ids, result)
+    schedule_pdd_upload_limited_time_status(
+        account_id=account_id,
+        product_ids=product_ids,
+        success=status == RunStatus.SUCCESS,
+        error=_summarize_campaign_message(result) if status != RunStatus.SUCCESS else "",
+    )
+
+
+def _schedule_feishu_activity_register_status(
+    *,
+    account_id: str,
+    activity_id: str,
+    selected_product_ids: list[str],
+    result: dict[str, Any],
+    status: RunStatus,
+) -> None:
+    from pdd_agent.integrations.feishu.pdd_upload_sync import (
+        extract_product_ids_from_campaign_result,
+        schedule_pdd_upload_activity_register_status,
+    )
+
+    product_ids = extract_product_ids_from_campaign_result(selected_product_ids, result)
+    schedule_pdd_upload_activity_register_status(
+        account_id=account_id,
+        activity_id=activity_id,
+        product_ids=product_ids,
+        success=status == RunStatus.SUCCESS,
+        error=_summarize_campaign_message(result) if status != RunStatus.SUCCESS else "",
+    )
+
+
+def _schedule_feishu_promotion_status(
+    *,
+    account_id: str,
+    selected_product_ids: list[str],
+    result: dict[str, Any],
+    status: RunStatus,
+) -> None:
+    from pdd_agent.integrations.feishu.pdd_upload_sync import (
+        extract_product_ids_from_campaign_result,
+        schedule_pdd_upload_promotion_status,
+    )
+
+    product_ids = extract_product_ids_from_campaign_result(selected_product_ids, result)
+    schedule_pdd_upload_promotion_status(
+        account_id=account_id,
+        product_ids=product_ids,
+        success=status == RunStatus.SUCCESS,
+        error=_summarize_traffic_message(result) if status != RunStatus.SUCCESS else "",
+    )
+
+
 def _activity_registration_summary_line(item: dict[str, Any]) -> str:
     """从单次活动报名结果生成一眼可读的摘要。"""
     step = str(item.get("step") or "").strip()
@@ -576,10 +641,25 @@ async def execute_campaign_marketing_activity_register(
         item_failed = any(str(r.get("status") or "") != "success" for r in item_results)
         status = RunStatus.SUCCESS if not result.get("errors") and not item_failed else RunStatus.FAILED
         store.finish(run_id, status, message=_summarize_campaign_message(result), result=result)
+        _schedule_feishu_activity_register_status(
+            account_id=account_id,
+            activity_id=activity_id,
+            selected_product_ids=selected_product_ids,
+            result=result,
+            status=status,
+        )
         return result
     except Exception as exc:
         logger.exception("campaign marketing activity register failed run_id=%s", run_id)
-        store.finish(run_id, RunStatus.FAILED, str(exc), result={"error": str(exc)})
+        failed_result = {"error": str(exc)}
+        store.finish(run_id, RunStatus.FAILED, str(exc), result=failed_result)
+        _schedule_feishu_activity_register_status(
+            account_id=account_id,
+            activity_id=activity_id,
+            selected_product_ids=selected_product_ids,
+            result=failed_result,
+            status=RunStatus.FAILED,
+        )
         return {"error": str(exc)}
 
 
@@ -655,10 +735,23 @@ async def execute_campaign_limited_time_setup(
         item_failed = any(str(r.get("status") or "") != "success" for r in item_results)
         status = RunStatus.SUCCESS if not result.get("errors") and not item_failed else RunStatus.FAILED
         store.finish(run_id, status, message=_summarize_campaign_message(result), result=result)
+        _schedule_feishu_limited_time_status(
+            account_id=account_id,
+            selected_product_ids=selected_product_ids,
+            result=result,
+            status=status,
+        )
         return result
     except Exception as exc:
         logger.exception("campaign job failed run_id=%s", run_id)
-        store.finish(run_id, RunStatus.FAILED, str(exc), result={"error": str(exc)})
+        failed_result = {"error": str(exc)}
+        store.finish(run_id, RunStatus.FAILED, str(exc), result=failed_result)
+        _schedule_feishu_limited_time_status(
+            account_id=account_id,
+            selected_product_ids=selected_product_ids,
+            result=failed_result,
+            status=RunStatus.FAILED,
+        )
         return {"error": str(exc)}
 
 
@@ -699,10 +792,23 @@ async def execute_traffic_promotion_create(
         item_failed = any(str(r.get("status") or "") != "success" for r in item_results)
         status = RunStatus.SUCCESS if not result.get("errors") and not item_failed else RunStatus.FAILED
         store.finish(run_id, status, message=_summarize_traffic_message(result), result=result)
+        _schedule_feishu_promotion_status(
+            account_id=account_id,
+            selected_product_ids=selected_product_ids,
+            result=result,
+            status=status,
+        )
         return result
     except Exception as exc:
         logger.exception("traffic promotion create failed run_id=%s", run_id)
-        store.finish(run_id, RunStatus.FAILED, str(exc), result={"error": str(exc)})
+        failed_result = {"error": str(exc)}
+        store.finish(run_id, RunStatus.FAILED, str(exc), result=failed_result)
+        _schedule_feishu_promotion_status(
+            account_id=account_id,
+            selected_product_ids=selected_product_ids,
+            result=failed_result,
+            status=RunStatus.FAILED,
+        )
         return {"error": str(exc)}
 
 

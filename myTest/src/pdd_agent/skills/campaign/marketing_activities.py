@@ -2030,9 +2030,154 @@ def _open_product_search_modal(page: DpPage, account_id: str) -> dict[str, Any]:
     return {"opened": False, "reason": "product_search_modal_not_opened"}
 
 
+_MODAL_PRODUCT_SCAN_JS = """
+(ids) => {
+    function norm(text) {
+        return (text || '').replace(/\\s+/g, ' ').trim();
+    }
+    function isVisible(el) {
+        if (!el || !el.getBoundingClientRect) return false;
+        const r = el.getBoundingClientRect();
+        const s = window.getComputedStyle(el);
+        return r.width > 2 && r.height > 2
+            && s.display !== 'none'
+            && s.visibility !== 'hidden'
+            && parseFloat(s.opacity || '1') > 0.05;
+    }
+    function findModalRoot() {
+        const roots = Array.from(document.querySelectorAll(
+            '[data-testid="beast-core-modal"], [class*="MDL_modal"], [class*="MDL_outer"], [role="dialog"]'
+        ))
+            .filter(isVisible)
+            .filter((el) => (el.innerText || el.textContent || '').includes('搜索商品'));
+        return roots.length ? roots[roots.length - 1] : null;
+    }
+    function findTables(scope) {
+        const tables = Array.from(scope.querySelectorAll(
+            'table[data-testid="beast-core-table"],'
+            + '[class*="TB_tableWrapper"] table,'
+            + '[class*="tableWrapper"] table,'
+            + 'table'
+        )).filter(isVisible);
+        return tables.length ? tables : [];
+    }
+    function isHeaderRow(row) {
+        const text = norm(row.innerText || row.textContent || '');
+        if (!text) return true;
+        if (text.includes('商品信息') && text.includes('库存')) return true;
+        return Boolean(row.querySelector('th') && !row.querySelector('td'));
+    }
+    function collectRows(scope) {
+        const rows = [];
+        const seen = new Set();
+        for (const table of findTables(scope)) {
+            for (const row of table.querySelectorAll('tbody tr, tr')) {
+                if (!isVisible(row) || isHeaderRow(row)) continue;
+                const text = norm(row.innerText || row.textContent || '');
+                if (!text || text.length < 4) continue;
+                const key = text.slice(0, 120);
+                if (seen.has(key)) continue;
+                seen.add(key);
+                rows.push(row);
+            }
+        }
+        for (const row of scope.querySelectorAll('[class*="TB_tr"], [class*="tableRow"], [data-testid="beast-core-table-body"] tr')) {
+            if (!isVisible(row)) continue;
+            const text = norm(row.innerText || row.textContent || '');
+            if (!text || text.length < 4) continue;
+            const key = text.slice(0, 120);
+            if (seen.has(key)) continue;
+            seen.add(key);
+            rows.push(row);
+        }
+        return rows;
+    }
+    function idsInRows(rows, targetIds) {
+        const found = [];
+        for (const id of targetIds) {
+            for (const row of rows) {
+                const text = norm(row.innerText || row.textContent || '');
+                if (text.includes(id)) {
+                    if (!found.includes(id)) found.push(id);
+                    break;
+                }
+            }
+        }
+        return found;
+    }
+
+    const root = findModalRoot();
+    if (!root) {
+        return {
+            found_ids: [],
+            row_count: 0,
+            table_count: 0,
+            detection_methods: {},
+            reason: 'search_modal_not_found',
+        };
+    }
+    const rows = collectRows(root);
+    const foundInRows = idsInRows(rows, ids);
+    const bodyText = norm(root.innerText || root.textContent || '');
+    const hasResultFooter = bodyText.includes('没有更多了') || bodyText.includes('共') || rows.length > 0;
+    const foundInBody = [];
+    for (const id of ids) {
+        if (foundInRows.includes(id)) continue;
+        if (!bodyText.includes(id) || !hasResultFooter) continue;
+        const idx = bodyText.indexOf(id);
+        const snippet = bodyText.slice(Math.max(0, idx - 40), idx + Math.min(id.length + 80, 160));
+        if (snippet.includes('库存') || snippet.includes('价格') || snippet.includes('商品信息') || rows.length > 0) {
+            foundInBody.push(id);
+        }
+    }
+    const foundIds = [...foundInRows];
+    for (const id of foundInBody) {
+        if (!foundIds.includes(id)) foundIds.push(id);
+    }
+    return {
+        found_ids: foundIds,
+        row_count: rows.length,
+        table_count: findTables(root).length,
+        detection_methods: {
+            row_match: foundInRows,
+            body_match: foundInBody,
+        },
+    };
+}
+"""
+
+
+def _scan_modal_products(modal, product_ids: list[str]) -> dict[str, Any]:
+    ids = [str(item).strip() for item in product_ids if str(item).strip()]
+    if not ids:
+        return {"found_ids": [], "row_count": 0, "table_count": 0, "detection_methods": {}}
+    try:
+        raw_page = modal.page
+        result = raw_page.evaluate(_MODAL_PRODUCT_SCAN_JS, ids)
+    except Exception as exc:
+        return {
+            "found_ids": [],
+            "row_count": 0,
+            "table_count": 0,
+            "error": str(exc),
+            "detection_methods": {},
+        }
+    if not isinstance(result, dict):
+        return {"found_ids": [], "row_count": 0, "table_count": 0, "detection_methods": {}}
+    result["found_ids"] = [
+        str(item).strip() for item in (result.get("found_ids") or []) if str(item).strip()
+    ]
+    return result
+
+
 def _modal_contains_products(modal, product_ids: list[str]) -> bool:
-    eligible = _modal_eligible_product_ids(modal, product_ids)
-    return all(product_id in eligible for product_id in product_ids)
+    scan = _scan_modal_products(modal, product_ids)
+    found = scan.get("found_ids") or []
+    return all(product_id in found for product_id in product_ids)
+
+
+def _modal_eligible_product_ids(modal, product_ids: list[str]) -> list[str]:
+    return list(_scan_modal_products(modal, product_ids).get("found_ids") or [])
 
 
 _TIME_REQUIREMENT_MARKERS: tuple[str, ...] = (
@@ -2042,32 +2187,6 @@ _TIME_REQUIREMENT_MARKERS: tuple[str, ...] = (
     "等待该时间",
     "近期有更新规格",
 )
-
-
-def _modal_eligible_product_ids(modal, product_ids: list[str]) -> list[str]:
-    try:
-        found = modal.evaluate(
-            """
-            (root, ids) => {
-                const table = root.querySelector('table[data-testid="beast-core-table"]') || root.querySelector('table');
-                if (!table) return [];
-                const found = [];
-                for (const row of table.querySelectorAll('tbody tr')) {
-                    const text = (row.innerText || row.textContent || '').replace(/\\s+/g, ' ');
-                    for (const id of ids) {
-                        if (text.includes(id) && !found.includes(id)) found.push(id);
-                    }
-                }
-                return found;
-            }
-            """,
-            product_ids,
-        )
-    except Exception:
-        return []
-    if not isinstance(found, list):
-        return []
-    return [str(item).strip() for item in found if str(item).strip()]
 
 
 def _analyze_modal_product_eligibility(modal, product_ids: list[str]) -> dict[str, Any]:
@@ -2091,14 +2210,20 @@ def _analyze_modal_product_eligibility(modal, product_ids: list[str]) -> dict[st
                 function tableIds(table) {
                     const found = [];
                     if (!table) return found;
-                    for (const row of table.querySelectorAll('tbody tr')) {
+                    for (const row of table.querySelectorAll('tbody tr, tr')) {
                         if (!isVisible(row)) continue;
                         const text = norm(row.innerText || row.textContent || '');
+                        if (!text || (text.includes('商品信息') && text.includes('库存'))) continue;
                         for (const id of ids) {
                             if (text.includes(id) && !found.includes(id)) found.push(id);
                         }
                     }
                     return found;
+                }
+                function findTable(scope) {
+                    return scope.querySelector('table[data-testid="beast-core-table"]')
+                        || scope.querySelector('[class*="TB_tableWrapper"] table')
+                        || scope.querySelector('table');
                 }
                 function clickTab(labelPart) {
                     const nodes = Array.from(root.querySelectorAll('[role="tab"], span, div, a, button'))
@@ -2116,16 +2241,14 @@ def _analyze_modal_product_eligibility(modal, product_ids: list[str]) -> dict[st
                     return '';
                 }
 
-                const eligibleIds = tableIds(
-                    root.querySelector('table[data-testid="beast-core-table"]') || root.querySelector('table')
-                );
+                const eligibleIds = tableIds(findTable(root));
 
                 const timeBlocked = [];
                 const otherIneligible = [];
                 const missing = [];
 
                 clickTab('不可报名');
-                const ineligibleTable = root.querySelector('table[data-testid="beast-core-table"]') || root.querySelector('table');
+                const ineligibleTable = findTable(root);
                 const ineligibleRows = ineligibleTable
                     ? Array.from(ineligibleTable.querySelectorAll('tbody tr')).filter(isVisible)
                     : [];
@@ -2272,6 +2395,9 @@ def _fill_product_search_modal_input(modal, product_ids: list[str]) -> dict[str,
         'input[data-testid="beast-core-input-htmlInput"]',
         'input[data-testid="beast-core-input-nativeInput"]',
         'input[placeholder*="多个ID以逗号隔开"]',
+        'input[placeholder*="商品名称或ID"]',
+        'input[placeholder*="商品ID"]',
+        'input[placeholder*="商品"]',
     )
     for selector in input_selectors:
         loc = modal.locator(selector).first
@@ -2286,6 +2412,20 @@ def _fill_product_search_modal_input(modal, product_ids: list[str]) -> dict[str,
                 return {"filled": True, "value": actual, "method": "playwright_fill", "selector": selector}
         except Exception:
             continue
+    if len(product_ids) == 1:
+        single = product_ids[0]
+        for selector in input_selectors:
+            loc = modal.locator(selector).first
+            try:
+                if not loc.count() or not loc.is_visible():
+                    continue
+                loc.click(timeout=3_000)
+                loc.fill(single, timeout=5_000)
+                actual = str(loc.input_value(timeout=2_000) or "").strip()
+                if actual == single:
+                    return {"filled": True, "value": actual, "method": "playwright_fill_single", "selector": selector}
+            except Exception:
+                continue
     return {"filled": False, "reason": "modal_search_input_fill_failed", "expected": query}
 
 
@@ -2377,12 +2517,9 @@ def _click_modal_query_button(modal) -> dict[str, Any]:
 
 
 def _trigger_modal_product_search(modal, product_ids: list[str]) -> dict[str, Any]:
-    try:
-        rows = modal.locator('table[data-testid="beast-core-table"] tbody tr')
-        if rows.count() > 0 and _modal_contains_products(modal, product_ids):
-            return {"clicked": True, "text": "查询", "method": "results_already_visible", "skipped": True}
-    except Exception:
-        pass
+    scan = _scan_modal_products(modal, product_ids)
+    if scan.get("found_ids") and all(pid in (scan.get("found_ids") or []) for pid in product_ids):
+        return {"clicked": True, "text": "查询", "method": "results_already_visible", "skipped": True, "scan": scan}
 
     query_result = _click_modal_query_button(modal)
     if query_result.get("clicked"):
@@ -2411,59 +2548,269 @@ def _trigger_modal_product_search(modal, product_ids: list[str]) -> dict[str, An
     return query_result
 
 
+def _ensure_modal_eligible_tab(modal) -> dict[str, Any]:
+    """搜索弹窗切回「可报名商品」标签，避免停留在不可报名页导致找不到行。"""
+    try:
+        result = modal.page.evaluate(
+            """
+            () => {
+                function norm(text) {
+                    return (text || '').replace(/\\s+/g, '').trim();
+                }
+                function isVisible(el) {
+                    if (!el || !el.getBoundingClientRect) return false;
+                    const r = el.getBoundingClientRect();
+                    const s = window.getComputedStyle(el);
+                    return r.width > 2 && r.height > 2
+                        && s.display !== 'none'
+                        && s.visibility !== 'hidden'
+                        && parseFloat(s.opacity || '1') > 0.05;
+                }
+                const roots = Array.from(document.querySelectorAll(
+                    '[data-testid="beast-core-modal"], [class*="MDL_modal"], [class*="MDL_outer"], [role="dialog"]'
+                ))
+                    .filter(isVisible)
+                    .filter((el) => (el.innerText || el.textContent || '').includes('搜索商品'));
+                const root = roots.length ? roots[roots.length - 1] : null;
+                if (!root) {
+                    return { switched: false, reason: 'search_modal_not_found' };
+                }
+                const tabs = Array.from(root.querySelectorAll('[role="tab"], button, span, div, a'))
+                    .filter(isVisible)
+                    .filter((el) => {
+                        const text = norm(el.innerText || el.textContent || '');
+                        return text.includes('可报名') && !text.includes('不可报名');
+                    });
+                if (!tabs.length) {
+                    return { switched: false, reason: 'eligible_tab_not_found' };
+                }
+                tabs[0].click();
+                return {
+                    switched: true,
+                    tab_text: (tabs[0].innerText || tabs[0].textContent || '').trim(),
+                };
+            }
+            """
+        )
+    except Exception as exc:
+        return {"switched": False, "reason": str(exc)}
+    return result if isinstance(result, dict) else {"switched": False, "reason": "eligible_tab_js_failed"}
+
+
+def _modal_search_results_loading(modal) -> bool:
+    try:
+        loading = modal.page.evaluate(
+            """
+            () => {
+                function isVisible(el) {
+                    if (!el || !el.getBoundingClientRect) return false;
+                    const r = el.getBoundingClientRect();
+                    const s = window.getComputedStyle(el);
+                    return r.width > 2 && r.height > 2
+                        && s.display !== 'none'
+                        && s.visibility !== 'hidden'
+                        && parseFloat(s.opacity || '1') > 0.05;
+                }
+                const roots = Array.from(document.querySelectorAll(
+                    '[data-testid="beast-core-modal"], [class*="MDL_modal"], [class*="MDL_outer"], [role="dialog"]'
+                ))
+                    .filter(isVisible)
+                    .filter((el) => (el.innerText || el.textContent || '').includes('搜索商品'));
+                const root = roots.length ? roots[roots.length - 1] : null;
+                const text = (root?.innerText || root?.textContent || '').replace(/\\s+/g, ' ');
+                return text.includes('加载中') || text.includes('正在加载');
+            }
+            """
+        )
+    except Exception:
+        return False
+    return bool(loading)
+
+
+def _click_modal_product_rows_with_mouse(modal, product_ids: list[str]) -> dict[str, Any]:
+    """用坐标点击 beast-core 行复选框（JS label.click 无效时的兜底）。"""
+    try:
+        raw_page = modal.page
+    except Exception:
+        return {"checked": False, "reason": "modal_page_unavailable"}
+
+    try:
+        js_result = modal.page.evaluate(
+            """
+            (ids) => {
+                function isVisible(el) {
+                    if (!el || !el.getBoundingClientRect) return false;
+                    const r = el.getBoundingClientRect();
+                    const s = window.getComputedStyle(el);
+                    return r.width > 2 && r.height > 2
+                        && s.display !== 'none'
+                        && s.visibility !== 'hidden'
+                        && parseFloat(s.opacity || '1') > 0.05;
+                }
+                const roots = Array.from(document.querySelectorAll(
+                    '[data-testid="beast-core-modal"], [class*="MDL_modal"], [class*="MDL_outer"], [role="dialog"]'
+                ))
+                    .filter(isVisible)
+                    .filter((el) => (el.innerText || el.textContent || '').includes('搜索商品'));
+                const root = roots.length ? roots[roots.length - 1] : null;
+                const table = root?.querySelector('[class*="TB_tableWrapper"] table')
+                    || root?.querySelector('table[data-testid="beast-core-table"]')
+                    || root?.querySelector('table');
+                if (!table) {
+                    return { checked: false, reason: 'modal_table_not_found', click_points: [] };
+                }
+                const rows = Array.from(table.querySelectorAll('tbody tr, tr'))
+                    .filter((row) => !row.querySelector('th') || row.querySelector('td'))
+                    .filter(isVisible);
+                const click_points = [];
+                for (const id of ids) {
+                    const row = rows.find((candidate) => {
+                        const text = (candidate.innerText || candidate.textContent || '').replace(/\\s+/g, ' ');
+                        return text.includes(id);
+                    });
+                    if (!row) continue;
+                    const cell = row.querySelector('td[class*="checkCell"], td[class*="CheckCell"], th[class*="checkCell"]') || row;
+                    const target = cell.querySelector('label[class*="CBX"]')
+                        || cell.querySelector('input[type="checkbox"]')
+                        || cell;
+                    const rect = target.getBoundingClientRect();
+                    click_points.push({
+                        id,
+                        x: rect.left + Math.min(16, Math.max(8, rect.width / 2)),
+                        y: rect.top + rect.height / 2,
+                    });
+                }
+                return {
+                    click_points,
+                    row_count: rows.length,
+                    checked: false,
+                    method: 'mouse_row_checkbox_click',
+                };
+            }
+            """,
+            product_ids,
+        )
+    except Exception as exc:
+        return {"checked": False, "reason": str(exc), "method": "mouse_row_checkbox_click"}
+
+    if not isinstance(js_result, dict):
+        return {"checked": False, "reason": "mouse_click_js_failed", "method": "mouse_row_checkbox_click"}
+
+    click_points = js_result.get("click_points") or []
+    if not click_points:
+        return {
+            "checked": False,
+            "reason": "product_rows_not_found",
+            "method": "mouse_row_checkbox_click",
+            **js_result,
+        }
+
+    for point in click_points:
+        try:
+            raw_page.mouse.click(float(point["x"]), float(point["y"]))
+            time.sleep(0.45)
+        except Exception:
+            continue
+
+    state = _read_modal_selection_state(modal)
+    body_checked = int(state.get("body_checked") or 0)
+    return {
+        "checked": body_checked > 0,
+        "method": "mouse_row_checkbox_click",
+        "click_points": click_points,
+        "selection_state": state,
+        "body_checked": body_checked,
+    }
+
+
 def _wait_modal_products_loaded(modal, product_ids: list[str], timeout: int = 15) -> dict[str, Any]:
+    _ensure_modal_eligible_tab(modal)
+    last_scan: dict[str, Any] = {}
     for _ in range(timeout):
         try:
-            eligible = _modal_eligible_product_ids(modal, product_ids)
-            if eligible and all(pid in eligible for pid in product_ids):
-                rows = modal.locator('table[data-testid="beast-core-table"] tbody tr')
-                if rows.count() > 0:
-                    return {
-                        "loaded": True,
-                        "product_ids": product_ids,
-                        "eligible_ids": eligible,
-                        "row_count": rows.count(),
-                    }
+            if _modal_search_results_loading(modal):
+                time.sleep(1)
+                continue
+            last_scan = _scan_modal_products(modal, product_ids)
+            found = last_scan.get("found_ids") or []
+            if found and all(pid in found for pid in product_ids):
+                return {
+                    "loaded": True,
+                    "product_ids": product_ids,
+                    "eligible_ids": found,
+                    "row_count": int(last_scan.get("row_count") or 0),
+                    "table_count": int(last_scan.get("table_count") or 0),
+                    "scan": last_scan,
+                }
         except Exception:
             pass
         time.sleep(1)
-    eligible = _modal_eligible_product_ids(modal, product_ids)
-    missing = [pid for pid in product_ids if pid not in eligible]
+    _ensure_modal_eligible_tab(modal)
+    last_scan = _scan_modal_products(modal, product_ids)
+    found = last_scan.get("found_ids") or []
+    missing = [pid for pid in product_ids if pid not in found]
     return {
         "loaded": False,
         "missing_product_ids": missing or product_ids,
-        "eligible_ids": eligible,
+        "eligible_ids": found,
+        "row_count": int(last_scan.get("row_count") or 0),
+        "table_count": int(last_scan.get("table_count") or 0),
+        "scan": last_scan,
     }
 
 
 def _read_modal_selection_state(modal) -> dict[str, Any]:
-    return modal.evaluate(
-        """
-        (root) => {
-            function beastChecked(input) {
-                if (!input) return false;
-                return input.checked || input.getAttribute('data-checked') === 'true';
+    try:
+        return modal.page.evaluate(
+            """
+            () => {
+                function beastChecked(input) {
+                    if (!input) return false;
+                    return input.checked || input.getAttribute('data-checked') === 'true';
+                }
+                function isVisible(el) {
+                    if (!el || !el.getBoundingClientRect) return false;
+                    const r = el.getBoundingClientRect();
+                    const s = window.getComputedStyle(el);
+                    return r.width > 2 && r.height > 2
+                        && s.display !== 'none'
+                        && s.visibility !== 'hidden'
+                        && parseFloat(s.opacity || '1') > 0.05;
+                }
+                const roots = Array.from(document.querySelectorAll(
+                    '[data-testid="beast-core-modal"], [class*="MDL_modal"], [class*="MDL_outer"], [role="dialog"]'
+                ))
+                    .filter(isVisible)
+                    .filter((el) => (el.innerText || el.textContent || '').includes('搜索商品'));
+                const root = roots.length ? roots[roots.length - 1] : null;
+                const text = (root?.innerText || root?.textContent || '').replace(/\\s+/g, ' ');
+                const needSelectWarning = text.includes('请至少勾选一个商品');
+                if (!root) {
+                    return { has_table: false, need_select_warning: needSelectWarning };
+                }
+                const table = root.querySelector('[class*="TB_tableWrapper"] table')
+                    || root.querySelector('table[data-testid="beast-core-table"]')
+                    || root.querySelector('table');
+                if (!table) {
+                    return { has_table: false, need_select_warning: needSelectWarning };
+                }
+                const headInput = table.querySelector('thead input[type="checkbox"]');
+                const bodyInputs = Array.from(table.querySelectorAll('tbody input[type="checkbox"], tr input[type="checkbox"]'))
+                    .filter((item) => !item.closest('thead'));
+                const checkedBody = bodyInputs.filter((item) => beastChecked(item)).length;
+                return {
+                    has_table: true,
+                    head_checked: beastChecked(headInput),
+                    body_total: bodyInputs.length,
+                    body_checked: checkedBody,
+                    need_select_warning: needSelectWarning,
+                    selected: checkedBody > 0 || beastChecked(headInput),
+                };
             }
-            const table = root.querySelector('table[data-testid="beast-core-table"]') || root.querySelector('table');
-            const text = (root.innerText || root.textContent || '').replace(/\\s+/g, ' ');
-            const needSelectWarning = text.includes('请至少勾选一个商品');
-            if (!table) {
-                return { has_table: false, need_select_warning: needSelectWarning };
-            }
-            const headInput = table.querySelector('thead input[type="checkbox"]');
-            const bodyInputs = Array.from(table.querySelectorAll('tbody input[type="checkbox"]'));
-            const checkedBody = bodyInputs.filter((item) => beastChecked(item)).length;
-            return {
-                has_table: true,
-                head_checked: beastChecked(headInput),
-                body_total: bodyInputs.length,
-                body_checked: checkedBody,
-                need_select_warning: needSelectWarning,
-                selected: checkedBody > 0 || beastChecked(headInput),
-            };
-        }
-        """
-    ) or {"selected": False, "reason": "selection_state_js_failed"}
+            """
+        ) or {"selected": False, "reason": "selection_state_js_failed"}
+    except Exception:
+        return {"selected": False, "reason": "selection_state_js_failed"}
 
 
 def _modal_selection_verified(modal) -> bool:
@@ -2521,9 +2868,9 @@ def _click_modal_select_all_checkbox(modal) -> dict[str, Any]:
         except Exception:
             continue
 
-    js_result = modal.evaluate(
+    js_result = modal.page.evaluate(
         """
-        (root) => {
+        () => {
             function beastChecked(input) {
                 if (!input) return false;
                 return input.checked || input.getAttribute('data-checked') === 'true';
@@ -2542,7 +2889,24 @@ def _click_modal_select_all_checkbox(modal) -> dict[str, Any]:
                 }
                 return false;
             }
-            const table = root.querySelector('table[data-testid="beast-core-table"]') || root.querySelector('table');
+            function isVisible(el) {
+                if (!el || !el.getBoundingClientRect) return false;
+                const r = el.getBoundingClientRect();
+                const s = window.getComputedStyle(el);
+                return r.width > 2 && r.height > 2
+                    && s.display !== 'none'
+                    && s.visibility !== 'hidden'
+                    && parseFloat(s.opacity || '1') > 0.05;
+            }
+            const roots = Array.from(document.querySelectorAll(
+                '[data-testid="beast-core-modal"], [class*="MDL_modal"], [class*="MDL_outer"], [role="dialog"]'
+            ))
+                .filter(isVisible)
+                .filter((el) => (el.innerText || el.textContent || '').includes('搜索商品'));
+            const root = roots.length ? roots[roots.length - 1] : null;
+            const table = root?.querySelector('[class*="TB_tableWrapper"] table')
+                || root?.querySelector('table[data-testid="beast-core-table"]')
+                || root?.querySelector('table');
             if (!table) {
                 return { checked: false, reason: 'modal_table_not_found' };
             }
@@ -2554,7 +2918,8 @@ def _click_modal_select_all_checkbox(modal) -> dict[str, Any]:
                 return { checked: false, reason: 'thead_checkbox_click_failed' };
             }
             const headInput = table.querySelector('thead input[type="checkbox"]');
-            const bodyInputs = Array.from(table.querySelectorAll('tbody input[type="checkbox"]'));
+            const bodyInputs = Array.from(table.querySelectorAll('tbody input[type="checkbox"], tr input[type="checkbox"]'))
+                .filter((item) => !item.closest('thead'));
             const selected = beastChecked(headInput) || bodyInputs.some((item) => beastChecked(item));
             return {
                 checked: selected,
@@ -2572,9 +2937,9 @@ def _click_modal_select_all_checkbox(modal) -> dict[str, Any]:
 
 def _click_modal_product_row_checkboxes(modal, product_ids: list[str]) -> dict[str, Any]:
     """逐行点击 beast-core 复选框 label（图三）。"""
-    js_result = modal.evaluate(
+    js_result = modal.page.evaluate(
         f"""
-        (root) => {{
+        () => {{
             const productIds = {product_ids!r};
             function beastChecked(input) {{
                 if (!input) return false;
@@ -2594,11 +2959,29 @@ def _click_modal_product_row_checkboxes(modal, product_ids: list[str]) -> dict[s
                 }}
                 return false;
             }}
-            const table = root.querySelector('table[data-testid="beast-core-table"]') || root.querySelector('table');
+            function isVisible(el) {{
+                if (!el || !el.getBoundingClientRect) return false;
+                const r = el.getBoundingClientRect();
+                const s = window.getComputedStyle(el);
+                return r.width > 2 && r.height > 2
+                    && s.display !== 'none'
+                    && s.visibility !== 'hidden'
+                    && parseFloat(s.opacity || '1') > 0.05;
+            }}
+            const roots = Array.from(document.querySelectorAll(
+                '[data-testid="beast-core-modal"], [class*="MDL_modal"], [class*="MDL_outer"], [role="dialog"]'
+            ))
+                .filter(isVisible)
+                .filter((el) => (el.innerText || el.textContent || '').includes('搜索商品'));
+            const root = roots.length ? roots[roots.length - 1] : null;
+            const table = root?.querySelector('[class*="TB_tableWrapper"] table')
+                || root?.querySelector('table[data-testid="beast-core-table"]')
+                || root?.querySelector('table');
             if (!table) {{
                 return {{ checked: false, reason: 'modal_table_not_found' }};
             }}
-            const rows = Array.from(table.querySelectorAll('tbody tr'))
+            const rows = Array.from(table.querySelectorAll('tbody tr, tr'))
+                .filter((row) => !row.querySelector('th') || row.querySelector('td'))
                 .filter((row) => {{
                     const text = (row.innerText || row.textContent || '').replace(/\\s+/g, ' ');
                     return productIds.some((id) => text.includes(id));
@@ -2608,7 +2991,7 @@ def _click_modal_product_row_checkboxes(modal, product_ids: list[str]) -> dict[s
             }}
             let clicked = 0;
             for (const row of rows) {{
-                const cell = row.querySelector('td[class*="checkCell"], td[class*="CheckCell"]') || row;
+                const cell = row.querySelector('td[class*="checkCell"], td[class*="CheckCell"], th[class*="checkCell"]') || row;
                 const input = row.querySelector('input[type="checkbox"]');
                 if (beastChecked(input)) {{
                     clicked += 1;
@@ -2618,7 +3001,8 @@ def _click_modal_product_row_checkboxes(modal, product_ids: list[str]) -> dict[s
                     clicked += 1;
                 }}
             }}
-            const bodyInputs = Array.from(table.querySelectorAll('tbody input[type="checkbox"]'));
+            const bodyInputs = Array.from(table.querySelectorAll('tbody input[type="checkbox"], tr input[type="checkbox"]'))
+                .filter((item) => !item.closest('thead'));
             const bodyChecked = bodyInputs.filter((item) => beastChecked(item)).length;
             return {{
                 checked: bodyChecked > 0,
@@ -2639,6 +3023,7 @@ def _ensure_modal_products_selected(modal, product_ids: list[str]) -> dict[str, 
     for method_name, action in (
         ("select_all", lambda: _click_modal_select_all_checkbox(modal)),
         ("row_checkboxes", lambda: _click_modal_product_row_checkboxes(modal, product_ids)),
+        ("row_mouse_click", lambda: _click_modal_product_rows_with_mouse(modal, product_ids)),
         ("select_all_retry", lambda: _click_modal_select_all_checkbox(modal)),
     ):
         result = action()
@@ -4111,10 +4496,18 @@ def _select_products_in_search_modal(
     if not query_result.get("clicked"):
         return {"status": "failed", "step": "click_modal_query", **query_result}
 
-    time.sleep(1.2)
     modal = _product_search_modal_locator(page)
     if modal is None:
         return {"status": "failed", "step": "find_product_search_modal", "error": "查询后搜索商品弹窗消失"}
+
+    load_result = _wait_modal_products_loaded(modal, product_ids, timeout=15)
+    if not load_result.get("loaded"):
+        return {
+            "status": "failed",
+            "step": "wait_modal_products",
+            "error": f"查询后未在弹窗找到商品：{', '.join(load_result.get('missing_product_ids') or product_ids)}",
+            **load_result,
+        }
 
     eligibility = _analyze_modal_product_eligibility(modal, product_ids)
     failure = _format_modal_eligibility_failure(eligibility, product_ids)
@@ -4132,15 +4525,8 @@ def _select_products_in_search_modal(
             "eligibility": eligibility,
         }
 
-    load_result = _wait_modal_products_loaded(modal, eligible_ids, timeout=15)
-    if not load_result.get("loaded"):
-        eligibility = _analyze_modal_product_eligibility(modal, product_ids)
-        failure = _format_modal_eligibility_failure(eligibility, product_ids)
-        if failure:
-            _click_modal_cancel_button(modal)
-            return failure
-        return {"status": "failed", "step": "wait_modal_products", **load_result}
-
+    _ensure_modal_eligible_tab(modal)
+    time.sleep(0.4)
     select_all_result = _ensure_modal_products_selected(modal, eligible_ids)
     if not select_all_result.get("checked"):
         return {"status": "failed", "step": "click_modal_select_all", **select_all_result}

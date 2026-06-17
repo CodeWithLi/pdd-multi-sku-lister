@@ -175,12 +175,23 @@ class TaskQueueWorker:
                     delist_params=dict(payload.get("delist_params") or {}),
                 )
             elif row.agent == AgentKind.CAMPAIGN.value:
-                result = await execute_campaign_marketing_activity_register(
-                    run_id=row.run_id,
-                    account_id=row.account_id,
-                    activity_id=str(payload.get("activity_id") or ""),
-                    pdd_product_ids=list(payload.get("pdd_product_ids") or []),
-                )
+                campaign_type = str(payload.get("campaign_type") or "marketing_activity_register")
+                if campaign_type == "limited_time_setup":
+                    from pdd_agent.api.services.task_runner import execute_campaign_limited_time_setup
+
+                    result = await execute_campaign_limited_time_setup(
+                        run_id=row.run_id,
+                        account_id=row.account_id,
+                        pdd_product_ids=list(payload.get("pdd_product_ids") or []),
+                        published_mapping_ids=list(payload.get("published_mapping_ids") or []),
+                    )
+                else:
+                    result = await execute_campaign_marketing_activity_register(
+                        run_id=row.run_id,
+                        account_id=row.account_id,
+                        activity_id=str(payload.get("activity_id") or ""),
+                        pdd_product_ids=list(payload.get("pdd_product_ids") or []),
+                    )
             elif row.agent == AgentKind.TRAFFIC.value:
                 result = await execute_traffic_promotion_create(
                     run_id=row.run_id,

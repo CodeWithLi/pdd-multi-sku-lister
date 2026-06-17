@@ -15,6 +15,8 @@ from pdd_agent.api.services.pipeline_service import (
     _is_campaign_time_requirement_failure,
     _merge_skipped_listing_products,
     _normalize_pipeline_activity_ids,
+    _on_listing_finished,
+    _on_limited_time_finished,
     _on_campaign_finished,
     _resolve_activity_delay,
     cancel_integrated_pipeline,
@@ -525,4 +527,63 @@ def test_on_campaign_finished_still_fails_on_other_campaign_errors():
     assert update.call_args.kwargs["status"] == "failed"
     assert update.call_args.kwargs["current_step"] == "activity_failed"
     assert update.call_args.kwargs["error"] == "价格确认页筛选失败"
+
+
+def test_on_listing_finished_queues_limited_time_before_activity():
+    row = SimpleNamespace(
+        pipeline_id="pipe_lt",
+        account_id="store_A",
+        demo_mode=True,
+        activity_delay_hours=24,
+        activity_id="20981",
+        meta={"activity_ids": ["20981"]},
+    )
+    with patch("pdd_agent.api.services.pipeline_service._summarize_run_message", return_value="listed"):
+        with patch("pdd_agent.api.services.pipeline_service._enqueue_pipeline_limited_time") as enqueue_lt:
+            with patch("pdd_agent.api.services.pipeline_service._schedule_pipeline_campaign") as schedule:
+                with patch("pdd_agent.api.services.pipeline_service.datetime") as dt:
+                    fixed_now = datetime(2026, 6, 17, 10, 0, 0)
+                    dt.now.return_value = fixed_now
+                    dt.side_effect = lambda *args, **kwargs: datetime(*args, **kwargs)
+                    _on_listing_finished(
+                        row,
+                        run_id="listing_run",
+                        success=True,
+                        result={
+                            "results": [
+                                {"status": "success", "pdd_product_id": "111", "mapping_id": "m1"},
+                            ]
+                        },
+                        error="",
+                    )
+    enqueue_lt.assert_called_once()
+    assert enqueue_lt.call_args.kwargs["pdd_ids"] == ["111"]
+    assert enqueue_lt.call_args.kwargs["scheduled_at"] == fixed_now + timedelta(seconds=5)
+    schedule.assert_not_called()
+
+
+def test_on_limited_time_finished_schedules_activity():
+    row = SimpleNamespace(
+        pipeline_id="pipe_lt",
+        account_id="store_A",
+        demo_mode=True,
+        activity_delay_hours=24,
+        activity_id="20981",
+        pdd_product_ids=["111"],
+        mapping_ids=["m1"],
+        meta={"activity_ids": ["20981"], "limited_time_run_id": "lt_run"},
+    )
+    with patch("pdd_agent.api.services.pipeline_service._summarize_run_message", return_value="ok"):
+        with patch("pdd_agent.api.services.pipeline_service.get_integrated_pipeline", return_value=row):
+            with patch(
+                "pdd_agent.api.services.pipeline_service._schedule_pipeline_activity_after_limited_time"
+            ) as schedule_activity:
+                _on_limited_time_finished(
+                    row,
+                    run_id="lt_run",
+                    success=True,
+                    result={"results": [{"status": "success"}]},
+                    error="",
+                )
+    schedule_activity.assert_called_once()
 

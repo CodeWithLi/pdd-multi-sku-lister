@@ -1,4 +1,4 @@
-"""上架 → 活动 → 推广 整合链路。"""
+"""上架 → 限时限量购 → 活动 → 推广 整合链路。"""
 
 from __future__ import annotations
 
@@ -25,6 +25,8 @@ logger = get_logger(__name__)
 
 DEMO_ACTIVITY_DELAY_MINUTES = 2
 DEMO_ACTIVITY_JITTER_MAX_SECONDS = 60
+# 上架刚结束立即开浏览器易抢 profile / 页面未稳定，限时限量购稍延后
+LIMITED_TIME_POST_LISTING_DELAY_SECONDS = 5
 
 TERMINAL_PIPELINE_STATUSES = frozenset({"completed", "failed", "canceled"})
 CAMPAIGN_TIME_REQUIREMENT_STEP = "product_time_requirement_not_met"
@@ -237,6 +239,26 @@ def _append_campaign_result(
     meta_patch["campaign_results"] = results
 
 
+def _pipeline_auto_limited_time(row) -> bool:
+    """选了活动报名时，限时限量购为必跑步骤。"""
+    return bool(_pipeline_activity_ids(row))
+
+
+def _limited_time_completed(row) -> bool:
+    run_id = _pipeline_limited_time_run_id(row)
+    if not run_id:
+        return False
+    record = TaskRunStore().load(run_id)
+    if not record:
+        return False
+    status = str(record.status.value if hasattr(record.status, "value") else record.status)
+    return status in {"success", "completed"}
+
+
+def _pipeline_limited_time_run_id(row) -> str:
+    return str((row.meta or {}).get("limited_time_run_id") or "").strip()
+
+
 def _schedule_pipeline_campaign(
     row,
     *,
@@ -279,6 +301,74 @@ def _schedule_pipeline_campaign(
         meta_patch=patch,
     )
     return campaign_run_id
+
+
+def _enqueue_pipeline_limited_time(
+    row,
+    *,
+    pdd_ids: list[str] | None = None,
+    mapping_ids: list[str] | None = None,
+    meta_patch: dict[str, Any] | None = None,
+    scheduled_at: datetime | None = None,
+) -> None:
+    resolved_pdd_ids = list(pdd_ids if pdd_ids is not None else (row.pdd_product_ids or []))
+    resolved_mapping_ids = list(mapping_ids if mapping_ids is not None else (row.mapping_ids or []))
+    limited_time_run_id = create_campaign_run(row.account_id)
+    run_at = scheduled_at or datetime.now()
+    enqueue_task(
+        agent=AgentKind.CAMPAIGN.value,
+        run_id=limited_time_run_id,
+        account_id=row.account_id,
+        payload={
+            "pipeline_id": row.pipeline_id,
+            "campaign_type": "limited_time_setup",
+            "pdd_product_ids": resolved_pdd_ids,
+            "published_mapping_ids": resolved_mapping_ids,
+        },
+        scheduled_at=run_at,
+    )
+    patch = dict(meta_patch or {})
+    patch["limited_time_run_id"] = limited_time_run_id
+    is_future = run_at > datetime.now()
+    update_integrated_pipeline(
+        row.pipeline_id,
+        status="waiting_limited_time" if is_future else "running",
+        current_step="waiting_limited_time" if is_future else "limited_time_queued",
+        pdd_product_ids=resolved_pdd_ids if pdd_ids is not None else None,
+        mapping_ids=resolved_mapping_ids if mapping_ids is not None else None,
+        error="",
+        meta_patch=patch,
+    )
+
+
+def _schedule_pipeline_activity_after_limited_time(
+    row,
+    *,
+    meta_patch: dict[str, Any] | None = None,
+) -> None:
+    scheduled_at = resolve_activity_scheduled_at(
+        demo_mode=bool(row.demo_mode),
+        activity_delay_hours=float(row.activity_delay_hours or 24.0),
+    )
+    base_at = datetime.now() + _resolve_activity_delay(
+        demo_mode=bool(row.demo_mode),
+        activity_delay_hours=float(row.activity_delay_hours or 24.0),
+    )
+    activity_jitter_seconds = max(0, int((scheduled_at - base_at).total_seconds()))
+    patch = dict(meta_patch or {})
+    patch["activity_jitter_seconds"] = activity_jitter_seconds
+    _schedule_pipeline_campaign(
+        row,
+        activity_index=0,
+        scheduled_at=scheduled_at,
+        meta_patch=patch,
+    )
+    logger.info(
+        "pipeline %s limited time done, activity scheduled at %s activities=%s",
+        row.pipeline_id,
+        scheduled_at,
+        _pipeline_activity_ids(row),
+    )
 
 
 def _enqueue_pipeline_traffic(row, *, meta_patch: dict[str, Any] | None = None) -> None:
@@ -492,11 +582,22 @@ def _step_infos(row) -> list[dict[str, Any]]:
     elif row.status == "completed":
         traffic_status = "skipped"
 
-    activity_detail = (
-        f"计划于 {row.scheduled_activity_at:%Y-%m-%d %H:%M} 自动报名"
-        if row.scheduled_activity_at and campaign_status == "scheduled"
-        else "等待上架完成后预约"
-    )
+    limited_time_status = "pending"
+    limited_time_run_id = _pipeline_limited_time_run_id(row)
+    if not _pipeline_auto_limited_time(row):
+        limited_time_status = "skipped"
+    elif limited_time_run_id:
+        record = TaskRunStore().load(limited_time_run_id)
+        if record:
+            limited_time_status = str(record.status.value if hasattr(record.status, "value") else record.status)
+    elif row.status == "completed":
+        limited_time_status = "skipped"
+
+    activity_detail = "等待限时限量购完成后预约"
+    if row.scheduled_activity_at and campaign_status == "scheduled":
+        activity_detail = f"计划于 {row.scheduled_activity_at:%Y-%m-%d %H:%M} 自动报名"
+    elif _limited_time_completed(row) and campaign_status == "pending" and not row.scheduled_activity_at:
+        activity_detail = "限时限量购已完成，等待预约活动报名"
     multi_detail = _build_multi_activity_detail(row, campaign_status=campaign_status)
     if multi_detail:
         activity_detail = multi_detail
@@ -509,6 +610,16 @@ def _step_infos(row) -> list[dict[str, Any]]:
     if campaign_outcome in CAMPAIGN_SKIP_TRAFFIC_OUTCOMES and row.auto_promotion:
         traffic_detail = "活动未报名，仍继续创建推广"
 
+    limited_time_detail = (
+        "上架完成后立即执行（先于活动报名，取消惊喜优惠）"
+        if _pipeline_auto_limited_time(row)
+        else "未启用"
+    )
+    if row.current_step == "waiting_limited_time":
+        limited_time_detail = f"上架完成后约 {LIMITED_TIME_POST_LISTING_DELAY_SECONDS} 秒启动（等待浏览器释放）"
+    elif listing_status in {"success", "completed"} and limited_time_status == "pending":
+        limited_time_detail = "即将启动限时限量购（先于活动报名）"
+
     listing_detail = "将素材上架到拼多多"
     if listing_outcome == LISTING_SKIPPED_OUTCOME:
         listing_detail = listing_skip_reason or "商品已上架，跳过上架步骤"
@@ -520,6 +631,13 @@ def _step_infos(row) -> list[dict[str, Any]]:
             "status": listing_status,
             "run_id": row.listing_run_id or "",
             "detail": listing_detail,
+        },
+        {
+            "key": "limited_time",
+            "label": "限时限量购",
+            "status": limited_time_status,
+            "run_id": limited_time_run_id,
+            "detail": limited_time_detail,
         },
         {
             "key": "activity",
@@ -543,6 +661,8 @@ def _step_infos(row) -> list[dict[str, Any]]:
                 step["status"] = "canceled"
                 if step["key"] == "activity" and row.scheduled_activity_at:
                     step["detail"] = "已取消，不再自动报名"
+                elif step["key"] == "limited_time":
+                    step["detail"] = "已取消"
                 elif step["key"] == "traffic":
                     step["detail"] = "已取消"
                 elif step["key"] == "listing":
@@ -562,6 +682,7 @@ def pipeline_to_dict(row) -> dict[str, Any]:
         "activity_id": row.activity_id,
         "activity_ids": _pipeline_activity_ids(row),
         "auto_promotion": bool(row.auto_promotion),
+        "auto_limited_time_setup": _pipeline_auto_limited_time(row),
         "activity_delay_hours": float(row.activity_delay_hours or 24.0),
         "demo_mode": bool(row.demo_mode),
         "slot_alignment_test": bool((row.meta or {}).get("slot_alignment_test")),
@@ -616,6 +737,7 @@ def start_integrated_pipeline(
     activity_ids: list[str] | None = None,
     category_keyword: str = "玩偶",
     auto_promotion: bool = True,
+    auto_limited_time_setup: bool = True,
     activity_delay_hours: float = 24.0,
     demo_mode: bool = False,
     platform_listing_code: str = "",
@@ -648,6 +770,7 @@ def start_integrated_pipeline(
         "category_keyword": category_keyword,
         "platform_listing_code": platform_listing_code,
         "slot_alignment_test": bool(slot_alignment_test),
+        "auto_limited_time_setup": bool(normalized_activity_ids),
         "activity_ids": normalized_activity_ids,
         "campaign_activity_index": 0,
         "campaign_results": [],
@@ -768,6 +891,7 @@ def start_integrated_pipeline_batch(
     activity_ids: list[str] | None = None,
     category_keyword: str = "玩偶",
     auto_promotion: bool = True,
+    auto_limited_time_setup: bool = True,
     activity_delay_hours: float = 24.0,
     demo_mode: bool = False,
     platform_listing_code: str = "",
@@ -804,6 +928,7 @@ def start_integrated_pipeline_batch(
             activity_ids=normalized_activity_ids,
             category_keyword=category_keyword,
             auto_promotion=auto_promotion,
+            auto_limited_time_setup=auto_limited_time_setup,
             activity_delay_hours=activity_delay_hours,
             demo_mode=demo_mode,
             platform_listing_code=platform_listing_code,
@@ -858,7 +983,10 @@ def on_queue_task_finished(
     if agent == AgentKind.LISTING.value:
         _on_listing_finished(row, run_id=run_id, success=success, result=result, error=error)
     elif agent == AgentKind.CAMPAIGN.value:
-        _on_campaign_finished(row, run_id=run_id, success=success, result=result, error=error)
+        if _pipeline_limited_time_run_id(row) == run_id:
+            _on_limited_time_finished(row, run_id=run_id, success=success, result=result, error=error)
+        else:
+            _on_campaign_finished(row, run_id=run_id, success=success, result=result, error=error)
     elif agent == AgentKind.TRAFFIC.value:
         _on_traffic_finished(row, run_id=run_id, success=success, error=error)
 
@@ -943,6 +1071,28 @@ def _on_listing_finished(row, *, run_id: str, success: bool, result: dict[str, A
             logger.warning("pipeline issue ingest failed pipeline_id=%s", row.pipeline_id, exc_info=True)
         return
 
+    listing_meta = {
+        "listing_summary": _summarize_run_message(run_id),
+    }
+    refreshed = get_integrated_pipeline(row.pipeline_id) or row
+    if _pipeline_auto_limited_time(refreshed):
+        limited_time_at = datetime.now() + timedelta(seconds=LIMITED_TIME_POST_LISTING_DELAY_SECONDS)
+        _enqueue_pipeline_limited_time(
+            refreshed,
+            pdd_ids=pdd_ids,
+            mapping_ids=mapping_ids,
+            meta_patch=listing_meta,
+            scheduled_at=limited_time_at,
+        )
+        logger.info(
+            "pipeline %s listing done, limited time scheduled at %s pdd_ids=%s activities=%s",
+            row.pipeline_id,
+            limited_time_at,
+            pdd_ids,
+            _pipeline_activity_ids(row),
+        )
+        return
+
     scheduled_at = resolve_activity_scheduled_at(
         demo_mode=bool(row.demo_mode),
         activity_delay_hours=float(row.activity_delay_hours or 24.0),
@@ -952,16 +1102,14 @@ def _on_listing_finished(row, *, run_id: str, success: bool, result: dict[str, A
         activity_delay_hours=float(row.activity_delay_hours or 24.0),
     )
     activity_jitter_seconds = max(0, int((scheduled_at - base_at).total_seconds()))
+    listing_meta["activity_jitter_seconds"] = activity_jitter_seconds
     _schedule_pipeline_campaign(
         row,
         activity_index=0,
         scheduled_at=scheduled_at,
         pdd_ids=pdd_ids,
         mapping_ids=mapping_ids,
-        meta_patch={
-            "listing_summary": _summarize_run_message(run_id),
-            "activity_jitter_seconds": activity_jitter_seconds,
-        },
+        meta_patch=listing_meta,
     )
     logger.info(
         "pipeline %s listing done, activity scheduled at %s pdd_ids=%s activities=%s",
@@ -1060,7 +1208,8 @@ def _on_campaign_finished(row, *, run_id: str, success: bool, result: dict[str, 
         )
         return
 
-    if not row.auto_promotion:
+    refreshed = get_integrated_pipeline(row.pipeline_id) or row
+    if not refreshed.auto_promotion:
         update_integrated_pipeline(
             row.pipeline_id,
             status="completed",
@@ -1070,8 +1219,25 @@ def _on_campaign_finished(row, *, run_id: str, success: bool, result: dict[str, 
         )
         return
 
-    refreshed = get_integrated_pipeline(row.pipeline_id) or row
     _enqueue_pipeline_traffic(refreshed, meta_patch=meta_patch)
+
+
+def _on_limited_time_finished(row, *, run_id: str, success: bool, result: dict[str, Any], error: str) -> None:
+    meta_patch: dict[str, Any] = {
+        "limited_time_summary": _summarize_run_message(run_id),
+    }
+    if not success:
+        update_integrated_pipeline(
+            row.pipeline_id,
+            status="failed",
+            current_step="limited_time_failed",
+            error=error or "限时限量购设置失败",
+            meta_patch=meta_patch,
+        )
+        return
+
+    refreshed = get_integrated_pipeline(row.pipeline_id) or row
+    _schedule_pipeline_activity_after_limited_time(refreshed, meta_patch=meta_patch)
 
 
 def _on_traffic_finished(row, *, run_id: str, success: bool, error: str) -> None:
@@ -1106,6 +1272,7 @@ def _reconcile_stuck_pipeline_row(row) -> Any:
     checks = [
         (row.listing_run_id, "listing_failed", "上架失败"),
         (row.campaign_run_id, "activity_failed", "活动报名失败"),
+        (_pipeline_limited_time_run_id(row), "limited_time_failed", "限时限量购设置失败"),
         (row.traffic_run_id, "traffic_failed", "推广创建失败"),
     ]
     for run_id, failed_step, default_error in checks:
