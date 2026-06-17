@@ -257,6 +257,14 @@ def _field_defs_for_pdd_upload_log(config: FeishuConfig) -> list[dict[str, Any]]
             "property": {"options": [{"name": x} for x in pdd_cfg.traffic_result_options]},
         },
         {"field_name": names.traffic_error_reason, "type": FIELD_TEXT},
+        {"field_name": names.traffic_spend, "type": FIELD_TEXT},
+        {"field_name": names.traffic_amount, "type": FIELD_TEXT},
+        {"field_name": names.traffic_roi, "type": FIELD_TEXT},
+        {"field_name": names.traffic_total_cost, "type": FIELD_TEXT},
+        {"field_name": names.traffic_net_amount, "type": FIELD_TEXT},
+        {"field_name": names.traffic_net_roi, "type": FIELD_TEXT},
+        {"field_name": names.traffic_net_orders, "type": FIELD_TEXT},
+        {"field_name": names.traffic_cost_per_order, "type": FIELD_TEXT},
         {"field_name": names.chain_phase, "type": FIELD_TEXT},
     ]
 

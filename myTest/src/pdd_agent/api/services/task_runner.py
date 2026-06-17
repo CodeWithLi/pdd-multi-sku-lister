@@ -846,6 +846,102 @@ async def execute_traffic_promotion_create(
         return {"error": str(exc)}
 
 
+async def execute_traffic_promotion_report_scrape(
+    *,
+    run_id: str,
+    account_id: str,
+) -> dict[str, Any]:
+    """抓取稳定成本推广昨日数据并回写飞书。"""
+    store = TaskRunStore()
+    settings = load_yaml_settings()
+    if not get_account_config(settings, account_id):
+        store.finish(run_id, RunStatus.FAILED, f"unknown account: {account_id}")
+        return {"error": f"unknown account: {account_id}"}
+
+    store.update_status(run_id, RunStatus.RUNNING)
+    store.update_phase(run_id, TaskPhase.BROWSER)
+    try:
+        graph = build_traffic_graph()
+        raw = await graph.ainvoke(
+            {
+                "account_id": account_id,
+                "traffic_type": "promotion_report_scrape",
+            }
+        )
+        result = _json_safe(raw)
+        item_results = [r for r in result.get("results") or [] if isinstance(r, dict)]
+        scrape_result = item_results[0] if item_results else {}
+        success = (
+            not result.get("errors")
+            and str(scrape_result.get("status") or "") == "success"
+        )
+        status = RunStatus.SUCCESS if success else RunStatus.FAILED
+
+        from pdd_agent.integrations.feishu.traffic_report_sync import (
+            format_traffic_scrape_failure_reason,
+            sync_traffic_report_to_feishu,
+        )
+
+        if success:
+            feishu_result = sync_traffic_report_to_feishu(
+                account_id=account_id,
+                rows=list(scrape_result.get("rows") or []),
+                report_date=str(scrape_result.get("report_date") or ""),
+            )
+            scrape_result["feishu_sync"] = feishu_result
+            if feishu_result.get("failed"):
+                status = RunStatus.FAILED
+                result.setdefault("errors", []).append(
+                    str(feishu_result.get("message") or "feishu sync failed")
+                )
+            created = len(feishu_result.get("created_record_ids") or [])
+            updated = len(feishu_result.get("updated_record_ids") or [])
+            print(
+                f"[{account_id}] 飞书投流回写：新增{created}条、更新{updated}条",
+                flush=True,
+            )
+        else:
+            fail_msg = str(
+                scrape_result.get("message")
+                or scrape_result.get("error")
+                or "投流数据抓取失败"
+            ).strip()
+            print(f"[{account_id}] 投流抓取失败，跳过飞书写入：{fail_msg}", flush=True)
+            sync_traffic_report_to_feishu(
+                account_id=account_id,
+                rows=[],
+                report_date=str(scrape_result.get("report_date") or ""),
+                error=format_traffic_scrape_failure_reason(scrape_result),
+            )
+
+        result["results"] = item_results
+        message = _summarize_traffic_report_message(result, scrape_result)
+        store.finish(run_id, status, message=message, result=result)
+        return result
+    except Exception as exc:
+        logger.exception("traffic promotion report scrape failed run_id=%s", run_id)
+        failed_result = {"error": str(exc)}
+        store.finish(run_id, RunStatus.FAILED, str(exc), result=failed_result)
+        return {"error": str(exc)}
+
+
+def _summarize_traffic_report_message(result: dict[str, Any], scrape_result: dict[str, Any]) -> str:
+    if result.get("errors"):
+        for item in result.get("errors") or []:
+            text = str(item or "").strip()
+            if text:
+                return _truncate_db_text(text, _DB_MESSAGE_MAX)
+    total = int(scrape_result.get("total") or 0)
+    feishu = scrape_result.get("feishu_sync") if isinstance(scrape_result.get("feishu_sync"), dict) else {}
+    created = len(feishu.get("created_record_ids") or [])
+    updated = len(feishu.get("updated_record_ids") or [])
+    report_date = str(scrape_result.get("report_date") or "")
+    return _truncate_db_text(
+        f"投流昨日数据抓取完成：{total}条；飞书新增{created}条、更新{updated}条；日期={report_date}",
+        _DB_MESSAGE_MAX,
+    )
+
+
 def create_traffic_run(account_id: str) -> str:
     store = TaskRunStore()
     return store.create_run(AgentKind.TRAFFIC, account_id).run_id

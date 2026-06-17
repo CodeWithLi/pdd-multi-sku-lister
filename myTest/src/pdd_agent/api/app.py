@@ -1,5 +1,6 @@
 """FastAPI 应用工厂。"""
 
+import asyncio
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
@@ -24,9 +25,11 @@ from pdd_agent.core.config import load_yaml_settings
 from pdd_agent.core.logging import get_logger, setup_logging
 from pdd_agent.db import database_status, init_database
 from pdd_agent.api.services.task_queue import TaskQueueWorker
+from pdd_agent.api.services.traffic_report_scheduler import TrafficReportScheduler
 
 logger = get_logger(__name__)
 worker = TaskQueueWorker()
+traffic_report_scheduler = TrafficReportScheduler()
 
 
 @asynccontextmanager
@@ -38,8 +41,16 @@ async def lifespan(app: FastAPI):
     if db["configured"] and not db["available"]:
         logger.warning("Database unavailable: %s", db["error"])
     worker.start()
+    traffic_report_scheduler.start()
+    try:
+        from pdd_agent.integrations.feishu.traffic_report_sync import ensure_pdd_marketing_log_table_ready
+
+        await asyncio.to_thread(ensure_pdd_marketing_log_table_ready)
+    except Exception:
+        logger.exception("ensure pdd marketing log fields on startup failed")
     logger.info("PDD Agent API started")
     yield
+    await traffic_report_scheduler.stop()
     await worker.stop()
     logger.info("PDD Agent API stopped")
 

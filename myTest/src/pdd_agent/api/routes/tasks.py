@@ -19,6 +19,7 @@ from pdd_agent.api.schemas.tasks import (
     MarketingActivityListResponse,
     MarketingActivityOption,
     TrafficPromotionCreateRequest,
+    TrafficPromotionReportScrapeRequest,
     TrafficTaskResponse,
     DelistBatchTaskRequest,
     DelistTaskRequest,
@@ -31,7 +32,11 @@ from pdd_agent.api.schemas.tasks import (
     RetryListingItemRequest,
 )
 from pdd_agent.api.services.config_service import get_account_or_none
-from pdd_agent.api.services.task_queue import enqueue_delist_task, enqueue_listing_task
+from pdd_agent.api.services.task_queue import (
+    enqueue_delist_task,
+    enqueue_listing_task,
+    enqueue_traffic_report_scrape_task,
+)
 from pdd_agent.api.services.task_runner import (
     create_campaign_run,
     create_delist_run,
@@ -42,6 +47,7 @@ from pdd_agent.api.services.task_runner import (
     execute_delist,
     execute_listing,
     execute_traffic_promotion_create,
+    execute_traffic_promotion_report_scrape,
     plan_tasks,
     create_traffic_run,
 )
@@ -666,4 +672,48 @@ async def traffic_promotion_create(
             f"推广新建任务已启动（商品 {len(pdd_product_ids)} 个）；"
             "将打开推广概况、新建推广并查询已选商品 ID，完成后在操作记录查看结果"
         ),
+    )
+
+
+@router.post("/traffic/promotion-report-scrape", response_model=TrafficTaskResponse)
+async def traffic_promotion_report_scrape(body: TrafficPromotionReportScrapeRequest):
+    """抓取稳定成本推广昨日数据并回写飞书（默认可后台队列执行）。"""
+    settings = load_yaml_settings()
+    account_ids = (
+        [body.account_id.strip()]
+        if str(body.account_id or "").strip()
+        else [acc.account_id for acc in settings.accounts if acc.enabled]
+    )
+    account_ids = [aid for aid in account_ids if aid]
+    if not account_ids:
+        raise HTTPException(status_code=422, detail="no enabled accounts")
+
+    for account_id in account_ids:
+        if not get_account_or_none(account_id, settings):
+            raise HTTPException(status_code=404, detail=f"unknown account: {account_id}")
+
+    if not body.background:
+        account_id = account_ids[0]
+        run_id = create_traffic_run(account_id)
+        result = await execute_traffic_promotion_report_scrape(run_id=run_id, account_id=account_id)
+        record = TaskRunStore().load(run_id)
+        status = record.status if record else RunStatus.SUCCESS
+        return TrafficTaskResponse(run_id=run_id, status=status, result=result)
+
+    _require_queue_available()
+    first_run_id = ""
+    for account_id in account_ids:
+        run_id = create_traffic_run(account_id)
+        if not first_run_id:
+            first_run_id = run_id
+        _mark_queued(run_id)
+        enqueue_traffic_report_scrape_task(
+            run_id=run_id,
+            account_id=account_id,
+            scheduled_at=datetime.now(),
+        )
+    return TrafficTaskResponse(
+        run_id=first_run_id,
+        status=RunStatus.PENDING,
+        message=f"投流昨日数据抓取已加入队列：{len(account_ids)} 家店铺",
     )

@@ -128,6 +128,11 @@ class TrafficPromotionCreateRequest(BaseModel):
     published_mapping_ids: list[str] = Field(default_factory=list)
 
 
+class TrafficPromotionReportScrapeRequest(BaseModel):
+    account_id: str = ""
+    background: bool = True
+
+
 class TrafficTaskResponse(BaseModel):
     run_id: str
     status: RunStatus

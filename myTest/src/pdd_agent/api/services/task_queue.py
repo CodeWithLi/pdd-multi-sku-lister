@@ -10,6 +10,7 @@ from pdd_agent.api.services.task_runner import (
     execute_delist,
     execute_listing,
     execute_traffic_promotion_create,
+    execute_traffic_promotion_report_scrape,
 )
 from pdd_agent.core.config import load_yaml_settings
 from pdd_agent.core.logging import get_logger
@@ -193,12 +194,19 @@ class TaskQueueWorker:
                         pdd_product_ids=list(payload.get("pdd_product_ids") or []),
                     )
             elif row.agent == AgentKind.TRAFFIC.value:
-                result = await execute_traffic_promotion_create(
-                    run_id=row.run_id,
-                    account_id=row.account_id,
-                    pdd_product_ids=list(payload.get("pdd_product_ids") or []),
-                    published_mapping_ids=list(payload.get("published_mapping_ids") or []),
-                )
+                traffic_type = str(payload.get("traffic_type") or "promotion_create")
+                if traffic_type == "promotion_report_scrape":
+                    result = await execute_traffic_promotion_report_scrape(
+                        run_id=row.run_id,
+                        account_id=row.account_id,
+                    )
+                else:
+                    result = await execute_traffic_promotion_create(
+                        run_id=row.run_id,
+                        account_id=row.account_id,
+                        pdd_product_ids=list(payload.get("pdd_product_ids") or []),
+                        published_mapping_ids=list(payload.get("published_mapping_ids") or []),
+                    )
             else:
                 raise ValueError(f"unsupported queued agent: {row.agent}")
 
@@ -348,6 +356,21 @@ def enqueue_traffic_pipeline_task(
             "pdd_product_ids": list(pdd_product_ids),
             "published_mapping_ids": list(published_mapping_ids),
         },
+        scheduled_at=scheduled_at,
+    )
+
+
+def enqueue_traffic_report_scrape_task(
+    *,
+    run_id: str,
+    account_id: str,
+    scheduled_at,
+):
+    return enqueue_task(
+        agent=AgentKind.TRAFFIC.value,
+        run_id=run_id,
+        account_id=account_id,
+        payload={"traffic_type": "promotion_report_scrape"},
         scheduled_at=scheduled_at,
     )
 
