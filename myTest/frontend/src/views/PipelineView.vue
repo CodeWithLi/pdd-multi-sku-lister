@@ -558,14 +558,23 @@ onUnmounted(stopPolling)
                     <div class="toolbar-actions">
                       <el-button size="small" type="primary" plain @click="selectAllMaterialGroups">全选</el-button>
                       <el-button size="small" @click="clearAllMaterialGroups">清空</el-button>
+                      <el-button
+                        size="small"
+                        link
+                        type="primary"
+                        :disabled="!accountId"
+                        @click="loadListingTargets(accountId)"
+                      >
+                        刷新
+                      </el-button>
                     </div>
                   </div>
                   <el-select
                     v-model="productCodes"
                     multiple
                     filterable
-                    collapse-tags
-                    collapse-tags-tooltip
+                    class="material-group-select"
+                    popper-class="material-group-select-popper"
                     :placeholder="showOnlyUnlistedGroups ? '仅显示仍有待上架商品的套图' : '选择套图（如 BD720 · 第一套图）'"
                     style="width: 100%"
                     @visible-change="onMaterialGroupDropdownVisible"
@@ -1004,6 +1013,29 @@ onUnmounted(stopPolling)
   color: var(--text-secondary);
 }
 
+.material-group-select :deep(.el-select__wrapper) {
+  min-height: 40px;
+  align-items: flex-start;
+  padding-top: 6px;
+  padding-bottom: 6px;
+}
+
+.material-group-select :deep(.el-select__selection) {
+  flex-wrap: wrap;
+  gap: 4px;
+  max-height: 84px;
+  overflow-y: auto;
+}
+
+.material-group-select :deep(.el-select__selected-item .el-tag) {
+  max-width: 180px;
+}
+
+.material-group-select :deep(.el-select__selected-item .el-tag__content) {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 .option-main {
   font-weight: 500;
   margin-right: 8px;
@@ -1028,6 +1060,7 @@ onUnmounted(stopPolling)
   flex-direction: column;
   gap: 2px;
   min-width: 0;
+  flex: 1 1 auto;
 }
 
 .material-option-set {
@@ -1044,6 +1077,10 @@ onUnmounted(stopPolling)
   display: inline-flex;
   align-items: center;
   flex-shrink: 0;
+}
+
+.material-option-tags .listed-tag {
+  margin-left: 0;
 }
 
 .pick-family {
@@ -1236,5 +1273,25 @@ onUnmounted(stopPolling)
   font-size: 12px;
   color: var(--el-text-color-secondary);
   line-height: 1.4;
+}
+</style>
+
+<style>
+.material-group-select-popper {
+  min-width: 520px !important;
+}
+
+.material-group-select-popper .el-select-dropdown__item {
+  height: auto;
+  min-height: 44px;
+  padding-top: 8px;
+  padding-bottom: 8px;
+  line-height: 1.4;
+}
+
+.material-group-select-popper .el-select-group__title {
+  font-size: 12px;
+  font-weight: 700;
+  color: #64748b;
 }
 </style>
