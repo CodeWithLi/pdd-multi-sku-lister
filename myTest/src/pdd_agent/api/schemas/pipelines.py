@@ -27,7 +27,7 @@ class IntegratedPipelineStartRequest(BaseModel):
     activity_delay_hours: float = Field(default=24.0, ge=0)
     demo_mode: bool = False
     platform_listing_code: str = ""
-    slot_alignment_test: bool = False
+    slot_alignment_test: bool = True
     skip_listing: bool = False
     listing_skip_selectors: list[str] = Field(default_factory=list)
 
@@ -56,7 +56,7 @@ class IntegratedPipelineBatchStartRequest(BaseModel):
     activity_delay_hours: float = Field(default=24.0, ge=0)
     demo_mode: bool = False
     platform_listing_code: str = ""
-    slot_alignment_test: bool = False
+    slot_alignment_test: bool = True
     skip_listing: bool = False
     listing_skip_selectors: list[str] = Field(default_factory=list)
     account_ids: list[str] = Field(default_factory=list)

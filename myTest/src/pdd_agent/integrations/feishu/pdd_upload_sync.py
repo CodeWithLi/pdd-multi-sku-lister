@@ -7,6 +7,7 @@
 
 from __future__ import annotations
 
+import re
 import threading
 import time
 from datetime import date, datetime
@@ -50,6 +51,147 @@ _FEISHU_UPLOAD_STATUS_FAILURE = "报错上架失败"
 _FEISHU_UPLOAD_STATUS_LISTED = "已上架"
 _FEISHU_LIMITED_TIME_SUCCESS = "成功"
 _FEISHU_LIMITED_TIME_FAILURE = "失败"
+
+
+def _extract_error_code(raw_error: str) -> str:
+    text = str(raw_error or "").strip()
+    if not text:
+        return "NO_ERROR_CODE"
+    patterns = (
+        r"(?:error[_\s-]*code|code)\s*[:=]\s*([A-Za-z0-9_.-]+)",
+        r'"(?:error[_\s-]*code|code)"\s*:\s*"([^"]+)"',
+        r"'(?:error[_\s-]*code|code)'\s*:\s*'([^']+)'",
+    )
+    for pattern in patterns:
+        matched = re.search(pattern, text, flags=re.IGNORECASE)
+        if matched:
+            code = str(matched.group(1) or "").strip()
+            if code:
+                return code
+
+    # 兜底：像 preview_not_ready / PARAM_INVALID / 10017 这类可读 token。
+    fallback = re.search(r"\b([A-Z][A-Z0-9_]{2,}|[a-z]+(?:_[a-z0-9]+){1,}|[0-9]{4,})\b", text)
+    if fallback:
+        code = str(fallback.group(1) or "").strip()
+        if code:
+            return code
+    return "NO_ERROR_CODE"
+
+
+def _infer_listing_error_stage(raw_error: str) -> str:
+    text = str(raw_error or "").lower()
+    if not text:
+        return "未知环节"
+    if any(token in text for token in ("preview", "素材", "图片", "video", "主图", "详情图")):
+        return "素材准备"
+    if any(token in text for token in ("title", "类目", "属性", "brand", "品牌", "基础信息")):
+        return "商品基础信息校验"
+    if any(token in text for token in ("sku", "price", "库存", "spec", "规格", "weight", "重量")):
+        return "SKU组装校验"
+    # 营销/活动报名类错误：用于填充营销工具日志报错原因
+    if any(
+        token in text
+        for token in (
+            "报名",
+            "活动",
+            "618",
+            "限量",
+            "七折",
+            "优惠",
+            "券",
+            "coupon",
+            "registration",
+            "activity",
+        )
+    ):
+        return "营销工具执行"
+    # 投流/推广类错误：用于填充投流数据日志报错原因
+    if any(
+        token in text
+        for token in (
+            "投流",
+            "推广",
+            "计划",
+            "预算",
+            "ads",
+            "campaign",
+            "traffic",
+        )
+    ):
+        return "投流执行/接口调用"
+    if any(token in text for token in ("timeout", "network", "http", "签名", "token", "permission", "权限", "接口")):
+        return "平台接口调用"
+    if any(token in text for token in ("bitable", "飞书", "回写", "record", "field", "table_id")):
+        return "结果回写"
+    return "平台接口调用"
+
+
+def _explain_listing_error(raw_error: str, error_code: str, stage: str) -> tuple[str, str]:
+    text = str(raw_error or "").strip()
+    lower = text.lower()
+    normalized_code = str(error_code or "").strip().lower()
+
+    if normalized_code == "preview_not_ready" or "preview_not_ready" in lower:
+        return (
+            "商品预览素材尚未生成完成，系统在预览未就绪时发起了提交流程，平台拒绝受理该商品。",
+            "等待1-3分钟后重试；若连续3次仍失败，检查商品主图/详情图处理任务是否卡住并重新触发素材生成。",
+        )
+    if "param_invalid" in normalized_code or "invalid parameter" in lower:
+        return (
+            "接口参数校验未通过，通常由价格、库存、类目属性或字段格式不符合平台约束导致。",
+            "根据原始报错中的字段名逐项修正（如价格、库存、属性值），修正后重新提交上传。",
+        )
+    if "category" in lower and ("missing" in lower or "attr" in lower):
+        return (
+            "类目必填属性缺失或填写不完整，平台在商品基础信息校验阶段拦截了请求。",
+            "补齐对应类目的必填属性并保存后重新上传。",
+        )
+    if "timeout" in lower or "timed out" in lower:
+        return (
+            "请求在平台接口调用阶段超时，常见于网络波动或平台接口拥堵。",
+            "先自动重试；若多次超时，稍后再试并检查本地网络与平台服务状态。",
+        )
+    if "token" in lower or "签名" in text or "permission" in lower or "权限" in text:
+        return (
+            "鉴权失败（token、签名或权限不足），平台拒绝当前请求。",
+            "检查账号授权状态、接口权限范围以及签名参数是否正确，再重新执行上传。",
+        )
+    if stage == "结果回写":
+        return (
+            "对应链路结果已产生，但在写回飞书多维表时失败，导致运营侧看不到最新状态。",
+            "检查飞书表字段名与配置是否一致、字段类型是否匹配，并确认当前 token 具备写权限。",
+        )
+    if stage == "营销工具执行":
+        return (
+            "营销工具链路返回业务失败：常见原因是活动报名/推广提交的商品不满足条件，或部分参数不符合平台约束。",
+            "按原始报错定位具体失败商品/步骤（例如报名提交被拦截、规格不合格、优惠工具参数非法等），修正后重新触发该链路回写。",
+        )
+    if stage == "投流执行/接口调用":
+        return (
+            "投流链路返回业务失败：常见原因是计划/预算/出价等参数非法，或投放提交时平台拦截请求。",
+            "检查原始报错中的具体参数字段（预算/出价/计划状态等），修正后重新触发该链路回写。",
+        )
+    return (
+        "平台返回了业务错误，当前信息不足以自动归类到更细场景，请按原始报错进行人工修正。",
+        "结合原始报错关键字定位具体字段或环节，修正后将人工处理状态改为“已修正”并触发重试。",
+    )
+
+
+def _format_listing_error_reason(raw_error: str) -> str:
+    raw = str(raw_error or "").strip()
+    if not raw:
+        return ""
+    error_code = _extract_error_code(raw)
+    stage = _infer_listing_error_stage(raw)
+    reason_cn, suggestion = _explain_listing_error(raw, error_code, stage)
+    # 用固定模板回写，确保运营可以精确看到“哪里报错、怎么导致、怎么修”。
+    return (
+        f"错误码: {error_code}\n"
+        f"错误环节: {stage}\n"
+        f"原始报错: {raw}\n"
+        f"中文解释: {reason_cn}\n"
+        f"修复建议: {suggestion}"
+    )
 
 
 def _field_defs_for_pdd_upload_log(config: FeishuConfig) -> list[dict[str, Any]]:
@@ -358,7 +500,7 @@ def push_pdd_upload_limited_time_status(
         error=error,
         extra_fields={
             names.marketing_result: status_value,
-            names.marketing_error_reason: "" if success else marketing_error[:500],
+            names.marketing_error_reason: "" if success else _format_listing_error_reason(marketing_error)[:2000],
             names.chain_phase: "campaign",
         },
         config=cfg,
@@ -397,7 +539,7 @@ def push_pdd_upload_activity_register_status(
         error=error,
         extra_fields={
             cfg.pdd_upload_log.field_names.marketing_result: status_value,
-            cfg.pdd_upload_log.field_names.marketing_error_reason: "" if success else marketing_error[:500],
+            cfg.pdd_upload_log.field_names.marketing_error_reason: "" if success else _format_listing_error_reason(marketing_error)[:2000],
             cfg.pdd_upload_log.field_names.chain_phase: "campaign",
         },
         config=cfg,
@@ -432,7 +574,7 @@ def push_pdd_upload_promotion_status(
         error=error,
         extra_fields={
             pdd_cfg.field_names.traffic_result: status_value,
-            pdd_cfg.field_names.traffic_error_reason: "" if success else traffic_error[:500],
+            pdd_cfg.field_names.traffic_error_reason: "" if success else _format_listing_error_reason(traffic_error)[:2000],
             pdd_cfg.field_names.chain_phase: "traffic",
         },
         config=cfg,
@@ -670,9 +812,9 @@ def build_pdd_upload_log_fields(
         fix_status, reentry_status = _listing_fix_flow_values(normalized_result == _FEISHU_LIMITED_TIME_SUCCESS)
         fields[names.listing_manual_fix_status] = fix_status
         fields[names.listing_reentry_status] = reentry_status
-    error_text = str(listing_error_reason or "").strip()
+    error_text = _format_listing_error_reason(listing_error_reason)
     if error_text:
-        fields[names.listing_error_reason] = error_text[:500]
+        fields[names.listing_error_reason] = error_text[:2000]
     if chain_phase:
         fields[names.chain_phase] = str(chain_phase).strip()
     if link:

@@ -1,5 +1,5 @@
 # 后端：FastAPI + LangGraph + Playwright（Linux）
-# noble 镜像带 Python 3.12（jammy 只有 3.10，不满足 pyproject requires-python>=3.11）
+https://github.com/baikailiang/jparlant-admin# noble 镜像带 Python 3.12（jammy 只有 3.10，不满足 pyproject requires-python>=3.11）
 FROM mcr.microsoft.com/playwright/python:v1.49.1-noble
 
 WORKDIR /app

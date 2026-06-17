@@ -1,7 +1,5 @@
 # 飞书多维表格接口文档（主系统）
 
-面向对象：项目同事（调用主系统 API），不依赖 `frontend-feishu-test`。
-
 鉴权模式：固定使用 `user_access_token`（来源于 `config/feishu.yaml`）。
 
 接口前缀：`/api/feishu-bitable`
