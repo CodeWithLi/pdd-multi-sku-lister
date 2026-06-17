@@ -62,6 +62,15 @@ class PddUploadLogFieldNames(BaseModel):
     activity_20981: str = "618报名"
     activity_21365: str = "21365限量七折"
     promotion_status: str = "推广状态"
+    listing_result: str = "上传商品日志回写结果"
+    listing_error_reason: str = "上传商品日志报错原因"
+    listing_manual_fix_status: str = "上传异常人工修正状态"
+    listing_reentry_status: str = "修正后重回上传链路"
+    marketing_result: str = "营销工具日志回写结果"
+    marketing_error_reason: str = "营销工具日志报错原因"
+    traffic_result: str = "投流数据日志回写结果"
+    traffic_error_reason: str = "投流数据日志报错原因"
+    chain_phase: str = "当前链路阶段"
 
 
 class PddUploadLogConfig(BaseModel):
@@ -123,6 +132,26 @@ class PddUploadLogConfig(BaseModel):
     promotion_status_options: list[str] = Field(
         default_factory=lambda: ["成功", "失败"],
         description="「推广状态」单选字段选项（须与飞书表一致）",
+    )
+    listing_result_options: list[str] = Field(
+        default_factory=lambda: ["成功", "失败"],
+        description="「上传商品日志回写结果」单选字段选项（须与飞书表一致）",
+    )
+    marketing_result_options: list[str] = Field(
+        default_factory=lambda: ["成功", "失败"],
+        description="「营销工具日志回写结果」单选字段选项（须与飞书表一致）",
+    )
+    traffic_result_options: list[str] = Field(
+        default_factory=lambda: ["成功", "失败"],
+        description="「投流数据日志回写结果」单选字段选项（须与飞书表一致）",
+    )
+    listing_manual_fix_status_options: list[str] = Field(
+        default_factory=lambda: ["待处理", "已修正", "无需处理"],
+        description="「上传异常人工修正状态」单选字段选项（须与飞书表一致）",
+    )
+    listing_reentry_status_options: list[str] = Field(
+        default_factory=lambda: ["待回流上传", "已回流上传", "无需回流"],
+        description="「修正后重回上传链路」单选字段选项（须与飞书表一致）",
     )
     update_promotion_status: bool = Field(
         default=True,

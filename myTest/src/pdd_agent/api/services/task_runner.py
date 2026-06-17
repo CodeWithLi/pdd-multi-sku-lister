@@ -207,6 +207,35 @@ def _schedule_feishu_promotion_status(
     )
 
 
+def _schedule_feishu_listing_result_log(
+    *,
+    account_id: str,
+    result: dict[str, Any],
+) -> None:
+    from pdd_agent.integrations.feishu.pdd_upload_sync import schedule_pdd_upload_log
+
+    for item in result.get("results") or []:
+        if not isinstance(item, dict):
+            continue
+        status = str(item.get("status") or "").strip().lower()
+        listing_result = "成功" if status in {"success", "listed"} else "失败"
+        error_reason = str(item.get("error") or item.get("reason") or "").strip()
+        schedule_pdd_upload_log(
+            account_id=account_id,
+            listing_label=str(item.get("listing_label") or ""),
+            title=str(item.get("title") or item.get("listing_label") or ""),
+            merchant_code=str(item.get("platform_listing_code") or item.get("merchant_code") or ""),
+            product_id=str(item.get("pdd_product_id") or ""),
+            product_link=str(item.get("pdd_product_link") or ""),
+            product_link_method=str(item.get("product_link_method") or ""),
+            list_status=str(item.get("pdd_product_list_status") or ("销售中" if listing_result == "成功" else "报错上架失败")),
+            created_at_raw=str(item.get("pdd_product_matched_created_at") or item.get("publish_submitted_at") or ""),
+            listing_result=listing_result,
+            listing_error_reason="" if listing_result == "成功" else error_reason,
+            chain_phase="listing",
+        )
+
+
 def _activity_registration_summary_line(item: dict[str, Any]) -> str:
     """从单次活动报名结果生成一眼可读的摘要。"""
     step = str(item.get("step") or "").strip()
@@ -446,6 +475,7 @@ async def execute_listing(
         item_results = [r for r in result.get("results") or [] if isinstance(r, dict)]
         item_failed = any(r.get("status") in {"failed", "retryable"} for r in item_results)
         status = RunStatus.SUCCESS if not result.get("errors") and not item_failed else RunStatus.FAILED
+        _schedule_feishu_listing_result_log(account_id=account_id, result=result)
         try:
             from pdd_agent.api.services.listing_failure_log import persist_listing_run_failures
 
@@ -473,6 +503,10 @@ async def execute_listing(
     except Exception as exc:
         logger.exception("listing job failed run_id=%s", run_id)
         store.finish(run_id, RunStatus.FAILED, str(exc), result={"error": str(exc)})
+        _schedule_feishu_listing_result_log(
+            account_id=account_id,
+            result={"results": [{"status": "failed", "reason": "listing_failed", "error": str(exc)}]},
+        )
         return {"error": str(exc)}
 
 

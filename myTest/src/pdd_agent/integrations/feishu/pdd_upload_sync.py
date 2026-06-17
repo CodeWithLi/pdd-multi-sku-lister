@@ -15,8 +15,11 @@ from typing import Any
 
 from pdd_agent.core.logging import get_logger
 from pdd_agent.integrations.feishu.bitable import (
+    FIELD_SINGLE_SELECT,
+    FIELD_TEXT,
     batch_create_records,
     batch_update_records,
+    ensure_fields,
     find_table_id_by_name,
     map_fields_to_table_names,
     search_records_by_field,
@@ -47,6 +50,83 @@ _FEISHU_UPLOAD_STATUS_FAILURE = "报错上架失败"
 _FEISHU_UPLOAD_STATUS_LISTED = "已上架"
 _FEISHU_LIMITED_TIME_SUCCESS = "成功"
 _FEISHU_LIMITED_TIME_FAILURE = "失败"
+
+
+def _field_defs_for_pdd_upload_log(config: FeishuConfig) -> list[dict[str, Any]]:
+    names = config.pdd_upload_log.field_names
+    pdd_cfg = config.pdd_upload_log
+    return [
+        {"field_name": names.date, "type": 5, "property": {"date_formatter": "yyyy/MM/dd", "auto_fill": False}},
+        {"field_name": names.link, "type": 15},
+        {"field_name": names.title, "type": FIELD_TEXT},
+        {"field_name": names.merchant_code, "type": FIELD_TEXT},
+        {"field_name": names.created_at, "type": 5, "property": {"date_formatter": "yyyy/MM/dd HH:mm:ss", "auto_fill": False}},
+        {
+            "field_name": names.status,
+            "type": FIELD_SINGLE_SELECT,
+            "property": {"options": [{"name": x} for x in pdd_cfg.status_options]},
+        },
+        {"field_name": names.product_id, "type": FIELD_TEXT},
+        {
+            "field_name": names.limited_time_status,
+            "type": FIELD_SINGLE_SELECT,
+            "property": {"options": [{"name": x} for x in pdd_cfg.limited_time_status_options]},
+        },
+        {
+            "field_name": names.activity_20981,
+            "type": FIELD_SINGLE_SELECT,
+            "property": {"options": [{"name": x} for x in pdd_cfg.activity_status_options]},
+        },
+        {
+            "field_name": names.activity_21365,
+            "type": FIELD_SINGLE_SELECT,
+            "property": {"options": [{"name": x} for x in pdd_cfg.activity_status_options]},
+        },
+        {
+            "field_name": names.promotion_status,
+            "type": FIELD_SINGLE_SELECT,
+            "property": {"options": [{"name": x} for x in pdd_cfg.promotion_status_options]},
+        },
+        {
+            "field_name": names.listing_result,
+            "type": FIELD_SINGLE_SELECT,
+            "property": {"options": [{"name": x} for x in pdd_cfg.listing_result_options]},
+        },
+        {"field_name": names.listing_error_reason, "type": FIELD_TEXT},
+        {
+            "field_name": names.listing_manual_fix_status,
+            "type": FIELD_SINGLE_SELECT,
+            "property": {"options": [{"name": x} for x in pdd_cfg.listing_manual_fix_status_options]},
+        },
+        {
+            "field_name": names.listing_reentry_status,
+            "type": FIELD_SINGLE_SELECT,
+            "property": {"options": [{"name": x} for x in pdd_cfg.listing_reentry_status_options]},
+        },
+        {
+            "field_name": names.marketing_result,
+            "type": FIELD_SINGLE_SELECT,
+            "property": {"options": [{"name": x} for x in pdd_cfg.marketing_result_options]},
+        },
+        {"field_name": names.marketing_error_reason, "type": FIELD_TEXT},
+        {
+            "field_name": names.traffic_result,
+            "type": FIELD_SINGLE_SELECT,
+            "property": {"options": [{"name": x} for x in pdd_cfg.traffic_result_options]},
+        },
+        {"field_name": names.traffic_error_reason, "type": FIELD_TEXT},
+        {"field_name": names.chain_phase, "type": FIELD_TEXT},
+    ]
+
+
+def _ensure_pdd_upload_table_fields(client: FeishuClient, config: FeishuConfig, app_token: str, table_id: str) -> None:
+    ensure_fields(client, app_token, table_id, _field_defs_for_pdd_upload_log(config))
+
+
+def _listing_fix_flow_values(success: bool) -> tuple[str, str]:
+    if success:
+        return ("无需处理", "无需回流")
+    return ("待处理", "待回流上传")
 
 
 def extract_product_ids_for_limited_time_status(
@@ -150,6 +230,7 @@ def _push_pdd_upload_select_field_by_product_ids(
     status_value: str,
     log_label: str,
     error: str = "",
+    extra_fields: dict[str, Any] | None = None,
     config: FeishuConfig | None = None,
     client: FeishuClient | None = None,
 ) -> dict[str, Any]:
@@ -177,6 +258,7 @@ def _push_pdd_upload_select_field_by_product_ids(
         msg = f"未找到飞书表「{pdd_cfg.table_name}」"
         logger.error("feishu %s failed: %s", log_label, msg)
         return {"failed": True, "reason": "table_not_found", "message": msg}
+    _ensure_pdd_upload_table_fields(api, cfg, app_token, table_id)
 
     updates: list[dict[str, Any]] = []
     missing: list[str] = []
@@ -197,12 +279,10 @@ def _push_pdd_upload_select_field_by_product_ids(
         if not record_id:
             missing.append(product_id)
             continue
-        fields = map_fields_to_table_names(
-            api,
-            app_token,
-            table_id,
-            {field_name: status_value},
-        )
+        merged_fields = {field_name: status_value}
+        if isinstance(extra_fields, dict):
+            merged_fields.update(extra_fields)
+        fields = map_fields_to_table_names(api, app_token, table_id, merged_fields)
         updates.append({"record_id": record_id, "fields": fields})
 
     updated_ids: list[str] = []
@@ -267,6 +347,7 @@ def push_pdd_upload_limited_time_status(
     status_value = map_limited_time_status_to_feishu(success=success)
     names = pdd_cfg.field_names
     status_field = str(names.limited_time_status or "限时限量购状态").strip()
+    marketing_error = str(error or "").strip()
 
     return _push_pdd_upload_select_field_by_product_ids(
         account_id=account_id,
@@ -275,6 +356,11 @@ def push_pdd_upload_limited_time_status(
         status_value=status_value,
         log_label="限时限量购状态",
         error=error,
+        extra_fields={
+            names.marketing_result: status_value,
+            names.marketing_error_reason: "" if success else marketing_error[:500],
+            names.chain_phase: "campaign",
+        },
         config=cfg,
         client=client,
     )
@@ -301,6 +387,7 @@ def push_pdd_upload_activity_register_status(
         return {"skipped": True, "reason": "activity_not_configured", "activity_id": activity_id}
 
     status_value = map_activity_register_status_to_feishu(success=success)
+    marketing_error = str(error or "").strip()
     return _push_pdd_upload_select_field_by_product_ids(
         account_id=account_id,
         product_ids=product_ids,
@@ -308,6 +395,11 @@ def push_pdd_upload_activity_register_status(
         status_value=status_value,
         log_label=f"活动报名({activity_id})",
         error=error,
+        extra_fields={
+            cfg.pdd_upload_log.field_names.marketing_result: status_value,
+            cfg.pdd_upload_log.field_names.marketing_error_reason: "" if success else marketing_error[:500],
+            cfg.pdd_upload_log.field_names.chain_phase: "campaign",
+        },
         config=cfg,
         client=client,
     )
@@ -330,6 +422,7 @@ def push_pdd_upload_promotion_status(
 
     status_field = str(pdd_cfg.field_names.promotion_status or "推广状态").strip()
     status_value = map_promotion_status_to_feishu(success=success)
+    traffic_error = str(error or "").strip()
     return _push_pdd_upload_select_field_by_product_ids(
         account_id=account_id,
         product_ids=product_ids,
@@ -337,6 +430,11 @@ def push_pdd_upload_promotion_status(
         status_value=status_value,
         log_label="推广状态",
         error=error,
+        extra_fields={
+            pdd_cfg.field_names.traffic_result: status_value,
+            pdd_cfg.field_names.traffic_error_reason: "" if success else traffic_error[:500],
+            pdd_cfg.field_names.chain_phase: "traffic",
+        },
         config=cfg,
         client=client,
     )
@@ -548,6 +646,9 @@ def build_pdd_upload_log_fields(
     list_status: str,
     created_at_raw: str,
     verified_at: datetime,
+    listing_result: str = "",
+    listing_error_reason: str = "",
+    chain_phase: str = "",
 ) -> dict[str, Any]:
     names = config.pdd_upload_log.field_names
     created_at = _parse_created_at(created_at_raw) or verified_at
@@ -563,6 +664,17 @@ def build_pdd_upload_log_fields(
         names.status: map_pdd_upload_status_to_feishu(list_status),
         names.product_id: str(product_id or "").strip(),
     }
+    normalized_result = str(listing_result or "").strip()
+    if normalized_result:
+        fields[names.listing_result] = normalized_result
+        fix_status, reentry_status = _listing_fix_flow_values(normalized_result == _FEISHU_LIMITED_TIME_SUCCESS)
+        fields[names.listing_manual_fix_status] = fix_status
+        fields[names.listing_reentry_status] = reentry_status
+    error_text = str(listing_error_reason or "").strip()
+    if error_text:
+        fields[names.listing_error_reason] = error_text[:500]
+    if chain_phase:
+        fields[names.chain_phase] = str(chain_phase).strip()
     if link:
         fields[names.link] = {"link": link, "text": title or product_id or link}
     return fields
@@ -614,6 +726,9 @@ def push_pdd_upload_log(
     list_status: str = "",
     created_at_raw: str = "",
     verified_at: datetime | None = None,
+    listing_result: str = "",
+    listing_error_reason: str = "",
+    chain_phase: str = "listing",
     config: FeishuConfig | None = None,
     client: FeishuClient | None = None,
     **_ignored: Any,
@@ -628,8 +743,9 @@ def push_pdd_upload_log(
         return {"skipped": True, "reason": "feishu_not_configured"}
 
     product_id = str(product_id or "").strip()
-    if not product_id:
-        return {"skipped": True, "reason": "missing_product_id"}
+    merchant_code = str(merchant_code or "").strip()
+    if not product_id and not merchant_code:
+        return {"skipped": True, "reason": "missing_product_id_and_merchant_code"}
 
     verified = verified_at or datetime.now()
     raw_link = str(product_link or "").strip()
@@ -663,6 +779,9 @@ def push_pdd_upload_log(
         list_status=list_status,
         created_at_raw=created_at_raw,
         verified_at=verified,
+        listing_result=listing_result,
+        listing_error_reason=listing_error_reason,
+        chain_phase=chain_phase,
     )
 
     api = client or FeishuClient(cfg)
@@ -671,10 +790,15 @@ def push_pdd_upload_log(
         msg = f"未找到飞书表「{pdd_cfg.table_name}」，请检查 bitable_app_token 与表名"
         logger.error("feishu pdd upload log failed: %s", msg)
         return {"failed": True, "reason": "table_not_found", "message": msg}
+    _ensure_pdd_upload_table_fields(api, cfg, app_token, table_id)
 
     fields = map_fields_to_table_names(api, app_token, table_id, fields)
 
     dedupe_field = str(pdd_cfg.dedupe_field or "").strip()
+    dedupe_value = product_id
+    if not dedupe_value:
+        dedupe_field = str(pdd_cfg.field_names.merchant_code or "商品编码").strip()
+        dedupe_value = merchant_code
     if dedupe_field:
         try:
             existing = search_records_by_field(
@@ -682,7 +806,7 @@ def push_pdd_upload_log(
                 app_token,
                 table_id,
                 field_name=dedupe_field,
-                value=product_id,
+                value=dedupe_value,
             )
         except FeishuAPIError as exc:
             if exc.code in _WRONG_TABLE_ID_CODES:
@@ -694,13 +818,13 @@ def push_pdd_upload_log(
                     app_token,
                     table_id,
                     field_name=dedupe_field,
-                    value=product_id,
+                    value=dedupe_value,
                 )
             elif exc.code in _INVALID_FILTER_CODES:
                 logger.warning(
                     "feishu pdd upload log dedupe skipped: invalid filter field=%s product_id=%s err=%s",
                     dedupe_field,
-                    product_id,
+                    dedupe_value,
                     exc,
                 )
                 print(
