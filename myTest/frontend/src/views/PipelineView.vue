@@ -36,6 +36,7 @@ const checkedProductsBySet = ref<Record<string, string[]>>({})
 const activityIds = ref<string[]>(['20981'])
 const categoryKeyword = ref('玩偶')
 const autoPromotion = ref(true)
+const continueAfterLimitedTimeFailure = ref(false)
 const demoMode = ref(true)
 const activityDelayHours = ref(24)
 const slotAlignmentTest = ref(false)
@@ -367,6 +368,7 @@ async function startPipeline() {
         activity_id: activityIds.value[0],
         category_keyword: categoryKeyword.value,
         auto_promotion: autoPromotion.value,
+        continue_after_limited_time_failure: continueAfterLimitedTimeFailure.value,
         activity_delay_hours: demoMode.value ? 0 : activityDelayHours.value,
         demo_mode: demoMode.value,
         slot_alignment_test: slotAlignmentTest.value,
@@ -388,6 +390,7 @@ async function startPipeline() {
         activity_id: activityIds.value[0],
         category_keyword: categoryKeyword.value,
         auto_promotion: autoPromotion.value,
+        continue_after_limited_time_failure: continueAfterLimitedTimeFailure.value,
         activity_delay_hours: demoMode.value ? 0 : activityDelayHours.value,
         demo_mode: demoMode.value,
         slot_alignment_test: slotAlignmentTest.value,
@@ -725,9 +728,16 @@ onUnmounted(stopPolling)
                     <el-switch v-model="autoPromotion" />
                   </div>
                   <div class="switch-row">
+                    <span class="switch-label">限时失败仍继续</span>
+                    <el-switch v-model="continueAfterLimitedTimeFailure" />
+                  </div>
+                  <div class="switch-row">
                     <span class="switch-label">演示模式</span>
                     <el-switch v-model="demoMode" />
                   </div>
+                </div>
+                <div v-if="continueAfterLimitedTimeFailure" class="form-tip">
+                  限时限量购失败时仍继续活动报名；若同时开启自动推广，活动处理完成后仍会创建推广。
                 </div>
                 <div v-if="slotAlignmentTest" class="form-tip">
                   开启后：主款预览图顺序定尺寸名，兄弟款跟槽位不走尺寸并集。

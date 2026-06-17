@@ -1,7 +1,12 @@
 from types import SimpleNamespace
 
-from pdd_agent.skills.campaign.limited_time import ACTIVITY_CREATE_URL_PARTS, _ensure_page_binding
-from pdd_agent.skills.campaign.limited_time import _campaign_price_candidates
+from pdd_agent.skills.campaign.limited_time import (
+    ACTIVITY_CREATE_URL_PARTS,
+    _campaign_price_candidates,
+    _ensure_page_binding,
+    _is_sync_marketing_checkbox_label,
+    _price_filter_failure_message,
+)
 from pdd_agent.skills.campaign.price_rules import price_rule_candidates, normalize_price_code
 
 
@@ -94,3 +99,34 @@ def test_campaign_price_candidates_use_first_sku_snapshot():
     assert result["pdd_product_id"] == "965068015115"
     assert "AXBD001A" in result["price_rule_candidates"]
     assert result["first_sku"]["combo_folder"] == "BD046A"
+
+
+def test_is_sync_marketing_checkbox_label_supports_new_and_old_text():
+    assert _is_sync_marketing_checkbox_label("同步设置惊喜优惠")
+    assert _is_sync_marketing_checkbox_label("不改变到手价，创建并更新「全站营销」总优惠金额享更多权益")
+    assert not _is_sync_marketing_checkbox_label("我已阅读并同意《外场活动说明》")
+
+
+def test_price_filter_failure_message_includes_price_detail():
+    message = _price_filter_failure_message(
+        {
+            "status": "no_eligible_products",
+            "decisions": [
+                {
+                    "product_id": "967318341181",
+                    "keep": False,
+                    "check_price": 25.0,
+                    "price_rule": {"code": "BD735A", "min_price": 28.0, "max_price": 35.0},
+                }
+            ],
+        }
+    )
+    assert "967318341181" in message
+    assert "pdd.xls" in message
+    assert "BD735A" in message
+
+
+def test_price_filter_failure_message_when_mapping_missing():
+    message = _price_filter_failure_message({"status": "skipped", "reason": "no_published_mapping_ids"})
+    assert "pdd.xls" in message
+    assert "映射" in message

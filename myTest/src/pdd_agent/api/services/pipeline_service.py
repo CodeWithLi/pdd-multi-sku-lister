@@ -244,6 +244,11 @@ def _pipeline_auto_limited_time(row) -> bool:
     return bool(_pipeline_activity_ids(row))
 
 
+def _pipeline_continue_after_limited_time_failure(row) -> bool:
+    """限时限量购失败后仍继续活动报名与推广。"""
+    return bool((row.meta or {}).get("continue_after_limited_time_failure"))
+
+
 def _limited_time_completed(row) -> bool:
     run_id = _pipeline_limited_time_run_id(row)
     if not run_id:
@@ -593,6 +598,9 @@ def _step_infos(row) -> list[dict[str, Any]]:
     elif row.status == "completed":
         limited_time_status = "skipped"
 
+    limited_time_outcome = str((row.meta or {}).get("limited_time_outcome") or "")
+    limited_time_skip_reason = str((row.meta or {}).get("limited_time_skip_reason") or "")
+
     activity_detail = "等待限时限量购完成后预约"
     if row.scheduled_activity_at and campaign_status == "scheduled":
         activity_detail = f"计划于 {row.scheduled_activity_at:%Y-%m-%d %H:%M} 自动报名"
@@ -603,12 +611,16 @@ def _step_infos(row) -> list[dict[str, Any]]:
         activity_detail = multi_detail
     elif campaign_outcome in CAMPAIGN_SKIP_TRAFFIC_OUTCOMES:
         activity_detail = campaign_skip_reason or "商品暂不可报名活动，已跳过活动报名"
+    elif limited_time_outcome == "failed" and _pipeline_continue_after_limited_time_failure(row):
+        activity_detail = "限时限量购失败，仍按设置继续活动报名"
 
     traffic_detail = "全部活动处理完成后自动创建推广" if row.auto_promotion and len(activity_ids) > 1 else (
         "活动报名成功后自动创建推广" if row.auto_promotion else "未启用"
     )
     if campaign_outcome in CAMPAIGN_SKIP_TRAFFIC_OUTCOMES and row.auto_promotion:
         traffic_detail = "活动未报名，仍继续创建推广"
+    elif limited_time_outcome == "failed" and _pipeline_continue_after_limited_time_failure(row) and row.auto_promotion:
+        traffic_detail = "限时限量购失败，活动处理完成后仍继续推广"
 
     limited_time_detail = (
         "上架完成后立即执行（先于活动报名，取消惊喜优惠）"
@@ -619,6 +631,8 @@ def _step_infos(row) -> list[dict[str, Any]]:
         limited_time_detail = f"上架完成后约 {LIMITED_TIME_POST_LISTING_DELAY_SECONDS} 秒启动（等待浏览器释放）"
     elif listing_status in {"success", "completed"} and limited_time_status == "pending":
         limited_time_detail = "即将启动限时限量购（先于活动报名）"
+    elif limited_time_outcome == "failed" and _pipeline_continue_after_limited_time_failure(row):
+        limited_time_detail = limited_time_skip_reason or "限时限量购失败，仍将继续活动报名"
 
     listing_detail = "将素材上架到拼多多"
     if listing_outcome == LISTING_SKIPPED_OUTCOME:
@@ -683,6 +697,9 @@ def pipeline_to_dict(row) -> dict[str, Any]:
         "activity_ids": _pipeline_activity_ids(row),
         "auto_promotion": bool(row.auto_promotion),
         "auto_limited_time_setup": _pipeline_auto_limited_time(row),
+        "continue_after_limited_time_failure": _pipeline_continue_after_limited_time_failure(row),
+        "limited_time_outcome": str((row.meta or {}).get("limited_time_outcome") or ""),
+        "limited_time_skip_reason": str((row.meta or {}).get("limited_time_skip_reason") or ""),
         "activity_delay_hours": float(row.activity_delay_hours or 24.0),
         "demo_mode": bool(row.demo_mode),
         "slot_alignment_test": bool((row.meta or {}).get("slot_alignment_test")),
@@ -738,6 +755,7 @@ def start_integrated_pipeline(
     category_keyword: str = "玩偶",
     auto_promotion: bool = True,
     auto_limited_time_setup: bool = True,
+    continue_after_limited_time_failure: bool = False,
     activity_delay_hours: float = 24.0,
     demo_mode: bool = False,
     platform_listing_code: str = "",
@@ -771,6 +789,7 @@ def start_integrated_pipeline(
         "platform_listing_code": platform_listing_code,
         "slot_alignment_test": bool(slot_alignment_test),
         "auto_limited_time_setup": bool(normalized_activity_ids),
+        "continue_after_limited_time_failure": bool(continue_after_limited_time_failure),
         "activity_ids": normalized_activity_ids,
         "campaign_activity_index": 0,
         "campaign_results": [],
@@ -892,6 +911,7 @@ def start_integrated_pipeline_batch(
     category_keyword: str = "玩偶",
     auto_promotion: bool = True,
     auto_limited_time_setup: bool = True,
+    continue_after_limited_time_failure: bool = False,
     activity_delay_hours: float = 24.0,
     demo_mode: bool = False,
     platform_listing_code: str = "",
@@ -929,6 +949,7 @@ def start_integrated_pipeline_batch(
             category_keyword=category_keyword,
             auto_promotion=auto_promotion,
             auto_limited_time_setup=auto_limited_time_setup,
+            continue_after_limited_time_failure=continue_after_limited_time_failure,
             activity_delay_hours=activity_delay_hours,
             demo_mode=demo_mode,
             platform_listing_code=platform_listing_code,
@@ -1008,6 +1029,7 @@ def on_queue_task_finished(
     _ensure_pipeline_failed_after_task(
         pipeline_id=pipeline_id,
         agent=agent,
+        run_id=run_id,
         success=success,
         error=error,
     )
@@ -1227,14 +1249,35 @@ def _on_limited_time_finished(row, *, run_id: str, success: bool, result: dict[s
         "limited_time_summary": _summarize_run_message(run_id),
     }
     if not success:
+        meta_patch["limited_time_outcome"] = "failed"
+        failure_message = error or "限时限量购设置失败"
+        if _pipeline_continue_after_limited_time_failure(row):
+            meta_patch["limited_time_skip_reason"] = failure_message
+            update_integrated_pipeline(
+                row.pipeline_id,
+                status="running",
+                current_step="limited_time_failed_continue",
+                error="",
+                meta_patch=meta_patch,
+            )
+            refreshed = get_integrated_pipeline(row.pipeline_id) or row
+            _schedule_pipeline_activity_after_limited_time(refreshed, meta_patch=meta_patch)
+            logger.info(
+                "pipeline %s limited time failed, continuing to activity: %s",
+                row.pipeline_id,
+                failure_message,
+            )
+            return
         update_integrated_pipeline(
             row.pipeline_id,
             status="failed",
             current_step="limited_time_failed",
-            error=error or "限时限量购设置失败",
+            error=failure_message,
             meta_patch=meta_patch,
         )
         return
+
+    meta_patch["limited_time_outcome"] = "success"
 
     refreshed = get_integrated_pipeline(row.pipeline_id) or row
     _schedule_pipeline_activity_after_limited_time(refreshed, meta_patch=meta_patch)
@@ -1284,6 +1327,21 @@ def _reconcile_stuck_pipeline_row(row) -> Any:
         run_status = _run_status_value(record.status)
         if run_status not in {RunStatus.FAILED, RunStatus.CANCELED}:
             continue
+        if (
+            run_id == _pipeline_limited_time_run_id(row)
+            and run_status == RunStatus.FAILED
+            and _pipeline_continue_after_limited_time_failure(row)
+        ):
+            refreshed = get_integrated_pipeline(row.pipeline_id) or row
+            if not refreshed.campaign_run_id and not refreshed.scheduled_activity_at:
+                _on_limited_time_finished(
+                    refreshed,
+                    run_id=run_id,
+                    success=False,
+                    result=record.result if isinstance(record.result, dict) else {},
+                    error=str(record.message or "").strip() or "限时限量购设置失败",
+                )
+            continue
         error = str(record.message or "").strip() or default_error
         if run_status == RunStatus.CANCELED:
             error = error or "子任务已取消"
@@ -1308,6 +1366,7 @@ def _ensure_pipeline_failed_after_task(
     *,
     pipeline_id: str,
     agent: str,
+    run_id: str = "",
     success: bool,
     error: str,
 ) -> None:
@@ -1315,6 +1374,12 @@ def _ensure_pipeline_failed_after_task(
         return
     row = get_integrated_pipeline(pipeline_id)
     if not row or row.status in TERMINAL_PIPELINE_STATUSES:
+        return
+    if (
+        agent == AgentKind.CAMPAIGN.value
+        and _pipeline_limited_time_run_id(row) == run_id
+        and _pipeline_continue_after_limited_time_failure(row)
+    ):
         return
     step_map = {
         AgentKind.LISTING.value: ("listing_failed", "上架失败"),

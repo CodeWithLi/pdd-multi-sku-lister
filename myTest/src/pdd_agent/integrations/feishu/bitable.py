@@ -10,6 +10,7 @@ from pdd_agent.integrations.feishu.client import FeishuClient
 FIELD_TEXT = 1
 FIELD_NUMBER = 2
 FIELD_SINGLE_SELECT = 3
+FIELD_MULTI_SELECT = 4
 FIELD_DATETIME = 5
 FIELD_URL = 15
 
@@ -136,6 +137,13 @@ def batch_update_records(
 
 
 _FIELD_LOOKUP_CACHE: dict[tuple[str, str], dict[str, str]] = {}
+_TABLE_FIELD_META_CACHE: dict[tuple[str, str], dict[str, dict[str, Any]]] = {}
+
+
+def clear_table_field_caches() -> None:
+    """测试或热更新表结构后清空字段缓存。"""
+    _FIELD_LOOKUP_CACHE.clear()
+    _TABLE_FIELD_META_CACHE.clear()
 
 
 def _table_field_lookup(client: FeishuClient, app_token: str, table_id: str) -> dict[str, str]:
@@ -151,6 +159,98 @@ def _table_field_lookup(client: FeishuClient, app_token: str, table_id: str) -> 
     }
     _FIELD_LOOKUP_CACHE[key] = lookup
     return lookup
+
+
+def get_table_field_meta(client: FeishuClient, app_token: str, table_id: str) -> dict[str, dict[str, Any]]:
+    key = (app_token, table_id)
+    cached = _TABLE_FIELD_META_CACHE.get(key)
+    if cached is not None:
+        return cached
+    fields = list_fields(client, app_token, table_id)
+    meta: dict[str, dict[str, Any]] = {}
+    for item in fields:
+        name = str(item.get("field_name") or "").strip()
+        if not name:
+            continue
+        meta[name] = {
+            "type": int(item.get("type") or 0),
+            "property": item.get("property") if isinstance(item.get("property"), dict) else {},
+        }
+    _TABLE_FIELD_META_CACHE[key] = meta
+    return meta
+
+
+def _resolve_select_option(value: str, options: list[Any]) -> str:
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    names = [
+        str(option.get("name") or "")
+        for option in options
+        if isinstance(option, dict) and str(option.get("name") or "").strip()
+    ]
+    if text in names:
+        return text
+    lowered = text.lower()
+    for name in names:
+        if name.lower() == lowered:
+            return name
+    return text
+
+
+def coerce_field_value_for_table(
+    value: Any,
+    *,
+    field_type: int,
+    field_property: dict[str, Any] | None = None,
+) -> Any:
+    """按飞书列类型规范化写入值（单选/多选/链接等）。"""
+    if value is None or value == "":
+        return value
+    prop = field_property or {}
+    if field_type == FIELD_SINGLE_SELECT:
+        options = prop.get("options") if isinstance(prop.get("options"), list) else []
+        resolved = _resolve_select_option(str(value), options)
+        return resolved or str(value).strip()
+    if field_type == FIELD_MULTI_SELECT:
+        options = prop.get("options") if isinstance(prop.get("options"), list) else []
+        if isinstance(value, list):
+            resolved_items = [
+                _resolve_select_option(str(item), options) or str(item).strip()
+                for item in value
+                if str(item).strip()
+            ]
+            return [item for item in resolved_items if item]
+        resolved = _resolve_select_option(str(value), options) or str(value).strip()
+        return [resolved] if resolved else []
+    if field_type == FIELD_URL:
+        if isinstance(value, dict):
+            link = str(value.get("link") or "").strip()
+            if not link:
+                return value
+            text = str(value.get("text") or link).strip() or link
+            return {"link": link, "text": text}
+        text = str(value).strip()
+        return {"link": text, "text": text} if text else value
+    if field_type == FIELD_DATETIME:
+        if isinstance(value, (int, float)):
+            return int(value)
+        if isinstance(value, str):
+            raw = value.strip()
+            if raw.isdigit():
+                return int(raw)
+        return value
+    if field_type == FIELD_NUMBER:
+        if isinstance(value, (int, float)):
+            return value
+        text = str(value).strip()
+        if not text:
+            return value
+        try:
+            return float(text) if "." in text else int(text)
+        except ValueError:
+            return value
+    return value
 
 
 def resolve_table_field_name(
@@ -210,8 +310,17 @@ def map_fields_to_table_names(
     table_id: str,
     fields: dict[str, Any],
 ) -> dict[str, Any]:
-    """把 fields 的 key 映射为飞书表真实列名。"""
+    """把 fields 的 key 映射为飞书表真实列名，并按列类型规范化值。"""
+    meta = get_table_field_meta(client, app_token, table_id)
     mapped: dict[str, Any] = {}
     for key, value in fields.items():
-        mapped[resolve_table_field_name(client, app_token, table_id, key)] = value
+        resolved_name = resolve_table_field_name(client, app_token, table_id, key)
+        field_meta = meta.get(resolved_name) or {}
+        field_type = int(field_meta.get("type") or 0)
+        field_property = field_meta.get("property") if isinstance(field_meta.get("property"), dict) else {}
+        mapped[resolved_name] = coerce_field_value_for_table(
+            value,
+            field_type=field_type,
+            field_property=field_property,
+        )
     return mapped

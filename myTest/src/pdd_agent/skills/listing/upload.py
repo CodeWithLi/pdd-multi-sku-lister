@@ -1078,6 +1078,7 @@ def _schedule_feishu_pdd_upload_log(
         if not product_id:
             return
         raw_link = str(capture.get("product_link") or "").strip()
+        # 上架成功立即写入/更新飞书；限时限量购/活动/推广后续按商品ID检索并改列
         schedule_pdd_upload_log(
             account_id=account_id,
             listing_label=unit.listing_label,

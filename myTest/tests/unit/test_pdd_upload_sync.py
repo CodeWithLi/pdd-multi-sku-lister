@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime
+from typing import Any
 
 from pdd_agent.integrations.feishu.config import FeishuConfig, PddUploadLogConfig
 from pdd_agent.integrations.feishu.pdd_upload_sync import (
@@ -163,6 +164,66 @@ def test_push_pdd_upload_log_accepts_listing_label_kwarg(monkeypatch):
 
     assert result.get("created") is True
     assert result.get("record_ids") == ["rec_test"]
+
+
+def test_push_pdd_upload_log_updates_existing_row_by_product_id(monkeypatch):
+    from pdd_agent.integrations.feishu import pdd_upload_sync
+
+    class FakeClient:
+        def __init__(self, config):
+            self.config = config
+
+    captured_updates: list[list[dict[str, Any]]] = []
+
+    def fake_batch_update(_client, _app_token, _table_id, updates):
+        captured_updates.append(list(updates))
+        return [item["record_id"] for item in updates]
+
+    monkeypatch.setattr(pdd_upload_sync, "FeishuClient", FakeClient)
+    monkeypatch.setattr(
+        pdd_upload_sync,
+        "search_records_by_field",
+        lambda *args, **kwargs: [{"record_id": "rec_exist", "fields": {}}],
+    )
+    monkeypatch.setattr(pdd_upload_sync, "batch_create_records", lambda *args, **kwargs: ["rec_new"])
+    monkeypatch.setattr(pdd_upload_sync, "batch_update_records", fake_batch_update)
+    monkeypatch.setattr(
+        pdd_upload_sync,
+        "resolve_pdd_upload_table_id",
+        lambda cfg, client, save_table_id=True: ("tbldwkpLiuvBWwe9", "test"),
+    )
+    monkeypatch.setattr(
+        pdd_upload_sync,
+        "map_fields_to_table_names",
+        lambda client, app_token, table_id, fields: fields,
+    )
+
+    result = pdd_upload_sync.push_pdd_upload_log(
+        account_id="store_A",
+        listing_label="BD724A/第一套图",
+        title="测试标题",
+        merchant_code="BD724A",
+        product_id="966965874378",
+        product_link="https://mobile.yangkeduo.com/goods.html?goods_id=966965874378",
+        list_status="销售中",
+        created_at_raw="2026-06-16 13:21",
+        verified_at=datetime(2026, 6, 16, 13, 25, 0),
+        config=FeishuConfig(
+            app_id="x",
+            app_secret="y",
+            bitable_app_token="z",
+            pdd_upload_log=PddUploadLogConfig(
+                enabled=True,
+                table_id="tbldwkpLiuvBWwe9",
+                dedupe_field="商品ID",
+            ),
+        ),
+    )
+
+    assert result.get("updated") is True
+    assert result.get("record_ids") == ["rec_exist"]
+    assert captured_updates
+    assert captured_updates[0][0]["record_id"] == "rec_exist"
 
 
 def test_format_pdd_upload_log_context_includes_link_source():

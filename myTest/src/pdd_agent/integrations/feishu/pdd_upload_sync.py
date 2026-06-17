@@ -1,4 +1,9 @@
-"""PDD每日上传商品日志 — 上架核验成功后异步写入飞书。"""
+"""PDD每日上传商品日志 — 分步写入飞书。
+
+流程：
+1. 上架核验成功 → 立即 create/upsert 一条记录（按商品ID去重）
+2. 限时限量购 / 活动报名 / 推广 → 按商品ID检索已有记录后 update 对应列
+"""
 
 from __future__ import annotations
 
@@ -707,20 +712,54 @@ def push_pdd_upload_log(
             else:
                 raise
         if existing:
-            logger.info(
-                "[%s] feishu pdd upload log skipped duplicate product_id=%s table=%s(%s)",
+            record_id = str(existing[0].get("record_id") or "").strip()
+            if record_id:
+                try:
+                    batch_update_records(
+                        api,
+                        app_token,
+                        table_id,
+                        [{"record_id": record_id, "fields": fields}],
+                    )
+                except FeishuAPIError as exc:
+                    if exc.code in _WRONG_TABLE_ID_CODES:
+                        table_id, resolve_method = resolve_pdd_upload_table_id(cfg, api, save_table_id=True)
+                        if not table_id:
+                            raise
+                        batch_update_records(
+                            api,
+                            app_token,
+                            table_id,
+                            [{"record_id": record_id, "fields": fields}],
+                        )
+                    else:
+                        raise
+                logger.info(
+                    "[%s] feishu pdd upload log updated duplicate product_id=%s record_id=%s table=%s(%s)",
+                    account_id or "-",
+                    product_id,
+                    record_id,
+                    table_id,
+                    resolve_method,
+                )
+                return {
+                    "updated": True,
+                    "product_id": product_id,
+                    "table_id": table_id,
+                    "resolve_method": resolve_method,
+                    "record_ids": [record_id],
+                    "fields": fields,
+                    "link_source": _link_source_label(
+                        effective_link,
+                        product_link_method,
+                        used_fallback=used_link_fallback,
+                    ),
+                }
+            logger.warning(
+                "[%s] feishu pdd upload log duplicate without record_id product_id=%s",
                 account_id or "-",
                 product_id,
-                table_id,
-                resolve_method,
             )
-            return {
-                "skipped": True,
-                "reason": "duplicate",
-                "product_id": product_id,
-                "table_id": table_id,
-                "resolve_method": resolve_method,
-            }
 
     try:
         record_ids = batch_create_records(api, app_token, table_id, [fields])
@@ -775,6 +814,12 @@ def _format_push_failure(exc: Exception, **kwargs: Any) -> str:
                 f"或检查 config/feishu.yaml 中 pdd_upload_log.table_name。"
                 f" 本次抓取 product_id={product_id} link={link} link_method={method}"
             )
+        if exc.code == 1254063:
+            return (
+                f"[{account_id}] [{label}] 飞书 PDD 上传日志失败：字段类型不匹配(MultiSelectFieldConvFail)。"
+                f"请检查飞书表「状态/限时限量购状态」等列是否为多选，且选项名与 config/feishu.yaml 一致。"
+                f" product_id={product_id}"
+            )
         return (
             f"[{account_id}] [{label}] 飞书 PDD 上传日志失败：{exc} "
             f"(product_id={product_id} link={link} link_method={method})"
@@ -798,6 +843,13 @@ def _push_pdd_upload_log_safe(**kwargs: Any) -> None:
                 f"link_source={result.get('link_source')}",
                 flush=True,
             )
+        elif result.get("updated"):
+            print(
+                f"[{account_id}] [{label}] 飞书 PDD 上传日志已更新（商品ID已存在） "
+                f"record_id={result.get('record_ids', [''])[0]} "
+                f"table={result.get('table_id')}",
+                flush=True,
+            )
         elif result.get("skipped"):
             print(
                 f"[{account_id}] [{label}] 飞书 PDD 上传日志跳过：{result.get('reason')}",
@@ -812,13 +864,17 @@ def _push_pdd_upload_log_safe(**kwargs: Any) -> None:
 
 
 def schedule_pdd_upload_log(**kwargs: Any) -> None:
-    """后台线程异步写入，不阻塞浏览器上架流程。"""
+    """写入 PDD 上传日志。默认上架路径同步写入，确保后续步骤能检索到记录。"""
     try:
         cfg = load_feishu_config()
     except Exception as exc:
         logger.warning("load feishu config failed: %s", exc)
         return
     if not cfg.pdd_upload_log.enabled:
+        return
+
+    if cfg.pdd_upload_log.sync_on_listing:
+        _push_pdd_upload_log_safe(**kwargs)
         return
 
     thread = threading.Thread(

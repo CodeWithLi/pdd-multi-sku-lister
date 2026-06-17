@@ -2,13 +2,17 @@
 
 from __future__ import annotations
 
+import json
 import time
 from typing import Any
 
 from pdd_agent.browser.dp_compat_sync import DpPage
 from pdd_agent.browser.sync_login import ensure_session_sync, is_login_url
 from pdd_agent.core.config import AccountConfig
-from pdd_agent.db.repositories import get_published_products_by_mapping_ids
+from pdd_agent.db.repositories import (
+    get_published_products_by_mapping_ids,
+    get_published_products_by_pdd_product_ids,
+)
 from pdd_agent.skills.campaign.price_rules import (
     find_pdd_price_range,
     load_pdd_price_ranges,
@@ -26,6 +30,24 @@ LIMITED_TIME_TOOL_URLS = (
 ACTIVITY_CREATE_URL_PARTS = ("/tool/promotion/create",)
 PRODUCT_SEARCH_BATCH_SIZE = 30
 MAX_CAMPAIGN_PRODUCTS = 40
+# PDD 底部「同步惊喜优惠 / 全站营销」复选框文案（新旧版并存）
+_SYNC_MARKETING_CHECKBOX_LABEL_KEYWORDS = (
+    "同步设置惊喜优惠",
+    "惊喜优惠",
+    "全站营销",
+    "不改变到手价",
+)
+_EXCLUDE_CHECKBOX_LABEL_KEYWORDS = (
+    "我已阅读",
+    "同意",
+    "外场活动",
+)
+_DIRECT_SYNC_CHECKBOX_SELECTORS = (
+    "#surpriseCouponCheck",
+    "#fullSiteMarketingCheck",
+    '[id*="surpriseCoupon"]',
+    '[id*="fullSiteMarketing"]',
+)
 
 
 def _safe_exc(exc: BaseException, limit: int = 300) -> str:
@@ -528,6 +550,8 @@ def _wait_activity_settings(page: DpPage, account_id: str, timeout: int = 30) ->
         "自动创建",
         "惊喜优惠",
         "同步设置",
+        "全站营销",
+        "立减后价格",
         "促销维度",
     )
     for attempt in range(timeout):
@@ -2860,11 +2884,61 @@ def _campaign_price_candidates(row: Any) -> dict[str, Any]:
     }
 
 
-def _load_campaign_price_targets(mapping_ids: list[str]) -> dict[str, Any]:
+def _is_sync_marketing_checkbox_label(text: str) -> bool:
+    normalized = str(text or "").strip()
+    if not normalized:
+        return False
+    if any(keyword in normalized for keyword in _EXCLUDE_CHECKBOX_LABEL_KEYWORDS):
+        return False
+    return any(keyword in normalized for keyword in _SYNC_MARKETING_CHECKBOX_LABEL_KEYWORDS)
+
+
+def _price_filter_failure_message(price_filter: dict[str, Any]) -> str:
+    if price_filter.get("status") == "skipped":
+        reason = str(price_filter.get("reason") or "").strip()
+        if reason == "mapping_not_found":
+            return "无法进行 pdd.xls 价格校验（已发布商品映射不存在）"
+        return "无法进行 pdd.xls 价格校验（缺少已发布商品映射或未导入 SKU 编码）"
+    decisions = price_filter.get("decisions") or []
+    out_of_range = [item for item in decisions if not item.get("keep")]
+    detail_parts: list[str] = []
+    for item in out_of_range[:3]:
+        product_id = str(item.get("product_id") or "").strip()
+        check_price = item.get("check_price")
+        rule = item.get("price_rule") if isinstance(item.get("price_rule"), dict) else {}
+        if rule:
+            detail_parts.append(
+                f"{product_id}: ¥{check_price} 不在 {rule.get('code')} "
+                f"¥{rule.get('min_price')}-¥{rule.get('max_price')} 区间"
+            )
+        elif product_id:
+            suffix = f"（页面价 ¥{check_price}）" if check_price is not None else "（页面未读到价格）"
+            detail_parts.append(f"{product_id}: 未匹配 pdd.xls 编码规则{suffix}")
+    base = "没有符合 pdd.xls 价格区间的活动商品，已删除不符合商品，不继续创建活动"
+    if detail_parts:
+        return f"{base}（{'；'.join(detail_parts)}）"
+    return base
+
+
+def _load_campaign_price_targets(
+    mapping_ids: list[str],
+    *,
+    account_id: str = "",
+    pdd_product_ids: list[str] | None = None,
+) -> dict[str, Any]:
     ids = [str(item).strip() for item in mapping_ids if str(item).strip()]
-    if not ids:
-        return {"status": "skipped", "reason": "no_published_mapping_ids", "targets": []}
-    rows = get_published_products_by_mapping_ids(ids)
+    rows = get_published_products_by_mapping_ids(ids) if ids else []
+    if not rows and account_id and pdd_product_ids:
+        rows = get_published_products_by_pdd_product_ids(
+            account_id=account_id,
+            pdd_product_ids=pdd_product_ids,
+        )
+    if not rows:
+        return {
+            "status": "skipped",
+            "reason": "mapping_not_found" if ids else "no_published_mapping_ids",
+            "targets": [],
+        }
     price_ranges = load_pdd_price_ranges()
     targets: list[dict[str, Any]] = []
     for row in rows:
@@ -2913,7 +2987,12 @@ def _read_activity_discount_price_rows(page: DpPage) -> dict[str, Any]:
                     const text = textOf(el);
                     return text.includes('活动库存')
                         && text.includes('促销维度')
-                        && (text.includes('折后价') || text.includes('拼单价') || text.includes('立减'));
+                        && (
+                            text.includes('折后价')
+                            || text.includes('立减后价格')
+                            || text.includes('拼单价')
+                            || text.includes('立减')
+                        );
                 });
             const rows = [];
             for (const root of roots) {
@@ -3155,8 +3234,14 @@ def _filter_activity_products_by_price(
     page: DpPage,
     account_id: str,
     mapping_ids: list[str],
+    *,
+    pdd_product_ids: list[str] | None = None,
 ) -> dict[str, Any]:
-    target_state = _load_campaign_price_targets(mapping_ids)
+    target_state = _load_campaign_price_targets(
+        mapping_ids,
+        account_id=account_id,
+        pdd_product_ids=pdd_product_ids,
+    )
     if target_state.get("status") == "skipped":
         return target_state
 
@@ -3226,16 +3311,24 @@ def _filter_activity_products_by_price(
 
 def _uncheck_surprise_discount(page: DpPage, account_id: str) -> dict[str, Any]:
     """
-    取消底部「同步设置惊喜优惠」复选框。
+    取消底部「同步设置惊喜优惠 / 全站营销」复选框。
 
+    PDD 新版文案为「不改变到手价，创建并更新全站营销…」，旧版为「同步设置惊喜优惠」。
     返回 checked=false 才算成功；没有找到该控件按失败处理，避免误以为完成。
     """
+    sync_keywords = json.dumps(list(_SYNC_MARKETING_CHECKBOX_LABEL_KEYWORDS), ensure_ascii=False)
+    exclude_keywords = json.dumps(list(_EXCLUDE_CHECKBOX_LABEL_KEYWORDS), ensure_ascii=False)
+    direct_selectors = json.dumps(list(_DIRECT_SYNC_CHECKBOX_SELECTORS), ensure_ascii=False)
     try:
-        page.run_js("window.scrollTo(0, document.body.scrollHeight);")
-        time.sleep(1)
+        for scroll_pass in range(2):
+            page.run_js("window.scrollTo(0, document.body.scrollHeight);")
+            time.sleep(0.8 if scroll_pass else 1.2)
         result = page.run_js(
-            """
-            function isVisible(el) {
+            f"""
+            const SYNC_LABEL_KEYWORDS = {sync_keywords};
+            const EXCLUDE_LABEL_KEYWORDS = {exclude_keywords};
+            const DIRECT_SELECTORS = {direct_selectors};
+            function isVisible(el) {{
                 if (!el || !el.getBoundingClientRect) return false;
                 const r = el.getBoundingClientRect();
                 const s = window.getComputedStyle(el);
@@ -3243,25 +3336,34 @@ def _uncheck_surprise_discount(page: DpPage, account_id: str) -> dict[str, Any]:
                     && s.display !== 'none'
                     && s.visibility !== 'hidden'
                     && parseFloat(s.opacity || '1') > 0.05;
-            }
-            function eventClick(el) {
-                el.scrollIntoView({ block: 'center', inline: 'nearest' });
+            }}
+            function textOf(el) {{
+                return (el.innerText || el.textContent || '').trim();
+            }}
+            function labelMatchesSync(text) {{
+                const normalized = String(text || '').trim();
+                if (!normalized) return false;
+                if (EXCLUDE_LABEL_KEYWORDS.some((keyword) => normalized.includes(keyword))) return false;
+                return SYNC_LABEL_KEYWORDS.some((keyword) => normalized.includes(keyword));
+            }}
+            function eventClick(el) {{
+                el.scrollIntoView({{ block: 'center', inline: 'nearest' }});
                 const r = el.getBoundingClientRect();
                 const x = r.left + Math.min(Math.max(6, r.width / 2), Math.max(6, r.width - 6));
                 const y = r.top + Math.min(Math.max(6, r.height / 2), Math.max(6, r.height - 6));
                 const target = document.elementFromPoint(x, y) || el;
-                for (const ev of ['pointerdown', 'mousedown', 'pointerup', 'mouseup', 'click']) {
-                    target.dispatchEvent(new MouseEvent(ev, {
+                for (const ev of ['pointerdown', 'mousedown', 'pointerup', 'mouseup', 'click']) {{
+                    target.dispatchEvent(new MouseEvent(ev, {{
                         bubbles: true,
                         cancelable: true,
                         view: window,
                         clientX: x,
                         clientY: y,
-                    }));
-                }
+                    }}));
+                }}
                 if (target !== el) el.click();
-            }
-            function checkedState(box) {
+            }}
+            function checkedState(box) {{
                 if (!box) return null;
                 const dataChecked = box.getAttribute?.('data-checked');
                 if (dataChecked === 'true') return true;
@@ -3272,9 +3374,9 @@ def _uncheck_surprise_discount(page: DpPage, account_id: str) -> dict[str, Any]:
                     || cls.includes('checked')
                     || cls.includes('is-checked')
                     || cls.includes('haschecksquare')
-                ) {
+                ) {{
                     return true;
-                }
+                }}
                 if ((box.tagName || '').toLowerCase() === 'input') return Boolean(box.checked);
                 const input = box.querySelector?.('input[type="checkbox"]');
                 if (input) return Boolean(input.checked);
@@ -3282,14 +3384,16 @@ def _uncheck_surprise_discount(page: DpPage, account_id: str) -> dict[str, Any]:
                 if (aria === 'true') return true;
                 if (aria === 'false') return false;
                 return false;
-            }
-            function findControlNear(node) {
+            }}
+            function findControlNear(node) {{
                 let cur = node;
-                for (let depth = 0; depth < 8 && cur; depth++, cur = cur.parentElement) {
+                for (let depth = 0; depth < 8 && cur; depth++, cur = cur.parentElement) {{
                     const label = cur.closest?.('label');
-                    if (label && label.querySelector?.('input[type="checkbox"]')) return label;
+                    if (label && label.querySelector?.('input[type="checkbox"], [role="checkbox"], [data-testid="beast-core-checkbox"]')) {{
+                        return label;
+                    }}
                     const input = cur.querySelector?.('input[type="checkbox"]');
-                    if (input) {
+                    if (input) {{
                         const inputLabel = input.closest?.('label');
                         if (inputLabel) return inputLabel;
                         const wrap = input.closest?.(
@@ -3297,83 +3401,106 @@ def _uncheck_surprise_discount(page: DpPage, account_id: str) -> dict[str, Any]:
                         );
                         if (wrap) return wrap;
                         return input;
-                    }
+                    }}
                     const roleBox = cur.querySelector?.('[role="checkbox"]');
                     if (roleBox) return roleBox;
                     const classBox = cur.querySelector?.(
-                        '[class*="checkbox"], [class*="Checkbox"], [class*="checkBox"]'
+                        '[class*="checkbox"], [class*="Checkbox"], [class*="checkBox"], [data-testid="beast-core-checkbox"]'
                     );
                     if (classBox) return classBox;
-                }
+                }}
                 return null;
-            }
-            const directRoot = document.querySelector('#surpriseCouponCheck');
-            const directBox = directRoot?.querySelector?.('[data-testid="beast-core-checkbox"]')
-                || directRoot?.querySelector?.('label,input[type="checkbox"],[role="checkbox"]');
-            if (directBox && isVisible(directBox)) {
-                const before = checkedState(directBox);
-                const directClickTarget = directBox.querySelector?.(
-                    '[data-testid="beast-core-checkbox-checkIcon"], [class*="CBX_square"], svg'
-                ) || directBox;
-                if (before === true) {
-                    eventClick(directClickTarget);
-                    let after = checkedState(directBox);
-                    if (after === true && directClickTarget !== directBox) {
-                        eventClick(directBox);
-                        after = checkedState(directBox);
-                    }
-                    return {
+            }}
+            function resolveCheckboxBox(root) {{
+                if (!root) return null;
+                return root.querySelector?.('[data-testid="beast-core-checkbox"]')
+                    || root.querySelector?.('label,input[type="checkbox"],[role="checkbox"]')
+                    || root;
+            }}
+            function tryToggleControl(control, method) {{
+                const before = checkedState(control);
+                if (before !== true) {{
+                    return {{
                         found: true,
-                        unchecked: after === false,
+                        unchecked: true,
                         before,
-                        after,
-                        method: 'direct_surprise_coupon_checkbox',
-                        rect: (() => {
-                            const r = directClickTarget.getBoundingClientRect();
-                            return {
-                                left: r.left,
-                                top: r.top,
-                                width: r.width,
-                                height: r.height,
-                                x: r.left + r.width / 2,
-                                y: r.top + r.height / 2,
-                            };
-                        })(),
-                        text: (directRoot.innerText || directRoot.textContent || '').trim(),
-                    };
-                }
-                return {
+                        after: before,
+                        method,
+                        text: textOf(control),
+                    }};
+                }}
+                const clickTarget = control.querySelector?.(
+                    '[data-testid="beast-core-checkbox-checkIcon"], [class*="CBX_square"], svg'
+                ) || control;
+                eventClick(clickTarget);
+                let after = checkedState(control);
+                if (after === true && clickTarget !== control) {{
+                    eventClick(control);
+                    after = checkedState(control);
+                }}
+                const rect = clickTarget.getBoundingClientRect?.();
+                return {{
                     found: true,
-                    unchecked: true,
+                    unchecked: after === false,
                     before,
-                    after: before,
-                    method: 'direct_surprise_coupon_checkbox',
-                    text: (directRoot.innerText || directRoot.textContent || '').trim(),
-                };
-            }
+                    after,
+                    method,
+                    text: textOf(control),
+                    rect: rect ? {{
+                        left: rect.left,
+                        top: rect.top,
+                        width: rect.width,
+                        height: rect.height,
+                        x: rect.left + rect.width / 2,
+                        y: rect.top + rect.height / 2,
+                    }} : null,
+                }};
+            }}
+            for (const selector of DIRECT_SELECTORS) {{
+                const directRoot = document.querySelector(selector);
+                const directBox = resolveCheckboxBox(directRoot);
+                if (directBox && isVisible(directBox)) {{
+                    const result = tryToggleControl(directBox, 'direct_sync_checkbox');
+                    result.text = textOf(directRoot) || result.text;
+                    return result;
+                }}
+            }}
             const nodes = Array.from(document.querySelectorAll('label,span,div,p'));
             const matches = nodes
                 .filter((el) => isVisible(el))
-                .filter((el) => ((el.innerText || el.textContent || '').trim()).includes('同步设置惊喜优惠'))
-                .map((el) => ({
+                .filter((el) => labelMatchesSync(textOf(el)))
+                .map((el) => ({{
                     el,
                     rect: el.getBoundingClientRect(),
-                    text: (el.innerText || el.textContent || '').trim(),
-                }))
+                    text: textOf(el),
+                }}))
                 .sort((a, b) => b.rect.top - a.rect.top);
-
-            for (const item of matches) {
+            for (const item of matches) {{
                 const control = findControlNear(item.el);
-                if (!control) continue;
-                const before = checkedState(control);
-                if (before === true) {
-                    eventClick(control);
-                    const after = checkedState(control);
-                    return { found: true, unchecked: after === false, before, after, text: item.text };
-                }
-                return { found: true, unchecked: true, before, after: before, text: item.text };
-            }
-            return { found: false, unchecked: false, before: null, after: null, text: '' };
+                if (!control || !isVisible(control)) continue;
+                const result = tryToggleControl(control, 'text_match_sync_checkbox');
+                result.text = item.text || result.text;
+                return result;
+            }}
+            const footerCheckboxes = Array.from(document.querySelectorAll(
+                'label,[data-testid="beast-core-checkbox"],input[type="checkbox"],[role="checkbox"]'
+            ))
+                .filter(isVisible)
+                .map((el) => ({{
+                    el,
+                    text: textOf(el.closest('label') || el.parentElement || el),
+                    rect: el.getBoundingClientRect(),
+                }}))
+                .filter((item) => labelMatchesSync(item.text))
+                .sort((a, b) => b.rect.top - a.rect.top);
+            for (const item of footerCheckboxes) {{
+                const control = findControlNear(item.el) || item.el;
+                if (!control || !isVisible(control)) continue;
+                const result = tryToggleControl(control, 'footer_sync_checkbox');
+                result.text = item.text || result.text;
+                return result;
+            }}
+            return {{ found: false, unchecked: false, before: null, after: null, text: '' }};
             """
         )
     except Exception as exc:
@@ -3396,8 +3523,11 @@ def _uncheck_surprise_discount(page: DpPage, account_id: str) -> dict[str, Any]:
                     raw_page.mouse.click(x, y)
                     time.sleep(0.5)
                     verify = page.run_js(
-                        """
-                        function isVisible(el) {
+                        f"""
+                        const SYNC_LABEL_KEYWORDS = {sync_keywords};
+                        const EXCLUDE_LABEL_KEYWORDS = {exclude_keywords};
+                        const DIRECT_SELECTORS = {direct_selectors};
+                        function isVisible(el) {{
                             if (!el || !el.getBoundingClientRect) return false;
                             const r = el.getBoundingClientRect();
                             const s = window.getComputedStyle(el);
@@ -3405,8 +3535,17 @@ def _uncheck_surprise_discount(page: DpPage, account_id: str) -> dict[str, Any]:
                                 && s.display !== 'none'
                                 && s.visibility !== 'hidden'
                                 && parseFloat(s.opacity || '1') > 0.05;
-                        }
-                        function checkedState(box) {
+                        }}
+                        function textOf(el) {{
+                            return (el.innerText || el.textContent || '').trim();
+                        }}
+                        function labelMatchesSync(text) {{
+                            const normalized = String(text || '').trim();
+                            if (!normalized) return false;
+                            if (EXCLUDE_LABEL_KEYWORDS.some((keyword) => normalized.includes(keyword))) return false;
+                            return SYNC_LABEL_KEYWORDS.some((keyword) => normalized.includes(keyword));
+                        }}
+                        function checkedState(box) {{
                             if (!box) return null;
                             const dataChecked = box.getAttribute?.('data-checked');
                             if (dataChecked === 'true') return true;
@@ -3422,17 +3561,35 @@ def _uncheck_surprise_discount(page: DpPage, account_id: str) -> dict[str, Any]:
                             const input = box.querySelector?.('input[type="checkbox"]');
                             if (input) return Boolean(input.checked);
                             return false;
-                        }
-                        const directRoot = document.querySelector('#surpriseCouponCheck');
-                        const directBox = directRoot?.querySelector?.('[data-testid="beast-core-checkbox"]')
-                            || directRoot?.querySelector?.('label,input[type="checkbox"],[role="checkbox"]');
-                        const checked = checkedState(directBox);
-                        return {
-                            found: Boolean(directBox && isVisible(directBox)),
+                        }}
+                        for (const selector of DIRECT_SELECTORS) {{
+                            const directRoot = document.querySelector(selector);
+                            const directBox = directRoot?.querySelector?.('[data-testid="beast-core-checkbox"]')
+                                || directRoot?.querySelector?.('label,input[type="checkbox"],[role="checkbox"]');
+                            if (directBox && isVisible(directBox)) {{
+                                const checked = checkedState(directBox);
+                                return {{
+                                    found: true,
+                                    checked,
+                                    unchecked: checked === false,
+                                    text: textOf(directRoot),
+                                }};
+                            }}
+                        }}
+                        const match = Array.from(document.querySelectorAll('label,span,div,p'))
+                            .filter(isVisible)
+                            .find((el) => labelMatchesSync(textOf(el)));
+                        if (!match) return {{ found: false, checked: null, unchecked: false, text: '' }};
+                        const control = match.closest('label')
+                            || match.querySelector?.('[data-testid="beast-core-checkbox"],input[type="checkbox"],[role="checkbox"]')
+                            || match.parentElement;
+                        const checked = checkedState(control);
+                        return {{
+                            found: Boolean(control && isVisible(control)),
                             checked,
                             unchecked: checked === false,
-                            text: (directRoot?.innerText || directRoot?.textContent || '').trim(),
-                        };
+                            text: textOf(match),
+                        }};
                         """
                     )
                     result["trusted_click"] = {"x": x, "y": y, "verify": verify}
@@ -3444,8 +3601,9 @@ def _uncheck_surprise_discount(page: DpPage, account_id: str) -> dict[str, Any]:
             except Exception as exc:
                 result["trusted_click_error"] = _safe_exc(exc)
         print(
-            f"[{account_id}] 同步设置惊喜优惠：found={result.get('found')} "
-            f"before={result.get('before')} after={result.get('after')}",
+            f"[{account_id}] 同步营销优惠复选框：found={result.get('found')} "
+            f"method={result.get('method')} before={result.get('before')} after={result.get('after')} "
+            f"text={(result.get('text') or '')[:80]}",
             flush=True,
         )
         return result
@@ -3495,7 +3653,7 @@ def setup_limited_time_campaign(
             return {
                 "status": "failed",
                 "step": "wait_activity_settings",
-                "error": "未进入活动设置页或未出现惊喜优惠设置",
+                "error": "未进入活动设置页或未出现同步营销优惠设置",
                 "current_url": page.url,
                 "selected_pdd_product_ids": selected_pdd_product_ids,
                 "published_mapping_ids": selected_mapping_ids,
@@ -3544,12 +3702,30 @@ def setup_limited_time_campaign(
                 "published_mapping_ids": selected_mapping_ids,
             }
 
-        price_filter = _filter_activity_products_by_price(page, account_id, selected_mapping_ids)
+        price_filter = _filter_activity_products_by_price(
+            page,
+            account_id,
+            selected_mapping_ids,
+            pdd_product_ids=selected_pdd_product_ids,
+        )
+        if price_filter.get("status") == "skipped":
+            return {
+                "status": "failed",
+                "step": "campaign_price_filter",
+                "error": _price_filter_failure_message(price_filter),
+                "price_filter": price_filter,
+                "batch_reduction": batch_reduction,
+                "promotion_dimension": promotion_dimension,
+                "product_selection": product_selection,
+                "current_url": page.url,
+                "selected_pdd_product_ids": selected_pdd_product_ids,
+                "published_mapping_ids": selected_mapping_ids,
+            }
         if price_filter.get("status") == "no_eligible_products":
             return {
                 "status": "failed",
                 "step": "campaign_price_filter",
-                "error": "没有符合 pdd.xls 价格区间的活动商品，已删除不符合商品，不继续创建活动",
+                "error": _price_filter_failure_message(price_filter),
                 "price_filter": price_filter,
                 "batch_reduction": batch_reduction,
                 "promotion_dimension": promotion_dimension,
@@ -3564,7 +3740,7 @@ def setup_limited_time_campaign(
             return {
                 "status": "failed",
                 "step": "uncheck_surprise_discount",
-                "error": "未找到同步设置惊喜优惠复选框",
+                "error": "未找到同步营销优惠复选框（惊喜优惠/全站营销）",
                 "checkbox": checkbox,
                 "price_filter": price_filter,
                 "batch_reduction": batch_reduction,
@@ -3578,7 +3754,7 @@ def setup_limited_time_campaign(
             return {
                 "status": "failed",
                 "step": "uncheck_surprise_discount",
-                "error": "同步设置惊喜优惠仍处于勾选状态",
+                "error": "同步营销优惠复选框仍处于勾选状态",
                 "checkbox": checkbox,
                 "price_filter": price_filter,
                 "batch_reduction": batch_reduction,
@@ -3592,7 +3768,7 @@ def setup_limited_time_campaign(
         return {
             "status": "success",
             "step": "ready_for_next",
-            "message": "已进入限时限量购活动设置页，选择活动商品，促销维度切换为规格级，并取消勾选同步设置惊喜优惠",
+            "message": "已进入限时限量购活动设置页，选择活动商品，促销维度切换为规格级，并取消勾选同步营销优惠",
             "checkbox": checkbox,
             "price_filter": price_filter,
             "batch_reduction": batch_reduction,

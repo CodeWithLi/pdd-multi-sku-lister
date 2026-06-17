@@ -519,6 +519,9 @@ export interface IntegratedPipeline {
   activity_ids?: string[]
   auto_promotion: boolean
   auto_limited_time_setup?: boolean
+  continue_after_limited_time_failure?: boolean
+  limited_time_outcome?: string
+  limited_time_skip_reason?: string
   activity_delay_hours: number
   demo_mode: boolean
   slot_alignment_test?: boolean
@@ -553,6 +556,7 @@ export interface IntegratedPipelineStartPayload {
   category_keyword?: string
   auto_promotion?: boolean
   auto_limited_time_setup?: boolean
+  continue_after_limited_time_failure?: boolean
   activity_delay_hours?: number
   demo_mode?: boolean
   platform_listing_code?: string
@@ -569,6 +573,7 @@ export interface IntegratedPipelineBatchStartPayload {
   category_keyword?: string
   auto_promotion?: boolean
   auto_limited_time_setup?: boolean
+  continue_after_limited_time_failure?: boolean
   activity_delay_hours?: number
   demo_mode?: boolean
   platform_listing_code?: string

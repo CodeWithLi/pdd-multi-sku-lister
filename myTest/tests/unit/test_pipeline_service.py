@@ -587,3 +587,66 @@ def test_on_limited_time_finished_schedules_activity():
                 )
     schedule_activity.assert_called_once()
 
+
+def test_on_limited_time_finished_stops_when_continue_disabled():
+    row = SimpleNamespace(
+        pipeline_id="pipe_lt",
+        account_id="store_A",
+        demo_mode=True,
+        activity_delay_hours=24,
+        activity_id="20981",
+        pdd_product_ids=["111"],
+        mapping_ids=["m1"],
+        meta={"activity_ids": ["20981"], "limited_time_run_id": "lt_run"},
+    )
+    with patch("pdd_agent.api.services.pipeline_service._summarize_run_message", return_value="fail"):
+        with patch("pdd_agent.api.services.pipeline_service.update_integrated_pipeline") as update:
+            with patch(
+                "pdd_agent.api.services.pipeline_service._schedule_pipeline_activity_after_limited_time"
+            ) as schedule_activity:
+                _on_limited_time_finished(
+                    row,
+                    run_id="lt_run",
+                    success=False,
+                    result={"results": [{"status": "failed"}]},
+                    error="未找到同步营销优惠复选框",
+                )
+    schedule_activity.assert_not_called()
+    update.assert_called_once()
+    assert update.call_args.kwargs["status"] == "failed"
+    assert update.call_args.kwargs["current_step"] == "limited_time_failed"
+
+
+def test_on_limited_time_finished_continues_when_continue_enabled():
+    row = SimpleNamespace(
+        pipeline_id="pipe_lt",
+        account_id="store_A",
+        demo_mode=True,
+        activity_delay_hours=24,
+        activity_id="20981",
+        pdd_product_ids=["111"],
+        mapping_ids=["m1"],
+        meta={
+            "activity_ids": ["20981"],
+            "limited_time_run_id": "lt_run",
+            "continue_after_limited_time_failure": True,
+        },
+    )
+    with patch("pdd_agent.api.services.pipeline_service._summarize_run_message", return_value="fail"):
+        with patch("pdd_agent.api.services.pipeline_service.get_integrated_pipeline", return_value=row):
+            with patch("pdd_agent.api.services.pipeline_service.update_integrated_pipeline") as update:
+                with patch(
+                    "pdd_agent.api.services.pipeline_service._schedule_pipeline_activity_after_limited_time"
+                ) as schedule_activity:
+                    _on_limited_time_finished(
+                        row,
+                        run_id="lt_run",
+                        success=False,
+                        result={"results": [{"status": "failed"}]},
+                        error="未找到同步营销优惠复选框",
+                    )
+    schedule_activity.assert_called_once()
+    update.assert_called_once()
+    assert update.call_args.kwargs["status"] == "running"
+    assert update.call_args.kwargs["current_step"] == "limited_time_failed_continue"
+

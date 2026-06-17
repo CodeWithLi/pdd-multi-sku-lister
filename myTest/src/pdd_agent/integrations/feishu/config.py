@@ -128,6 +128,10 @@ class PddUploadLogConfig(BaseModel):
         default=True,
         description="推广任务完成后按商品ID回写飞书「推广状态」",
     )
+    sync_on_listing: bool = Field(
+        default=True,
+        description="上架成功后立即同步写入飞书（非等链路全部完成）；False 时改为后台线程",
+    )
     field_names: PddUploadLogFieldNames = Field(default_factory=PddUploadLogFieldNames)
 
 
