@@ -11,6 +11,7 @@ from pdd_agent.api.routes.catalog import router as catalog_router
 from pdd_agent.api.routes.config import router as config_router
 from pdd_agent.api.routes.failures import router as failures_router
 from pdd_agent.api.routes.feishu_bitable import router as feishu_bitable_router
+from pdd_agent.api.routes.feishu_oauth import router as feishu_oauth_router
 from pdd_agent.api.routes.health import router as health_router
 from pdd_agent.api.routes.login import router as login_router
 from pdd_agent.api.routes.published_products import router as published_products_router
@@ -43,12 +44,35 @@ async def lifespan(app: FastAPI):
         logger.warning("Database unavailable: %s", db["error"])
     worker.start()
     traffic_report_scheduler.start()
+    async def _ensure_feishu_table(label: str, fn):
+        try:
+            return await asyncio.to_thread(fn)
+        except Exception as exc:
+            from pdd_agent.integrations.feishu.client import FeishuAPIError
+
+            if isinstance(exc, FeishuAPIError) and (
+                "OAuth" in str(exc) or "refresh_token" in str(exc) or "user_access_token" in str(exc)
+            ):
+                logger.error(
+                    "%s 初始化失败：飞书 user_access_token 已失效，请打开主前端「上架/下架」页完成 OAuth 授权",
+                    label,
+                )
+                print(
+                    f"[feishu] {label} 跳过：授权已失效，请打开主前端侧边栏「飞书授权」完成 OAuth",
+                    flush=True,
+                )
+            else:
+                logger.exception("%s 初始化失败", label)
+            return {"failed": True, "error": str(exc)}
+
     try:
         from pdd_agent.integrations.feishu.traffic_report_sync import ensure_pdd_marketing_log_table_ready
+        from pdd_agent.integrations.feishu.pdd_activity_log_sync import ensure_pdd_activity_log_table_ready
         from pdd_agent.integrations.feishu.pdd_upload_sync import ensure_pdd_upload_log_tables_ready
 
-        marketing_ready = await asyncio.to_thread(ensure_pdd_marketing_log_table_ready)
-        upload_ready = await asyncio.to_thread(ensure_pdd_upload_log_tables_ready)
+        marketing_ready = await _ensure_feishu_table("PDD营销日志表", ensure_pdd_marketing_log_table_ready)
+        upload_ready = await _ensure_feishu_table("PDD发布日志表", ensure_pdd_upload_log_tables_ready)
+        activity_ready = await _ensure_feishu_table("PDD活动日志表", ensure_pdd_activity_log_table_ready)
         if upload_ready.get("ready"):
             logger.info(
                 "pdd upload log tables ready success=%s(%s) failure=%s(%s)",
@@ -65,6 +89,18 @@ async def lifespan(app: FastAPI):
             )
         elif not upload_ready.get("skipped"):
             logger.error("pdd upload log tables not ready: %s", upload_ready)
+        if activity_ready.get("ready"):
+            logger.info(
+                "pdd activity log table ready table=%s(%s)",
+                activity_ready.get("table_id"),
+                activity_ready.get("resolve_method"),
+            )
+            print(
+                f"[feishu] PDD活动日志表已就绪：{activity_ready.get('table_id')}",
+                flush=True,
+            )
+        elif not activity_ready.get("skipped"):
+            logger.error("pdd activity log table not ready: %s", activity_ready)
     except Exception:
         logger.exception("ensure pdd feishu tables on startup failed")
     logger.info("PDD Agent API started")
@@ -111,6 +147,7 @@ def create_app() -> FastAPI:
     app.include_router(queue_router, prefix="/api")
     app.include_router(failures_router, prefix="/api")
     app.include_router(feishu_bitable_router, prefix="/api")
+    app.include_router(feishu_oauth_router, prefix="/api")
     app.include_router(login_router, prefix="/api")
     app.include_router(published_products_router, prefix="/api")
     app.include_router(style_colors_router, prefix="/api")

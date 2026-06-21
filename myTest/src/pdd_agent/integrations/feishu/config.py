@@ -93,6 +93,48 @@ class PddMarketingLogFieldNames(BaseModel):
     traffic_cost_per_order: str = "每笔净成交花费(元)"
 
 
+class PddActivityLogFieldNames(BaseModel):
+    """PDD活动日志表 — 店铺 + 商品ID 定位，仅活动步骤列。"""
+
+    date: str = "日期"
+    account_name: str = "店铺名称"
+    product_id: str = "商品ID"
+    limited_time_status: str = "限时限量购状态"
+    limited_time_failure_reason: str = "限时限量购失败原因"
+    activity_618_status: str = "618状态"
+    activity_618_failure_reason: str = "618失败原因"
+    activity_discount_status: str = "七折状态"
+    activity_discount_failure_reason: str = "七折失败原因"
+
+
+class PddActivityLogConfig(BaseModel):
+    enabled: bool = Field(default=True, description="是否启用 PDD 活动日志表")
+    table_id: str = Field(default="", description="PDD活动日志表 table_id")
+    table_name: str = Field(default="PDD活动日志表", description="整合链路活动日志表名")
+    dedupe_field: str = Field(default="商品ID", description="检索字段（与店铺名称组合定位唯一行）")
+    activity_618_id: str = Field(default="20981", description="618 大促活动 ID")
+    activity_discount_id: str = Field(default="21365", description="限量七折活动 ID")
+    lookup_retries: int = Field(default=6, ge=1, le=20)
+    lookup_interval_seconds: float = Field(default=5.0, ge=0.5, le=30.0)
+    seed_on_listing: bool = Field(
+        default=True,
+        description="上架成功后预建活动日志行（仅商品标识+活动未执行，不含上架状态）",
+    )
+    immediate_find_retries: int = Field(
+        default=2,
+        ge=1,
+        le=10,
+        description="限时限量购回写时查活动表已有行的重试次数（上架后紧接执行，行应已预建）",
+    )
+    limited_time_status_options: list[str] = Field(
+        default_factory=lambda: ["进行中", "失败", "未执行"],
+    )
+    activity_register_status_options: list[str] = Field(
+        default_factory=lambda: ["报名成功", "活动下线", "失败", "未执行"],
+    )
+    field_names: PddActivityLogFieldNames = Field(default_factory=PddActivityLogFieldNames)
+
+
 class PddMarketingLogConfig(BaseModel):
     enabled: bool = Field(default=True, description="是否启用 PDD 营销日志表")
     table_id: str = Field(default="", description="PDD营销日志表 table_id")
@@ -238,7 +280,7 @@ class FeishuYamlConfig(BaseModel):
     app_id: str = ""
     app_secret: str = ""
     oauth_redirect_uri: str = Field(
-        default="http://127.0.0.1:5174/oauth/callback",
+        default="http://127.0.0.1:8010/api/feishu/oauth/callback",
         description="飞书 OAuth 回调地址（需在开放平台安全设置中配置）",
     )
     oauth_scope: str = Field(
@@ -283,13 +325,14 @@ class FeishuYamlConfig(BaseModel):
         description="「状态」单选字段选项",
     )
     pdd_upload_log: PddUploadLogConfig = Field(default_factory=PddUploadLogConfig)
+    pdd_activity_log: PddActivityLogConfig = Field(default_factory=PddActivityLogConfig)
     pdd_marketing_log: PddMarketingLogConfig = Field(default_factory=PddMarketingLogConfig)
 
 
 class FeishuConfig(BaseModel):
     app_id: str
     app_secret: str
-    oauth_redirect_uri: str = "http://127.0.0.1:5174/oauth/callback"
+    oauth_redirect_uri: str = "http://127.0.0.1:8010/api/feishu/oauth/callback"
     oauth_scope: str = "offline_access bitable:app"
     use_user_access_token: bool = True
     user_access_token: str = ""
@@ -307,6 +350,7 @@ class FeishuConfig(BaseModel):
     dedupe_field: str = "映射ID"
     status_options: list[str] = Field(default_factory=lambda: ["在售", "已下架", "未知"])
     pdd_upload_log: PddUploadLogConfig = Field(default_factory=PddUploadLogConfig)
+    pdd_activity_log: PddActivityLogConfig = Field(default_factory=PddActivityLogConfig)
     pdd_marketing_log: PddMarketingLogConfig = Field(default_factory=PddMarketingLogConfig)
 
 
@@ -335,6 +379,10 @@ def load_feishu_config(path: Path | None = None) -> FeishuConfig:
     if "pdd_marketing_log" in raw and isinstance(raw.get("pdd_marketing_log"), dict):
         pdd_marketing_log = PddMarketingLogConfig.model_validate(raw["pdd_marketing_log"])
 
+    pdd_activity_log = yaml_cfg.pdd_activity_log
+    if "pdd_activity_log" in raw and isinstance(raw.get("pdd_activity_log"), dict):
+        pdd_activity_log = PddActivityLogConfig.model_validate(raw["pdd_activity_log"])
+
     return FeishuConfig(
         app_id=env.feishu_app_id or yaml_cfg.app_id,
         app_secret=env.feishu_app_secret or yaml_cfg.app_secret,
@@ -354,6 +402,7 @@ def load_feishu_config(path: Path | None = None) -> FeishuConfig:
         dedupe_field=dedupe_field,
         status_options=list(yaml_cfg.status_options),
         pdd_upload_log=pdd_upload_log,
+        pdd_activity_log=pdd_activity_log,
         pdd_marketing_log=pdd_marketing_log,
     )
 
@@ -405,6 +454,23 @@ def save_pdd_upload_failure_table_id_to_config(table_id: str, path: Path | None 
         pdd_raw = {}
     pdd_raw["failure_table_id"] = table_id
     data["pdd_upload_log"] = pdd_raw
+    cfg_path.parent.mkdir(parents=True, exist_ok=True)
+    with open(cfg_path, "w", encoding="utf-8") as f:
+        yaml.dump(data, f, allow_unicode=True, default_flow_style=False, sort_keys=False)
+
+
+def save_pdd_activity_table_id_to_config(table_id: str, path: Path | None = None) -> None:
+    """解析到 PDD 活动日志表后，把 table_id 写回 feishu.yaml。"""
+    cfg_path = path or Path(os.getenv("FEISHU_CONFIG_PATH", DEFAULT_FEISHU_CONFIG_PATH))
+    data: dict = {}
+    if cfg_path.is_file():
+        with open(cfg_path, encoding="utf-8") as f:
+            data = yaml.safe_load(f) or {}
+    activity_raw = data.get("pdd_activity_log")
+    if not isinstance(activity_raw, dict):
+        activity_raw = {}
+    activity_raw["table_id"] = table_id
+    data["pdd_activity_log"] = activity_raw
     cfg_path.parent.mkdir(parents=True, exist_ok=True)
     with open(cfg_path, "w", encoding="utf-8") as f:
         yaml.dump(data, f, allow_unicode=True, default_flow_style=False, sort_keys=False)

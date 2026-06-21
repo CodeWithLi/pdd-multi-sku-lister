@@ -50,6 +50,9 @@ import type {
   RunInterpretResponse,
   RuntimeConfig,
   FeishuBitableHealth,
+  FeishuOAuthAuthorizeResult,
+  FeishuOAuthExchangeResult,
+  FeishuOAuthStatus,
   TrafficReportSchedule,
   TrafficReportScheduleUpdate,
   TrafficReportScheduleTriggerResult,
@@ -442,6 +445,15 @@ export const api = {
     table_id: string
     record_ids: string[]
   }) => http.post('/feishu-bitable/records/batch-delete', body).then((r) => r.data),
+
+  feishuOAuthStatus: () =>
+    http.get<FeishuOAuthStatus>('/feishu/oauth/status').then((r) => r.data),
+
+  feishuOAuthAuthorizeUrl: () =>
+    http.get<FeishuOAuthAuthorizeResult>('/feishu/oauth/authorize-url').then((r) => r.data),
+
+  feishuOAuthExchangeCode: (body: { code: string; state?: string; redirect_uri?: string }) =>
+    http.post<FeishuOAuthExchangeResult>('/feishu/oauth/exchange-code', body).then((r) => r.data),
 
   trafficReportSchedule: () =>
     http.get<TrafficReportSchedule>('/traffic-report-schedule').then((r) => r.data),

@@ -121,9 +121,7 @@ def test_price_filter_failure_message_includes_price_detail():
             ],
         }
     )
-    assert "967318341181" in message
-    assert "pdd.xls" in message
-    assert "BD735A" in message
+    assert message == "活动价格不符合价格区间，不继续创建活动"
 
 
 def test_price_filter_failure_message_when_mapping_missing():

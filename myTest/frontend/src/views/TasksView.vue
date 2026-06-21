@@ -404,7 +404,7 @@ function goRunDetail(runId: string) {
   router.push({ path: '/runs', query: { id: runId } })
 }
 
-onMounted(() => {
+onMounted(async () => {
   if (route.query.tab === 'delist') activeTab.value = 'delist'
   loadMeta()
 })

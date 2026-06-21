@@ -2899,25 +2899,7 @@ def _price_filter_failure_message(price_filter: dict[str, Any]) -> str:
         if reason == "mapping_not_found":
             return "无法进行 pdd.xls 价格校验（已发布商品映射不存在）"
         return "无法进行 pdd.xls 价格校验（缺少已发布商品映射或未导入 SKU 编码）"
-    decisions = price_filter.get("decisions") or []
-    out_of_range = [item for item in decisions if not item.get("keep")]
-    detail_parts: list[str] = []
-    for item in out_of_range[:3]:
-        product_id = str(item.get("product_id") or "").strip()
-        check_price = item.get("check_price")
-        rule = item.get("price_rule") if isinstance(item.get("price_rule"), dict) else {}
-        if rule:
-            detail_parts.append(
-                f"{product_id}: ¥{check_price} 不在 {rule.get('code')} "
-                f"¥{rule.get('min_price')}-¥{rule.get('max_price')} 区间"
-            )
-        elif product_id:
-            suffix = f"（页面价 ¥{check_price}）" if check_price is not None else "（页面未读到价格）"
-            detail_parts.append(f"{product_id}: 未匹配 pdd.xls 编码规则{suffix}")
-    base = "没有符合 pdd.xls 价格区间的活动商品，已删除不符合商品，不继续创建活动"
-    if detail_parts:
-        return f"{base}（{'；'.join(detail_parts)}）"
-    return base
+    return "活动价格不符合价格区间，不继续创建活动"
 
 
 def _load_campaign_price_targets(

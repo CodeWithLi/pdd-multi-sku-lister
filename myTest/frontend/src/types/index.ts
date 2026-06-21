@@ -520,6 +520,7 @@ export interface IntegratedPipeline {
   auto_promotion: boolean
   auto_limited_time_setup?: boolean
   continue_after_limited_time_failure?: boolean
+  continue_after_activity_failure?: boolean
   limited_time_outcome?: string
   limited_time_skip_reason?: string
   activity_delay_hours: number
@@ -557,6 +558,7 @@ export interface IntegratedPipelineStartPayload {
   auto_promotion?: boolean
   auto_limited_time_setup?: boolean
   continue_after_limited_time_failure?: boolean
+  continue_after_activity_failure?: boolean
   activity_delay_hours?: number
   demo_mode?: boolean
   platform_listing_code?: string
@@ -574,6 +576,7 @@ export interface IntegratedPipelineBatchStartPayload {
   auto_promotion?: boolean
   auto_limited_time_setup?: boolean
   continue_after_limited_time_failure?: boolean
+  continue_after_activity_failure?: boolean
   activity_delay_hours?: number
   demo_mode?: boolean
   platform_listing_code?: string
@@ -646,6 +649,28 @@ export interface FeishuBitableHealth {
   default_table_id?: string
   default_table_name?: string
   user_token_ready?: boolean
+}
+
+export interface FeishuOAuthStatus {
+  authorized: boolean
+  message: string
+  need_oauth?: boolean
+  redirect_uri?: string
+}
+
+export interface FeishuOAuthAuthorizeResult {
+  authorize_url: string
+  state: string
+  scope: string
+  redirect_uri: string
+}
+
+export interface FeishuOAuthExchangeResult {
+  ok: boolean
+  message: string
+  access_token_length?: number
+  expires_in?: number
+  refresh_token_present?: boolean
 }
 
 export interface TrafficReportSchedule {

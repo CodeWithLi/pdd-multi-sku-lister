@@ -119,6 +119,10 @@ def _summarize_delist_message(result: dict[str, Any]) -> str:
 
 def _summarize_campaign_message(result: dict[str, Any]) -> str:
     """活动任务失败时只存简短说明，避免把整份 results JSON 写入 message。"""
+    top_error = str(result.get("error") or "").strip()
+    if top_error:
+        return top_error
+
     item_results = [r for r in result.get("results") or [] if isinstance(r, dict)]
     for item in item_results:
         reg_msg = _activity_registration_summary_line(item)
@@ -143,6 +147,94 @@ def _summarize_campaign_message(result: dict[str, Any]) -> str:
     return "活动任务失败"
 
 
+def _campaign_failure_message(result: dict[str, Any], status: RunStatus) -> str:
+    if status == RunStatus.SUCCESS:
+        return ""
+    return _summarize_campaign_message(result if isinstance(result, dict) else {})
+
+
+_CANCEL_FAILURE_MESSAGE = "任务已取消（可能为手动关闭浏览器或用户取消）"
+
+
+def _normalize_terminal_failure_result(
+    result: dict[str, Any] | None,
+    *,
+    error: str = "",
+    run_status: RunStatus | None = None,
+) -> dict[str, Any]:
+    payload = dict(result) if isinstance(result, dict) else {}
+    msg = str(error or payload.get("error") or "").strip()
+    if run_status == RunStatus.CANCELED:
+        msg = msg or _CANCEL_FAILURE_MESSAGE
+        payload["error"] = msg
+        errors = payload.get("errors")
+        if not isinstance(errors, list):
+            errors = []
+        if msg and msg not in errors:
+            errors.append(msg)
+        payload["errors"] = errors
+    elif msg and not payload.get("error"):
+        payload["error"] = msg
+    return payload
+
+
+def _extract_per_product_activity_errors(
+    result: dict[str, Any] | None,
+    *,
+    fallback_error: str = "",
+    product_ids: list[str] | None = None,
+) -> dict[str, str]:
+    """从活动结果中解析各商品ID对应的失败原因（含24h限制、不可报名等）。"""
+    errors: dict[str, str] = {}
+    fallback = str(fallback_error or "").strip()
+
+    for item in (result or {}).get("results") or []:
+        if not isinstance(item, dict):
+            continue
+        item_error = str(item.get("error") or item.get("message") or "").strip()
+        eligibility = item.get("eligibility") if isinstance(item.get("eligibility"), dict) else {}
+
+        for blocked in eligibility.get("time_blocked") or []:
+            if not isinstance(blocked, dict):
+                continue
+            pid = str(blocked.get("product_id") or "").strip()
+            reason = str(blocked.get("reason_text") or "需等待1天").strip()
+            if pid:
+                errors[pid] = f"当前商品未满足时间要求：{reason}"
+
+        for blocked in eligibility.get("other_ineligible") or []:
+            if not isinstance(blocked, dict):
+                continue
+            pid = str(blocked.get("product_id") or "").strip()
+            reason = str(blocked.get("reason_text") or "不可报名").strip()
+            if pid:
+                errors[pid] = reason
+
+        for pid in eligibility.get("missing_ids") or []:
+            pid = str(pid or "").strip()
+            if pid and pid not in errors:
+                errors[pid] = item_error or "商品不可报名活动"
+
+        candidate_ids = [
+            str(pid or "").strip()
+            for pid in (
+                list(item.get("product_ids") or [])
+                + list(item.get("selected_pdd_product_ids") or [])
+                + list(item.get("missing_ids") or [])
+            )
+            if str(pid or "").strip()
+        ]
+        if item_error:
+            for pid in candidate_ids:
+                if pid not in errors:
+                    errors[pid] = item_error
+
+    if fallback:
+        for pid in dict.fromkeys(str(x or "").strip() for x in (product_ids or []) if str(x or "").strip()):
+            errors.setdefault(pid, fallback)
+    return errors
+
+
 def _schedule_feishu_limited_time_status(
     *,
     account_id: str,
@@ -150,18 +242,46 @@ def _schedule_feishu_limited_time_status(
     result: dict[str, Any],
     status: RunStatus,
 ) -> None:
-    from pdd_agent.integrations.feishu.pdd_upload_sync import (
-        extract_product_ids_for_limited_time_status,
-        schedule_pdd_upload_limited_time_status,
-    )
+    try:
+        from pdd_agent.integrations.feishu.pdd_activity_log_sync import (
+            safe_load_activity_log_product_context,
+            schedule_pdd_activity_log_limited_time,
+        )
+        from pdd_agent.integrations.feishu.pdd_upload_sync import (
+            extract_product_ids_for_limited_time_status,
+            schedule_pdd_upload_limited_time_status,
+        )
 
-    product_ids = extract_product_ids_for_limited_time_status(selected_product_ids, result)
-    schedule_pdd_upload_limited_time_status(
-        account_id=account_id,
-        product_ids=product_ids,
-        success=status == RunStatus.SUCCESS,
-        error=_summarize_campaign_message(result) if status != RunStatus.SUCCESS else "",
-    )
+        product_ids = extract_product_ids_for_limited_time_status(selected_product_ids, result)
+        error = _campaign_failure_message(result, status)
+        account_name = _account_display_name(account_id)
+        product_contexts = safe_load_activity_log_product_context(
+            account_id,
+            product_ids,
+            account_name=account_name,
+        )
+        product_errors = None if status == RunStatus.SUCCESS else _extract_per_product_activity_errors(
+            result,
+            fallback_error=error,
+            product_ids=product_ids,
+        )
+        schedule_pdd_upload_limited_time_status(
+            account_id=account_id,
+            product_ids=product_ids,
+            success=status == RunStatus.SUCCESS,
+            error=error,
+        )
+        schedule_pdd_activity_log_limited_time(
+            account_id=account_id,
+            product_ids=product_ids,
+            success=status == RunStatus.SUCCESS,
+            error=error,
+            account_name=account_name,
+            product_contexts=product_contexts,
+            product_errors=product_errors,
+        )
+    except Exception:
+        logger.exception("schedule feishu limited time status failed account=%s", account_id)
 
 
 def _schedule_feishu_activity_register_status(
@@ -172,19 +292,52 @@ def _schedule_feishu_activity_register_status(
     result: dict[str, Any],
     status: RunStatus,
 ) -> None:
-    from pdd_agent.integrations.feishu.pdd_upload_sync import (
-        extract_product_ids_from_campaign_result,
-        schedule_pdd_upload_activity_register_status,
-    )
+    try:
+        from pdd_agent.integrations.feishu.pdd_activity_log_sync import (
+            safe_load_activity_log_product_context,
+            schedule_pdd_activity_log_activity_register,
+        )
+        from pdd_agent.integrations.feishu.pdd_upload_sync import (
+            extract_product_ids_from_campaign_result,
+            schedule_pdd_upload_activity_register_status,
+        )
 
-    product_ids = extract_product_ids_from_campaign_result(selected_product_ids, result)
-    schedule_pdd_upload_activity_register_status(
-        account_id=account_id,
-        activity_id=activity_id,
-        product_ids=product_ids,
-        success=status == RunStatus.SUCCESS,
-        error=_summarize_campaign_message(result) if status != RunStatus.SUCCESS else "",
-    )
+        product_ids = extract_product_ids_from_campaign_result(selected_product_ids, result)
+        error = _campaign_failure_message(result, status)
+        account_name = _account_display_name(account_id)
+        product_contexts = safe_load_activity_log_product_context(
+            account_id,
+            product_ids,
+            account_name=account_name,
+        )
+        product_errors = None if status == RunStatus.SUCCESS else _extract_per_product_activity_errors(
+            result,
+            fallback_error=error,
+            product_ids=product_ids,
+        )
+        schedule_pdd_upload_activity_register_status(
+            account_id=account_id,
+            activity_id=activity_id,
+            product_ids=product_ids,
+            success=status == RunStatus.SUCCESS,
+            error=error,
+        )
+        schedule_pdd_activity_log_activity_register(
+            account_id=account_id,
+            activity_id=activity_id,
+            product_ids=product_ids,
+            success=status == RunStatus.SUCCESS,
+            error=error,
+            account_name=account_name,
+            product_contexts=product_contexts,
+            product_errors=product_errors,
+        )
+    except Exception:
+        logger.exception(
+            "schedule feishu activity register status failed account=%s activity=%s",
+            account_id,
+            activity_id,
+        )
 
 
 def _schedule_feishu_promotion_status(
@@ -194,18 +347,130 @@ def _schedule_feishu_promotion_status(
     result: dict[str, Any],
     status: RunStatus,
 ) -> None:
-    from pdd_agent.integrations.feishu.pdd_upload_sync import (
-        extract_product_ids_from_campaign_result,
-        schedule_pdd_upload_promotion_status,
-    )
+    try:
+        from pdd_agent.integrations.feishu.pdd_upload_sync import (
+            extract_product_ids_from_campaign_result,
+            schedule_pdd_upload_promotion_status,
+        )
 
-    product_ids = extract_product_ids_from_campaign_result(selected_product_ids, result)
-    schedule_pdd_upload_promotion_status(
-        account_id=account_id,
-        product_ids=product_ids,
-        success=status == RunStatus.SUCCESS,
-        error=_summarize_traffic_message(result) if status != RunStatus.SUCCESS else "",
+        product_ids = extract_product_ids_from_campaign_result(selected_product_ids, result)
+        error = _summarize_traffic_message(result) if status != RunStatus.SUCCESS else ""
+        schedule_pdd_upload_promotion_status(
+            account_id=account_id,
+            product_ids=product_ids,
+            success=status == RunStatus.SUCCESS,
+            error=error,
+        )
+    except Exception:
+        logger.exception("schedule feishu promotion status failed account=%s", account_id)
+
+
+def ensure_feishu_logged_for_terminal_run(
+    *,
+    run_id: str,
+    agent: str = "",
+    account_id: str = "",
+    payload: dict[str, Any] | None = None,
+    result: dict[str, Any] | None = None,
+    error: str = "",
+    run_status: RunStatus | None = None,
+    pipeline_row: Any = None,
+) -> None:
+    """队列/链路子任务失败或取消时兜底回写飞书（防止浏览器被关、回调丢失等漏写）。"""
+    run_id = str(run_id or "").strip()
+    if not run_id:
+        return
+
+    store = TaskRunStore()
+    record = store.load(run_id)
+    if record and record.status == RunStatus.SUCCESS:
+        return
+
+    status = run_status
+    if status is None and record:
+        status = record.status
+    if status is None:
+        status = RunStatus.FAILED
+    if status == RunStatus.SUCCESS:
+        return
+
+    agent_name = str(agent or (record.agent.value if record and hasattr(record.agent, "value") else record.agent if record else "") or "").strip()
+    account = str(account_id or (record.account_id if record else "") or "").strip()
+    task_payload: dict[str, Any] = dict(payload or {})
+    if not task_payload and run_id:
+        try:
+            from pdd_agent.db.repositories import get_queue_task_by_run_id
+
+            task = get_queue_task_by_run_id(run_id)
+            if task and isinstance(task.payload, dict):
+                task_payload.update(task.payload)
+        except Exception:
+            pass
+
+    result_payload = _normalize_terminal_failure_result(
+        result if isinstance(result, dict) else (record.result if record and isinstance(record.result, dict) else {}),
+        error=error or str(record.message or "") if record else error,
+        run_status=status,
     )
+    failed_status = RunStatus.FAILED
+
+    try:
+        if agent_name == AgentKind.LISTING.value:
+            codes = list(task_payload.get("product_codes") or [])
+            if pipeline_row is not None:
+                codes = codes or list(getattr(pipeline_row, "product_codes", None) or [])
+            _schedule_feishu_listing_result_log(
+                account_id=account,
+                run_id=run_id,
+                result=result_payload,
+                product_codes=codes,
+            )
+            return
+
+        if agent_name == AgentKind.CAMPAIGN.value:
+            campaign_type = str(task_payload.get("campaign_type") or "marketing_activity_register").strip()
+            selected_product_ids = list(task_payload.get("pdd_product_ids") or [])
+            if pipeline_row is not None:
+                selected_product_ids = selected_product_ids or list(getattr(pipeline_row, "pdd_product_ids", None) or [])
+            if campaign_type == "limited_time_setup":
+                _schedule_feishu_limited_time_status(
+                    account_id=account,
+                    selected_product_ids=selected_product_ids,
+                    result=result_payload,
+                    status=failed_status,
+                )
+            elif campaign_type == "marketing_activity_register":
+                activity_id = str(task_payload.get("activity_id") or "").strip()
+                if not activity_id and pipeline_row is not None:
+                    activity_id = str(getattr(pipeline_row, "activity_id", "") or "").strip()
+                _schedule_feishu_activity_register_status(
+                    account_id=account,
+                    activity_id=activity_id,
+                    selected_product_ids=selected_product_ids,
+                    result=result_payload,
+                    status=failed_status,
+                )
+            return
+
+        if agent_name == AgentKind.TRAFFIC.value:
+            traffic_type = str(task_payload.get("traffic_type") or "promotion_create").strip()
+            if traffic_type != "promotion_create":
+                return
+            selected_product_ids = list(task_payload.get("pdd_product_ids") or [])
+            if pipeline_row is not None:
+                selected_product_ids = selected_product_ids or list(getattr(pipeline_row, "pdd_product_ids", None) or [])
+            _schedule_feishu_promotion_status(
+                account_id=account,
+                selected_product_ids=selected_product_ids,
+                result=result_payload,
+                status=failed_status,
+            )
+    except Exception:
+        logger.exception(
+            "ensure feishu logged for terminal run failed run_id=%s agent=%s",
+            run_id,
+            agent_name,
+        )
 
 
 def _account_display_name(account_id: str) -> str:
@@ -385,6 +650,14 @@ def _schedule_feishu_listing_result_log(
                 publish_end=publish_end or datetime.now(),
                 verified_at=publish_end or datetime.now(),
             )
+            from pdd_agent.integrations.feishu.pdd_activity_log_sync import schedule_pdd_activity_log_seed
+
+            schedule_pdd_activity_log_seed(
+                account_id=account_id,
+                product_id=product_id,
+                account_name=account_name,
+                seeded_at=publish_end or datetime.now(),
+            )
             continue
 
         if status in {"failed", "retryable"} or item.get("error") or item.get("reason"):
@@ -493,6 +766,9 @@ def _activity_registration_summary_line(item: dict[str, Any]) -> str:
     step = str(item.get("step") or "").strip()
     if step == "price_page_prepared":
         return "仅完成规格反查，未点击确认提交"
+    if step in {"product_time_requirement_not_met", "product_not_eligible_for_activity"}:
+        err = str(item.get("error") or "").strip()
+        return err or "商品暂不可报名活动"
 
     product_ids = [
         str(pid).strip()
@@ -602,6 +878,9 @@ def _activity_registration_summary_line(item: dict[str, Any]) -> str:
 
 def _summarize_traffic_message(result: dict[str, Any]) -> str:
     """推广任务失败时只存简短说明。"""
+    top_error = str(result.get("error") or "").strip()
+    if top_error:
+        return top_error
     errors = result.get("errors") or []
     if isinstance(errors, list):
         for item in errors:
@@ -915,18 +1194,44 @@ async def execute_campaign_marketing_activity_register(
 ) -> dict[str, Any]:
     store = TaskRunStore()
     settings = load_yaml_settings()
-    if not get_account_config(settings, account_id):
-        store.finish(run_id, RunStatus.FAILED, f"unknown account: {account_id}")
-        return {"error": f"unknown account: {account_id}"}
-
     activity_id = str(activity_id or "").strip()
     selected_product_ids = list(dict.fromkeys(pdd_product_ids or []))
+    if not get_account_config(settings, account_id):
+        err = f"unknown account: {account_id}"
+        failed_result = {"error": err}
+        store.finish(run_id, RunStatus.FAILED, err)
+        _schedule_feishu_activity_register_status(
+            account_id=account_id,
+            activity_id=activity_id,
+            selected_product_ids=selected_product_ids,
+            result=failed_result,
+            status=RunStatus.FAILED,
+        )
+        return {"error": err}
     if not activity_id:
-        store.finish(run_id, RunStatus.FAILED, "activity_id is required")
-        return {"error": "activity_id is required"}
+        err = "activity_id is required"
+        failed_result = {"error": err}
+        store.finish(run_id, RunStatus.FAILED, err)
+        _schedule_feishu_activity_register_status(
+            account_id=account_id,
+            activity_id=activity_id,
+            selected_product_ids=selected_product_ids,
+            result=failed_result,
+            status=RunStatus.FAILED,
+        )
+        return {"error": err}
     if not selected_product_ids:
-        store.finish(run_id, RunStatus.FAILED, "pdd_product_ids is required")
-        return {"error": "pdd_product_ids is required"}
+        err = "pdd_product_ids is required"
+        failed_result = {"error": err}
+        store.finish(run_id, RunStatus.FAILED, err)
+        _schedule_feishu_activity_register_status(
+            account_id=account_id,
+            activity_id=activity_id,
+            selected_product_ids=selected_product_ids,
+            result=failed_result,
+            status=RunStatus.FAILED,
+        )
+        return {"error": err}
 
     store.update_status(run_id, RunStatus.RUNNING)
     store.update_phase(run_id, TaskPhase.BROWSER)
@@ -953,6 +1258,21 @@ async def execute_campaign_marketing_activity_register(
             status=status,
         )
         return result
+    except asyncio.CancelledError:
+        canceled_result = _normalize_terminal_failure_result(
+            {},
+            error="canceled by user",
+            run_status=RunStatus.CANCELED,
+        )
+        store.update_status(run_id, RunStatus.CANCELED, "canceled by user")
+        _schedule_feishu_activity_register_status(
+            account_id=account_id,
+            activity_id=activity_id,
+            selected_product_ids=selected_product_ids,
+            result=canceled_result,
+            status=RunStatus.FAILED,
+        )
+        raise
     except Exception as exc:
         logger.exception("campaign marketing activity register failed run_id=%s", run_id)
         failed_result = {"error": str(exc)}
@@ -1016,14 +1336,22 @@ async def execute_campaign_limited_time_setup(
 ) -> dict[str, Any]:
     store = TaskRunStore()
     settings = load_yaml_settings()
+    selected_product_ids = list(dict.fromkeys((pdd_product_ids or [])))
+    selected_mapping_ids = list(dict.fromkeys((published_mapping_ids or [])))
     if not get_account_config(settings, account_id):
-        store.finish(run_id, RunStatus.FAILED, f"unknown account: {account_id}")
-        return {"error": f"unknown account: {account_id}"}
+        err = f"unknown account: {account_id}"
+        failed_result = {"error": err}
+        store.finish(run_id, RunStatus.FAILED, err)
+        _schedule_feishu_limited_time_status(
+            account_id=account_id,
+            selected_product_ids=selected_product_ids,
+            result=failed_result,
+            status=RunStatus.FAILED,
+        )
+        return {"error": err}
 
     store.update_status(run_id, RunStatus.RUNNING)
     store.update_phase(run_id, TaskPhase.BROWSER)
-    selected_product_ids = list(dict.fromkeys((pdd_product_ids or [])))
-    selected_mapping_ids = list(dict.fromkeys((published_mapping_ids or [])))
     try:
         graph = build_campaign_graph()
         raw = await graph.ainvoke(
@@ -1046,6 +1374,20 @@ async def execute_campaign_limited_time_setup(
             status=status,
         )
         return result
+    except asyncio.CancelledError:
+        canceled_result = _normalize_terminal_failure_result(
+            {},
+            error="canceled by user",
+            run_status=RunStatus.CANCELED,
+        )
+        store.update_status(run_id, RunStatus.CANCELED, "canceled by user")
+        _schedule_feishu_limited_time_status(
+            account_id=account_id,
+            selected_product_ids=selected_product_ids,
+            result=canceled_result,
+            status=RunStatus.FAILED,
+        )
+        raise
     except Exception as exc:
         logger.exception("campaign job failed run_id=%s", run_id)
         failed_result = {"error": str(exc)}
@@ -1103,6 +1445,20 @@ async def execute_traffic_promotion_create(
             status=status,
         )
         return result
+    except asyncio.CancelledError:
+        canceled_result = _normalize_terminal_failure_result(
+            {},
+            error="canceled by user",
+            run_status=RunStatus.CANCELED,
+        )
+        store.update_status(run_id, RunStatus.CANCELED, "canceled by user")
+        _schedule_feishu_promotion_status(
+            account_id=account_id,
+            selected_product_ids=selected_product_ids,
+            result=canceled_result,
+            status=RunStatus.FAILED,
+        )
+        raise
     except Exception as exc:
         logger.exception("traffic promotion create failed run_id=%s", run_id)
         failed_result = {"error": str(exc)}

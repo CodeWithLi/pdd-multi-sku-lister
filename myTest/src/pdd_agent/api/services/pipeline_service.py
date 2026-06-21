@@ -7,7 +7,12 @@ import uuid
 from datetime import datetime, timedelta
 from typing import Any
 
-from pdd_agent.api.services.task_runner import create_campaign_run, create_listing_run, create_traffic_run
+from pdd_agent.api.services.task_runner import (
+    create_campaign_run,
+    create_listing_run,
+    create_traffic_run,
+    ensure_feishu_logged_for_terminal_run,
+)
 from pdd_agent.core.config import load_yaml_settings
 from pdd_agent.core.logging import get_logger
 from pdd_agent.db.repositories import (
@@ -247,6 +252,11 @@ def _pipeline_auto_limited_time(row) -> bool:
 def _pipeline_continue_after_limited_time_failure(row) -> bool:
     """限时限量购失败后仍继续活动报名与推广。"""
     return bool((row.meta or {}).get("continue_after_limited_time_failure"))
+
+
+def _pipeline_continue_after_activity_failure(row) -> bool:
+    """活动报名失败后仍继续下一个活动，并在全部处理完后继续推广。"""
+    return bool((row.meta or {}).get("continue_after_activity_failure"))
 
 
 def _limited_time_completed(row) -> bool:
@@ -613,6 +623,11 @@ def _step_infos(row) -> list[dict[str, Any]]:
         activity_detail = campaign_skip_reason or "商品暂不可报名活动，已跳过活动报名"
     elif limited_time_outcome == "failed" and _pipeline_continue_after_limited_time_failure(row):
         activity_detail = "限时限量购失败，仍按设置继续活动报名"
+    elif _pipeline_continue_after_activity_failure(row) and any(
+        isinstance(item, dict) and not item.get("success") and not item.get("skipped")
+        for item in campaign_results
+    ):
+        activity_detail = "部分活动报名失败，已按设置继续后续活动/推广"
 
     traffic_detail = "全部活动处理完成后自动创建推广" if row.auto_promotion and len(activity_ids) > 1 else (
         "活动报名成功后自动创建推广" if row.auto_promotion else "未启用"
@@ -621,6 +636,8 @@ def _step_infos(row) -> list[dict[str, Any]]:
         traffic_detail = "活动未报名，仍继续创建推广"
     elif limited_time_outcome == "failed" and _pipeline_continue_after_limited_time_failure(row) and row.auto_promotion:
         traffic_detail = "限时限量购失败，活动处理完成后仍继续推广"
+    elif _pipeline_continue_after_activity_failure(row) and row.auto_promotion:
+        traffic_detail = "活动有失败时仍按设置继续创建推广"
 
     limited_time_detail = (
         "上架完成后立即执行（先于活动报名，取消惊喜优惠）"
@@ -698,6 +715,7 @@ def pipeline_to_dict(row) -> dict[str, Any]:
         "auto_promotion": bool(row.auto_promotion),
         "auto_limited_time_setup": _pipeline_auto_limited_time(row),
         "continue_after_limited_time_failure": _pipeline_continue_after_limited_time_failure(row),
+        "continue_after_activity_failure": _pipeline_continue_after_activity_failure(row),
         "limited_time_outcome": str((row.meta or {}).get("limited_time_outcome") or ""),
         "limited_time_skip_reason": str((row.meta or {}).get("limited_time_skip_reason") or ""),
         "activity_delay_hours": float(row.activity_delay_hours or 24.0),
@@ -756,6 +774,7 @@ def start_integrated_pipeline(
     auto_promotion: bool = True,
     auto_limited_time_setup: bool = True,
     continue_after_limited_time_failure: bool = False,
+    continue_after_activity_failure: bool = False,
     activity_delay_hours: float = 24.0,
     demo_mode: bool = False,
     platform_listing_code: str = "",
@@ -790,6 +809,7 @@ def start_integrated_pipeline(
         "slot_alignment_test": bool(slot_alignment_test),
         "auto_limited_time_setup": bool(normalized_activity_ids),
         "continue_after_limited_time_failure": bool(continue_after_limited_time_failure),
+        "continue_after_activity_failure": bool(continue_after_activity_failure),
         "activity_ids": normalized_activity_ids,
         "campaign_activity_index": 0,
         "campaign_results": [],
@@ -912,6 +932,7 @@ def start_integrated_pipeline_batch(
     auto_promotion: bool = True,
     auto_limited_time_setup: bool = True,
     continue_after_limited_time_failure: bool = False,
+    continue_after_activity_failure: bool = False,
     activity_delay_hours: float = 24.0,
     demo_mode: bool = False,
     platform_listing_code: str = "",
@@ -950,6 +971,7 @@ def start_integrated_pipeline_batch(
             auto_promotion=auto_promotion,
             auto_limited_time_setup=auto_limited_time_setup,
             continue_after_limited_time_failure=continue_after_limited_time_failure,
+            continue_after_activity_failure=continue_after_activity_failure,
             activity_delay_hours=activity_delay_hours,
             demo_mode=demo_mode,
             platform_listing_code=platform_listing_code,
@@ -1167,10 +1189,15 @@ def _on_campaign_finished(row, *, run_id: str, success: bool, result: dict[str, 
         activity_ids[current_index] if current_index < len(activity_ids) else str(row.activity_id or "")
     )
     activity_skipped = (not success) and _should_skip_campaign_for_traffic(result, error)
+    activity_continue = (
+        (not success)
+        and not activity_skipped
+        and _pipeline_continue_after_activity_failure(row)
+    )
     campaign_summary = _summarize_run_message(run_id)
     meta_patch: dict[str, Any] = {"campaign_summary": campaign_summary}
 
-    if not success and not activity_skipped:
+    if not success and not activity_skipped and not activity_continue:
         _append_campaign_result(
             meta_patch,
             row,
@@ -1197,7 +1224,7 @@ def _on_campaign_finished(row, *, run_id: str, success: bool, result: dict[str, 
         run_id=run_id,
         success=bool(success),
         skipped=activity_skipped,
-        error=error if activity_skipped else "",
+        error=error if (activity_skipped or activity_continue) else "",
         summary=campaign_summary,
     )
 
@@ -1210,6 +1237,26 @@ def _on_campaign_finished(row, *, run_id: str, success: bool, result: dict[str, 
             row.pipeline_id,
             current_activity_id,
             meta_patch["campaign_outcome"],
+        )
+    elif activity_continue:
+        meta_patch["campaign_outcome"] = "activity_failed_continue"
+        meta_patch["campaign_skip_reason"] = _format_multi_campaign_skip_reason(
+            row,
+            meta_patch,
+            error or "活动报名失败",
+        )
+        update_integrated_pipeline(
+            row.pipeline_id,
+            status="running",
+            current_step="activity_failed_continue",
+            error="",
+            meta_patch=meta_patch,
+        )
+        logger.info(
+            "pipeline %s activity %s failed, continuing per setting: %s",
+            row.pipeline_id,
+            current_activity_id,
+            error or "活动报名失败",
         )
 
     next_index = current_index + 1
@@ -1232,11 +1279,20 @@ def _on_campaign_finished(row, *, run_id: str, success: bool, result: dict[str, 
 
     refreshed = get_integrated_pipeline(row.pipeline_id) or row
     if not refreshed.auto_promotion:
+        final_status = "completed"
+        final_step = "completed"
+        final_error = ""
+        if activity_continue or any(
+            isinstance(item, dict) and not item.get("success") and not item.get("skipped")
+            for item in _campaign_results(refreshed)
+        ):
+            final_status = "completed"
+            meta_patch.setdefault("campaign_outcome", "partial_activity_failure")
         update_integrated_pipeline(
             row.pipeline_id,
-            status="completed",
-            current_step="completed",
-            error="",
+            status=final_status,
+            current_step=final_step,
+            error=final_error,
             meta_patch=meta_patch,
         )
         return
@@ -1327,6 +1383,26 @@ def _reconcile_stuck_pipeline_row(row) -> Any:
         run_status = _run_status_value(record.status)
         if run_status not in {RunStatus.FAILED, RunStatus.CANCELED}:
             continue
+        error = str(record.message or "").strip() or default_error
+        if run_status == RunStatus.CANCELED:
+            error = error or "子任务已取消"
+        try:
+            ensure_feishu_logged_for_terminal_run(
+                run_id=run_id,
+                agent=str(record.agent.value if hasattr(record.agent, "value") else record.agent),
+                account_id=row.account_id,
+                result=record.result if isinstance(record.result, dict) else {},
+                error=error,
+                run_status=RunStatus.CANCELED if run_status == RunStatus.CANCELED else RunStatus.FAILED,
+                pipeline_row=row,
+            )
+        except Exception:
+            logger.warning(
+                "ensure feishu for reconciled run failed pipeline=%s run=%s",
+                row.pipeline_id,
+                run_id,
+                exc_info=True,
+            )
         if (
             run_id == _pipeline_limited_time_run_id(row)
             and run_status == RunStatus.FAILED
@@ -1341,6 +1417,20 @@ def _reconcile_stuck_pipeline_row(row) -> Any:
                     result=record.result if isinstance(record.result, dict) else {},
                     error=str(record.message or "").strip() or "限时限量购设置失败",
                 )
+            continue
+        if (
+            run_id == row.campaign_run_id
+            and run_status == RunStatus.FAILED
+            and _pipeline_continue_after_activity_failure(row)
+        ):
+            refreshed = get_integrated_pipeline(row.pipeline_id) or row
+            _on_campaign_finished(
+                refreshed,
+                run_id=run_id,
+                success=False,
+                result=record.result if isinstance(record.result, dict) else {},
+                error=str(record.message or "").strip() or "活动报名失败",
+            )
             continue
         error = str(record.message or "").strip() or default_error
         if run_status == RunStatus.CANCELED:
@@ -1379,6 +1469,12 @@ def _ensure_pipeline_failed_after_task(
         agent == AgentKind.CAMPAIGN.value
         and _pipeline_limited_time_run_id(row) == run_id
         and _pipeline_continue_after_limited_time_failure(row)
+    ):
+        return
+    if (
+        agent == AgentKind.CAMPAIGN.value
+        and _pipeline_limited_time_run_id(row) != run_id
+        and _pipeline_continue_after_activity_failure(row)
     ):
         return
     step_map = {

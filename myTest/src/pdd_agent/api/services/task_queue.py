@@ -6,6 +6,7 @@ import asyncio
 from typing import Any
 
 from pdd_agent.api.services.task_runner import (
+    ensure_feishu_logged_for_terminal_run,
     execute_campaign_marketing_activity_register,
     execute_delist,
     execute_listing,
@@ -36,6 +37,30 @@ def _extract_queue_task_error(result: dict[str, Any]) -> str:
     if isinstance(errors, list):
         return "; ".join(str(item).strip() for item in errors if str(item).strip())
     return str(errors or "")
+
+
+def _ensure_terminal_feishu_log(
+    row,
+    *,
+    payload: dict[str, Any],
+    result: dict[str, Any] | None,
+    error: str,
+    run_status: RunStatus,
+) -> None:
+    if run_status == RunStatus.SUCCESS:
+        return
+    try:
+        ensure_feishu_logged_for_terminal_run(
+            run_id=row.run_id,
+            agent=row.agent,
+            account_id=row.account_id,
+            payload=payload,
+            result=result if isinstance(result, dict) else {},
+            error=error,
+            run_status=run_status,
+        )
+    except Exception:
+        logger.exception("ensure terminal feishu log failed run_id=%s", row.run_id)
 
 
 class TaskQueueWorker:
@@ -212,6 +237,13 @@ class TaskQueueWorker:
 
             record = TaskRunStore().load(row.run_id)
             if record and record.status == RunStatus.CANCELED:
+                _ensure_terminal_feishu_log(
+                    row,
+                    payload=payload,
+                    result=result if isinstance(result, dict) else {},
+                    error="canceled by user",
+                    run_status=RunStatus.CANCELED,
+                )
                 finish_queue_task(row.task_id, success=False, error="canceled by user")
                 if pipeline_id:
                     from pdd_agent.api.services.pipeline_service import on_queue_task_finished
@@ -227,6 +259,14 @@ class TaskQueueWorker:
                 return
             success = bool(record and record.status == RunStatus.SUCCESS)
             error = "" if success else _extract_queue_task_error(result)
+            if not success:
+                _ensure_terminal_feishu_log(
+                    row,
+                    payload=payload,
+                    result=result if isinstance(result, dict) else {},
+                    error=error,
+                    run_status=record.status if record else RunStatus.FAILED,
+                )
             finish_queue_task(row.task_id, success=success, error=error)
             if pipeline_id:
                 from pdd_agent.api.services.pipeline_service import on_queue_task_finished
@@ -244,6 +284,13 @@ class TaskQueueWorker:
 
             request_cancel(row.run_id)
             TaskRunStore().update_status(row.run_id, RunStatus.CANCELED, "canceled by user")
+            _ensure_terminal_feishu_log(
+                row,
+                payload=payload,
+                result={"error": "canceled by user"},
+                error="canceled by user",
+                run_status=RunStatus.CANCELED,
+            )
             finish_queue_task(row.task_id, success=False, error="canceled by user")
             clear_cancel(row.run_id)
             if pipeline_id:
@@ -268,6 +315,13 @@ class TaskQueueWorker:
             raise
         except Exception as exc:
             logger.exception("queue task failed task_id=%s", row.task_id)
+            _ensure_terminal_feishu_log(
+                row,
+                payload=payload,
+                result={"error": str(exc)},
+                error=str(exc),
+                run_status=RunStatus.FAILED,
+            )
             finish_queue_task(row.task_id, success=False, error=str(exc))
             if pipeline_id:
                 from pdd_agent.api.services.pipeline_service import on_queue_task_finished

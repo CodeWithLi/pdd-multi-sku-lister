@@ -529,6 +529,77 @@ def test_on_campaign_finished_still_fails_on_other_campaign_errors():
     assert update.call_args.kwargs["error"] == "价格确认页筛选失败"
 
 
+def test_on_campaign_finished_continues_next_activity_when_continue_enabled():
+    row = SimpleNamespace(
+        pipeline_id="pipe_multi",
+        account_id="store_A",
+        status="running",
+        auto_promotion=True,
+        pdd_product_ids=["111"],
+        mapping_ids=["m1"],
+        activity_id="20981",
+        campaign_run_id="run_1",
+        meta={
+            "activity_ids": ["20981", "21365"],
+            "campaign_activity_index": 0,
+            "campaign_results": [],
+            "continue_after_activity_failure": True,
+        },
+    )
+    with patch("pdd_agent.api.services.pipeline_service._summarize_run_message", return_value="fail"):
+        with patch("pdd_agent.api.services.pipeline_service.get_integrated_pipeline", return_value=row):
+            with patch("pdd_agent.api.services.pipeline_service.update_integrated_pipeline") as update:
+                with patch("pdd_agent.api.services.pipeline_service._schedule_pipeline_campaign") as schedule:
+                    _on_campaign_finished(
+                        row,
+                        run_id="run_1",
+                        success=False,
+                        result={"results": [{"status": "failed", "step": "filter_activity_prices"}]},
+                        error="价格确认页筛选失败",
+                    )
+    schedule.assert_called_once()
+    assert schedule.call_args.kwargs["activity_index"] == 1
+    assert update.call_args.kwargs["current_step"] == "activity_failed_continue"
+
+
+def test_on_campaign_finished_runs_traffic_after_last_activity_failure_continue():
+    row = SimpleNamespace(
+        pipeline_id="pipe_multi",
+        account_id="store_A",
+        status="running",
+        auto_promotion=True,
+        pdd_product_ids=["111"],
+        mapping_ids=["m1"],
+        activity_id="21365",
+        campaign_run_id="run_2",
+        meta={
+            "activity_ids": ["20981", "21365"],
+            "campaign_activity_index": 1,
+            "campaign_results": [
+                {
+                    "activity_id": "20981",
+                    "run_id": "run_1",
+                    "success": False,
+                    "skipped": False,
+                    "summary": "fail",
+                }
+            ],
+            "continue_after_activity_failure": True,
+        },
+    )
+    with patch("pdd_agent.api.services.pipeline_service._summarize_run_message", return_value="fail"):
+        with patch("pdd_agent.api.services.pipeline_service.get_integrated_pipeline", return_value=row):
+            with patch("pdd_agent.api.services.pipeline_service._enqueue_pipeline_traffic") as enqueue_traffic:
+                _on_campaign_finished(
+                    row,
+                    run_id="run_2",
+                    success=False,
+                    result={"results": [{"status": "failed"}]},
+                    error="报名失败",
+                )
+    enqueue_traffic.assert_called_once()
+
+
 def test_on_listing_finished_queues_limited_time_before_activity():
     row = SimpleNamespace(
         pipeline_id="pipe_lt",

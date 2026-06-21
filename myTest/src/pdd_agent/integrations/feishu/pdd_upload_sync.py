@@ -881,6 +881,80 @@ def _find_pdd_upload_record_by_product_id(
     return None
 
 
+def _coerce_bitable_text(value: Any) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, str):
+        return value.strip()
+    if isinstance(value, (int, float)):
+        return str(value).strip()
+    if isinstance(value, list):
+        parts: list[str] = []
+        for item in value:
+            if isinstance(item, dict) and item.get("text") is not None:
+                parts.append(str(item["text"]))
+            else:
+                parts.append(str(item))
+        return "".join(parts).strip()
+    if isinstance(value, dict) and value.get("text") is not None:
+        return str(value["text"]).strip()
+    return str(value).strip()
+
+
+def lookup_pdd_upload_log_identity_fields(
+    product_id: str,
+    *,
+    config: FeishuConfig | None = None,
+    client: FeishuClient | None = None,
+    retries: int | None = None,
+    interval_seconds: float | None = None,
+) -> dict[str, str]:
+    """从 PDD发布日志表读取商品标识（供 PDD活动日志表建行的上下文）。"""
+    pid = str(product_id or "").strip()
+    if not pid:
+        return {}
+    cfg = config or load_feishu_config()
+    pdd_cfg = cfg.pdd_upload_log
+    if not pdd_cfg.enabled:
+        return {}
+
+    app_token = str(cfg.bitable_app_token or "").strip()
+    if not app_token or not cfg.app_id or not cfg.app_secret:
+        return {}
+
+    api = client or FeishuClient(cfg)
+    table_id, _ = resolve_pdd_upload_table_id(cfg, api, save_table_id=False, create_if_missing=False)
+    if not table_id:
+        return {}
+
+    dedupe_field = str(pdd_cfg.dedupe_field or pdd_cfg.field_names.product_id or "商品ID").strip()
+    upload_names = pdd_cfg.field_names
+    lookup_retries = max(1, int(retries if retries is not None else pdd_cfg.limited_time_lookup_retries))
+    lookup_interval = max(
+        0.5,
+        float(interval_seconds if interval_seconds is not None else pdd_cfg.limited_time_lookup_interval_seconds),
+    )
+    row = _find_pdd_upload_record_by_product_id(
+        api,
+        app_token=app_token,
+        table_id=table_id,
+        dedupe_field=dedupe_field,
+        product_id=pid,
+        retries=lookup_retries,
+        interval_seconds=lookup_interval,
+    )
+    if not row:
+        return {}
+
+    fields = row.get("fields") if isinstance(row.get("fields"), dict) else {}
+    return {
+        "merchant_code": _coerce_bitable_text(fields.get(upload_names.merchant_code)),
+        "title": _coerce_bitable_text(fields.get(upload_names.title)),
+        "account_name": _coerce_bitable_text(fields.get(upload_names.account_name)),
+        "product_link": _coerce_bitable_text(fields.get(upload_names.link)),
+    }
+
+
 def _push_pdd_upload_select_field_by_product_ids(
     *,
     account_id: str = "",
@@ -1126,13 +1200,17 @@ def _push_pdd_upload_promotion_status_safe(**kwargs: Any) -> None:
 
 
 def schedule_pdd_upload_limited_time_status(**kwargs: Any) -> None:
-    """限时限量购完成后异步回写飞书状态。"""
+    """限时限量购完成后回写飞书状态；失败同步写入确保落表。"""
     try:
         cfg = load_feishu_config()
     except Exception as exc:
         logger.warning("load feishu config failed: %s", exc)
         return
     if not cfg.pdd_upload_log.enabled or not cfg.pdd_upload_log.update_limited_time_status:
+        return
+
+    if not bool(kwargs.get("success")):
+        _push_pdd_upload_limited_time_status_safe(**kwargs)
         return
 
     thread = threading.Thread(
@@ -1145,7 +1223,7 @@ def schedule_pdd_upload_limited_time_status(**kwargs: Any) -> None:
 
 
 def schedule_pdd_upload_activity_register_status(**kwargs: Any) -> None:
-    """活动报名完成后异步回写飞书对应活动列。"""
+    """活动报名完成后回写飞书对应活动列；失败同步写入确保落表。"""
     try:
         cfg = load_feishu_config()
     except Exception as exc:
@@ -1155,6 +1233,10 @@ def schedule_pdd_upload_activity_register_status(**kwargs: Any) -> None:
         return
     activity_id = str(kwargs.get("activity_id") or "").strip()
     if not resolve_activity_register_field_name(activity_id, cfg):
+        return
+
+    if not bool(kwargs.get("success")):
+        _push_pdd_upload_activity_register_status_safe(**kwargs)
         return
 
     thread = threading.Thread(
@@ -1167,13 +1249,17 @@ def schedule_pdd_upload_activity_register_status(**kwargs: Any) -> None:
 
 
 def schedule_pdd_upload_promotion_status(**kwargs: Any) -> None:
-    """推广任务完成后异步回写飞书「推广状态」。"""
+    """推广任务完成后回写飞书「推广状态」；失败同步写入确保落表。"""
     try:
         cfg = load_feishu_config()
     except Exception as exc:
         logger.warning("load feishu config failed: %s", exc)
         return
     if not cfg.pdd_upload_log.enabled or not cfg.pdd_upload_log.update_promotion_status:
+        return
+
+    if not bool(kwargs.get("success")):
+        _push_pdd_upload_promotion_status_safe(**kwargs)
         return
 
     thread = threading.Thread(

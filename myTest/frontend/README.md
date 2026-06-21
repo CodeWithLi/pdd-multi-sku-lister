@@ -27,9 +27,11 @@ npm install
 npm run dev
 ```
 
-浏览器打开：http://127.0.0.1:5173
+浏览器打开：http://localhost:5173（或 http://127.0.0.1:5173，需 Vite 开启 `host: true`）
 
 Vite 已将 `/api` 代理到 `http://127.0.0.1:8010`。
+
+飞书 OAuth 回调走 **后端** `http://127.0.0.1:8010/api/feishu/oauth/callback`（需在飞书开放平台「安全设置 → 重定向 URL」里添加同地址）。授权完成后返回前端即可，无需 5173 在回调瞬间必须在线。
 
 ## 页面
 

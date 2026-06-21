@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
+import FeishuSidebarAuth from '@/components/FeishuSidebarAuth.vue'
 import {
   ArrowDown,
   Connection,
@@ -36,6 +37,7 @@ interface NavGroup {
 
 const route = useRoute()
 const router = useRouter()
+const feishuAuthRef = ref<InstanceType<typeof FeishuSidebarAuth> | null>(null)
 
 const topItem: NavItem = { path: '/', label: '工作台', icon: DataBoard }
 const pipelineItem: NavItem = { path: '/pipeline', label: '整合链路', icon: Connection }
@@ -141,7 +143,12 @@ function ensureActiveGroupOpen() {
 
 watch(
   () => route.path,
-  () => ensureActiveGroupOpen(),
+  (path, prev) => {
+    ensureActiveGroupOpen()
+    if (prev === '/feishu/oauth/callback' || path === '/feishu/oauth/callback') {
+      feishuAuthRef.value?.refreshStatus?.()
+    }
+  },
   { immediate: true },
 )
 
@@ -204,6 +211,7 @@ function go(path: string) {
       </nav>
 
       <div class="sidebar-bottom">
+        <FeishuSidebarAuth ref="feishuAuthRef" />
         <button
           class="nav-item bottom-item"
           :class="{ active: active === bottomItem.path }"

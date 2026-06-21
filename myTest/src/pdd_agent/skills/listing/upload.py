@@ -1143,6 +1143,13 @@ def _schedule_feishu_pdd_upload_log(
             publish_end=verified_at,
             verified_at=verified_at,
         )
+        from pdd_agent.integrations.feishu.pdd_activity_log_sync import schedule_pdd_activity_log_seed
+
+        schedule_pdd_activity_log_seed(
+            account_id=account_id,
+            product_id=product_id,
+            seeded_at=verified_at,
+        )
     except Exception as exc:
         print(
             f"[{account_id}] [{unit.listing_label}] 飞书 PDD 上传日志调度失败：{_safe_exc(exc)}",

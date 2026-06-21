@@ -24,6 +24,7 @@ class IntegratedPipelineStartRequest(BaseModel):
     auto_promotion: bool = True
     auto_limited_time_setup: bool = True
     continue_after_limited_time_failure: bool = False
+    continue_after_activity_failure: bool = False
     activity_delay_hours: float = Field(default=24.0, ge=0)
     demo_mode: bool = False
     platform_listing_code: str = ""
@@ -53,6 +54,7 @@ class IntegratedPipelineBatchStartRequest(BaseModel):
     auto_promotion: bool = True
     auto_limited_time_setup: bool = True
     continue_after_limited_time_failure: bool = False
+    continue_after_activity_failure: bool = False
     activity_delay_hours: float = Field(default=24.0, ge=0)
     demo_mode: bool = False
     platform_listing_code: str = ""
@@ -113,6 +115,7 @@ class IntegratedPipelineResponse(BaseModel):
     auto_promotion: bool
     auto_limited_time_setup: bool = True
     continue_after_limited_time_failure: bool = False
+    continue_after_activity_failure: bool = False
     limited_time_outcome: str = ""
     limited_time_skip_reason: str = ""
     activity_delay_hours: float
