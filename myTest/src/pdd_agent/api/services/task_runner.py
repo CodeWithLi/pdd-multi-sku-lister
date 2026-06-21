@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from datetime import datetime
 from typing import Any
 
 from pdd_agent.browser.sync_job import run_browser_job_async
@@ -207,32 +208,270 @@ def _schedule_feishu_promotion_status(
     )
 
 
+def _account_display_name(account_id: str) -> str:
+    settings = load_yaml_settings()
+    account = get_account_config(settings, account_id)
+    if account and str(account.username or "").strip():
+        return str(account.username).strip()
+    return str(account_id or "").strip()
+
+
+def _listing_run_timing(run_id: str) -> tuple[datetime | None, datetime | None]:
+    if not run_id:
+        return None, None
+    try:
+        record = TaskRunStore().load(run_id)
+        if not record:
+            return None, None
+        return record.started_at, record.finished_at or datetime.now()
+    except Exception:
+        return None, None
+
+
+def _listing_failure_row_key(
+    *,
+    listing_label: str = "",
+    merchant_code: str = "",
+    message: str = "",
+) -> str:
+    from pdd_agent.integrations.feishu.pdd_upload_sync import parse_listing_label_from_text
+
+    label = str(listing_label or "").strip()
+    if label:
+        return label.lower()
+    text = str(message or "").strip()
+    if text:
+        parsed_label, _ = parse_listing_label_from_text(text)
+        if parsed_label:
+            return parsed_label.lower()
+    code = str(merchant_code or "").strip()
+    if code and "/" not in code:
+        return code.lower()
+    if code:
+        parsed_label, parsed_code = parse_listing_label_from_text(code)
+        if parsed_label:
+            return parsed_label.lower()
+        if parsed_code:
+            return parsed_code.lower()
+    return text[:80].lower() if text else "unknown"
+
+
+def _normalize_listing_failure_codes(
+    *,
+    listing_label: str = "",
+    merchant_code: str = "",
+    message: str = "",
+    fallback_code: str = "",
+) -> tuple[str, str]:
+    from pdd_agent.integrations.feishu.pdd_upload_sync import parse_listing_label_from_text
+
+    label = str(listing_label or "").strip()
+    code = str(merchant_code or "").strip()
+    text = str(message or "").strip()
+    if not label and not code and text:
+        label, code = parse_listing_label_from_text(text)
+    if label and (not code or "/" in code):
+        parsed_label, parsed_code = parse_listing_label_from_text(label)
+        if parsed_label:
+            label = parsed_label
+        if parsed_code:
+            code = parsed_code
+    if code and "/" in code:
+        _, code = parse_listing_label_from_text(code)
+    if not code and label:
+        _, code = parse_listing_label_from_text(label)
+    if not code:
+        code = fallback_code
+    return label, code
+
+
 def _schedule_feishu_listing_result_log(
     *,
     account_id: str,
     result: dict[str, Any],
+    run_id: str = "",
+    product_codes: list[str] | None = None,
 ) -> None:
-    from pdd_agent.integrations.feishu.pdd_upload_sync import schedule_pdd_upload_log
+    from pdd_agent.integrations.feishu.pdd_upload_sync import (
+        map_listing_failure_record_type,
+        schedule_pdd_upload_failure_log,
+        schedule_pdd_upload_log,
+    )
+
+    account_name = _account_display_name(account_id)
+    publish_start, publish_end = _listing_run_timing(run_id)
+    duration_seconds: float | None = None
+    if publish_start and publish_end:
+        duration_seconds = max(0.0, (publish_end - publish_start).total_seconds())
+
+    fallback_code = ""
+    for code in product_codes or []:
+        text = str(code or "").strip()
+        if text:
+            fallback_code = text
+            break
+
+    failures: dict[str, dict[str, Any]] = {}
+
+    def _queue_failure(
+        *,
+        listing_label: str = "",
+        merchant_code: str = "",
+        reason_code: str = "",
+        error: str = "",
+        message: str = "",
+        status: str = "",
+        retryable: bool = False,
+        legacy_status: str = "",
+        priority: int = 0,
+    ) -> None:
+        label, code = _normalize_listing_failure_codes(
+            listing_label=listing_label,
+            merchant_code=merchant_code,
+            message=message or error,
+            fallback_code=fallback_code,
+        )
+        msg = str(message or error or "").strip()
+        key = _listing_failure_row_key(listing_label=label, merchant_code=code, message=msg)
+        existing = failures.get(key)
+        if existing:
+            if int(existing.get("priority") or 0) > priority:
+                return
+            if int(existing.get("priority") or 0) == priority and len(str(existing.get("message") or "")) >= len(msg):
+                return
+        failures[key] = {
+            "listing_label": label,
+            "merchant_code": code,
+            "reason_code": reason_code,
+            "error": error,
+            "message": msg,
+            "status": status,
+            "retryable": retryable,
+            "legacy_status": legacy_status,
+            "priority": priority,
+        }
 
     for item in result.get("results") or []:
         if not isinstance(item, dict):
             continue
         status = str(item.get("status") or "").strip().lower()
-        listing_result = "成功" if status in {"success", "listed"} else "失败"
-        error_reason = str(item.get("error") or item.get("reason") or "").strip()
-        schedule_pdd_upload_log(
+        product_id = str(item.get("pdd_product_id") or "").strip()
+        listing_label = str(item.get("listing_label") or "")
+        merchant_code = str(
+            item.get("platform_listing_code")
+            or item.get("merchant_code")
+            or item.get("product_code")
+            or ""
+        ).strip()
+        is_success = status in {"success", "listed"} and bool(product_id)
+
+        if is_success:
+            item_publish_start = None
+            raw_start = str(item.get("publish_submitted_at") or "").strip()
+            if raw_start:
+                from pdd_agent.integrations.feishu.pdd_upload_sync import _parse_created_at
+
+                item_publish_start = _parse_created_at(raw_start)
+            schedule_pdd_upload_log(
+                account_id=account_id,
+                listing_label=listing_label,
+                title=str(item.get("title") or listing_label or ""),
+                merchant_code=merchant_code,
+                product_id=product_id,
+                product_link=str(item.get("pdd_product_link") or ""),
+                product_link_method=str(item.get("product_link_method") or ""),
+                account_name=account_name,
+                publish_start=item_publish_start or publish_start,
+                publish_end=publish_end or datetime.now(),
+                verified_at=publish_end or datetime.now(),
+            )
+            continue
+
+        if status in {"failed", "retryable"} or item.get("error") or item.get("reason"):
+            _queue_failure(
+                listing_label=listing_label,
+                merchant_code=merchant_code,
+                reason_code=str(item.get("reason") or item.get("reason_code") or "").strip(),
+                error=str(
+                    item.get("error")
+                    or item.get("pdd_product_capture_message")
+                    or item.get("message")
+                    or ""
+                ).strip(),
+                status=status,
+                retryable=bool(item.get("retryable")),
+                legacy_status=str(item.get("legacy_status") or ""),
+                priority=4,
+            )
+            continue
+
+        summary = str(item.get("summary") or "").strip()
+        if summary:
+            _queue_failure(message=summary, reason_code="no_valid_units", priority=0)
+
+    preflight = result.get("preflight")
+    issues: list[Any] = []
+    if isinstance(preflight, dict):
+        issues = list(preflight.get("issues") or [])
+    elif preflight is not None:
+        issues = list(getattr(preflight, "issues", None) or [])
+
+    for issue in issues:
+        level = str(getattr(issue, "level", None) or (issue.get("level") if isinstance(issue, dict) else "") or "")
+        if level != "error":
+            continue
+        listing_label = str(
+            getattr(issue, "listing_label", None) or (issue.get("listing_label") if isinstance(issue, dict) else "") or ""
+        )
+        message = str(
+            getattr(issue, "message", None) or (issue.get("message") if isinstance(issue, dict) else "") or ""
+        )
+        reason_code = "slot_alignment_failed" if "槽位对齐" in message else "preflight_catalog"
+        _queue_failure(
+            listing_label=listing_label,
+            reason_code=reason_code,
+            message=message,
+            retryable="槽位对齐" in message,
+            priority=3,
+        )
+
+    for err in result.get("errors") or []:
+        text = str(err or "").strip()
+        if not text:
+            continue
+        reason_code = "slot_alignment_failed" if "槽位对齐" in text else "unexpected_error"
+        _queue_failure(
+            message=text,
+            reason_code=reason_code,
+            retryable="槽位对齐" in text,
+            priority=2,
+        )
+
+    run_error = str(result.get("error") or "").strip()
+    if run_error:
+        _queue_failure(message=run_error, reason_code="unexpected_error", priority=1)
+
+    has_unit_failures = any(int(row.get("priority") or 0) >= 2 for row in failures.values())
+    for row in failures.values():
+        if has_unit_failures and str(row.get("reason_code") or "") == "no_valid_units":
+            continue
+        schedule_pdd_upload_failure_log(
             account_id=account_id,
-            listing_label=str(item.get("listing_label") or ""),
-            title=str(item.get("title") or item.get("listing_label") or ""),
-            merchant_code=str(item.get("platform_listing_code") or item.get("merchant_code") or ""),
-            product_id=str(item.get("pdd_product_id") or ""),
-            product_link=str(item.get("pdd_product_link") or ""),
-            product_link_method=str(item.get("product_link_method") or ""),
-            list_status=str(item.get("pdd_product_list_status") or ("销售中" if listing_result == "成功" else "报错上架失败")),
-            created_at_raw=str(item.get("pdd_product_matched_created_at") or item.get("publish_submitted_at") or ""),
-            listing_result=listing_result,
-            listing_error_reason="" if listing_result == "成功" else error_reason,
-            chain_phase="listing",
+            account_name=account_name,
+            listing_label=str(row.get("listing_label") or ""),
+            merchant_code=str(row.get("merchant_code") or ""),
+            record_type=map_listing_failure_record_type(
+                status=str(row.get("status") or ""),
+                reason_code=str(row.get("reason_code") or ""),
+                retryable=bool(row.get("retryable")),
+                legacy_status=str(row.get("legacy_status") or ""),
+            ),
+            reason_code=str(row.get("reason_code") or ""),
+            error=str(row.get("error") or ""),
+            message=str(row.get("message") or ""),
+            publish_start=publish_start,
+            publish_end=publish_end,
+            duration_seconds=duration_seconds,
         )
 
 
@@ -438,6 +677,11 @@ async def execute_listing(
     account = get_account_config(settings, account_id)
     if not account:
         store.finish(run_id, RunStatus.FAILED, f"unknown account: {account_id}")
+        _schedule_feishu_listing_result_log(
+            account_id=account_id,
+            run_id=run_id,
+            result={"errors": [f"unknown account: {account_id}"]},
+        )
         return {"error": f"unknown account: {account_id}"}
 
     codes = product_codes or account.product_codes
@@ -475,7 +719,12 @@ async def execute_listing(
         item_results = [r for r in result.get("results") or [] if isinstance(r, dict)]
         item_failed = any(r.get("status") in {"failed", "retryable"} for r in item_results)
         status = RunStatus.SUCCESS if not result.get("errors") and not item_failed else RunStatus.FAILED
-        _schedule_feishu_listing_result_log(account_id=account_id, result=result)
+        _schedule_feishu_listing_result_log(
+            account_id=account_id,
+            run_id=run_id,
+            result=result,
+            product_codes=codes,
+        )
         try:
             from pdd_agent.api.services.listing_failure_log import persist_listing_run_failures
 
@@ -505,7 +754,9 @@ async def execute_listing(
         store.finish(run_id, RunStatus.FAILED, str(exc), result={"error": str(exc)})
         _schedule_feishu_listing_result_log(
             account_id=account_id,
-            result={"results": [{"status": "failed", "reason": "listing_failed", "error": str(exc)}]},
+            run_id=run_id,
+            result={"errors": [str(exc)], "results": [{"status": "failed", "reason": "unexpected_error", "error": str(exc)}]},
+            product_codes=codes,
         )
         return {"error": str(exc)}
 

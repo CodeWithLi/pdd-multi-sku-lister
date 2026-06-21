@@ -45,17 +45,25 @@ status_options:
   - 已下架
   - 未知
 
-# 上架核验成功（20s 后在售）后异步写入「PDD每日上传商品日志」
+# 上架核验成功（20s 后在售）后异步写入「PDD发布日志表」；失败写入「PDD发布日志表(失败)」
 pdd_upload_log:
   enabled: true
-  table_id: tbldwkpLiuvBWwe9
-  table_name: PDD每日上传商品日志
+  table_id: ""
+  table_name: PDD发布日志表
+  failure_table_id: ""
+  failure_table_name: PDD发布日志表(失败)
   dedupe_field: 商品ID
+  failure_record_type_options:
+    - 失败
+    - 跳过
   field_names:
     date: 日期
-    link: 商品链接
-    title: 宝贝标题
     merchant_code: 商品编码
-    created_at: 创建时间
-    status: 状态
+    title: 标题
+    account_name: 店铺名称
     product_id: 商品ID
+    link: 商品链接
+    publish_start: 发布开始时间
+    publish_end: 发布结束时间
+    status: 状态
+    created_at: 创建时间

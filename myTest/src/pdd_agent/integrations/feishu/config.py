@@ -48,38 +48,31 @@ class FeishuFieldNames(BaseModel):
     image_set: str = "套图"
 
 
-class PddUploadLogFieldNames(BaseModel):
-    """PDD每日上传商品日志 表列名。"""
+class PddUploadFailureLogFieldNames(BaseModel):
+    """PDD发布日志表(失败) 表列名。"""
 
     date: str = "日期"
-    link: str = "商品链接"
-    title: str = "宝贝标题"
     merchant_code: str = "商品编码"
-    created_at: str = "创建时间"
-    status: str = "状态"
+    account_name: str = "店铺名称"
+    record_type: str = "记录类型"
+    failure_reason: str = "失败原因"
+    publish_start: str = "发布开始时间"
+    publish_end: str = "发布结束时间"
+    duration_seconds: str = "耗时秒"
+
+
+class PddUploadLogFieldNames(BaseModel):
+    """PDD发布日志表 — 与淘宝发布日志表列一致（仅发布）。"""
+
+    date: str = "日期"
+    merchant_code: str = "商品编码"
+    title: str = "标题"
+    account_name: str = "店铺名称"
     product_id: str = "商品ID"
-    limited_time_status: str = "限时限量购状态"
-    activity_20981: str = "618报名"
-    activity_21365: str = "21365限量七折"
-    promotion_status: str = "推广状态"
-    listing_result: str = "上传商品日志回写结果"
-    listing_error_reason: str = "上传商品日志报错原因"
-    listing_manual_fix_status: str = "上传异常人工修正状态"
-    listing_reentry_status: str = "修正后重回上传链路"
-    marketing_result: str = "营销工具日志回写结果"
-    marketing_error_reason: str = "营销工具日志报错原因"
-    traffic_result: str = "投流数据日志回写结果"
-    traffic_error_reason: str = "投流数据日志报错原因"
-    traffic_report_date: str = "投流数据日期"
-    traffic_spend: str = "成交花费(元)"
-    traffic_amount: str = "交易额(元)"
-    traffic_roi: str = "实际投产比"
-    traffic_total_cost: str = "总花费(元)"
-    traffic_net_amount: str = "净交易额(元)"
-    traffic_net_roi: str = "净实际投产比"
-    traffic_net_orders: str = "净成交笔数"
-    traffic_cost_per_order: str = "每笔净成交花费(元)"
-    chain_phase: str = "当前链路阶段"
+    link: str = "商品链接"
+    publish_start: str = "发布开始时间"
+    publish_end: str = "发布结束时间"
+    duration_seconds: str = "耗时秒"
 
 
 class PddMarketingLogFieldNames(BaseModel):
@@ -124,11 +117,26 @@ class PddUploadLogConfig(BaseModel):
     )
     table_id: str = Field(
         default="",
-        description="PDD每日上传商品日志 table_id",
+        description="PDD发布日志表 table_id",
     )
     table_name: str = Field(
-        default="PDD每日上传商品日志",
-        description="表名（仅文档用途，写入时用 table_id）",
+        default="PDD发布日志表",
+        description="上架成功写入的飞书表名",
+    )
+    failure_table_id: str = Field(
+        default="",
+        description="PDD发布日志表(失败) table_id",
+    )
+    failure_table_name: str = Field(
+        default="PDD发布日志表(失败)",
+        description="上架失败/跳过写入的飞书表名",
+    )
+    failure_record_type_options: list[str] = Field(
+        default_factory=lambda: ["失败", "跳过"],
+        description="失败表「记录类型」单选选项",
+    )
+    failure_field_names: PddUploadFailureLogFieldNames = Field(
+        default_factory=PddUploadFailureLogFieldNames,
     )
     dedupe_field: str = Field(
         default="商品ID",
@@ -143,8 +151,8 @@ class PddUploadLogConfig(BaseModel):
         description="「限时限量购状态」单选字段选项（须与飞书表一致）",
     )
     update_limited_time_status: bool = Field(
-        default=True,
-        description="限时限量购完成后按商品ID回写飞书「限时限量购状态」",
+        default=False,
+        description="限时限量购完成后按商品ID回写飞书（默认关闭；发布日志表仅记录上架）",
     )
     limited_time_lookup_retries: int = Field(
         default=6,
@@ -163,8 +171,8 @@ class PddUploadLogConfig(BaseModel):
         description="活动报名状态单选字段选项（618报名 / 21365限量七折 等，须与飞书表一致）",
     )
     update_activity_register_status: bool = Field(
-        default=True,
-        description="活动报名完成后按商品ID回写飞书对应活动列（20981→618报名，21365→21365限量七折）",
+        default=False,
+        description="活动报名完成后按商品ID回写飞书（默认关闭；后续独立营销表）",
     )
     activity_register_fields: dict[str, str] = Field(
         default_factory=lambda: {
@@ -198,8 +206,8 @@ class PddUploadLogConfig(BaseModel):
         description="「修正后重回上传链路」单选字段选项（须与飞书表一致）",
     )
     update_promotion_status: bool = Field(
-        default=True,
-        description="推广任务完成后按商品ID回写飞书「推广状态」",
+        default=False,
+        description="推广任务完成后按商品ID回写飞书（默认关闭；后续独立营销表）",
     )
     traffic_report_enabled: bool = Field(
         default=True,
@@ -369,7 +377,7 @@ def save_table_id_to_config(table_id: str, path: Path | None = None) -> None:
 
 
 def save_pdd_upload_table_id_to_config(table_id: str, path: Path | None = None) -> None:
-    """解析到 PDD 上传日志表后，把 table_id 写回 feishu.yaml。"""
+    """解析到 PDD 发布日志表后，把 table_id 写回 feishu.yaml。"""
     cfg_path = path or Path(os.getenv("FEISHU_CONFIG_PATH", DEFAULT_FEISHU_CONFIG_PATH))
     data: dict = {}
     if cfg_path.is_file():
@@ -379,6 +387,23 @@ def save_pdd_upload_table_id_to_config(table_id: str, path: Path | None = None) 
     if not isinstance(pdd_raw, dict):
         pdd_raw = {}
     pdd_raw["table_id"] = table_id
+    data["pdd_upload_log"] = pdd_raw
+    cfg_path.parent.mkdir(parents=True, exist_ok=True)
+    with open(cfg_path, "w", encoding="utf-8") as f:
+        yaml.dump(data, f, allow_unicode=True, default_flow_style=False, sort_keys=False)
+
+
+def save_pdd_upload_failure_table_id_to_config(table_id: str, path: Path | None = None) -> None:
+    """解析到 PDD 发布失败日志表后，把 failure_table_id 写回 feishu.yaml。"""
+    cfg_path = path or Path(os.getenv("FEISHU_CONFIG_PATH", DEFAULT_FEISHU_CONFIG_PATH))
+    data: dict = {}
+    if cfg_path.is_file():
+        with open(cfg_path, encoding="utf-8") as f:
+            data = yaml.safe_load(f) or {}
+    pdd_raw = data.get("pdd_upload_log")
+    if not isinstance(pdd_raw, dict):
+        pdd_raw = {}
+    pdd_raw["failure_table_id"] = table_id
     data["pdd_upload_log"] = pdd_raw
     cfg_path.parent.mkdir(parents=True, exist_ok=True)
     with open(cfg_path, "w", encoding="utf-8") as f:
@@ -396,6 +421,39 @@ def save_pdd_marketing_table_id_to_config(table_id: str, path: Path | None = Non
     if not isinstance(marketing_raw, dict):
         marketing_raw = {}
     marketing_raw["table_id"] = table_id
+    data["pdd_marketing_log"] = marketing_raw
+    cfg_path.parent.mkdir(parents=True, exist_ok=True)
+    with open(cfg_path, "w", encoding="utf-8") as f:
+        yaml.dump(data, f, allow_unicode=True, default_flow_style=False, sort_keys=False)
+
+
+def save_pdd_marketing_log_schedule_to_config(
+    *,
+    traffic_report_enabled: bool | None = None,
+    traffic_report_schedule_hour: int | None = None,
+    traffic_report_schedule_minute: int | None = None,
+    traffic_report_account_ids: list[str] | None = None,
+    path: Path | None = None,
+) -> None:
+    """更新 PDD 营销日志表投流定时任务配置并写回 feishu.yaml。"""
+    cfg_path = path or Path(os.getenv("FEISHU_CONFIG_PATH", DEFAULT_FEISHU_CONFIG_PATH))
+    data: dict = {}
+    if cfg_path.is_file():
+        with open(cfg_path, encoding="utf-8") as f:
+            data = yaml.safe_load(f) or {}
+    marketing_raw = data.get("pdd_marketing_log")
+    if not isinstance(marketing_raw, dict):
+        marketing_raw = {}
+    if traffic_report_enabled is not None:
+        marketing_raw["traffic_report_enabled"] = bool(traffic_report_enabled)
+    if traffic_report_schedule_hour is not None:
+        marketing_raw["traffic_report_schedule_hour"] = int(traffic_report_schedule_hour)
+    if traffic_report_schedule_minute is not None:
+        marketing_raw["traffic_report_schedule_minute"] = int(traffic_report_schedule_minute)
+    if traffic_report_account_ids is not None:
+        marketing_raw["traffic_report_account_ids"] = [
+            str(aid).strip() for aid in traffic_report_account_ids if str(aid).strip()
+        ]
     data["pdd_marketing_log"] = marketing_raw
     cfg_path.parent.mkdir(parents=True, exist_ok=True)
     with open(cfg_path, "w", encoding="utf-8") as f:

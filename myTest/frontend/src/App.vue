@@ -18,6 +18,7 @@ import {
   CircleClose,
   Brush,
   Grid,
+  Timer,
 } from '@element-plus/icons-vue'
 import type { Component } from 'vue'
 
@@ -48,6 +49,7 @@ const navGroups: NavGroup[] = [
       { path: '/tasks', label: '上架 / 下架', icon: Goods },
       { path: '/campaign', label: '活动', icon: Discount },
       { path: '/traffic', label: '推广', icon: TrendCharts },
+      { path: '/traffic-report-schedule', label: '投流日报定时', icon: Timer },
       { path: '/catalog', label: '素材检查', icon: FolderOpened },
     ],
   },

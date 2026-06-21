@@ -50,6 +50,9 @@ import type {
   RunInterpretResponse,
   RuntimeConfig,
   FeishuBitableHealth,
+  TrafficReportSchedule,
+  TrafficReportScheduleUpdate,
+  TrafficReportScheduleTriggerResult,
 } from '@/types'
 
 const http = axios.create({
@@ -439,6 +442,17 @@ export const api = {
     table_id: string
     record_ids: string[]
   }) => http.post('/feishu-bitable/records/batch-delete', body).then((r) => r.data),
+
+  trafficReportSchedule: () =>
+    http.get<TrafficReportSchedule>('/traffic-report-schedule').then((r) => r.data),
+
+  updateTrafficReportSchedule: (body: TrafficReportScheduleUpdate) =>
+    http.put<TrafficReportSchedule>('/traffic-report-schedule', body).then((r) => r.data),
+
+  triggerTrafficReportSchedule: () =>
+    http
+      .post<TrafficReportScheduleTriggerResult>('/traffic-report-schedule/trigger')
+      .then((r) => r.data),
 }
 
 export default http

@@ -8,6 +8,7 @@ const router = createRouter({
     { path: '/tasks', name: 'tasks', component: () => import('@/views/TasksView.vue'), meta: { title: '上架 / 下架' } },
     { path: '/campaign', name: 'campaign', component: () => import('@/views/CampaignView.vue'), meta: { title: '活动' } },
     { path: '/traffic', name: 'traffic', component: () => import('@/views/TrafficView.vue'), meta: { title: '推广' } },
+    { path: '/traffic-report-schedule', name: 'traffic-report-schedule', component: () => import('@/views/TrafficReportScheduleView.vue'), meta: { title: '投流日报定时' } },
     { path: '/catalog', name: 'catalog', component: () => import('@/views/CatalogView.vue'), meta: { title: '素材检查' } },
     { path: '/accounts', name: 'accounts', component: () => import('@/views/AccountsView.vue'), meta: { title: '店铺设置' } },
     { path: '/login-health', name: 'login-health', component: () => import('@/views/LoginHealthView.vue'), meta: { title: '登录体检' } },

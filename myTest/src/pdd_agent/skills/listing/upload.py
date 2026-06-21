@@ -1066,6 +1066,7 @@ def _schedule_feishu_pdd_upload_log(
     merchant_code: str,
     capture: dict[str, Any],
     verified_at: datetime,
+    submitted_at: datetime | None = None,
 ) -> None:
     try:
         from pdd_agent.integrations.feishu.config import load_feishu_config
@@ -1087,8 +1088,8 @@ def _schedule_feishu_pdd_upload_log(
             product_id=product_id,
             product_link=raw_link,
             product_link_method=str(capture.get("product_link_method") or ""),
-            list_status=str(capture.get("list_status") or "销售中"),
-            created_at_raw=str(capture.get("matched_created_at") or ""),
+            publish_start=submitted_at,
+            publish_end=verified_at,
             verified_at=verified_at,
         )
     except Exception as exc:
@@ -1411,6 +1412,7 @@ def upload_one_listing(
                 merchant_code=pcode,
                 capture=capture,
                 verified_at=verified_at,
+                submitted_at=submitted_at,
             )
             return result
         if capture["status"] == "rejected":

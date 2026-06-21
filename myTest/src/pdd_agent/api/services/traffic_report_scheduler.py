@@ -25,6 +25,38 @@ class TrafficReportScheduler:
         self._stop = asyncio.Event()
         self._task: asyncio.Task | None = None
         self._last_run_date: date | None = None
+        self._schedule_track_date: date | None = None
+        self._seen_before_target_today = False
+
+    @property
+    def is_running(self) -> bool:
+        return self._task is not None and not self._task.done()
+
+    @property
+    def last_run_date(self) -> date | None:
+        return self._last_run_date
+
+    def _schedule_target(self, now: datetime, marketing_cfg) -> datetime:
+        return now.replace(
+            hour=int(marketing_cfg.traffic_report_schedule_hour),
+            minute=int(marketing_cfg.traffic_report_schedule_minute),
+            second=0,
+            microsecond=0,
+        )
+
+    def _init_schedule_tracking(self) -> None:
+        """初始化当日调度跟踪，避免重启后误触发「补跑」。"""
+        cfg = load_feishu_config()
+        marketing_cfg = cfg.pdd_marketing_log
+        now = datetime.now(TZ)
+        self._schedule_track_date = now.date()
+        target = self._schedule_target(now, marketing_cfg)
+        self._seen_before_target_today = now < target
+
+    def reset_last_run_date(self) -> None:
+        """配置变更后允许当天按新时间再次调度。"""
+        self._last_run_date = None
+        self._init_schedule_tracking()
 
     def start(self) -> None:
         if self._task and not self._task.done():
@@ -32,6 +64,7 @@ class TrafficReportScheduler:
         if not is_database_available():
             logger.warning("traffic report scheduler disabled: database unavailable")
             return
+        self._init_schedule_tracking()
         self._task = asyncio.create_task(self._loop())
         logger.info("traffic report scheduler started")
 
@@ -56,15 +89,24 @@ class TrafficReportScheduler:
             return
 
         now = datetime.now(TZ)
-        target = now.replace(
-            hour=int(marketing_cfg.traffic_report_schedule_hour),
-            minute=int(marketing_cfg.traffic_report_schedule_minute),
-            second=0,
-            microsecond=0,
-        )
+        if self._schedule_track_date != now.date():
+            self._schedule_track_date = now.date()
+            self._seen_before_target_today = False
+
+        target = self._schedule_target(now, marketing_cfg)
         if now < target:
+            self._seen_before_target_today = True
             return
         if self._last_run_date == now.date():
+            return
+        if not self._seen_before_target_today:
+            logger.info(
+                "traffic report scheduler skip catch-up after restart for %s (schedule=%02d:%02d)",
+                now.date().isoformat(),
+                int(marketing_cfg.traffic_report_schedule_hour),
+                int(marketing_cfg.traffic_report_schedule_minute),
+            )
+            self._last_run_date = now.date()
             return
 
         settings = load_yaml_settings()
@@ -139,3 +181,10 @@ class TrafficReportScheduler:
             )
             count += 1
         return count
+
+
+traffic_report_scheduler = TrafficReportScheduler()
+
+
+def get_traffic_report_scheduler() -> TrafficReportScheduler:
+    return traffic_report_scheduler

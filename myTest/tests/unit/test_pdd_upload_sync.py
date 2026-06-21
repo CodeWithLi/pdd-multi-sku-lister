@@ -2,29 +2,43 @@
 
 from __future__ import annotations
 
+import pytest
 from datetime import datetime
 from typing import Any
 
 from pdd_agent.integrations.feishu.config import FeishuConfig, PddUploadLogConfig
 from pdd_agent.integrations.feishu.pdd_upload_sync import (
+    build_pdd_upload_failure_log_fields,
     build_pdd_upload_log_fields,
     extract_product_ids_for_limited_time_status,
     format_pdd_upload_log_context,
     map_activity_register_status_to_feishu,
     map_limited_time_status_to_feishu,
+    map_listing_failure_record_type,
     map_promotion_status_to_feishu,
     map_pdd_upload_status_to_feishu,
     push_pdd_upload_activity_register_status,
+    push_pdd_upload_failure_log,
     push_pdd_upload_limited_time_status,
     push_pdd_upload_log,
     push_pdd_upload_promotion_status,
     resolve_activity_register_field_name,
+    _format_brief_listing_failure_reason,
+    parse_listing_label_from_text,
 )
 from pdd_agent.skills.listing.goods_list_capture import (
     extract_list_status_from_text,
     is_plain_goods_template_link,
     parse_goods_list_row_meta,
 )
+
+
+@pytest.fixture(autouse=True)
+def _skip_feishu_ensure_fields(monkeypatch):
+    from pdd_agent.integrations.feishu import pdd_upload_sync
+
+    monkeypatch.setattr(pdd_upload_sync, "_ensure_pdd_upload_table_fields", lambda *args, **kwargs: None)
+    monkeypatch.setattr(pdd_upload_sync, "_ensure_pdd_upload_failure_table_fields", lambda *args, **kwargs: None)
 
 
 def test_parse_goods_list_row_meta_extracts_created_at_and_status():
@@ -63,7 +77,7 @@ def test_map_pdd_upload_status_to_feishu():
     assert map_pdd_upload_status_to_feishu("已上架") == "已上架"
 
 
-def test_build_pdd_upload_log_fields_maps_seven_columns():
+def test_build_pdd_upload_log_fields_maps_taobao_columns():
     cfg = FeishuConfig(
         app_id="x",
         app_secret="y",
@@ -73,7 +87,8 @@ def test_build_pdd_upload_log_fields_maps_seven_columns():
             table_id="tbldwkpLuvBVwc9",
         ),
     )
-    verified_at = datetime(2026, 6, 16, 13, 25, 0)
+    verified_at = datetime(2026, 6, 20, 10, 32, 0)
+    publish_start = datetime(2026, 6, 20, 10, 29, 0)
     fields = build_pdd_upload_log_fields(
         config=cfg,
         title="可爱草莓软糯造型毛绒零钱包",
@@ -83,17 +98,21 @@ def test_build_pdd_upload_log_fields_maps_seven_columns():
             "https://mobile.yangkeduo.com/goods.html?goods_id=966965874378"
             "&refer_page_app=mms&refer_page_name=mms_goods"
         ),
-        list_status="销售中",
-        created_at_raw="2026-06-16 13:21",
+        account_name="测试店铺",
+        publish_start=publish_start,
+        publish_end=verified_at,
         verified_at=verified_at,
     )
 
-    assert fields["宝贝标题"] == "可爱草莓软糯造型毛绒零钱包"
+    assert fields["标题"] == "可爱草莓软糯造型毛绒零钱包"
     assert fields["商品编码"] == "BD737A"
-    assert fields["状态"] == "已上架"
+    assert fields["店铺名称"] == "测试店铺"
     assert fields["商品ID"] == "966965874378"
     assert isinstance(fields["日期"], int)
-    assert isinstance(fields["创建时间"], int)
+    assert isinstance(fields["发布开始时间"], int)
+    assert isinstance(fields["发布结束时间"], int)
+    assert fields["耗时秒"] == 180.0
+    assert fields["商品链接"]["text"] == "查看商品"
     assert "966965874378" in fields["商品链接"]["link"]
 
 
@@ -110,8 +129,6 @@ def test_build_pdd_upload_log_fields_skips_plain_template_link():
         merchant_code="BD737A",
         product_id="966965874378",
         product_link="https://mobile.yangkeduo.com/goods.html?goods_id=966965874378",
-        list_status="销售中",
-        created_at_raw="2026-06-16 13:21",
         verified_at=datetime(2026, 6, 16, 13, 25, 0),
     )
     assert "商品链接" not in fields
@@ -482,3 +499,138 @@ def test_push_pdd_upload_promotion_status_updates_field(monkeypatch):
     )
     assert fail.get("status") == "失败"
     assert map_promotion_status_to_feishu(success=False) == "失败"
+
+
+def test_format_brief_listing_failure_reason_is_short():
+    text = _format_brief_listing_failure_reason(
+        listing_label="BD736/第三套图/BD736A",
+        reason_code="preflight_catalog",
+        error="very long\nstack trace should not appear",
+        record_type="跳过",
+    )
+    assert text.startswith("跳过: BD736/第三套图/BD736A:")
+    assert "stack trace" not in text
+
+
+def test_schedule_feishu_listing_result_log_dedupes_one_failure(monkeypatch):
+    from pdd_agent.api.services import task_runner
+    from pdd_agent.integrations.feishu import pdd_upload_sync
+
+    captured: list[dict] = []
+
+    def fake_schedule_failure(**kwargs):
+        captured.append(kwargs)
+        return {"created": True}
+
+    monkeypatch.setattr(pdd_upload_sync, "schedule_pdd_upload_failure_log", fake_schedule_failure)
+
+    task_runner._schedule_feishu_listing_result_log(
+        account_id="store_A",
+        product_codes=["BD722"],
+        result={
+            "results": [{"summary": "无有效上架单元"}],
+            "preflight": {
+                "issues": [
+                    {
+                        "level": "error",
+                        "listing_label": "BD722B/第一套图",
+                        "message": "槽位对齐失败：兄弟款规格数量不一致",
+                    }
+                ]
+            },
+            "errors": ["[BD722B/第一套图] 槽位对齐失败：兄弟款规格数量不一致"],
+        },
+    )
+
+    assert len(captured) == 1
+    assert captured[0]["merchant_code"] == "BD722B"
+    assert captured[0]["listing_label"] == "BD722B/第一套图"
+    assert captured[0]["reason_code"] == "slot_alignment_failed"
+
+
+def test_map_listing_failure_record_type_skip_vs_fail():
+    assert map_listing_failure_record_type(reason_code="slot_alignment_failed", retryable=True) == "跳过"
+    assert map_listing_failure_record_type(status="failed", reason_code="submit_blocked") == "失败"
+
+
+def test_build_pdd_upload_failure_log_fields():
+    cfg = FeishuConfig(
+        app_id="x",
+        app_secret="y",
+        bitable_app_token="z",
+        pdd_upload_log=PddUploadLogConfig(enabled=True),
+    )
+    start = datetime(2026, 6, 20, 10, 28, 0)
+    end = datetime(2026, 6, 20, 10, 29, 6)
+    fields = build_pdd_upload_failure_log_fields(
+        config=cfg,
+        merchant_code="BD736A",
+        account_name="store_A",
+        record_type="跳过",
+        failure_reason="BD736/第三套图/BD736A: 图片文件不存在或无法读取",
+        publish_start=start,
+        publish_end=end,
+    )
+    assert fields["商品编码"] == "BD736A"
+    assert fields["记录类型"] == "跳过"
+    assert "图片文件" in fields["失败原因"]
+    assert fields["耗时秒"] == 66.0
+
+
+def test_push_pdd_upload_log_skips_without_product_id():
+    result = push_pdd_upload_log(
+        account_id="store_A",
+        title="t",
+        merchant_code="BD736A",
+        product_id="",
+        listing_result="失败",
+        config=FeishuConfig(
+            app_id="x",
+            app_secret="y",
+            bitable_app_token="z",
+            pdd_upload_log=PddUploadLogConfig(enabled=True, table_id="tbl"),
+        ),
+    )
+    assert result.get("skipped") is True
+
+
+def test_parse_listing_label_from_text():
+    label, code = parse_listing_label_from_text("[BD722B/第一套图] 槽位对齐失败")
+    assert label == "BD722B/第一套图"
+    assert code == "BD722B"
+
+
+def test_push_pdd_upload_failure_log_without_merchant_code(monkeypatch):
+    from pdd_agent.integrations.feishu import pdd_upload_sync
+
+    class FakeClient:
+        def __init__(self, config):
+            self.config = config
+
+    monkeypatch.setattr(pdd_upload_sync, "FeishuClient", FakeClient)
+    monkeypatch.setattr(pdd_upload_sync, "batch_create_records", lambda *args, **kwargs: ["rec_fail"])
+    monkeypatch.setattr(
+        pdd_upload_sync,
+        "resolve_pdd_upload_failure_table_id",
+        lambda cfg, client, save_table_id=True, create_if_missing=False: ("tbl_fail", "test"),
+    )
+    monkeypatch.setattr(
+        pdd_upload_sync,
+        "map_fields_to_table_names",
+        lambda client, app_token, table_id, fields: fields,
+    )
+
+    result = push_pdd_upload_failure_log(
+        account_id="store_A",
+        account_name="测试店",
+        message="[BD722B/第一套图] 槽位对齐失败：兄弟款规格数量不一致",
+        reason_code="slot_alignment_failed",
+        config=FeishuConfig(
+            app_id="x",
+            app_secret="y",
+            bitable_app_token="z",
+            pdd_upload_log=PddUploadLogConfig(enabled=True, failure_table_id="tbl_fail"),
+        ),
+    )
+    assert result.get("created") is True
+    assert result["fields"]["商品编码"] == "BD722B"

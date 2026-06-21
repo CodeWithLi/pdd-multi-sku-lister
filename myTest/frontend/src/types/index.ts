@@ -647,3 +647,31 @@ export interface FeishuBitableHealth {
   default_table_name?: string
   user_token_ready?: boolean
 }
+
+export interface TrafficReportSchedule {
+  enabled: boolean
+  traffic_report_enabled: boolean
+  schedule_hour: number
+  schedule_minute: number
+  schedule_time: string
+  timezone: string
+  account_ids: string[]
+  table_name: string
+  scheduler_running: boolean
+  database_available: boolean
+  last_run_date: string
+  description: string
+}
+
+export interface TrafficReportScheduleUpdate {
+  traffic_report_enabled?: boolean
+  schedule_hour?: number
+  schedule_minute?: number
+  account_ids?: string[]
+}
+
+export interface TrafficReportScheduleTriggerResult {
+  enqueued: number
+  account_ids: string[]
+  message: string
+}

@@ -21,15 +21,16 @@ from pdd_agent.api.routes.pipeline_issues import router as pipeline_issues_route
 from pdd_agent.api.routes.queue import router as queue_router
 from pdd_agent.api.routes.runs import router as runs_router
 from pdd_agent.api.routes.tasks import router as tasks_router
+from pdd_agent.api.routes.traffic_report_schedule import router as traffic_report_schedule_router
 from pdd_agent.core.config import load_yaml_settings
 from pdd_agent.core.logging import get_logger, setup_logging
 from pdd_agent.db import database_status, init_database
+from pdd_agent.api.services.traffic_report_scheduler import get_traffic_report_scheduler
 from pdd_agent.api.services.task_queue import TaskQueueWorker
-from pdd_agent.api.services.traffic_report_scheduler import TrafficReportScheduler
 
 logger = get_logger(__name__)
 worker = TaskQueueWorker()
-traffic_report_scheduler = TrafficReportScheduler()
+traffic_report_scheduler = get_traffic_report_scheduler()
 
 
 @asynccontextmanager
@@ -44,10 +45,28 @@ async def lifespan(app: FastAPI):
     traffic_report_scheduler.start()
     try:
         from pdd_agent.integrations.feishu.traffic_report_sync import ensure_pdd_marketing_log_table_ready
+        from pdd_agent.integrations.feishu.pdd_upload_sync import ensure_pdd_upload_log_tables_ready
 
-        await asyncio.to_thread(ensure_pdd_marketing_log_table_ready)
+        marketing_ready = await asyncio.to_thread(ensure_pdd_marketing_log_table_ready)
+        upload_ready = await asyncio.to_thread(ensure_pdd_upload_log_tables_ready)
+        if upload_ready.get("ready"):
+            logger.info(
+                "pdd upload log tables ready success=%s(%s) failure=%s(%s)",
+                upload_ready.get("success_table_id"),
+                upload_ready.get("success_resolve_method"),
+                upload_ready.get("failure_table_id"),
+                upload_ready.get("failure_resolve_method"),
+            )
+            print(
+                "[feishu] PDD发布日志表已就绪："
+                f"{upload_ready.get('success_table_id')} / "
+                f"{upload_ready.get('failure_table_id')}",
+                flush=True,
+            )
+        elif not upload_ready.get("skipped"):
+            logger.error("pdd upload log tables not ready: %s", upload_ready)
     except Exception:
-        logger.exception("ensure pdd marketing log fields on startup failed")
+        logger.exception("ensure pdd feishu tables on startup failed")
     logger.info("PDD Agent API started")
     yield
     await traffic_report_scheduler.stop()
@@ -85,6 +104,7 @@ def create_app() -> FastAPI:
     app.include_router(config_router, prefix="/api")
     app.include_router(catalog_router, prefix="/api")
     app.include_router(tasks_router, prefix="/api")
+    app.include_router(traffic_report_schedule_router, prefix="/api")
     app.include_router(pipelines_router, prefix="/api")
     app.include_router(pipeline_issues_router, prefix="/api")
     app.include_router(listed_folders_router, prefix="/api")
