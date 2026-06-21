@@ -7,12 +7,7 @@ import uuid
 from datetime import datetime, timedelta
 from typing import Any
 
-from pdd_agent.api.services.task_runner import (
-    create_campaign_run,
-    create_listing_run,
-    create_traffic_run,
-    ensure_feishu_logged_for_terminal_run,
-)
+from pdd_agent.api.services.task_runner import create_campaign_run, create_listing_run, create_traffic_run
 from pdd_agent.core.config import load_yaml_settings
 from pdd_agent.core.logging import get_logger
 from pdd_agent.db.repositories import (
@@ -155,6 +150,8 @@ def _should_skip_campaign_for_traffic(result: dict[str, Any] | None, error: str 
             "需等待1天",
             "等待1天",
             "1天后再试",
+            "商品需过24h后才可以报活动",
+            "24h后才可以报活动",
             "部分商品不可报名活动",
             "不可报名活动",
         )
@@ -1386,23 +1383,6 @@ def _reconcile_stuck_pipeline_row(row) -> Any:
         error = str(record.message or "").strip() or default_error
         if run_status == RunStatus.CANCELED:
             error = error or "子任务已取消"
-        try:
-            ensure_feishu_logged_for_terminal_run(
-                run_id=run_id,
-                agent=str(record.agent.value if hasattr(record.agent, "value") else record.agent),
-                account_id=row.account_id,
-                result=record.result if isinstance(record.result, dict) else {},
-                error=error,
-                run_status=RunStatus.CANCELED if run_status == RunStatus.CANCELED else RunStatus.FAILED,
-                pipeline_row=row,
-            )
-        except Exception:
-            logger.warning(
-                "ensure feishu for reconciled run failed pipeline=%s run=%s",
-                row.pipeline_id,
-                run_id,
-                exc_info=True,
-            )
         if (
             run_id == _pipeline_limited_time_run_id(row)
             and run_status == RunStatus.FAILED

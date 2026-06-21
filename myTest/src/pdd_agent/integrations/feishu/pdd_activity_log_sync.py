@@ -69,6 +69,16 @@ def _brief_activity_failure_reason(error: str) -> str:
     text = str(error or "").strip()
     if not text:
         return ""
+    try:
+        from pdd_agent.skills.campaign.marketing_activities import (
+            ACTIVITY_TIME_REQUIREMENT_FEISHU_MESSAGE,
+            is_activity_time_requirement_text,
+        )
+
+        if is_activity_time_requirement_text(text) or text == ACTIVITY_TIME_REQUIREMENT_FEISHU_MESSAGE:
+            return ACTIVITY_TIME_REQUIREMENT_FEISHU_MESSAGE
+    except Exception:
+        pass
     if "中文解释:" in text:
         match = re.search(r"中文解释:\s*(.+?)(?:\n|$)", text)
         if match:

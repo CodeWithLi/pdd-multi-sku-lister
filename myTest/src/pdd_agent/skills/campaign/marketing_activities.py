@@ -2182,11 +2182,24 @@ def _modal_eligible_product_ids(modal, product_ids: list[str]) -> list[str]:
 
 _TIME_REQUIREMENT_MARKERS: tuple[str, ...] = (
     "需等待1天",
+    "需等待1天后",
     "等待1天",
     "1天后再试",
     "等待该时间",
     "近期有更新规格",
+    "近期有过新建规格",
+    "新建规格",
+    "修改时间满1天",
 )
+
+ACTIVITY_TIME_REQUIREMENT_FEISHU_MESSAGE = "商品需过24h后才可以报活动"
+
+
+def is_activity_time_requirement_text(text: str) -> bool:
+    normalized = str(text or "").strip()
+    if not normalized:
+        return False
+    return any(marker in normalized for marker in _TIME_REQUIREMENT_MARKERS)
 
 
 def _analyze_modal_product_eligibility(modal, product_ids: list[str]) -> dict[str, Any]:
@@ -2324,14 +2337,10 @@ def _format_modal_eligibility_failure(eligibility: dict[str, Any], product_ids: 
         item for item in (eligibility.get("time_blocked") or []) if isinstance(item, dict)
     ]
     if time_blocked:
-        parts = [
-            f"{item.get('product_id')}（{item.get('reason_text') or '需等待1天'}）"
-            for item in time_blocked
-        ]
         return {
             "status": "failed",
             "step": "product_time_requirement_not_met",
-            "error": "当前商品未满足时间要求，已取消报名：" + "；".join(parts),
+            "error": ACTIVITY_TIME_REQUIREMENT_FEISHU_MESSAGE,
             "eligibility": eligibility,
         }
 

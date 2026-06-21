@@ -418,12 +418,12 @@ def test_is_campaign_time_requirement_failure_detects_step():
             {
                 "status": "failed",
                 "step": CAMPAIGN_TIME_REQUIREMENT_STEP,
-                "error": "当前商品未满足时间要求，已取消报名：123（需等待1天）",
+                "error": "商品需过24h后才可以报活动",
             }
         ]
     }
     assert _is_campaign_time_requirement_failure(result, "")
-    assert "未满足时间要求" in _campaign_time_requirement_message(result, "")
+    assert _campaign_time_requirement_message(result, "") == "商品需过24h后才可以报活动"
 
 
 def test_on_campaign_finished_skips_to_traffic_when_time_requirement_not_met():

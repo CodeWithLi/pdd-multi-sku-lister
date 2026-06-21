@@ -52,8 +52,8 @@ def test_format_time_requirement_failure():
     }
     result = _format_modal_eligibility_failure(eligibility, ["965182969751", "966631777744"])
     assert result["step"] == "product_time_requirement_not_met"
-    assert "未满足时间要求" in result["error"]
-    assert "966631777744" in result["error"]
+    assert result["error"] == "商品需过24h后才可以报活动"
+    assert "未满足时间要求" not in result["error"]
 
 
 def test_format_partial_ineligible_failure():

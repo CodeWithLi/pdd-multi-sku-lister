@@ -22,12 +22,12 @@ def test_summarize_campaign_message_time_requirement():
             {
                 "status": "failed",
                 "step": "product_time_requirement_not_met",
-                "error": "当前商品未满足时间要求，已取消报名：968599179476（需等待1天）",
+                "error": "商品需过24h后才可以报活动",
             }
         ]
     }
     msg = _summarize_campaign_message(result)
-    assert "未满足时间要求" in msg
+    assert msg == "商品需过24h后才可以报活动"
 
 
 def test_extract_per_product_activity_errors_from_eligibility():
@@ -36,7 +36,7 @@ def test_extract_per_product_activity_errors_from_eligibility():
             {
                 "status": "failed",
                 "step": "product_time_requirement_not_met",
-                "error": "当前商品未满足时间要求，已取消报名：968599179476（需等待1天）",
+                "error": "商品需过24h后才可以报活动",
                 "eligibility": {
                     "time_blocked": [
                         {"product_id": "968599179476", "reason_text": "需等待1天"},
@@ -46,7 +46,7 @@ def test_extract_per_product_activity_errors_from_eligibility():
         ]
     }
     errors = _extract_per_product_activity_errors(result, fallback_error="fallback")
-    assert errors["968599179476"] == "当前商品未满足时间要求：需等待1天"
+    assert errors["968599179476"] == "商品需过24h后才可以报活动"
 
 
 def test_ensure_feishu_logged_for_terminal_run_limited_time(monkeypatch):
@@ -76,3 +76,35 @@ def test_ensure_feishu_logged_for_terminal_run_limited_time(monkeypatch):
     assert captured
     assert captured[0]["result"]["error"] == "Target page closed"
     assert captured[0]["status"] == RunStatus.FAILED
+
+
+def test_ensure_feishu_logged_for_terminal_run_is_idempotent(monkeypatch):
+    from pdd_agent.api.services import task_runner as tr
+
+    tr._feishu_terminal_logged_run_ids.clear()
+    calls: list[str] = []
+
+    def fake_schedule(**kwargs):
+        calls.append(str(kwargs.get("run_id") or ""))
+
+    monkeypatch.setattr(
+        "pdd_agent.api.services.task_runner._schedule_feishu_limited_time_status",
+        fake_schedule,
+    )
+    monkeypatch.setattr(
+        "pdd_agent.api.services.task_runner.TaskRunStore",
+        lambda: type("S", (), {"load": lambda self, _rid: None})(),
+    )
+
+    kwargs = {
+        "run_id": "run_once_dedupe_test",
+        "agent": "campaign",
+        "account_id": "store_A",
+        "payload": {"campaign_type": "limited_time_setup", "pdd_product_ids": ["1"]},
+        "result": {"error": "failed"},
+        "error": "failed",
+        "run_status": RunStatus.FAILED,
+    }
+    ensure_feishu_logged_for_terminal_run(**kwargs)
+    ensure_feishu_logged_for_terminal_run(**kwargs)
+    assert calls == ["run_once_dedupe_test"]

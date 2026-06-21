@@ -259,14 +259,6 @@ class TaskQueueWorker:
                 return
             success = bool(record and record.status == RunStatus.SUCCESS)
             error = "" if success else _extract_queue_task_error(result)
-            if not success:
-                _ensure_terminal_feishu_log(
-                    row,
-                    payload=payload,
-                    result=result if isinstance(result, dict) else {},
-                    error=error,
-                    run_status=record.status if record else RunStatus.FAILED,
-                )
             finish_queue_task(row.task_id, success=success, error=error)
             if pipeline_id:
                 from pdd_agent.api.services.pipeline_service import on_queue_task_finished
