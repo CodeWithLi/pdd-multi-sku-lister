@@ -746,8 +746,6 @@ def _schedule_feishu_listing_result_log(
             continue
 
         if status in {"failed", "retryable"} or item.get("error") or item.get("reason"):
-            if item.get("feishu_failure_logged"):
-                continue
             _queue_failure(
                 listing_label=listing_label,
                 merchant_code=merchant_code,
@@ -796,6 +794,8 @@ def _schedule_feishu_listing_result_log(
             reason_code = "preflight_no_detail"
         elif "图片" in message and ("不存在" in message or "无法" in message):
             reason_code = "image_file_missing"
+        elif "飞书" in message and "没数据" in message:
+            reason_code = "feishu_product_catalog_missing"
         else:
             reason_code = "preflight_catalog"
         _queue_failure(
@@ -823,27 +823,43 @@ def _schedule_feishu_listing_result_log(
         _queue_failure(message=run_error, reason_code="unexpected_error", priority=1)
 
     has_unit_failures = any(int(row.get("priority") or 0) >= 2 for row in failures.values())
-    for row in failures.values():
-        if has_unit_failures and str(row.get("reason_code") or "") == "no_valid_units":
-            continue
-        schedule_pdd_upload_failure_log(
-            account_id=account_id,
-            account_name=account_name,
-            listing_label=str(row.get("listing_label") or ""),
-            merchant_code=str(row.get("merchant_code") or ""),
-            record_type=map_listing_failure_record_type(
-                status=str(row.get("status") or ""),
-                reason_code=str(row.get("reason_code") or ""),
-                retryable=bool(row.get("retryable")),
-                legacy_status=str(row.get("legacy_status") or ""),
-            ),
-            reason_code=str(row.get("reason_code") or ""),
-            error=str(row.get("error") or ""),
-            message=str(row.get("message") or ""),
-            publish_start=publish_start,
-            publish_end=publish_end,
-            duration_seconds=duration_seconds,
-        )
+    rows = list(failures.values())
+    if has_unit_failures:
+        rows = [row for row in rows if str(row.get("reason_code") or "") != "no_valid_units"]
+    if not rows:
+        return
+
+    primary = max(
+        rows,
+        key=lambda row: (
+            int(row.get("priority") or 0),
+            1 if str(row.get("status") or "").strip().lower() == "failed" else 0,
+            len(str(row.get("message") or row.get("error") or "")),
+        ),
+    )
+    extra_count = max(0, len(rows) - 1)
+    message = str(primary.get("message") or primary.get("error") or "").strip()
+    if extra_count > 0 and message:
+        message = f"{message}（另{extra_count}项失败）"
+
+    schedule_pdd_upload_failure_log(
+        account_id=account_id,
+        account_name=account_name,
+        listing_label="",
+        merchant_code="",
+        record_type=map_listing_failure_record_type(
+            status=str(primary.get("status") or ""),
+            reason_code=str(primary.get("reason_code") or ""),
+            retryable=bool(primary.get("retryable")),
+            legacy_status=str(primary.get("legacy_status") or ""),
+        ),
+        reason_code=str(primary.get("reason_code") or ""),
+        error=str(primary.get("error") or ""),
+        message=message,
+        publish_start=publish_start,
+        publish_end=publish_end,
+        duration_seconds=duration_seconds,
+    )
 
 
 def _activity_registration_summary_line(item: dict[str, Any]) -> str:

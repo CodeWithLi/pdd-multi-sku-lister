@@ -239,7 +239,7 @@ def schedule_feishu_product_catalog_missing_logs(
     product_codes: list[str] | None = None,
     config: FeishuConfig | None = None,
 ) -> int:
-    """飞书商品表缺数据时写入 PDD发布日志表(失败)。"""
+    """飞书商品表缺数据时写入 PDD发布日志表(失败)（每店铺每次仅一条）。"""
     cfg = config or load_feishu_config()
     if not cfg.pdd_upload_log.enabled:
         return 0
@@ -259,19 +259,16 @@ def schedule_feishu_product_catalog_missing_logs(
     from pdd_agent.integrations.feishu.pdd_upload_sync import schedule_pdd_upload_failure_log
 
     table_name = str(cfg.pdd_product_catalog.table_name or "拼多多所有商品").strip()
-    logged = 0
-    for code in missing:
-        message = feishu_product_catalog_missing_message(table_name=table_name, product_code=code)
-        schedule_pdd_upload_failure_log(
-            account_id=account_id,
-            listing_label=_listing_label_for_code(units, code),
-            merchant_code=code,
-            reason_code=FEISHU_PRODUCT_CATALOG_MISSING_REASON,
-            failure_reason=message,
-            message=message,
-        )
-        logged += 1
-    return logged
+    message = feishu_product_catalog_missing_message(table_name=table_name)
+    schedule_pdd_upload_failure_log(
+        account_id=account_id,
+        listing_label="",
+        merchant_code="",
+        reason_code=FEISHU_PRODUCT_CATALOG_MISSING_REASON,
+        failure_reason=message,
+        message=message,
+    )
+    return 1
 
 
 def clear_pdd_product_catalog_cache() -> None:

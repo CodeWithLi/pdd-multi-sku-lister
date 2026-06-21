@@ -568,8 +568,8 @@ def test_schedule_feishu_listing_result_log_dedupes_one_failure(monkeypatch):
     )
 
     assert len(captured) == 1
-    assert captured[0]["merchant_code"] == "BD722B"
-    assert captured[0]["listing_label"] == "BD722B/第一套图"
+    assert captured[0]["merchant_code"] == ""
+    assert captured[0]["listing_label"] == ""
     assert captured[0]["reason_code"] == "slot_alignment_failed"
 
 
@@ -623,17 +623,12 @@ def test_schedule_feishu_listing_result_log_records_post_submit_failures(monkeyp
         },
     )
 
-    assert len(captured) == 2
+    assert len(captured) == 1
     assert captured[0]["reason_code"] == "rejected_after_publish"
-    assert captured[1]["reason_code"] == "published_but_not_found_in_on_sale_or_rejected"
+    assert "另1项失败" in captured[0]["message"]
     assert map_listing_failure_record_type(
         reason_code=captured[0]["reason_code"],
         status="failed",
-    ) == "失败"
-    assert map_listing_failure_record_type(
-        reason_code=captured[1]["reason_code"],
-        status="retryable",
-        retryable=True,
     ) == "失败"
 
 

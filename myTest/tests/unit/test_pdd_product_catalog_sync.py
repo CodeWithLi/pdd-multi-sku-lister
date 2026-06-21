@@ -109,10 +109,10 @@ def test_schedule_feishu_product_catalog_missing_logs_writes_failure_rows(monkey
         units=[unit],
         config=cfg,
     )
-    assert logged == 2
-    assert captured[0]["failure_reason"] == "飞书拼多多所有商品没数据(BD716A)"
+    assert logged == 1
+    assert captured[0]["failure_reason"] == "飞书拼多多所有商品没数据"
     assert captured[0]["reason_code"] == "feishu_product_catalog_missing"
-    assert captured[1]["failure_reason"] == "飞书拼多多所有商品没数据(YKL001N)"
+    assert captured[0]["merchant_code"] == ""
 
 
 def test_load_unified_pdd_product_catalog_falls_back_to_excel(monkeypatch, tmp_path):

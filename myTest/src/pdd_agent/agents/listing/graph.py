@@ -16,6 +16,8 @@ from pdd_agent.core.config import load_yaml_settings
 from pdd_agent.core.logging import get_logger
 from pdd_agent.db.repositories import get_account_config
 from pdd_agent.skills.listing.preflight import run_preflight
+
+from pdd_agent.domain.models import PreflightIssue
 from pdd_agent.skills.listing.upload import run_listing_uploads
 
 logger = get_logger(__name__)
@@ -38,6 +40,30 @@ async def preflight_node(state: ListingState) -> dict:
     )
     run_id = str(state.get("run_id") or "")
     account_id = str(state.get("account_id") or "")
+    if account_id:
+        try:
+            from pdd_agent.integrations.feishu.config import load_feishu_config
+            from pdd_agent.integrations.feishu.pdd_product_catalog_sync import (
+                feishu_product_catalog_missing_message,
+                find_missing_feishu_product_codes,
+                _collect_catalog_codes,
+            )
+
+            feishu_cfg = load_feishu_config()
+            if feishu_cfg.pdd_product_catalog.enabled and feishu_cfg.pdd_product_catalog.prefer_feishu:
+                catalog_codes = _collect_catalog_codes(units=report.units, extra_codes=codes)
+                missing, _ = find_missing_feishu_product_codes(catalog_codes, config=feishu_cfg)
+                if missing:
+                    table_name = str(feishu_cfg.pdd_product_catalog.table_name or "拼多多所有商品").strip()
+                    report.issues.append(
+                        PreflightIssue(
+                            level="error",
+                            message=feishu_product_catalog_missing_message(table_name=table_name),
+                            listing_label="",
+                        )
+                    )
+        except Exception:
+            logger.exception("check feishu product catalog missing failed")
     if run_id:
         from pdd_agent.api.services.listing_failure_log import record_preflight_issue
 
@@ -48,25 +74,6 @@ async def preflight_node(state: ListingState) -> dict:
                     account_id=account_id,
                     issue=issue,
                 )
-    if account_id:
-        try:
-            from pdd_agent.integrations.feishu.pdd_product_catalog_sync import (
-                schedule_feishu_product_catalog_missing_logs,
-            )
-
-            logged = schedule_feishu_product_catalog_missing_logs(
-                account_id=account_id,
-                units=report.units,
-                product_codes=codes,
-            )
-            if logged:
-                logger.info(
-                    "feishu product catalog missing logged count=%s account=%s",
-                    logged,
-                    account_id,
-                )
-        except Exception:
-            logger.exception("schedule feishu product catalog missing logs failed")
     logger.info(
         "preflight: units=%s ok=%s errors=%s",
         len(report.units),

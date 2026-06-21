@@ -1058,57 +1058,6 @@ def _attach_capture_fields(result: dict[str, Any], capture: dict[str, Any]) -> d
     return result
 
 
-def _schedule_feishu_pdd_upload_failure_log(
-    *,
-    account_id: str,
-    unit: ListingUnit,
-    title: str,
-    merchant_code: str,
-    reason_code: str,
-    message: str = "",
-    error: str = "",
-    status: str = "",
-    retryable: bool = False,
-    legacy_status: str = "",
-    submitted_at: datetime | None = None,
-) -> None:
-    try:
-        from pdd_agent.integrations.feishu.config import load_feishu_config
-        from pdd_agent.integrations.feishu.pdd_upload_sync import (
-            map_listing_failure_record_type,
-            schedule_pdd_upload_failure_log,
-        )
-
-        cfg = load_feishu_config()
-        if not cfg.pdd_upload_log.enabled:
-            return
-        verified_at = datetime.now()
-        schedule_pdd_upload_failure_log(
-            account_id=account_id,
-            listing_label=unit.listing_label,
-            merchant_code=merchant_code or unit.merchant_code,
-            record_type=map_listing_failure_record_type(
-                status=status,
-                reason_code=reason_code,
-                retryable=retryable,
-                legacy_status=legacy_status,
-            ),
-            reason_code=reason_code,
-            message=message or error,
-            error=error,
-            publish_start=submitted_at,
-            publish_end=verified_at,
-            duration_seconds=(
-                max(0.0, (verified_at - submitted_at).total_seconds()) if submitted_at else None
-            ),
-        )
-    except Exception as exc:
-        print(
-            f"[{account_id}] [{unit.listing_label}] 飞书 PDD 失败日志调度失败：{_safe_exc(exc)}",
-            flush=True,
-        )
-
-
 def _schedule_feishu_pdd_upload_log(
     *,
     account_id: str,
@@ -1494,19 +1443,6 @@ def upload_one_listing(
                 page_url=page_url,
             )
             result = _attach_capture_fields(result, capture)
-            _schedule_feishu_pdd_upload_failure_log(
-                account_id=account_id,
-                unit=unit,
-                title=listing_info.get("title", ""),
-                merchant_code=pcode,
-                reason_code="rejected_after_publish",
-                error=reject_error,
-                status="failed",
-                retryable=False,
-                legacy_status="failed",
-                submitted_at=submitted_at,
-            )
-            result["feishu_failure_logged"] = True
             return result
 
         not_found_error = str(capture.get("message") or "").strip() or (
@@ -1531,21 +1467,6 @@ def upload_one_listing(
             page_url=page_url,
         )
         result = _attach_capture_fields(result, capture)
-        _schedule_feishu_pdd_upload_failure_log(
-            account_id=account_id,
-            unit=unit,
-            title=listing_info.get("title", ""),
-            merchant_code=pcode,
-            reason_code=(
-                "published_but_not_found_in_on_sale_or_rejected" if ok else "submit_uncertain"
-            ),
-            error=not_found_error,
-            status="retryable",
-            retryable=True,
-            legacy_status="submit_uncertain",
-            submitted_at=submitted_at,
-        )
-        result["feishu_failure_logged"] = True
         return result
     return _finish_listing(
         run_id,
