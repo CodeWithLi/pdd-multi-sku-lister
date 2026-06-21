@@ -62,6 +62,12 @@ def _clear_beforeunload(page: DpPage) -> None:
         pass
 
 
+def _listing_unit_succeeded(item: dict[str, Any]) -> bool:
+    status = str(item.get("status") or "").strip().lower()
+    product_id = str(item.get("pdd_product_id") or "").strip()
+    return status in {"success", "listed"} and bool(product_id or status == "listed")
+
+
 def _listing_result(
     *,
     unit: ListingUnit,
@@ -1507,7 +1513,7 @@ def run_listing_uploads(
     run_id: str = "",
     slot_alignment_test: bool = False,
 ) -> list[dict[str, Any]]:
-    """顺序上架多个单元。"""
+    """顺序上架多个单元；任一单元失败即停止，不再继续后续套图。"""
     from pdd_agent.api.services.run_cancel import is_cancelled
 
     product_info = {
@@ -1539,6 +1545,12 @@ def run_listing_uploads(
             results.append(item_result)
             if run_id:
                 _persist_unit_progress(run_id, item_result)
+            if not _listing_unit_succeeded(item_result):
+                print(
+                    f"[{account_id}] [{unit.listing_label}] 上架失败，停止剩余单元",
+                    flush=True,
+                )
+                break
         except Exception as e:
             err = _safe_exc(e)
             reason, retryable = _classify_exception(e)
@@ -1569,6 +1581,9 @@ def run_listing_uploads(
             results.append(exc_result)
             if run_id:
                 _persist_unit_progress(run_id, exc_result)
-            if reason == "browser_manually_closed" or "连接已断开" in err or "disconnect" in err.lower():
-                break
+            print(
+                f"[{account_id}] [{unit.listing_label}] 上架异常，停止剩余单元",
+                flush=True,
+            )
+            break
     return results
