@@ -36,6 +36,7 @@ from pdd_agent.skills.listing.pdd_product_catalog import (
     load_pdd_product_catalog,
     lookup_catalog_spec,
     resolve_combo_pricing,
+    resolve_listing_price_scope,
 )
 from pdd_agent.skills.listing.listing_spec_pipeline import apply_unit_listing_specs
 
@@ -106,18 +107,21 @@ def is_image_set_dir(name: str) -> bool:
 
 
 def _load_product_catalog(settings: YamlSettings | None = None) -> dict[str, PddProductEntry]:
-    """上架唯一商品数据源：拼多多所有商品.xls（可在系统设置中改路径）。"""
+    """上架商品数据源：优先飞书「拼多多所有商品」，否则本地 Excel。"""
+    from pdd_agent.integrations.feishu.pdd_product_catalog_sync import load_unified_pdd_product_catalog
+
+    catalog = load_unified_pdd_product_catalog(settings=settings)
+    if catalog:
+        return catalog
+
     if settings is not None:
         path = settings.multi_spec.excel_path
         if path.is_file():
-            catalog = load_pdd_product_catalog(path)
-            if catalog:
-                return catalog
-        default_path = default_catalog_path()
-        if default_path.is_file() and default_path != path:
-            return load_pdd_product_catalog(default_path)
-        return {}
-    return get_pdd_product_catalog()
+            return load_pdd_product_catalog(path)
+    default_path = default_catalog_path()
+    if default_path.is_file():
+        return load_pdd_product_catalog(default_path)
+    return {}
 
 
 def _collect_images(folder: Path) -> list[Path]:
@@ -386,7 +390,17 @@ def _append_skus_from_previews(
         if model_code not in unit.model_codes:
             unit.model_codes.append(model_code)
 
-        inv, gp, sp = resolve_combo_pricing(style_code, model_code, catalog, defaults)
+        inv, gp, sp = resolve_combo_pricing(
+            style_code,
+            model_code,
+            catalog,
+            defaults,
+            listing_scope=resolve_listing_price_scope(
+                family_code=unit.family_code,
+                image_set=unit.image_set,
+                listing_label=unit.listing_label,
+            ),
+        )
         unit.skus.append(
             SkuCombo(
                 style_code=style_code,
@@ -539,7 +553,17 @@ def parse_legacy_listing_unit(
             if model_code not in unit.model_codes:
                 unit.model_codes.append(model_code)
 
-            inv, gp, sp = resolve_combo_pricing(style_code, model_code, catalog, defaults)
+            inv, gp, sp = resolve_combo_pricing(
+            style_code,
+            model_code,
+            catalog,
+            defaults,
+            listing_scope=resolve_listing_price_scope(
+                family_code=unit.family_code,
+                image_set=unit.image_set,
+                listing_label=unit.listing_label,
+            ),
+        )
             unit.skus.append(
                 SkuCombo(
                     style_code=style_code,

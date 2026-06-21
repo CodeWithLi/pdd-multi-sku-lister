@@ -171,7 +171,61 @@ def load_pdd_product_catalog(path: Path | None = None) -> dict[str, PddProductEn
 
 @lru_cache
 def get_pdd_product_catalog() -> dict[str, PddProductEntry]:
-    return load_pdd_product_catalog()
+    from pdd_agent.integrations.feishu.pdd_product_catalog_sync import load_unified_pdd_product_catalog
+
+    return load_unified_pdd_product_catalog()
+
+
+def resolve_listing_price_scope(*, family_code: str = "", image_set: str = "", listing_label: str = "") -> str:
+    family = str(family_code or "").strip()
+    image = str(image_set or "").strip()
+    if family and image:
+        return f"{family}/{image}"
+    return str(listing_label or "").strip()
+
+
+def resolve_combo_pricing(
+    style_code: str,
+    model_code: str,
+    catalog: dict[str, PddProductEntry],
+    defaults: dict[str, str],
+    *,
+    listing_scope: str = "",
+) -> tuple[str, str, str]:
+    """组合 SKU 库存/拼单价/单买价（定价来自商品表，上架时加同 scope 同定价共享浮动）。"""
+    from pdd_agent.skills.listing.listing_price_float import get_listing_price_float_registry
+
+    fallback_inv = defaults.get("inventory", "10")
+    fallback_gp = defaults.get("group_price", "199.9")
+    fallback_sp = defaults.get("single_price", "299.9")
+    registry = get_listing_price_float_registry()
+    scope = str(listing_scope or "").strip()
+
+    def _component_price(entry: PddProductEntry | None) -> float:
+        if not entry:
+            return 0.0
+        base = float(entry.price or 0.0)
+        if scope and registry.enabled:
+            return registry.effective_price(scope, base)
+        return base
+
+    style = catalog.get(_norm_code(style_code))
+    model_norm = _norm_code(model_code)
+    style_norm = _norm_code(style_code)
+    if model_norm == style_norm:
+        if not style:
+            return fallback_inv, fallback_gp, fallback_sp
+        group_price = _component_price(style)
+        return str(style.inventory or fallback_inv), _format_price(group_price), _format_price(group_price + 100)
+
+    model = catalog.get(model_norm)
+    if not style or not model:
+        return fallback_inv, fallback_gp, fallback_sp
+
+    inventory = min(style.inventory, model.inventory)
+    group_price = _component_price(style) + _component_price(model)
+    single_price = group_price + 100
+    return str(inventory), _format_price(group_price), _format_price(single_price)
 
 
 def catalog_has_code(code: str) -> bool:
@@ -186,36 +240,6 @@ def lookup_catalog_spec(code: str, catalog: dict[str, PddProductEntry] | None = 
     """颜色规格（等同原 sku+名称.xlsx 中的名称列）。"""
     entry = (catalog or get_pdd_product_catalog()).get(_norm_code(code))
     return entry.color_spec if entry else None
-
-
-def resolve_combo_pricing(
-    style_code: str,
-    model_code: str,
-    catalog: dict[str, PddProductEntry],
-    defaults: dict[str, str],
-) -> tuple[str, str, str]:
-    """组合 SKU 库存/拼单价/单买价（数据来自商品表）。"""
-    fallback_inv = defaults.get("inventory", "10")
-    fallback_gp = defaults.get("group_price", "199.9")
-    fallback_sp = defaults.get("single_price", "299.9")
-
-    style = catalog.get(_norm_code(style_code))
-    model_norm = _norm_code(model_code)
-    style_norm = _norm_code(style_code)
-    if model_norm == style_norm:
-        if not style:
-            return fallback_inv, fallback_gp, fallback_sp
-        group_price = style.price
-        return str(style.inventory or fallback_inv), _format_price(group_price), _format_price(group_price + 100)
-
-    model = catalog.get(model_norm)
-    if not style or not model:
-        return fallback_inv, fallback_gp, fallback_sp
-
-    inventory = min(style.inventory, model.inventory)
-    group_price = style.price + model.price
-    single_price = group_price + 100
-    return str(inventory), _format_price(group_price), _format_price(single_price)
 
 
 def is_weak_sub_category(category: str) -> bool:

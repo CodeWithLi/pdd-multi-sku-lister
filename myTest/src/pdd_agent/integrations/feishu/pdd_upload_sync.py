@@ -98,6 +98,7 @@ _FAIL_LISTING_REASON_CODES = frozenset(
         "price_fill_row_not_found",
         "price_fill_by_index_failed",
         "listed",
+        "feishu_product_catalog_missing",
     }
 )
 
@@ -135,6 +136,7 @@ FEISHU_FAILURE_REASON_LABELS: dict[str, str] = {
     "slot_alignment_failed": "兄弟款预览图张数不一致，请核对各款图数",
     "task_cancelled": "任务已被用户停止",
     "user_cancelled": "任务已被用户停止",
+    "feishu_product_catalog_missing": "飞书拼多多所有商品没数据",
 }
 
 

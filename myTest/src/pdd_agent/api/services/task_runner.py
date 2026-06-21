@@ -1074,6 +1074,20 @@ async def execute_listing(
     store.update_status(run_id, RunStatus.RUNNING)
     store.update_phase(run_id, TaskPhase.PREFLIGHT)
 
+    try:
+        from pdd_agent.integrations.feishu.config import load_feishu_config
+        from pdd_agent.skills.listing.listing_price_float import reset_listing_price_float_registry
+
+        feishu_cfg = load_feishu_config()
+        cat_cfg = feishu_cfg.pdd_product_catalog
+        reset_listing_price_float_registry(
+            float_min=cat_cfg.price_float_min,
+            float_max=cat_cfg.price_float_max,
+            enabled=cat_cfg.price_float_enabled,
+        )
+    except Exception:
+        logger.exception("reset listing price float registry failed run_id=%s", run_id)
+
     resolved_source = "local"
     assets_root_path: Path | None = None
     try:

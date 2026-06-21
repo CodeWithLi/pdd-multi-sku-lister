@@ -169,6 +169,23 @@ pdd_promotion_log:
     message: 备注
     failure_reason: 失败原因
     run_id: 运行ID
+pdd_product_catalog:
+  enabled: true
+  table_id: tblnJdjDAUx7xMRN
+  table_name: 拼多多所有商品
+  excel_relpath: data/assets/拼多多所有商品.xls
+  prefer_feishu: true
+  fallback_excel: true
+  cache_seconds: 300
+  price_float_enabled: true
+  price_float_min: 0
+  price_float_max: 5
+  field_names:
+    product_code: 商品编码
+    color_spec: 颜色规格
+    product_type: 商品类型
+    available_inventory: 可用库存
+    pricing: 定价
 pdd_price_compare:
   enabled: true
   table_id: tblDi8kC1f4WWRXe

@@ -236,6 +236,25 @@ def migrate_pdd_price_compare(
     return result
 
 
+@router.post("/migrate-pdd-product-catalog")
+def migrate_pdd_product_catalog(
+    dry_run: bool = Query(default=False, description="仅预览，不写入飞书"),
+):
+    """将 拼多多所有商品.xls 迁移到飞书「拼多多所有商品」表。"""
+    from pdd_agent.integrations.feishu.pdd_product_catalog_sync import migrate_pdd_product_catalog_xls_to_feishu
+
+    try:
+        result = migrate_pdd_product_catalog_xls_to_feishu(dry_run=dry_run)
+    except FeishuAPIError as exc:
+        raise HTTPException(
+            status_code=502,
+            detail={"message": str(exc), "code": exc.code},
+        ) from exc
+    if isinstance(result, dict) and result.get("failed"):
+        raise HTTPException(status_code=400, detail=result)
+    return result
+
+
 @router.get("/tables/{table_id}/records")
 def list_records(
     table_id: str,

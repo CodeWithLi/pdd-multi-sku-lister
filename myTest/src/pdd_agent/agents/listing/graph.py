@@ -48,6 +48,25 @@ async def preflight_node(state: ListingState) -> dict:
                     account_id=account_id,
                     issue=issue,
                 )
+    if account_id:
+        try:
+            from pdd_agent.integrations.feishu.pdd_product_catalog_sync import (
+                schedule_feishu_product_catalog_missing_logs,
+            )
+
+            logged = schedule_feishu_product_catalog_missing_logs(
+                account_id=account_id,
+                units=report.units,
+                product_codes=codes,
+            )
+            if logged:
+                logger.info(
+                    "feishu product catalog missing logged count=%s account=%s",
+                    logged,
+                    account_id,
+                )
+        except Exception:
+            logger.exception("schedule feishu product catalog missing logs failed")
     logger.info(
         "preflight: units=%s ok=%s errors=%s",
         len(report.units),

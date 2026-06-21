@@ -143,6 +143,33 @@ class PddPriceCompareConfig(BaseModel):
     field_names: PddPriceCompareFieldNames = Field(default_factory=PddPriceCompareFieldNames)
 
 
+class PddProductCatalogFieldNames(BaseModel):
+    """拼多多所有商品飞书表列名。"""
+
+    product_code: str = "商品编码"
+    color_spec: str = "颜色规格"
+    product_type: str = "商品类型"
+    available_inventory: str = "可用库存"
+    pricing: str = "定价"
+
+
+class PddProductCatalogConfig(BaseModel):
+    enabled: bool = Field(default=True, description="是否从飞书「拼多多所有商品」读取上架商品表")
+    table_id: str = Field(default="", description="拼多多所有商品 table_id")
+    table_name: str = Field(default="拼多多所有商品", description="上架商品飞书表名")
+    excel_relpath: str = Field(
+        default="data/assets/拼多多所有商品.xls",
+        description="本地商品表 Excel 路径",
+    )
+    prefer_feishu: bool = Field(default=True, description="运行时优先读飞书")
+    fallback_excel: bool = Field(default=True, description="飞书无数据时回退本地 Excel")
+    cache_seconds: int = Field(default=300, ge=0, le=3600, description="飞书商品表缓存秒数")
+    price_float_enabled: bool = Field(default=True, description="上架拼单价是否在定价基础上加随机浮动")
+    price_float_min: float = Field(default=0.0, ge=0, description="定价浮动下限（元）")
+    price_float_max: float = Field(default=5.0, ge=0, description="定价浮动上限（元）")
+    field_names: PddProductCatalogFieldNames = Field(default_factory=PddProductCatalogFieldNames)
+
+
 class PddActivityLogConfig(BaseModel):
     enabled: bool = Field(default=True, description="是否启用 PDD 活动日志表")
     table_id: str = Field(default="", description="PDD活动日志表 table_id")
@@ -402,6 +429,7 @@ class FeishuYamlConfig(BaseModel):
     pdd_marketing_log: PddMarketingLogConfig = Field(default_factory=PddMarketingLogConfig)
     pdd_promotion_log: PddPromotionLogConfig = Field(default_factory=PddPromotionLogConfig)
     pdd_price_compare: PddPriceCompareConfig = Field(default_factory=PddPriceCompareConfig)
+    pdd_product_catalog: PddProductCatalogConfig = Field(default_factory=PddProductCatalogConfig)
 
 
 class FeishuConfig(BaseModel):
@@ -429,6 +457,7 @@ class FeishuConfig(BaseModel):
     pdd_marketing_log: PddMarketingLogConfig = Field(default_factory=PddMarketingLogConfig)
     pdd_promotion_log: PddPromotionLogConfig = Field(default_factory=PddPromotionLogConfig)
     pdd_price_compare: PddPriceCompareConfig = Field(default_factory=PddPriceCompareConfig)
+    pdd_product_catalog: PddProductCatalogConfig = Field(default_factory=PddProductCatalogConfig)
 
 
 def load_feishu_config(path: Path | None = None) -> FeishuConfig:
@@ -468,6 +497,10 @@ def load_feishu_config(path: Path | None = None) -> FeishuConfig:
     if "pdd_promotion_log" in raw and isinstance(raw.get("pdd_promotion_log"), dict):
         pdd_promotion_log = PddPromotionLogConfig.model_validate(raw["pdd_promotion_log"])
 
+    pdd_product_catalog = yaml_cfg.pdd_product_catalog
+    if "pdd_product_catalog" in raw and isinstance(raw.get("pdd_product_catalog"), dict):
+        pdd_product_catalog = PddProductCatalogConfig.model_validate(raw["pdd_product_catalog"])
+
     return FeishuConfig(
         app_id=env.feishu_app_id or yaml_cfg.app_id,
         app_secret=env.feishu_app_secret or yaml_cfg.app_secret,
@@ -491,6 +524,7 @@ def load_feishu_config(path: Path | None = None) -> FeishuConfig:
         pdd_marketing_log=pdd_marketing_log,
         pdd_promotion_log=pdd_promotion_log,
         pdd_price_compare=pdd_price_compare,
+        pdd_product_catalog=pdd_product_catalog,
     )
 
 
@@ -592,6 +626,22 @@ def save_pdd_marketing_table_id_to_config(table_id: str, path: Path | None = Non
         marketing_raw = {}
     marketing_raw["table_id"] = table_id
     data["pdd_marketing_log"] = marketing_raw
+    cfg_path.parent.mkdir(parents=True, exist_ok=True)
+    with open(cfg_path, "w", encoding="utf-8") as f:
+        yaml.dump(data, f, allow_unicode=True, default_flow_style=False, sort_keys=False)
+
+
+def save_pdd_product_catalog_table_id_to_config(table_id: str, path: Path | None = None) -> None:
+    cfg_path = path or Path(os.getenv("FEISHU_CONFIG_PATH", DEFAULT_FEISHU_CONFIG_PATH))
+    data: dict = {}
+    if cfg_path.is_file():
+        with open(cfg_path, encoding="utf-8") as f:
+            data = yaml.safe_load(f) or {}
+    catalog_raw = data.get("pdd_product_catalog")
+    if not isinstance(catalog_raw, dict):
+        catalog_raw = {}
+    catalog_raw["table_id"] = table_id
+    data["pdd_product_catalog"] = catalog_raw
     cfg_path.parent.mkdir(parents=True, exist_ok=True)
     with open(cfg_path, "w", encoding="utf-8") as f:
         yaml.dump(data, f, allow_unicode=True, default_flow_style=False, sort_keys=False)
