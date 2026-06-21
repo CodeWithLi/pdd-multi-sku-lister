@@ -88,6 +88,23 @@ pdd_activity_log:
     activity_discount_status: 七折状态
     activity_discount_failure_reason: 七折失败原因
 
+# 推广创建步骤：成功/失败写入同一张飞书表
+pdd_promotion_log:
+  enabled: true
+  table_id: ""
+  table_name: PDD推广日志表
+  result_options:
+  - 成功
+  - 失败
+  field_names:
+    date: 日期
+    account_name: 店铺名称
+    product_id: 商品ID
+    result: 推广结果
+    message: 备注
+    failure_reason: 失败原因
+    run_id: 运行ID
+
 # pdd.xls 控价区间 → 飞书「拼多多比价定价」
 pdd_price_compare:
   enabled: true

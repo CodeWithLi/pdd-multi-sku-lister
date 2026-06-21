@@ -1,16 +1,18 @@
 from unittest.mock import patch
 
 from pdd_agent.skills.traffic.promotion_create import (
-    _click_begin_promotion_button,
+    PROMOTION_SEARCH_EMPTY_FEISHU_MESSAGE,
+    _is_promotion_search_empty_text,
     _click_promotion_edit_bid_icons,
+    _click_begin_promotion_button,
     _ensure_global_boost_checkbox_unchecked,
     _is_add_promotion_product_drawer,
     _is_product_promotion_create_page,
     _is_promotion_overview_page,
-    _is_promotion_search_empty_text,
     _is_promotion_search_result_empty,
     _is_unwanted_tab_url,
     _parse_roi_bid_limit_price,
+    normalize_promotion_failure_for_feishu,
 )
 
 
@@ -118,6 +120,14 @@ def test_is_promotion_search_empty_text_detects_zero_header_only():
     assert _is_promotion_search_empty_text(text) is True
 
 
+def test_is_promotion_search_empty_text_detects_empty_hint_without_header():
+    text = (
+        "添加推广商品 商品: 968544622705 查询 "
+        "未查询到目标商品，可查看商品是否已创建推广"
+    )
+    assert _is_promotion_search_empty_text(text) is True
+
+
 def test_is_promotion_search_empty_text_ignores_footer_help_when_product_found():
     text = (
         "推广商品 (1) 965180544666 净目标投产比 "
@@ -169,6 +179,23 @@ def test_click_promotion_edit_bid_icons_fails_when_search_empty():
         result = _click_promotion_edit_bid_icons(page, "store_A", ["965180544565"])
     assert result["status"] == "failed"
     assert result["step"] == "promotion_search_empty"
+    assert result["error"] == PROMOTION_SEARCH_EMPTY_FEISHU_MESSAGE
+
+
+def test_normalize_promotion_failure_for_feishu_maps_search_empty():
+    assert (
+        normalize_promotion_failure_for_feishu(
+            step="promotion_search_empty",
+            error="anything",
+        )
+        == PROMOTION_SEARCH_EMPTY_FEISHU_MESSAGE
+    )
+    assert (
+        normalize_promotion_failure_for_feishu(
+            error="未查询到目标商品，可查看商品是否已创建推广",
+        )
+        == PROMOTION_SEARCH_EMPTY_FEISHU_MESSAGE
+    )
 
 
 def test_click_begin_promotion_button_by_testid():

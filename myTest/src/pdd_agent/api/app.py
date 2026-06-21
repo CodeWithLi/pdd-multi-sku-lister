@@ -69,10 +69,15 @@ async def lifespan(app: FastAPI):
         from pdd_agent.integrations.feishu.traffic_report_sync import ensure_pdd_marketing_log_table_ready
         from pdd_agent.integrations.feishu.pdd_activity_log_sync import ensure_pdd_activity_log_table_ready
         from pdd_agent.integrations.feishu.pdd_upload_sync import ensure_pdd_upload_log_tables_ready
+        from pdd_agent.integrations.feishu.pdd_promotion_log_sync import ensure_pdd_promotion_log_tables_ready
         from pdd_agent.integrations.feishu.pdd_price_compare_sync import ensure_pdd_price_compare_table_ready
 
         marketing_ready = await _ensure_feishu_table("PDD营销日志表", ensure_pdd_marketing_log_table_ready)
         upload_ready = await _ensure_feishu_table("PDD发布日志表", ensure_pdd_upload_log_tables_ready)
+        promotion_log_ready = await _ensure_feishu_table(
+            "PDD推广日志表",
+            ensure_pdd_promotion_log_tables_ready,
+        )
         activity_ready = await _ensure_feishu_table("PDD活动日志表", ensure_pdd_activity_log_table_ready)
         price_compare_ready = await _ensure_feishu_table(
             "拼多多比价定价",
@@ -94,6 +99,18 @@ async def lifespan(app: FastAPI):
             )
         elif not upload_ready.get("skipped"):
             logger.error("pdd upload log tables not ready: %s", upload_ready)
+        if promotion_log_ready.get("ready"):
+            logger.info(
+                "pdd promotion log table ready table=%s(%s)",
+                promotion_log_ready.get("table_id"),
+                promotion_log_ready.get("resolve_method"),
+            )
+            print(
+                f"[feishu] PDD推广日志表已就绪：{promotion_log_ready.get('table_id')}",
+                flush=True,
+            )
+        elif not promotion_log_ready.get("skipped"):
+            logger.error("pdd promotion log tables not ready: %s", promotion_log_ready)
         if activity_ready.get("ready"):
             logger.info(
                 "pdd activity log table ready table=%s(%s)",

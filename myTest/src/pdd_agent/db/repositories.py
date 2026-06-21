@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import os
 import uuid
+from collections import defaultdict
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -1112,29 +1113,90 @@ def build_catalog_set_index(settings) -> dict[str, frozenset[str]]:
     return {item.selector: frozenset(item.product_codes) for item in list_listing_targets(settings)}
 
 
+def build_product_code_selector_index(
+    catalog_index: dict[str, frozenset[str]],
+) -> dict[str, set[str]]:
+    """商品编码 -> 包含该编码的套图 selector 集合。"""
+    mapped: dict[str, set[str]] = defaultdict(set)
+    for selector, codes in catalog_index.items():
+        for code in codes:
+            text = str(code or "").strip()
+            if text:
+                mapped[text].add(selector)
+    return mapped
+
+
+def list_on_sale_published_product_codes(account_id: str) -> frozenset[str]:
+    """店铺内在售已发布商品编码（与素材源无关）。"""
+    if not is_database_available():
+        return frozenset()
+    account_id = str(account_id or "").strip()
+    if not account_id:
+        return frozenset()
+    with session_scope() as session:
+        rows = session.scalars(
+            select(PublishedProductORM.product_code).where(
+                PublishedProductORM.account_id == account_id,
+                PublishedProductORM.status == "on_sale",
+            )
+        ).all()
+    return frozenset(str(code or "").strip() for code in rows if str(code or "").strip())
+
+
+def _resolve_listed_set_selector(row) -> str:
+    if row.family_code and row.image_set:
+        return f"{row.family_code}/{row.image_set}"
+    if row.image_set:
+        return str(row.image_set)
+    folder_selector = str(row.folder_selector or "")
+    if "/" in folder_selector:
+        return folder_selector.rsplit("/", 1)[0]
+    return folder_selector
+
+
+def _listed_selectors_for_catalog(
+    *,
+    set_selector: str,
+    product_code: str,
+    catalog_index: dict[str, frozenset[str]],
+    code_to_selectors: dict[str, set[str]],
+) -> set[str]:
+    """将上架记录映射到当前素材目录套图（允许本地/MinIO 套图名不一致）。"""
+    targets: set[str] = set()
+    current_codes = catalog_index.get(set_selector)
+    if current_codes is not None and product_code in current_codes:
+        targets.add(set_selector)
+    for selector in code_to_selectors.get(product_code, ()):
+        targets.add(selector)
+    return targets
+
+
 def prune_listed_folders_against_catalog(
     *,
     catalog_index: dict[str, frozenset[str]],
     account_id: str = "",
     limit: int = 5000,
+    match_by_product_code: bool = False,
 ) -> int:
     """清理素材目录已不存在或商品已从套图移除的上架记录。"""
     if not is_database_available():
         return 0
+    all_catalog_codes: set[str] | None = None
+    if match_by_product_code and catalog_index:
+        all_catalog_codes = set()
+        for codes in catalog_index.values():
+            all_catalog_codes.update(str(code).strip() for code in codes if str(code).strip())
+
     removed = 0
     rows = list_listed_asset_folders(account_id=account_id, limit=limit)
     for row in rows:
-        if row.family_code and row.image_set:
-            set_selector = f"{row.family_code}/{row.image_set}"
-        elif row.image_set:
-            set_selector = row.image_set
-        else:
-            parts = str(row.folder_selector or "").split("/")
-            set_selector = "/".join(parts[:2]) if len(parts) >= 2 else str(row.folder_selector or "")
-
-        current_codes = catalog_index.get(set_selector)
+        set_selector = _resolve_listed_set_selector(row)
         product_code = str(row.product_code or "").strip()
-        should_remove = current_codes is None or product_code not in current_codes
+        if match_by_product_code:
+            should_remove = bool(all_catalog_codes) and product_code not in all_catalog_codes
+        else:
+            current_codes = catalog_index.get(set_selector)
+            should_remove = current_codes is None or product_code not in current_codes
         if not should_remove:
             continue
         if delete_listed_asset_folder_for_product(
@@ -1156,21 +1218,28 @@ def get_listed_product_codes_for_set(
     """按套图 selector 汇总已上架商品编码（仅保留仍存在于当前素材目录的商品）。"""
     rows = list_listed_asset_folders(account_id=account_id, limit=5000)
     grouped: dict[str, set[str]] = {}
+    code_to_selectors: dict[str, set[str]] | None = None
+    if catalog_index is not None:
+        code_to_selectors = build_product_code_selector_index(catalog_index)
+
     for row in rows:
         product_code = str(row.product_code or "").strip()
         if not product_code:
             continue
-        if row.family_code and row.image_set:
-            set_selector = f"{row.family_code}/{row.image_set}"
-        elif row.image_set:
-            set_selector = row.image_set
-        else:
-            set_selector = row.folder_selector.rsplit("/", 1)[0] if "/" in row.folder_selector else row.folder_selector
+        set_selector = _resolve_listed_set_selector(row)
 
-        if catalog_index is not None:
-            current_codes = catalog_index.get(set_selector)
-            if current_codes is None or product_code not in current_codes:
+        if catalog_index is not None and code_to_selectors is not None:
+            targets = _listed_selectors_for_catalog(
+                set_selector=set_selector,
+                product_code=product_code,
+                catalog_index=catalog_index,
+                code_to_selectors=code_to_selectors,
+            )
+            if not targets:
                 continue
+            for selector in targets:
+                grouped.setdefault(selector, set()).add(product_code)
+            continue
 
         grouped.setdefault(set_selector, set()).add(product_code)
     return {key: sorted(codes) for key, codes in grouped.items()}

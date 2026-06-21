@@ -6,9 +6,10 @@ import os
 import time
 from functools import lru_cache
 from pathlib import Path
+from typing import Any
 
 import yaml
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from pdd_agent.paths import CONFIG_DIR, PROJECT_ROOT
@@ -187,6 +188,43 @@ class PddMarketingLogConfig(BaseModel):
     field_names: PddMarketingLogFieldNames = Field(default_factory=PddMarketingLogFieldNames)
 
 
+class PddPromotionLogFieldNames(BaseModel):
+    """PDD推广日志表列名。"""
+
+    date: str = "日期"
+    account_name: str = "店铺名称"
+    product_id: str = "商品ID"
+    result: str = "推广结果"
+    message: str = "备注"
+    failure_reason: str = "失败原因"
+    run_id: str = "运行ID"
+
+
+class PddPromotionLogConfig(BaseModel):
+    enabled: bool = Field(default=True, description="是否启用 PDD 推广日志表")
+    table_id: str = Field(default="", description="PDD推广日志表 table_id")
+    table_name: str = Field(default="PDD推广日志表", description="推广日志飞书表名")
+    result_options: list[str] = Field(default_factory=lambda: ["成功", "失败"])
+    field_names: PddPromotionLogFieldNames = Field(default_factory=PddPromotionLogFieldNames)
+
+    @model_validator(mode="before")
+    @classmethod
+    def _coerce_legacy_table(cls, data: Any) -> Any:
+        if not isinstance(data, dict):
+            return data
+        out = dict(data)
+        if not str(out.get("table_id") or "").strip():
+            legacy = str(out.get("success_table_id") or out.get("failure_table_id") or "").strip()
+            if legacy:
+                out["table_id"] = legacy
+        if not out.get("result_options"):
+            opts = out.get("success_result_options")
+            if isinstance(opts, list) and opts:
+                merged = list(dict.fromkeys([*opts, "失败"]))
+                out["result_options"] = merged
+        return out
+
+
 class PddUploadLogConfig(BaseModel):
     enabled: bool = Field(
         default=False,
@@ -362,6 +400,7 @@ class FeishuYamlConfig(BaseModel):
     pdd_upload_log: PddUploadLogConfig = Field(default_factory=PddUploadLogConfig)
     pdd_activity_log: PddActivityLogConfig = Field(default_factory=PddActivityLogConfig)
     pdd_marketing_log: PddMarketingLogConfig = Field(default_factory=PddMarketingLogConfig)
+    pdd_promotion_log: PddPromotionLogConfig = Field(default_factory=PddPromotionLogConfig)
     pdd_price_compare: PddPriceCompareConfig = Field(default_factory=PddPriceCompareConfig)
 
 
@@ -388,6 +427,7 @@ class FeishuConfig(BaseModel):
     pdd_upload_log: PddUploadLogConfig = Field(default_factory=PddUploadLogConfig)
     pdd_activity_log: PddActivityLogConfig = Field(default_factory=PddActivityLogConfig)
     pdd_marketing_log: PddMarketingLogConfig = Field(default_factory=PddMarketingLogConfig)
+    pdd_promotion_log: PddPromotionLogConfig = Field(default_factory=PddPromotionLogConfig)
     pdd_price_compare: PddPriceCompareConfig = Field(default_factory=PddPriceCompareConfig)
 
 
@@ -424,6 +464,10 @@ def load_feishu_config(path: Path | None = None) -> FeishuConfig:
     if "pdd_price_compare" in raw and isinstance(raw.get("pdd_price_compare"), dict):
         pdd_price_compare = PddPriceCompareConfig.model_validate(raw["pdd_price_compare"])
 
+    pdd_promotion_log = yaml_cfg.pdd_promotion_log
+    if "pdd_promotion_log" in raw and isinstance(raw.get("pdd_promotion_log"), dict):
+        pdd_promotion_log = PddPromotionLogConfig.model_validate(raw["pdd_promotion_log"])
+
     return FeishuConfig(
         app_id=env.feishu_app_id or yaml_cfg.app_id,
         app_secret=env.feishu_app_secret or yaml_cfg.app_secret,
@@ -445,6 +489,7 @@ def load_feishu_config(path: Path | None = None) -> FeishuConfig:
         pdd_upload_log=pdd_upload_log,
         pdd_activity_log=pdd_activity_log,
         pdd_marketing_log=pdd_marketing_log,
+        pdd_promotion_log=pdd_promotion_log,
         pdd_price_compare=pdd_price_compare,
     )
 
@@ -547,6 +592,22 @@ def save_pdd_marketing_table_id_to_config(table_id: str, path: Path | None = Non
         marketing_raw = {}
     marketing_raw["table_id"] = table_id
     data["pdd_marketing_log"] = marketing_raw
+    cfg_path.parent.mkdir(parents=True, exist_ok=True)
+    with open(cfg_path, "w", encoding="utf-8") as f:
+        yaml.dump(data, f, allow_unicode=True, default_flow_style=False, sort_keys=False)
+
+
+def save_pdd_promotion_table_id_to_config(table_id: str, path: Path | None = None) -> None:
+    cfg_path = path or Path(os.getenv("FEISHU_CONFIG_PATH", DEFAULT_FEISHU_CONFIG_PATH))
+    data: dict = {}
+    if cfg_path.is_file():
+        with open(cfg_path, encoding="utf-8") as f:
+            data = yaml.safe_load(f) or {}
+    promo_raw = data.get("pdd_promotion_log")
+    if not isinstance(promo_raw, dict):
+        promo_raw = {}
+    promo_raw["table_id"] = table_id
+    data["pdd_promotion_log"] = promo_raw
     cfg_path.parent.mkdir(parents=True, exist_ok=True)
     with open(cfg_path, "w", encoding="utf-8") as f:
         yaml.dump(data, f, allow_unicode=True, default_flow_style=False, sort_keys=False)

@@ -418,6 +418,7 @@ def _schedule_feishu_promotion_status(
             extract_product_ids_from_campaign_result,
             schedule_pdd_upload_promotion_status,
         )
+        from pdd_agent.integrations.feishu.pdd_promotion_log_sync import schedule_pdd_promotion_log
 
         product_ids = extract_product_ids_from_campaign_result(selected_product_ids, result)
         error = _summarize_traffic_message(result) if status != RunStatus.SUCCESS else ""
@@ -426,6 +427,14 @@ def _schedule_feishu_promotion_status(
             product_ids=product_ids,
             success=status == RunStatus.SUCCESS,
             error=error,
+        )
+        schedule_pdd_promotion_log(
+            account_id=account_id,
+            product_ids=product_ids or list(selected_product_ids or []),
+            success=status == RunStatus.SUCCESS,
+            result=result,
+            error=error,
+            run_id=run_id,
         )
     except Exception:
         if run_id:

@@ -74,6 +74,17 @@ BEGIN_PROMOTION_BUTTON_TESTID = "beginPromotionButton"
 CANCEL_PROMOTION_BUTTON_TESTID = "cancelPromotionButton"
 _PROMOTION_SEARCH_ZERO_COUNT_JSON = json.dumps(list(PROMOTION_SEARCH_ZERO_COUNT_MARKERS))
 PRODUCT_SEARCH_BATCH_SIZE = 30
+PROMOTION_SEARCH_EMPTY_FEISHU_MESSAGE = "该商品已创建推广或该商品不存在"
+PROMOTION_SEARCH_EMPTY_UI_MARKERS = ("未查询到目标商品",)
+
+
+def _has_promotion_search_empty_hint(text: str) -> bool:
+    """空结果页为「未查询到目标商品…」；有商品时底部帮助语为「若未查询到…」。"""
+    normalized = str(text or "")
+    idx = normalized.find("未查询到目标商品")
+    if idx < 0:
+        return False
+    return idx == 0 or normalized[idx - 1] != "若"
 UNWANTED_TAB_URL_PARTS = (
     "/home/",
     "/home",
@@ -88,6 +99,17 @@ PROMOTION_TAB_URL_PARTS = (
     "promotionOverview",
     "promotion/overview",
 )
+
+
+def normalize_promotion_failure_for_feishu(*, error: str = "", step: str = "") -> str:
+    """将推广失败原因规范为飞书日志文案。"""
+    step_key = str(step or "").strip()
+    text = str(error or "").strip()
+    if step_key == "promotion_search_empty":
+        return PROMOTION_SEARCH_EMPTY_FEISHU_MESSAGE
+    if _has_promotion_search_empty_hint(text):
+        return PROMOTION_SEARCH_EMPTY_FEISHU_MESSAGE
+    return text[:500] if text else "推广任务失败"
 
 
 def _ensure_session(
@@ -744,7 +766,9 @@ const hasProducts = (headerCount !== null && headerCount > 0)
 const productCount = hasProducts
     ? Math.max(productIds.length, icons.length, productRows.length, headerCount || 0)
     : 0;
-const empty = headerCount === 0 || !hasProducts;
+const hasEmptyHint = text.includes('未查询到目标商品');
+const empty = (headerCount === 0)
+    || (hasEmptyHint && productIds.length === 0 && icons.length === 0 && productRows.length === 0);
 return {{
     ready: true,
     empty,
@@ -768,11 +792,11 @@ def _parse_promotion_header_count(text: str) -> int | None:
 
 
 def _is_promotion_search_empty_text(text: str) -> bool:
-    """仅当表头明确为「推广商品 (0)」时判定为空；忽略底部帮助文案。"""
+    """表头为 0，或抽屉内出现空结果提示且无商品行。"""
     count = _parse_promotion_header_count(text)
     if count is not None:
         return count == 0
-    return False
+    return _has_promotion_search_empty_hint(text)
 
 
 def _is_promotion_search_result_empty(state: dict[str, Any]) -> bool:
@@ -785,6 +809,10 @@ def _is_promotion_search_result_empty(state: dict[str, Any]) -> bool:
         return False
     if int(state.get("product_row_count") or 0) > 0:
         return False
+    if state.get("has_products"):
+        return False
+    if state.get("empty") is True:
+        return True
     return not bool(state.get("has_products"))
 
 
@@ -817,6 +845,17 @@ def _read_promotion_search_result(page: DpPage) -> dict[str, Any]:
             "header_count": header_count,
             "has_products": False,
             "source": "body_text_fallback",
+        }
+    if _is_promotion_search_empty_text(text):
+        return {
+            "ready": True,
+            "empty": True,
+            "product_count": 0,
+            "product_ids": [],
+            "edit_icons": [],
+            "header_count": header_count,
+            "has_products": False,
+            "source": "empty_hint_fallback",
         }
     return result
 
@@ -2133,7 +2172,7 @@ def _click_promotion_edit_bid_icons(
         return {
             "status": "failed",
             "step": "promotion_search_empty",
-            "error": "未查询到目标商品，请确认商品 ID 是否正确或是否已创建推广",
+            "error": PROMOTION_SEARCH_EMPTY_FEISHU_MESSAGE,
             "search_state": search_state,
             "requested_product_ids": requested,
         }
@@ -2153,7 +2192,7 @@ def _click_promotion_edit_bid_icons(
             return {
                 "status": "failed",
                 "step": "promotion_search_empty",
-                "error": "未查询到目标商品，请确认商品 ID 是否正确或是否已创建推广",
+                "error": PROMOTION_SEARCH_EMPTY_FEISHU_MESSAGE,
                 "search_state": search_state,
                 "requested_product_ids": requested,
             }
@@ -2308,6 +2347,16 @@ def _search_promotion_products(
         )
         wait_state = _wait_promotion_search_result(page, timeout=15)
         batch_results[-1]["search_state"] = wait_state
+        if _is_promotion_search_result_empty(wait_state):
+            return {
+                "status": "failed",
+                "step": "promotion_search_empty",
+                "error": PROMOTION_SEARCH_EMPTY_FEISHU_MESSAGE,
+                "searched_count": len(ids),
+                "batch_count": len(batches),
+                "batch_results": batch_results,
+                "requested_product_ids": ids,
+            }
         if batch_index + 1 < len(batches):
             time.sleep(2)
 

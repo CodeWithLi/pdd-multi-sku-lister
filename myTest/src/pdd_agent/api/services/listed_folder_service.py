@@ -8,10 +8,12 @@ from typing import Any
 from pdd_agent.db.repositories import (
     backfill_listed_folders_from_published_products,
     build_folder_selector,
+    build_product_code_selector_index,
     delete_listed_asset_folder_for_product,
     get_listed_product_codes_for_set,
     get_queue_task_by_run_id,
     list_listed_asset_folders,
+    list_on_sale_published_product_codes,
     prune_listed_folders_against_catalog,
     upsert_listed_asset_folder,
 )
@@ -104,8 +106,26 @@ def listed_product_codes_by_set(
 
     account_id = str(account_id or "").strip()
     if account_id:
-        prune_listed_folders_against_catalog(account_id=account_id, catalog_index=catalog_index)
-    return get_listed_product_codes_for_set(account_id, catalog_index=catalog_index)
+        prune_listed_folders_against_catalog(
+            account_id=account_id,
+            catalog_index=catalog_index,
+            match_by_product_code=material_source == "minio",
+        )
+
+    listed_by_set = get_listed_product_codes_for_set(account_id, catalog_index=catalog_index)
+    if not account_id or not catalog_index:
+        return listed_by_set
+
+    on_sale_codes = list_on_sale_published_product_codes(account_id)
+    if not on_sale_codes:
+        return listed_by_set
+
+    code_to_selectors = build_product_code_selector_index(catalog_index)
+    merged: dict[str, set[str]] = {key: set(codes) for key, codes in listed_by_set.items()}
+    for product_code in on_sale_codes:
+        for selector in code_to_selectors.get(product_code, ()):
+            merged.setdefault(selector, set()).add(product_code)
+    return {key: sorted(codes) for key, codes in merged.items()}
 
 
 def sync_listed_folders_with_catalog(*, account_id: str = "") -> int:
