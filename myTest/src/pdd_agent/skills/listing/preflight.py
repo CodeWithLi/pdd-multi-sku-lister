@@ -16,6 +16,7 @@ def run_preflight(
     *,
     include_excel_missing_previews: bool = False,
     slot_alignment_test: bool = False,
+    assets_root: Path | None = None,
 ) -> PreflightReport:
     """
     批量校验商品编码。
@@ -28,6 +29,7 @@ def run_preflight(
             settings,
             include_excel_missing_previews=include_excel_missing_previews,
             slot_alignment_test=slot_alignment_test,
+            assets_root=assets_root,
         )
         if not units:
             report.issues.append(

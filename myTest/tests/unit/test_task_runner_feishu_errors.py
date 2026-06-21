@@ -108,3 +108,46 @@ def test_ensure_feishu_logged_for_terminal_run_is_idempotent(monkeypatch):
     ensure_feishu_logged_for_terminal_run(**kwargs)
     ensure_feishu_logged_for_terminal_run(**kwargs)
     assert calls == ["run_once_dedupe_test"]
+
+
+def test_schedule_feishu_limited_time_status_claims_run_id_once(monkeypatch):
+    from pdd_agent.api.services import task_runner as tr
+
+    tr._feishu_terminal_logged_run_ids.clear()
+    calls = 0
+
+    def fake_upload(**kwargs):
+        return None
+
+    def fake_activity(**kwargs):
+        nonlocal calls
+        calls += 1
+
+    monkeypatch.setattr(
+        "pdd_agent.integrations.feishu.pdd_upload_sync.schedule_pdd_upload_limited_time_status",
+        fake_upload,
+    )
+    monkeypatch.setattr(
+        "pdd_agent.integrations.feishu.pdd_activity_log_sync.schedule_pdd_activity_log_limited_time",
+        fake_activity,
+    )
+    monkeypatch.setattr(
+        "pdd_agent.integrations.feishu.pdd_activity_log_sync.safe_load_activity_log_product_context",
+        lambda *a, **k: {},
+    )
+    monkeypatch.setattr(
+        "pdd_agent.integrations.feishu.pdd_upload_sync.extract_product_ids_for_limited_time_status",
+        lambda selected, result: list(selected),
+    )
+    monkeypatch.setattr(tr, "_account_display_name", lambda _aid: "store")
+
+    kwargs = {
+        "account_id": "store_A",
+        "selected_product_ids": ["968599179476"],
+        "result": {"error": "failed"},
+        "status": RunStatus.FAILED,
+        "run_id": "lt_run_claim_test",
+    }
+    tr._schedule_feishu_limited_time_status(**kwargs)
+    tr._schedule_feishu_limited_time_status(**kwargs)
+    assert calls == 1

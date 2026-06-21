@@ -13,11 +13,14 @@ from pdd_agent.api.schemas.catalog import (
     ProductSummaryOut,
 )
 from pdd_agent.api.services.catalog_service import (
+    MaterialSource,
     get_product_detail,
     list_listing_target_options,
     list_products,
     run_preflight_api,
 )
+from pdd_agent.integrations.minio.client import check_minio_health
+from pdd_agent.integrations.minio.config import load_minio_config, minio_configured
 from pdd_agent.core.config import load_yaml_settings
 from pdd_agent.skills.listing.catalog import list_image_sets, parse_all_listings
 
@@ -26,19 +29,40 @@ router = APIRouter(prefix="/catalog", tags=["catalog"])
 IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".webp"}
 
 
-def _safe_asset_image_path(raw_path: str) -> Path:
+def _safe_asset_image_path(raw_path: str, *, material_source: MaterialSource = "local") -> Path:
     settings = load_yaml_settings()
-    assets_root = settings.paths.resolve("assets_root")
+    roots = [settings.paths.resolve("assets_root")]
+    if material_source == "minio":
+        from pdd_agent.integrations.minio.config import minio_cache_root
+
+        roots.insert(0, minio_cache_root())
     target = Path(raw_path)
     if not target.is_absolute():
-        target = (assets_root / target).resolve()
+        resolved = None
+        for root in roots:
+            candidate = (root / target).resolve()
+            try:
+                candidate.relative_to(root)
+            except ValueError:
+                continue
+            resolved = candidate
+            break
+        if resolved is None:
+            resolved = (roots[0] / target).resolve()
+        target = resolved
     else:
         target = target.resolve()
 
-    try:
-        target.relative_to(assets_root)
-    except ValueError:
-        raise HTTPException(status_code=403, detail="asset path is outside assets_root")
+    allowed = False
+    for root in roots:
+        try:
+            target.relative_to(root)
+            allowed = True
+            break
+        except ValueError:
+            continue
+    if not allowed:
+        raise HTTPException(status_code=403, detail="asset path is outside allowed assets roots")
 
     if target.suffix.lower() not in IMAGE_EXTS:
         raise HTTPException(status_code=400, detail="only image assets can be viewed")
@@ -48,21 +72,48 @@ def _safe_asset_image_path(raw_path: str) -> Path:
 
 
 @router.get("/products", response_model=list[ProductSummaryOut])
-def catalog_products():
-    """扫描 data/assets 下所有商品编码。"""
-    return list_products()
+def catalog_products(material_source: MaterialSource = "local"):
+    """扫描素材目录或 MinIO 下所有商品编码。"""
+    source = material_source if material_source in {"local", "minio"} else "local"
+    if source == "minio" and not minio_configured():
+        raise HTTPException(status_code=503, detail="MinIO 未配置，请填写 config/minio.yaml")
+    return list_products(material_source=source)
 
 
 @router.get("/listing-targets", response_model=list[ListingTargetOptionOut])
-def catalog_listing_targets(account_id: str = ""):
+def catalog_listing_targets(
+    account_id: str = "",
+    material_source: MaterialSource = "local",
+):
     """列出上架任务可选的素材分组；传 account_id 时附带该店已上架商品标记。"""
-    return list_listing_target_options(account_id=account_id.strip())
+    source = material_source if material_source in {"local", "minio"} else "local"
+    if source == "minio" and not minio_configured():
+        raise HTTPException(status_code=503, detail="MinIO 未配置，请填写 config/minio.yaml")
+    return list_listing_target_options(
+        account_id=account_id.strip(),
+        material_source=source,
+    )
+
+
+@router.get("/minio/health")
+def catalog_minio_health():
+    """MinIO 连接状态。"""
+    cfg = load_minio_config()
+    health = check_minio_health(cfg)
+    health["listing_poll_seconds"] = cfg.listing_poll_seconds
+    health["alist_url"] = cfg.alist_url
+    health["console_url"] = cfg.console_url
+    health["cache_root"] = str(cfg.cache_root)
+    return health
 
 
 @router.get("/products/{product_code}", response_model=ProductDetailOut)
-def catalog_product_detail(product_code: str):
+def catalog_product_detail(product_code: str, material_source: MaterialSource = "local"):
     """解析单个商品的全部套图与 SKU。"""
-    detail = get_product_detail(product_code)
+    source = material_source if material_source in {"local", "minio"} else "local"
+    if source == "minio" and not minio_configured():
+        raise HTTPException(status_code=503, detail="MinIO 未配置，请填写 config/minio.yaml")
+    detail = get_product_detail(product_code, material_source=source)
     if not detail:
         raise HTTPException(status_code=404, detail=f"product not found: {product_code}")
     return detail
@@ -79,12 +130,19 @@ def catalog_image_sets(product_code: str):
 
 
 @router.get("/asset")
-def catalog_asset(path: str = Query(..., min_length=1)):
-    """安全读取素材目录内的图片，用于前端预览。"""
-    return FileResponse(_safe_asset_image_path(path))
+def catalog_asset(
+    path: str = Query(..., min_length=1),
+    material_source: MaterialSource = "local",
+):
+    """安全读取素材目录或 MinIO 缓存内的图片，用于前端预览。"""
+    source = material_source if material_source in {"local", "minio"} else "local"
+    return FileResponse(_safe_asset_image_path(path, material_source=source))
 
 
 @router.post("/preflight", response_model=PreflightResponse)
 def catalog_preflight(body: PreflightRequest):
     """上架前校验（不打开浏览器）。"""
-    return run_preflight_api(body.product_codes)
+    source = body.material_source if body.material_source in {"local", "minio"} else "local"
+    if source == "minio" and not minio_configured():
+        raise HTTPException(status_code=503, detail="MinIO 未配置，请填写 config/minio.yaml")
+    return run_preflight_api(body.product_codes, material_source=source)

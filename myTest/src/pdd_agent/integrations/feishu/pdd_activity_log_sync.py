@@ -249,6 +249,14 @@ def _find_activity_log_record(
     return None
 
 
+def _activity_log_patch_unchanged(existing_fields: dict[str, Any], mapped_patch: dict[str, Any]) -> bool:
+    existing = existing_fields if isinstance(existing_fields, dict) else {}
+    for key, new_value in mapped_patch.items():
+        if _coerce_bitable_text(existing.get(key)) != _coerce_bitable_text(new_value):
+            return False
+    return True
+
+
 def _build_activity_log_base_fields(
     *,
     config: FeishuConfig,
@@ -496,6 +504,24 @@ def upsert_pdd_activity_log_fields(
         record_id = str(existing.get("record_id") or "").strip()
         if not record_id:
             return {"failed": True, "reason": "missing_record_id"}
+        existing_fields = existing.get("fields") if isinstance(existing.get("fields"), dict) else {}
+        if _activity_log_patch_unchanged(existing_fields, mapped_patch):
+            logger.debug(
+                "feishu pdd activity log unchanged product_id=%s table=%s fields=%s",
+                pid,
+                table_id,
+                list(mapped_patch.keys()),
+            )
+            return {
+                "updated": False,
+                "created": False,
+                "skipped": True,
+                "reason": "unchanged",
+                "record_id": record_id,
+                "table_id": table_id,
+                "product_id": pid,
+                "fields": mapped_patch,
+            }
         batch_update_records(
             api,
             app_token,
@@ -712,7 +738,7 @@ def _push_pdd_activity_log_safe(*, log_label: str, push_fn: Any, **kwargs: Any) 
         result = push_fn(**kwargs)
         if result.get("updated") or result.get("created") or result.get("updated_count"):
             print(f"[{account_id}] 飞书{log_label}已回写", flush=True)
-        elif result.get("skipped"):
+        elif result.get("skipped") and result.get("reason") != "unchanged":
             logger.info("feishu %s skipped: %s", log_label, result.get("reason"))
         elif result.get("failed"):
             print(f"[{account_id}] 飞书{log_label}失败：{result.get('message') or result.get('reason')}", flush=True)

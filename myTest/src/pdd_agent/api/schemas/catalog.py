@@ -62,6 +62,7 @@ class ProductDetailOut(BaseModel):
 
 class PreflightRequest(BaseModel):
     product_codes: list[str] = Field(..., min_length=1)
+    material_source: str = Field(default="local", description="local | minio")
 
 
 class PreflightIssueOut(BaseModel):

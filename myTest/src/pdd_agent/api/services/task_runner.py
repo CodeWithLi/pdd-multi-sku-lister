@@ -168,6 +168,23 @@ def mark_feishu_terminal_logged(run_id: str) -> None:
         _feishu_terminal_logged_run_ids.add(run_id)
 
 
+def _claim_feishu_terminal_log(run_id: str) -> bool:
+    """乐观占位：同一 run 的飞书终态回写只允许一次（防 execute 与 reconcile 并发重复写）。"""
+    run_id = str(run_id or "").strip()
+    if not run_id:
+        return True
+    if run_id in _feishu_terminal_logged_run_ids:
+        return False
+    _feishu_terminal_logged_run_ids.add(run_id)
+    return True
+
+
+def _release_feishu_terminal_log(run_id: str) -> None:
+    run_id = str(run_id or "").strip()
+    if run_id:
+        _feishu_terminal_logged_run_ids.discard(run_id)
+
+
 def _normalize_terminal_failure_result(
     result: dict[str, Any] | None,
     *,
@@ -270,6 +287,11 @@ def _schedule_feishu_limited_time_status(
     status: RunStatus,
     run_id: str = "",
 ) -> None:
+    run_id = str(run_id or "").strip()
+    claimed = _claim_feishu_terminal_log(run_id)
+    if not claimed:
+        logger.debug("skip duplicate feishu limited time log run_id=%s", run_id)
+        return
     try:
         from pdd_agent.integrations.feishu.pdd_activity_log_sync import (
             safe_load_activity_log_product_context,
@@ -309,9 +331,9 @@ def _schedule_feishu_limited_time_status(
             product_errors=product_errors,
         )
     except Exception:
+        if run_id:
+            _release_feishu_terminal_log(run_id)
         logger.exception("schedule feishu limited time status failed account=%s", account_id)
-    else:
-        mark_feishu_terminal_logged(run_id)
 
 
 def _schedule_feishu_activity_register_status(
@@ -323,6 +345,11 @@ def _schedule_feishu_activity_register_status(
     status: RunStatus,
     run_id: str = "",
 ) -> None:
+    run_id = str(run_id or "").strip()
+    claimed = _claim_feishu_terminal_log(run_id)
+    if not claimed:
+        logger.debug("skip duplicate feishu activity register log run_id=%s", run_id)
+        return
     try:
         from pdd_agent.integrations.feishu.pdd_activity_log_sync import (
             safe_load_activity_log_product_context,
@@ -369,8 +396,8 @@ def _schedule_feishu_activity_register_status(
             account_id,
             activity_id,
         )
-    else:
-        mark_feishu_terminal_logged(run_id)
+        if run_id:
+            _release_feishu_terminal_log(run_id)
 
 
 def _schedule_feishu_promotion_status(
@@ -381,6 +408,11 @@ def _schedule_feishu_promotion_status(
     status: RunStatus,
     run_id: str = "",
 ) -> None:
+    run_id = str(run_id or "").strip()
+    claimed = _claim_feishu_terminal_log(run_id)
+    if not claimed:
+        logger.debug("skip duplicate feishu promotion log run_id=%s", run_id)
+        return
     try:
         from pdd_agent.integrations.feishu.pdd_upload_sync import (
             extract_product_ids_from_campaign_result,
@@ -396,9 +428,9 @@ def _schedule_feishu_promotion_status(
             error=error,
         )
     except Exception:
+        if run_id:
+            _release_feishu_terminal_log(run_id)
         logger.exception("schedule feishu promotion status failed account=%s", account_id)
-    else:
-        mark_feishu_terminal_logged(run_id)
 
 
 def ensure_feishu_logged_for_terminal_run(

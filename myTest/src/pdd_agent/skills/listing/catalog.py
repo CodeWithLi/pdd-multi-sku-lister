@@ -585,8 +585,9 @@ def parse_all_listings(
     settings: YamlSettings,
     *,
     include_excel_missing_previews: bool = False,
+    assets_root: Path | None = None,
 ) -> list[ListingUnit]:
-    assets_root = settings.paths.resolve("assets_root")
+    assets_root = assets_root or settings.paths.resolve("assets_root")
     catalog = _load_product_catalog(settings)
     defaults = settings.multi_spec.defaults
 
@@ -639,11 +640,12 @@ def parse_listing_target(
     *,
     include_excel_missing_previews: bool = False,
     slot_alignment_test: bool = False,
+    assets_root: Path | None = None,
 ) -> list[ListingUnit]:
+    assets_root = assets_root or settings.paths.resolve("assets_root")
     product_selector = _parse_listing_target_product_selector(target)
     if product_selector:
         family_code, image_set, product_code = product_selector
-        assets_root = settings.paths.resolve("assets_root")
         catalog = _load_product_catalog(settings)
         defaults = settings.multi_spec.defaults
         code_dir = assets_root / family_code / image_set / product_code
@@ -667,10 +669,10 @@ def parse_listing_target(
             target,
             settings,
             include_excel_missing_previews=include_excel_missing_previews,
+            assets_root=assets_root,
         )
 
     family_code, image_set = selector
-    assets_root = settings.paths.resolve("assets_root")
     catalog = _load_product_catalog(settings)
     defaults = settings.multi_spec.defaults
     set_dir = assets_root / family_code / image_set

@@ -10,9 +10,11 @@ __pycache__/
 .env
 config/settings.yaml
 config/agents.yaml
+config/minio.yaml
 
 data/profiles/
 data/runs/
+data/minio_cache/
 *.log
 
 # Playwright

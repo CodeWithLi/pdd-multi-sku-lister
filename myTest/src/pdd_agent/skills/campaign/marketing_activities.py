@@ -2253,56 +2253,98 @@ def _analyze_modal_product_eligibility(modal, product_ids: list[str]) -> dict[st
                     }
                     return '';
                 }
+                function classifyRow(rowText, id) {
+                    const text = norm(rowText);
+                    if (!text.includes(id)) return null;
+                    const reason = rowReason(text);
+                    return {
+                        product_id: id,
+                        reason_text: reason || text.slice(0, 200),
+                        time_blocked: Boolean(reason),
+                    };
+                }
+                function classifyTable(table, ineligibleTab) {
+                    if (!table) return;
+                    for (const row of table.querySelectorAll('tbody tr, tr')) {
+                        if (!isVisible(row)) continue;
+                        const rowText = norm(row.innerText || row.textContent || '');
+                        if (!rowText || (rowText.includes('商品信息') && rowText.includes('库存'))) continue;
+                        for (const id of ids) {
+                            const entry = classifyRow(rowText, id);
+                            if (!entry) continue;
+                            if (entry.time_blocked) {
+                                if (!timeBlocked.some((item) => item.product_id === id)) {
+                                    timeBlocked.push({
+                                        product_id: id,
+                                        reason_text: entry.reason_text,
+                                    });
+                                }
+                            } else if (ineligibleTab) {
+                                if (!otherIneligible.some((item) => item.product_id === id)) {
+                                    otherIneligible.push({
+                                        product_id: id,
+                                        reason_text: entry.reason_text,
+                                    });
+                                }
+                            } else if (!rowEligibleIds.includes(id)) {
+                                rowEligibleIds.push(id);
+                            }
+                            break;
+                        }
+                    }
+                }
+                function isBlocked(id) {
+                    return timeBlocked.some((item) => item.product_id === id)
+                        || otherIneligible.some((item) => item.product_id === id);
+                }
 
-                const eligibleIds = tableIds(findTable(root));
-
+                const bodyText = norm(root.innerText || root.textContent || '');
                 const timeBlocked = [];
                 const otherIneligible = [];
+                const rowEligibleIds = [];
                 const missing = [];
 
-                clickTab('不可报名');
-                const ineligibleTable = findTable(root);
-                const ineligibleRows = ineligibleTable
-                    ? Array.from(ineligibleTable.querySelectorAll('tbody tr')).filter(isVisible)
-                    : [];
-                const bodyText = norm(root.innerText || root.textContent || '');
+                // 搜索结果行内可能同时展示商品 ID 与「需等待1天/新建规格」提示，不能仅因出现 ID 就视为可报名
+                classifyTable(findTable(root), false);
 
                 for (const id of ids) {
-                    if (eligibleIds.includes(id)) continue;
-                    let matched = false;
-                    for (const row of ineligibleRows) {
-                        const rowText = norm(row.innerText || row.textContent || '');
-                        if (!rowText.includes(id)) continue;
-                        matched = true;
-                        const reason = rowReason(rowText);
-                        const entry = { product_id: id, reason_text: reason || rowText.slice(0, 120) };
-                        if (reason) {
-                            timeBlocked.push(entry);
-                        } else {
-                            otherIneligible.push(entry);
-                        }
-                        break;
+                    if (isBlocked(id)) continue;
+                    const idx = bodyText.indexOf(id);
+                    if (idx < 0) continue;
+                    const snippet = bodyText.slice(Math.max(0, idx - 40), idx + 220);
+                    const reason = rowReason(snippet);
+                    if (reason) {
+                        timeBlocked.push({ product_id: id, reason_text: snippet.slice(0, 200) });
                     }
-                    if (matched) continue;
+                }
+
+                clickTab('不可报名');
+                classifyTable(findTable(root), true);
+
+                for (const id of ids) {
+                    if (isBlocked(id)) continue;
+                    if (rowEligibleIds.includes(id)) continue;
                     const idx = bodyText.indexOf(id);
                     if (idx >= 0) {
-                        const snippet = bodyText.slice(Math.max(0, idx - 20), idx + 160);
+                        const snippet = bodyText.slice(Math.max(0, idx - 40), idx + 220);
                         const reason = rowReason(snippet);
                         if (reason) {
-                            timeBlocked.push({ product_id: id, reason_text: reason });
-                            matched = true;
+                            timeBlocked.push({ product_id: id, reason_text: snippet.slice(0, 200) });
+                            continue;
                         }
                     }
-                    if (!matched) missing.push(id);
+                    missing.push(id);
                 }
 
                 clickTab('可报名');
+
+                const eligibleIds = rowEligibleIds.filter((id) => !isBlocked(id));
 
                 return {
                     eligible_ids: eligibleIds,
                     time_blocked: timeBlocked,
                     other_ineligible: otherIneligible,
-                    missing_ids: missing,
+                    missing_ids: missing.filter((id) => !isBlocked(id) && !eligibleIds.includes(id)),
                 };
             }
             """,

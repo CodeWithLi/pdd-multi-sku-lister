@@ -1298,7 +1298,11 @@ def _on_campaign_finished(row, *, run_id: str, success: bool, result: dict[str, 
 
 
 def _on_limited_time_finished(row, *, run_id: str, success: bool, result: dict[str, Any], error: str) -> None:
+    meta = dict(row.meta or {})
+    if meta.get("limited_time_finish_handled"):
+        return
     meta_patch: dict[str, Any] = {
+        "limited_time_finish_handled": True,
         "limited_time_summary": _summarize_run_message(run_id),
     }
     if not success:
@@ -1389,7 +1393,12 @@ def _reconcile_stuck_pipeline_row(row) -> Any:
             and _pipeline_continue_after_limited_time_failure(row)
         ):
             refreshed = get_integrated_pipeline(row.pipeline_id) or row
-            if not refreshed.campaign_run_id and not refreshed.scheduled_activity_at:
+            refreshed_meta = refreshed.meta if isinstance(refreshed.meta, dict) else {}
+            if (
+                not refreshed.campaign_run_id
+                and not refreshed.scheduled_activity_at
+                and not refreshed_meta.get("limited_time_finish_handled")
+            ):
                 _on_limited_time_finished(
                     refreshed,
                     run_id=run_id,

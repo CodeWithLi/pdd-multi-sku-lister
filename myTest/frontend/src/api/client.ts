@@ -102,13 +102,37 @@ export const api = {
   deleteAccount: (accountId: string) =>
     http.delete(`/config/accounts/${accountId}`).then(() => undefined),
 
-  products: () => http.get<ProductSummary[]>('/catalog/products').then((r) => r.data),
+  products: (materialSource: 'local' | 'minio' = 'local') =>
+    http
+      .get<ProductSummary[]>('/catalog/products', { params: { material_source: materialSource } })
+      .then((r) => r.data),
 
-  listingTargets: (accountId?: string) =>
+  listingTargets: (accountId?: string, materialSource: 'local' | 'minio' = 'local') =>
     http
       .get<ListingTargetOption[]>('/catalog/listing-targets', {
-        params: accountId ? { account_id: accountId } : undefined,
+        params: {
+          ...(accountId ? { account_id: accountId } : {}),
+          material_source: materialSource,
+        },
       })
+      .then((r) => r.data),
+
+  minioHealth: () =>
+    http
+      .get<{
+        configured: boolean
+        available: boolean
+        endpoint?: string
+        bucket?: string
+        categories?: string[]
+        prefix?: string
+        listing_poll_seconds?: number
+        object_sample_found?: boolean
+        alist_url?: string
+        console_url?: string
+        cache_root?: string
+        error?: string
+      }>('/catalog/minio/health')
       .then((r) => r.data),
 
   listedFolders: (params?: {
@@ -124,8 +148,13 @@ export const api = {
   productDetail: (productCode: string) =>
     http.get<ProductDetail>(`/catalog/products/${productCode}`).then((r) => r.data),
 
-  preflight: (product_codes: string[]) =>
-    http.post<PreflightResponse>('/catalog/preflight', { product_codes }).then((r) => r.data),
+  preflight: (product_codes: string[], materialSource: 'local' | 'minio' = 'local') =>
+    http
+      .post<PreflightResponse>('/catalog/preflight', {
+        product_codes,
+        material_source: materialSource,
+      })
+      .then((r) => r.data),
 
   plan: (message: string) =>
     http.post<PlanResponse>('/tasks/plan', { message }).then((r) => r.data),

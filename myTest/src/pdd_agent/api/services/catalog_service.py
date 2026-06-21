@@ -1,5 +1,8 @@
 """素材目录解析与 preflight 服务。"""
 
+from pathlib import Path
+from typing import Literal
+
 from pdd_agent.api.schemas.catalog import (
     ListingTargetOptionOut,
     ListingUnitOut,
@@ -19,6 +22,32 @@ from pdd_agent.skills.listing.catalog import (
 )
 from pdd_agent.skills.listing.preflight import run_preflight
 
+MaterialSource = Literal["local", "minio"]
+
+
+def _assets_root_for_source(material_source: MaterialSource) -> Path | None:
+    if material_source == "minio":
+        from pdd_agent.integrations.minio.config import minio_cache_root
+
+        return minio_cache_root()
+    return None
+
+
+def _listing_targets_for_source(material_source: MaterialSource):
+    settings = load_yaml_settings()
+    if material_source == "minio":
+        from pdd_agent.integrations.minio.catalog import list_minio_listing_targets
+
+        return list_minio_listing_targets()
+    return list_listing_targets(settings)
+
+
+def _catalog_set_index_for_source(material_source: MaterialSource) -> dict[str, frozenset[str]]:
+    return {
+        item.selector: frozenset(item.product_codes)
+        for item in _listing_targets_for_source(material_source)
+    }
+
 
 def _asset_path(path, assets_root) -> str:
     try:
@@ -27,9 +56,14 @@ def _asset_path(path, assets_root) -> str:
         return str(path)
 
 
-def _unit_to_out(unit: ListingUnit, *, include_skus: bool = False) -> ListingUnitOut:
+def _unit_to_out(
+    unit: ListingUnit,
+    *,
+    include_skus: bool = False,
+    assets_root: Path | None = None,
+) -> ListingUnitOut:
     settings = load_yaml_settings()
-    assets_root = settings.paths.resolve("assets_root")
+    root = assets_root or settings.paths.resolve("assets_root")
     skus: list[SkuComboOut] = []
     if include_skus:
         skus = [
@@ -39,7 +73,7 @@ def _unit_to_out(unit: ListingUnit, *, include_skus: bool = False) -> ListingUni
                 model_code=s.model_code,
                 model_name=s.model_name,
                 combo_folder=s.combo_folder,
-                preview_image=_asset_path(s.preview_image, assets_root),
+                preview_image=_asset_path(s.preview_image, root),
                 inventory=s.inventory,
                 group_price=s.group_price,
                 single_price=s.single_price,
@@ -53,8 +87,8 @@ def _unit_to_out(unit: ListingUnit, *, include_skus: bool = False) -> ListingUni
         listing_label=unit.listing_label,
         merchant_code=unit.merchant_code,
         root=str(unit.root),
-        carousel_images=[_asset_path(p, assets_root) for p in unit.carousel_images],
-        detail_images=[_asset_path(p, assets_root) for p in unit.detail_images],
+        carousel_images=[_asset_path(p, root) for p in unit.carousel_images],
+        detail_images=[_asset_path(p, root) for p in unit.detail_images],
         carousel_count=len(unit.carousel_images),
         detail_count=len(unit.detail_images),
         sku_count=len(unit.skus),
@@ -65,7 +99,26 @@ def _unit_to_out(unit: ListingUnit, *, include_skus: bool = False) -> ListingUni
     )
 
 
-def list_products() -> list[ProductSummaryOut]:
+def list_products(*, material_source: MaterialSource = "local") -> list[ProductSummaryOut]:
+    if material_source == "minio":
+        from collections import defaultdict
+
+        grouped: dict[str, set[str]] = defaultdict(set)
+        for item in _listing_targets_for_source("minio"):
+            for code in item.product_codes:
+                grouped[code].add(item.image_set)
+        summaries: list[ProductSummaryOut] = []
+        for code in sorted(grouped):
+            image_sets = sorted(grouped[code], key=lambda name: name)
+            summaries.append(
+                ProductSummaryOut(
+                    product_code=code,
+                    image_sets=image_sets,
+                    listing_unit_count=len(image_sets),
+                )
+            )
+        return summaries
+
     settings = load_yaml_settings()
     assets_root = settings.paths.resolve("assets_root")
     summaries: list[ProductSummaryOut] = []
@@ -82,16 +135,22 @@ def list_products() -> list[ProductSummaryOut]:
     return summaries
 
 
-def list_listing_target_options(*, account_id: str = "") -> list[ListingTargetOptionOut]:
-    settings = load_yaml_settings()
+def list_listing_target_options(
+    *,
+    account_id: str = "",
+    material_source: MaterialSource = "local",
+) -> list[ListingTargetOptionOut]:
     from pdd_agent.api.services.listed_folder_service import listed_product_codes_by_set
 
     listed_by_set: dict[str, list[str]] = {}
     if account_id:
-        listed_by_set = listed_product_codes_by_set(account_id)
+        listed_by_set = listed_product_codes_by_set(
+            account_id,
+            material_source=material_source,
+        )
 
     options: list[ListingTargetOptionOut] = []
-    for item in list_listing_targets(settings):
+    for item in _listing_targets_for_source(material_source):
         current_codes = list(item.product_codes)
         listed_set = set(listed_by_set.get(item.selector, []))
         listed_codes = [code for code in current_codes if code in listed_set]
@@ -115,22 +174,49 @@ def list_listing_target_options(*, account_id: str = "") -> list[ListingTargetOp
     return options
 
 
-def get_product_detail(product_code: str) -> ProductDetailOut | None:
+def get_product_detail(
+    product_code: str,
+    *,
+    material_source: MaterialSource = "local",
+) -> ProductDetailOut | None:
     settings = load_yaml_settings()
-    assets_root = settings.paths.resolve("assets_root")
-    units = parse_all_listings(product_code, settings, include_excel_missing_previews=True)
+    assets_root = _assets_root_for_source(material_source) or settings.paths.resolve("assets_root")
+    if material_source == "minio":
+        from pdd_agent.integrations.minio.staging import stage_minio_for_product_codes
+
+        stage_minio_for_product_codes([product_code])
+    units = parse_all_listings(
+        product_code,
+        settings,
+        include_excel_missing_previews=True,
+        assets_root=assets_root if material_source == "minio" else None,
+    )
     if not units:
         return None
     return ProductDetailOut(
         product_code=product_code,
         image_sets=list_image_sets(product_code, assets_root),
-        units=[_unit_to_out(u, include_skus=True) for u in units],
+        units=[_unit_to_out(u, include_skus=True, assets_root=assets_root) for u in units],
     )
 
 
-def run_preflight_api(product_codes: list[str]) -> PreflightResponse:
+def run_preflight_api(
+    product_codes: list[str],
+    *,
+    material_source: MaterialSource = "local",
+) -> PreflightResponse:
     settings = load_yaml_settings()
-    report = run_preflight(product_codes, settings, include_excel_missing_previews=True)
+    assets_root = _assets_root_for_source(material_source) or settings.paths.resolve("assets_root")
+    if material_source == "minio":
+        from pdd_agent.integrations.minio.staging import stage_minio_for_product_codes
+
+        stage_minio_for_product_codes(product_codes)
+    report = run_preflight(
+        product_codes,
+        settings,
+        include_excel_missing_previews=True,
+        assets_root=assets_root if material_source == "minio" else None,
+    )
     errors = sum(1 for i in report.issues if i.level == "error")
     warnings = sum(1 for i in report.issues if i.level == "warning")
     return PreflightResponse(
@@ -138,7 +224,7 @@ def run_preflight_api(product_codes: list[str]) -> PreflightResponse:
         unit_count=len(report.units),
         error_count=errors,
         warning_count=warnings,
-        units=[_unit_to_out(u, include_skus=True) for u in report.units],
+        units=[_unit_to_out(u, include_skus=True, assets_root=assets_root) for u in report.units],
         issues=[
             PreflightIssueOut(
                 level=i.level,

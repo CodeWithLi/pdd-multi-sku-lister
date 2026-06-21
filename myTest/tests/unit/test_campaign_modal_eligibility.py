@@ -3,6 +3,8 @@
 from types import SimpleNamespace
 
 from pdd_agent.skills.campaign.marketing_activities import (
+    ACTIVITY_TIME_REQUIREMENT_FEISHU_MESSAGE,
+    _analyze_modal_product_eligibility,
     _ensure_modal_eligible_tab,
     _format_modal_eligibility_failure,
     _modal_search_results_loading,
@@ -79,6 +81,30 @@ def test_format_all_eligible_returns_empty():
         "missing_ids": [],
     }
     assert _format_modal_eligibility_failure(eligibility, ["111", "222"]) == {}
+
+
+def test_analyze_modal_detects_inline_time_requirement_in_search_row():
+    """搜索弹窗结果行内展示「新建规格需等待1天」时，应识别为 time_blocked 而非可报名。"""
+    modal = FakeModal(
+        evaluate_results=[
+            {
+                "eligible_ids": [],
+                "time_blocked": [
+                    {
+                        "product_id": "968599179476",
+                        "reason_text": "该商品近期有过新建规格，需等待1天后才可报名，请待修改时间满1天后再试",
+                    }
+                ],
+                "other_ineligible": [],
+                "missing_ids": [],
+            }
+        ]
+    )
+    eligibility = _analyze_modal_product_eligibility(modal, ["968599179476"])
+    failure = _format_modal_eligibility_failure(eligibility, ["968599179476"])
+    assert failure["step"] == "product_time_requirement_not_met"
+    assert failure["error"] == ACTIVITY_TIME_REQUIREMENT_FEISHU_MESSAGE
+    assert eligibility["eligible_ids"] == []
 
 
 def test_wait_modal_products_loaded_waits_until_rows_visible(monkeypatch):

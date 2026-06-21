@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { api } from '@/api/client'
@@ -16,6 +16,15 @@ interface PreviewImage {
 const router = useRouter()
 const loading = ref(false)
 const products = ref<ProductSummary[]>([])
+const materialSource = ref<'local' | 'minio'>('local')
+const minioHealth = ref<{
+  available?: boolean
+  error?: string
+  listing_poll_seconds?: number
+  alist_url?: string
+  console_url?: string
+} | null>(null)
+const materialPolling = ref(false)
 const selectedCodes = ref<string[]>([])
 const preflight = ref<PreflightResponse | null>(null)
 const error = ref('')
@@ -27,23 +36,73 @@ const skuDrawerVisible = ref(false)
 const activeUnit = ref<ListingUnit | null>(null)
 const activeSku = ref<SkuCombo | null>(null)
 
+let materialPollTimer: ReturnType<typeof setInterval> | null = null
+
 const productOptions = computed(() => products.value.map((p) => p.product_code))
 const allPassed = computed(() => preflight.value?.ok === true)
 const activeSkuRows = computed(() => activeUnit.value?.skus ?? [])
 
 function assetUrl(path: string) {
-  return `/api/catalog/asset?path=${encodeURIComponent(path)}`
+  const params = new URLSearchParams({
+    path,
+    material_source: materialSource.value,
+  })
+  return `/api/catalog/asset?${params.toString()}`
 }
 
 function fileName(path: string) {
   return path.split(/[\\/]/).pop() || path
 }
 
+async function loadMinioHealth() {
+  try {
+    minioHealth.value = await api.minioHealth()
+  } catch (e) {
+    minioHealth.value = { available: false, error: e instanceof Error ? e.message : 'MinIO 不可用' }
+  }
+}
+
+function stopMaterialPolling() {
+  materialPolling.value = false
+  if (materialPollTimer) {
+    clearInterval(materialPollTimer)
+    materialPollTimer = null
+  }
+}
+
+function startMaterialPolling() {
+  stopMaterialPolling()
+  if (materialSource.value !== 'minio') return
+  const seconds = minioHealth.value?.listing_poll_seconds ?? 30
+  if (!seconds || seconds <= 0) return
+  materialPolling.value = true
+  materialPollTimer = setInterval(() => {
+    loadProducts().catch(() => undefined)
+  }, seconds * 1000)
+}
+
+async function onMaterialSourceChange(source: 'local' | 'minio') {
+  materialSource.value = source
+  selectedCodes.value = []
+  preflight.value = null
+  imagePanelTitle.value = ''
+  previewImages.value = []
+  stopMaterialPolling()
+  if (source === 'minio') {
+    await loadMinioHealth()
+    if (!minioHealth.value?.available) {
+      ElMessage.warning(minioHealth.value?.error || 'MinIO 未就绪，请检查 config/minio.yaml')
+    }
+  }
+  await loadProducts()
+  startMaterialPolling()
+}
+
 async function loadProducts() {
   loading.value = true
   error.value = ''
   try {
-    products.value = await api.products()
+    products.value = await api.products(materialSource.value)
   } catch (e) {
     error.value = e instanceof Error ? e.message : '加载失败'
   } finally {
@@ -62,7 +121,7 @@ async function runPreflight() {
   imagePanelTitle.value = ''
   previewImages.value = []
   try {
-    const result = await api.preflight(selectedCodes.value)
+    const result = await api.preflight(selectedCodes.value, materialSource.value)
     preflight.value = result
     const firstUnit = result.units[0]
     if (firstUnit) {
@@ -153,7 +212,13 @@ function openSkuPreview(sku: SkuCombo) {
   ])
 }
 
-onMounted(loadProducts)
+onMounted(async () => {
+  await loadMinioHealth()
+  await loadProducts()
+  startMaterialPolling()
+})
+
+onUnmounted(stopMaterialPolling)
 </script>
 
 <template>
@@ -183,8 +248,50 @@ onMounted(loadProducts)
             </div>
           </template>
 
-          <el-empty v-if="!products.length" description="素材文件夹里还没有商品">
-            <div class="form-tip">请把商品素材放到 data/assets 目录中</div>
+          <div class="material-source-bar">
+            <el-radio-group
+              :model-value="materialSource"
+              size="small"
+              @change="onMaterialSourceChange($event as 'local' | 'minio')"
+            >
+              <el-radio-button label="local">本地文件夹</el-radio-button>
+              <el-radio-button label="minio">MinIO</el-radio-button>
+            </el-radio-group>
+            <el-tag
+              v-if="materialSource === 'minio'"
+              size="small"
+              :type="minioHealth?.available ? 'success' : 'danger'"
+            >
+              {{ minioHealth?.available ? 'MinIO 已连接' : (minioHealth?.error || 'MinIO 未连接') }}
+            </el-tag>
+            <el-tag v-if="materialSource === 'minio' && materialPolling" size="small" type="info">
+              自动刷新
+            </el-tag>
+            <el-button
+              v-if="materialSource === 'minio'"
+              link
+              type="primary"
+              size="small"
+              @click="loadProducts"
+            >
+              刷新
+            </el-button>
+          </div>
+          <div v-if="materialSource === 'minio' && minioHealth?.alist_url" class="form-tip source-tip">
+            运营上传入口（Alist）：{{ minioHealth.alist_url }}
+          </div>
+
+          <el-empty
+            v-if="!products.length"
+            :description="materialSource === 'minio' ? 'MinIO 中暂无可用笔袋素材' : '素材文件夹里还没有商品'"
+          >
+            <div class="form-tip">
+              {{
+                materialSource === 'minio'
+                  ? '请确认 config/minio.yaml 与同事 MinIO 配置一致，且 bucket 内已有套图'
+                  : '请把商品素材放到 data/assets 目录中'
+              }}
+            </div>
           </el-empty>
 
           <el-checkbox-group v-else v-model="selectedCodes" class="code-list">
@@ -206,7 +313,7 @@ onMounted(loadProducts)
             :disabled="!selectedCodes.length"
             @click="runPreflight"
           >
-            开始检查
+            {{ materialSource === 'minio' ? '从 MinIO 同步并检查' : '开始检查' }}
           </el-button>
         </el-card>
       </el-col>
@@ -366,6 +473,18 @@ onMounted(loadProducts)
   display: flex;
   justify-content: space-between;
   align-items: center;
+}
+
+.material-source-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-bottom: 12px;
+}
+
+.source-tip {
+  margin-bottom: 12px;
 }
 
 .result-card {

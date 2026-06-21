@@ -86,13 +86,22 @@ def listed_folder_rows_for_account(account_id: str) -> list:
     return list_listed_asset_folders(account_id=account_id, limit=5000)
 
 
-def listed_product_codes_by_set(account_id: str) -> dict[str, list[str]]:
+def listed_product_codes_by_set(
+    account_id: str,
+    *,
+    material_source: str = "local",
+) -> dict[str, list[str]]:
     """返回 {套图selector: [已上架商品编码]}，与当前素材目录实时对齐。"""
-    from pdd_agent.core.config import load_yaml_settings
-    from pdd_agent.db.repositories import build_catalog_set_index
+    if material_source == "minio":
+        from pdd_agent.integrations.minio.catalog import build_minio_catalog_set_index
 
-    settings = load_yaml_settings()
-    catalog_index = build_catalog_set_index(settings)
+        catalog_index = build_minio_catalog_set_index()
+    else:
+        from pdd_agent.core.config import load_yaml_settings
+        from pdd_agent.db.repositories import build_catalog_set_index
+
+        catalog_index = build_catalog_set_index(load_yaml_settings())
+
     account_id = str(account_id or "").strip()
     if account_id:
         prune_listed_folders_against_catalog(account_id=account_id, catalog_index=catalog_index)

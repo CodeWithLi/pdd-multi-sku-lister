@@ -25,6 +25,9 @@ const success = ref('')
 
 const accounts = ref<Account[]>([])
 const productOptions = ref<ListingTargetOption[]>([])
+const materialSource = ref<'local' | 'minio'>('local')
+const minioHealth = ref<{ available?: boolean; error?: string; listing_poll_seconds?: number } | null>(null)
+const materialPolling = ref(false)
 const showOnlyUnlistedGroups = ref(false)
 const activities = ref<MarketingActivityOption[]>([])
 const pipelines = ref<IntegratedPipeline[]>([])
@@ -47,6 +50,7 @@ const startDelayMin = ref(30)
 const startDelayMax = ref(180)
 
 let pollTimer: ReturnType<typeof setInterval> | null = null
+let materialPollTimer: ReturnType<typeof setInterval> | null = null
 
 const enabledAccounts = computed(() => accounts.value.filter((a) => a.enabled))
 
@@ -305,8 +309,50 @@ function onAccountChange() {
   checkedProductsBySet.value = {}
 }
 
+async function loadMinioHealth() {
+  try {
+    minioHealth.value = await api.minioHealth()
+  } catch (e) {
+    minioHealth.value = { available: false, error: e instanceof Error ? e.message : 'MinIO 不可用' }
+  }
+}
+
 async function loadListingTargets(forAccountId = '') {
-  productOptions.value = await api.listingTargets(forAccountId || undefined)
+  productOptions.value = await api.listingTargets(forAccountId || undefined, materialSource.value)
+}
+
+function stopMaterialPolling() {
+  materialPolling.value = false
+  if (materialPollTimer) {
+    clearInterval(materialPollTimer)
+    materialPollTimer = null
+  }
+}
+
+function startMaterialPolling() {
+  stopMaterialPolling()
+  if (materialSource.value !== 'minio') return
+  const seconds = minioHealth.value?.listing_poll_seconds ?? 30
+  if (!seconds || seconds <= 0) return
+  materialPolling.value = true
+  materialPollTimer = setInterval(() => {
+    if (accountId.value) loadListingTargets(accountId.value).catch(() => undefined)
+  }, seconds * 1000)
+}
+
+async function onMaterialSourceChange(source: 'local' | 'minio') {
+  materialSource.value = source
+  productCodes.value = []
+  checkedProductsBySet.value = {}
+  if (source === 'minio') {
+    await loadMinioHealth()
+    if (!minioHealth.value?.available) {
+      ElMessage.warning(minioHealth.value?.error || 'MinIO 未就绪，请检查 config/minio.yaml')
+    }
+  }
+  stopMaterialPolling()
+  if (accountId.value) await loadListingTargets(accountId.value)
+  startMaterialPolling()
 }
 
 async function loadBaseData() {
@@ -451,15 +497,20 @@ watch(accountId, (id) => {
 
 onMounted(async () => {
   try {
+    await loadMinioHealth()
     await loadBaseData()
     await refreshPipelines()
     startPolling()
+    startMaterialPolling()
   } catch (e) {
     error.value = e instanceof Error ? e.message : String(e)
   }
 })
 
-onUnmounted(stopPolling)
+onUnmounted(() => {
+  stopPolling()
+  stopMaterialPolling()
+})
 </script>
 
 <template>
@@ -555,6 +606,27 @@ onUnmounted(stopPolling)
               <el-form-item required class="material-form-item">
                 <div class="material-panel">
                   <div class="material-panel-toolbar">
+                    <div class="material-source-row">
+                      <el-radio-group
+                        :model-value="materialSource"
+                        size="small"
+                        class="source-segment"
+                        @change="onMaterialSourceChange($event as 'local' | 'minio')"
+                      >
+                        <el-radio-button label="local">本地文件夹</el-radio-button>
+                        <el-radio-button label="minio">MinIO</el-radio-button>
+                      </el-radio-group>
+                      <el-tag
+                        v-if="materialSource === 'minio'"
+                        size="small"
+                        :type="minioHealth?.available ? 'success' : 'danger'"
+                      >
+                        {{ minioHealth?.available ? 'MinIO 已连接' : (minioHealth?.error || 'MinIO 未连接') }}
+                      </el-tag>
+                      <el-tag v-if="materialSource === 'minio' && materialPolling" size="small" type="info">
+                        自动刷新
+                      </el-tag>
+                    </div>
                     <el-radio-group v-model="showOnlyUnlistedGroups" size="small" class="filter-segment">
                       <el-radio-button :label="true">
                         仅未上架{{ unlistedGroupCount ? ` (${unlistedGroupCount})` : '' }}
@@ -1016,10 +1088,17 @@ onUnmounted(stopPolling)
 }
 
 .material-panel-toolbar {
+  display: grid;
+  grid-template-columns: 1fr auto auto;
+  gap: 10px 12px;
+  align-items: center;
+}
+
+.material-source-row {
+  grid-column: 1 / -1;
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  gap: 12px;
+  gap: 8px;
   flex-wrap: wrap;
 }
 

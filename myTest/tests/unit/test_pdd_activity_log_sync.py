@@ -407,3 +407,54 @@ def test_push_pdd_activity_log_activity_register_618_and_discount(monkeypatch, a
 
     assert captured[-1]["patch_fields"]["七折状态"] == "失败"
 
+
+def test_upsert_pdd_activity_log_fields_skips_unchanged(monkeypatch, activity_cfg):
+    from pdd_agent.integrations.feishu import pdd_activity_log_sync
+
+    monkeypatch.setattr(
+        pdd_activity_log_sync,
+        "resolve_pdd_activity_log_table_id",
+        lambda *a, **k: ("tbl_test", "table_name"),
+    )
+    monkeypatch.setattr(pdd_activity_log_sync, "ensure_fields", lambda *a, **k: None)
+    monkeypatch.setattr(
+        pdd_activity_log_sync,
+        "map_fields_to_table_names",
+        lambda *a, **k: {"限时限量购状态": "失败", "限时限量购失败原因": "活动价格不符合价格区间，不继续创建活动"},
+    )
+    monkeypatch.setattr(
+        pdd_activity_log_sync,
+        "_find_activity_log_record",
+        lambda *a, **k: {
+            "record_id": "rec1",
+            "fields": {
+                "限时限量购状态": "失败",
+                "限时限量购失败原因": "活动价格不符合价格区间，不继续创建活动",
+            },
+        },
+    )
+
+    batch_updates: list = []
+    monkeypatch.setattr(
+        pdd_activity_log_sync,
+        "batch_update_records",
+        lambda *a, **k: batch_updates.append(k),
+    )
+
+    result = pdd_activity_log_sync.upsert_pdd_activity_log_fields(
+        product_id="968599179476",
+        patch_fields={
+            "限时限量购状态": "失败",
+            "限时限量购失败原因": "活动价格不符合价格区间，不继续创建活动",
+        },
+        account_id="store_A",
+        account_name="测试店",
+        identity_mode="immediate",
+        config=activity_cfg,
+        client=object(),
+    )
+
+    assert result.get("skipped") is True
+    assert result.get("reason") == "unchanged"
+    assert batch_updates == []
+

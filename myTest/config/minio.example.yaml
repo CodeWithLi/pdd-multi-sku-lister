@@ -1,0 +1,32 @@
+# MinIO 素材存储（与同事项目一致）
+# 复制：cp config/minio.example.yaml config/minio.yaml
+
+enabled: true
+# MinIO API
+endpoint: 192.168.1.129:9000
+secure: false
+access_key: ""
+secret_key: ""
+bucket: beilemei-images
+
+# 运营 Alist 上传入口（图片经 Alist -> MinIO -> RabbitMQ 通知）
+alist_url: http://192.168.1.129
+# MinIO 控制台 http://192.168.1.129:9001  admin / 12345678
+console_url: http://192.168.1.129:9001
+
+# 只扫描这些一级目录（与 bucket 内 Alist 目录结构一致）
+categories:
+  - 笔袋
+
+prefix: ""
+cache_root: data/minio_cache/商品上架规格文件
+listing_poll_seconds: 30
+
+rabbitmq:
+  enabled: false
+  host: 192.168.1.129
+  port: 5672
+  username: guest
+  password: guest
+  queue: minio-upload-events
+  settle_seconds: 100
