@@ -24,6 +24,7 @@ from pdd_agent.integrations.feishu.pdd_upload_sync import (
     push_pdd_upload_promotion_status,
     resolve_activity_register_field_name,
     _format_brief_listing_failure_reason,
+    _humanize_listing_failure_message,
     parse_listing_label_from_text,
 )
 from pdd_agent.skills.listing.goods_list_capture import (
@@ -504,12 +505,36 @@ def test_push_pdd_upload_promotion_status_updates_field(monkeypatch):
 def test_format_brief_listing_failure_reason_is_short():
     text = _format_brief_listing_failure_reason(
         listing_label="BD736/第三套图/BD736A",
-        reason_code="preflight_catalog",
-        error="very long\nstack trace should not appear",
+        reason_code="preflight_no_carousel",
         record_type="跳过",
     )
-    assert text.startswith("跳过: BD736/第三套图/BD736A:")
-    assert "stack trace" not in text
+    assert text == "跳过: BD736/第三套图/BD736A: 缺少主图（需 1-5 编号图）"
+
+
+def test_humanize_slot_alignment_uses_plain_language():
+    text = _humanize_listing_failure_message(
+        reason_code="slot_alignment_failed",
+        message="[BD722C/第一套图] 槽位对齐失败：兄弟款预览图数量不一致（BD722B=3张，BD722C=2张）",
+    )
+    assert text == "兄弟款预览图张数不一致（BD722B=3张，BD722C=2张）"
+
+    brief = _format_brief_listing_failure_reason(
+        listing_label="BD722C/第一套图",
+        reason_code="slot_alignment_failed",
+        message="槽位对齐失败：兄弟款规格数量不一致",
+        record_type="跳过",
+    )
+    assert brief == "跳过: BD722C/第一套图: 兄弟款预览图张数不一致，请核对各款图数"
+
+
+def test_humanize_skip_missing_numbered_images():
+    text = _format_brief_listing_failure_reason(
+        listing_label="BD736/第三套图/BD736A",
+        reason_code="preflight_catalog",
+        message="无任何数字命名图 (1-9)",
+        record_type="跳过",
+    )
+    assert text == "跳过: BD736/第三套图/BD736A: 缺少按数字命名的图片 (1-9)"
 
 
 def test_schedule_feishu_listing_result_log_dedupes_one_failure(monkeypatch):
@@ -551,6 +576,82 @@ def test_schedule_feishu_listing_result_log_dedupes_one_failure(monkeypatch):
 def test_map_listing_failure_record_type_skip_vs_fail():
     assert map_listing_failure_record_type(reason_code="slot_alignment_failed", retryable=True) == "跳过"
     assert map_listing_failure_record_type(status="failed", reason_code="submit_blocked") == "失败"
+    assert map_listing_failure_record_type(
+        reason_code="rejected_after_publish",
+        status="failed",
+    ) == "失败"
+    assert map_listing_failure_record_type(
+        reason_code="published_but_not_found_in_on_sale_or_rejected",
+        status="retryable",
+        retryable=True,
+    ) == "失败"
+
+
+def test_schedule_feishu_listing_result_log_records_post_submit_failures(monkeypatch):
+    from pdd_agent.api.services import task_runner
+    from pdd_agent.integrations.feishu import pdd_upload_sync
+
+    captured: list[dict] = []
+
+    def fake_schedule_failure(**kwargs):
+        captured.append(kwargs)
+        return {"created": True}
+
+    monkeypatch.setattr(pdd_upload_sync, "schedule_pdd_upload_failure_log", fake_schedule_failure)
+
+    task_runner._schedule_feishu_listing_result_log(
+        account_id="store_A",
+        product_codes=["BD722"],
+        result={
+            "results": [
+                {
+                    "status": "failed",
+                    "reason": "rejected_after_publish",
+                    "listing_label": "BD722C/第一套图",
+                    "platform_listing_code": "BD722C",
+                    "error": "提交后在「已驳回」找到商品，平台已驳回",
+                },
+                {
+                    "status": "retryable",
+                    "reason": "published_but_not_found_in_on_sale_or_rejected",
+                    "listing_label": "BD722D/第一套图",
+                    "platform_listing_code": "BD722D",
+                    "error": "提交后在在售/驳回列表没找到刚上的商品，请人工核对",
+                    "retryable": True,
+                },
+            ]
+        },
+    )
+
+    assert len(captured) == 2
+    assert captured[0]["reason_code"] == "rejected_after_publish"
+    assert captured[1]["reason_code"] == "published_but_not_found_in_on_sale_or_rejected"
+    assert map_listing_failure_record_type(
+        reason_code=captured[0]["reason_code"],
+        status="failed",
+    ) == "失败"
+    assert map_listing_failure_record_type(
+        reason_code=captured[1]["reason_code"],
+        status="retryable",
+        retryable=True,
+    ) == "失败"
+
+
+def test_humanize_post_submit_failure_messages():
+    rejected = _humanize_listing_failure_message(
+        reason_code="rejected_after_publish",
+        error="提交后在「已驳回」找到商品，平台已驳回",
+    )
+    assert "已驳回" in rejected
+
+    not_found = _format_brief_listing_failure_reason(
+        listing_label="BD722D/第一套图",
+        reason_code="published_but_not_found_in_on_sale_or_rejected",
+        error="提交后在在售/驳回列表没找到刚上的商品，请人工核对",
+        record_type="失败",
+    )
+    assert not_found.startswith("失败: BD722D/第一套图:")
+    assert "没找到刚上" in not_found
 
 
 def test_build_pdd_upload_failure_log_fields():
@@ -634,3 +735,5 @@ def test_push_pdd_upload_failure_log_without_merchant_code(monkeypatch):
     )
     assert result.get("created") is True
     assert result["fields"]["商品编码"] == "BD722B"
+    assert "兄弟款预览图张数不一致" in result["fields"]["失败原因"]
+    assert "槽位对齐" not in result["fields"]["失败原因"]

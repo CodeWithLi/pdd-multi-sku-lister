@@ -388,6 +388,8 @@ def _schedule_feishu_listing_result_log(
             continue
 
         if status in {"failed", "retryable"} or item.get("error") or item.get("reason"):
+            if item.get("feishu_failure_logged"):
+                continue
             _queue_failure(
                 listing_label=listing_label,
                 merchant_code=merchant_code,
@@ -426,7 +428,18 @@ def _schedule_feishu_listing_result_log(
         message = str(
             getattr(issue, "message", None) or (issue.get("message") if isinstance(issue, dict) else "") or ""
         )
-        reason_code = "slot_alignment_failed" if "槽位对齐" in message else "preflight_catalog"
+        if "槽位对齐" in message:
+            reason_code = "slot_alignment_failed"
+        elif "无有效 SKU" in message or "未解析到任何有效 SKU" in message:
+            reason_code = "preflight_no_skus"
+        elif "主图为空" in message or "1-5 主图" in message:
+            reason_code = "preflight_no_carousel"
+        elif "详情图为空" in message or "7-9 详情图" in message:
+            reason_code = "preflight_no_detail"
+        elif "图片" in message and ("不存在" in message or "无法" in message):
+            reason_code = "image_file_missing"
+        else:
+            reason_code = "preflight_catalog"
         _queue_failure(
             listing_label=listing_label,
             reason_code=reason_code,
@@ -707,6 +720,12 @@ async def execute_listing(
         _persist_published_products(run_id, account_id, result)
         record = store.load(run_id)
         if record and record.status == RunStatus.CANCELED:
+            _schedule_feishu_listing_result_log(
+                account_id=account_id,
+                run_id=run_id,
+                result=result,
+                product_codes=codes,
+            )
             return {"canceled": True, "results": result.get("results") or []}
         labels = []
         for u in result.get("units") or []:
