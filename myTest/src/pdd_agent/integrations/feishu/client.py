@@ -15,8 +15,11 @@ FEISHU_OAUTH_AUTHORIZE_URL = "https://accounts.feishu.cn/open-apis/authen/v1/aut
 _NETWORK_RETRY_ATTEMPTS = 3
 _NETWORK_RETRYABLE = (
     httpx.ConnectError,
+    httpx.ConnectTimeout,
     httpx.ReadTimeout,
     httpx.WriteTimeout,
+    httpx.PoolTimeout,
+    httpx.TimeoutException,
     httpx.RemoteProtocolError,
     httpx.NetworkError,
 )
@@ -33,7 +36,7 @@ _USER_TOKEN_EXPIRED_CODES = frozenset({99991663, 99991668, 99991677})
 
 
 class FeishuClient:
-    def __init__(self, config: FeishuConfig, *, timeout: float = 30.0) -> None:
+    def __init__(self, config: FeishuConfig, *, timeout: float = 60.0) -> None:
         self._config = config
         self._timeout = timeout
         self._token: str = ""

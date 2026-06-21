@@ -104,6 +104,9 @@ def catalog_minio_health():
     health["alist_url"] = cfg.alist_url
     health["console_url"] = cfg.console_url
     health["cache_root"] = str(cfg.cache_root)
+    from pdd_agent.integrations.redis.client import check_redis_health
+
+    health["redis"] = check_redis_health()
     return health
 
 

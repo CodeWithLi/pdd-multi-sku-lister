@@ -35,6 +35,10 @@ class MinioYamlConfig(BaseModel):
     categories: list[str] = Field(default_factory=lambda: ["笔袋"])
     prefix: str = ""
     listing_poll_seconds: int = Field(default=30, ge=0, le=300)
+    default_material_source: str = Field(
+        default="minio",
+        description="未显式指定 material_source 时的默认素材源：local | minio",
+    )
     cache_root: str = Field(
         default="data/minio_cache/商品上架规格文件",
         description="MinIO 素材同步到本地的缓存目录（相对 myTest 根目录）",
@@ -54,6 +58,7 @@ class MinioConfig(BaseModel):
     categories: list[str] = Field(default_factory=lambda: ["笔袋"])
     prefix: str = ""
     listing_poll_seconds: int = 30
+    default_material_source: str = "minio"
     cache_root: str = "data/minio_cache/商品上架规格文件"
     alist_url: str = ""
     console_url: str = ""
@@ -103,6 +108,7 @@ def load_minio_config(path: Path | None = None) -> MinioConfig:
         categories=[str(item).strip() for item in yaml_cfg.categories if str(item).strip()],
         prefix=str(yaml_cfg.prefix or "").strip().strip("/"),
         listing_poll_seconds=int(yaml_cfg.listing_poll_seconds or 0),
+        default_material_source=str(yaml_cfg.default_material_source or "minio").strip().lower(),
         cache_root=str(yaml_cfg.cache_root or "data/minio_cache/商品上架规格文件").strip(),
         alist_url=str(yaml_cfg.alist_url or "").strip(),
         console_url=str(yaml_cfg.console_url or "").strip(),

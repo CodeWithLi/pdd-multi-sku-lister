@@ -107,6 +107,41 @@ class PddActivityLogFieldNames(BaseModel):
     activity_discount_failure_reason: str = "七折失败原因"
 
 
+class PddPriceCompareFieldNames(BaseModel):
+    """拼多多比价定价表列名。"""
+
+    merchant_code: str = "商品编码"
+    min_price: str = "PDD控价下限价格"
+    max_price: str = "PDD控价上限价格"
+    pdd_pricing: str = "拼多多定价"
+    pdd_control_price: str = "拼多多控价"
+
+
+class PddPriceCompareConfig(BaseModel):
+    enabled: bool = Field(default=True, description="是否从飞书「拼多多比价定价」读取定价/控价数据")
+    table_id: str = Field(default="", description="拼多多比价定价 table_id")
+    table_name: str = Field(default="拼多多比价定价", description="比价定价飞书表名")
+    excel_relpath: str = Field(
+        default="data/assets/pdd.xls",
+        description="控价区间 Excel（下限/上限）",
+    )
+    pricing_excel_relpath: str = Field(
+        default="data/assets/拼多多定价.xls",
+        description="母商品定价 Excel",
+    )
+    control_excel_relpath: str = Field(
+        default="data/assets/拼多多控价.xls",
+        description="子商品控价 Excel",
+    )
+    prefer_feishu: bool = Field(default=True, description="运行时优先读飞书，而非本地 Excel")
+    fallback_excel: bool = Field(
+        default=True,
+        description="飞书无数据时是否回退读本地 Excel",
+    )
+    cache_seconds: int = Field(default=300, ge=0, le=3600, description="飞书定价/控价缓存秒数")
+    field_names: PddPriceCompareFieldNames = Field(default_factory=PddPriceCompareFieldNames)
+
+
 class PddActivityLogConfig(BaseModel):
     enabled: bool = Field(default=True, description="是否启用 PDD 活动日志表")
     table_id: str = Field(default="", description="PDD活动日志表 table_id")
@@ -327,6 +362,7 @@ class FeishuYamlConfig(BaseModel):
     pdd_upload_log: PddUploadLogConfig = Field(default_factory=PddUploadLogConfig)
     pdd_activity_log: PddActivityLogConfig = Field(default_factory=PddActivityLogConfig)
     pdd_marketing_log: PddMarketingLogConfig = Field(default_factory=PddMarketingLogConfig)
+    pdd_price_compare: PddPriceCompareConfig = Field(default_factory=PddPriceCompareConfig)
 
 
 class FeishuConfig(BaseModel):
@@ -352,6 +388,7 @@ class FeishuConfig(BaseModel):
     pdd_upload_log: PddUploadLogConfig = Field(default_factory=PddUploadLogConfig)
     pdd_activity_log: PddActivityLogConfig = Field(default_factory=PddActivityLogConfig)
     pdd_marketing_log: PddMarketingLogConfig = Field(default_factory=PddMarketingLogConfig)
+    pdd_price_compare: PddPriceCompareConfig = Field(default_factory=PddPriceCompareConfig)
 
 
 def load_feishu_config(path: Path | None = None) -> FeishuConfig:
@@ -383,6 +420,10 @@ def load_feishu_config(path: Path | None = None) -> FeishuConfig:
     if "pdd_activity_log" in raw and isinstance(raw.get("pdd_activity_log"), dict):
         pdd_activity_log = PddActivityLogConfig.model_validate(raw["pdd_activity_log"])
 
+    pdd_price_compare = yaml_cfg.pdd_price_compare
+    if "pdd_price_compare" in raw and isinstance(raw.get("pdd_price_compare"), dict):
+        pdd_price_compare = PddPriceCompareConfig.model_validate(raw["pdd_price_compare"])
+
     return FeishuConfig(
         app_id=env.feishu_app_id or yaml_cfg.app_id,
         app_secret=env.feishu_app_secret or yaml_cfg.app_secret,
@@ -404,6 +445,7 @@ def load_feishu_config(path: Path | None = None) -> FeishuConfig:
         pdd_upload_log=pdd_upload_log,
         pdd_activity_log=pdd_activity_log,
         pdd_marketing_log=pdd_marketing_log,
+        pdd_price_compare=pdd_price_compare,
     )
 
 
@@ -471,6 +513,23 @@ def save_pdd_activity_table_id_to_config(table_id: str, path: Path | None = None
         activity_raw = {}
     activity_raw["table_id"] = table_id
     data["pdd_activity_log"] = activity_raw
+    cfg_path.parent.mkdir(parents=True, exist_ok=True)
+    with open(cfg_path, "w", encoding="utf-8") as f:
+        yaml.dump(data, f, allow_unicode=True, default_flow_style=False, sort_keys=False)
+
+
+def save_pdd_price_compare_table_id_to_config(table_id: str, path: Path | None = None) -> None:
+    """解析到拼多多比价定价表后，把 table_id 写回 feishu.yaml。"""
+    cfg_path = path or Path(os.getenv("FEISHU_CONFIG_PATH", DEFAULT_FEISHU_CONFIG_PATH))
+    data: dict = {}
+    if cfg_path.is_file():
+        with open(cfg_path, encoding="utf-8") as f:
+            data = yaml.safe_load(f) or {}
+    compare_raw = data.get("pdd_price_compare")
+    if not isinstance(compare_raw, dict):
+        compare_raw = {}
+    compare_raw["table_id"] = table_id
+    data["pdd_price_compare"] = compare_raw
     cfg_path.parent.mkdir(parents=True, exist_ok=True)
     with open(cfg_path, "w", encoding="utf-8") as f:
         yaml.dump(data, f, allow_unicode=True, default_flow_style=False, sort_keys=False)

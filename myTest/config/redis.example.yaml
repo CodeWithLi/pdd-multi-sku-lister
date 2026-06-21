@@ -1,0 +1,10 @@
+# Redis（MinIO 套图索引等）
+# 复制：cp config/redis.example.yaml config/redis.yaml
+
+enabled: true
+host: 127.0.0.1
+port: 6379
+password: ""
+db: 0
+# 所有 key 的前缀，如 pdd:minio:index:{bucket}:sets
+key_prefix: pdd

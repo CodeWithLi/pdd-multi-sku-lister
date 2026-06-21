@@ -32,6 +32,8 @@ class ListingState(TypedDict, total=False):
     retry_item: dict[str, Any]
     run_id: str
     slot_alignment_test: bool  # 试验：主款槽位对齐，默认应由 API 传 False
+    material_source: str
+    assets_root: str
     preflight: PreflightReport
     units: list[ListingUnit]
     current_index: int  # 多单元顺序上架时的游标（预留）

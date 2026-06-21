@@ -4,6 +4,7 @@ from datetime import datetime, timedelta
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
+from pdd_agent.domain.enums import RunStatus
 from pdd_agent.api.services.pipeline_service import (
     CAMPAIGN_TIME_REQUIREMENT_STEP,
     DEMO_ACTIVITY_DELAY_MINUTES,
@@ -721,3 +722,77 @@ def test_on_limited_time_finished_continues_when_continue_enabled():
     assert update.call_args.kwargs["status"] == "running"
     assert update.call_args.kwargs["current_step"] == "limited_time_failed_continue"
 
+
+def test_on_campaign_finished_is_idempotent_for_same_run_id():
+    row = SimpleNamespace(
+        pipeline_id="pipe_dup",
+        account_id="store_A",
+        status="running",
+        auto_promotion=True,
+        pdd_product_ids=["111"],
+        mapping_ids=["m1"],
+        activity_id="21365",
+        campaign_run_id="run_dup",
+        meta={
+            "activity_ids": ["20981", "21365"],
+            "campaign_activity_index": 1,
+            "campaign_results": [
+                {
+                    "activity_id": "20981",
+                    "run_id": "run_1",
+                    "success": False,
+                    "skipped": True,
+                    "summary": "skip",
+                }
+            ],
+            "handled_campaign_run_ids": ["run_dup"],
+        },
+    )
+    with patch("pdd_agent.api.services.pipeline_service._enqueue_pipeline_traffic") as enqueue_traffic:
+        _on_campaign_finished(
+            row,
+            run_id="run_dup",
+            success=False,
+            result={"results": [{"status": "failed", "error": "部分商品不可报名活动"}]},
+            error="部分商品不可报名活动",
+        )
+    enqueue_traffic.assert_not_called()
+
+
+def test_reconcile_campaign_failure_continue_does_not_duplicate_traffic():
+    from pdd_agent.api.services.pipeline_service import _reconcile_stuck_pipeline_row
+
+    row = SimpleNamespace(
+        pipeline_id="pipe_reconcile",
+        account_id="store_A",
+        status="running",
+        auto_promotion=True,
+        listing_run_id="",
+        campaign_run_id="run_2",
+        traffic_run_id="",
+        meta={
+            "activity_ids": ["20981", "21365"],
+            "campaign_activity_index": 1,
+            "campaign_results": [
+                {
+                    "activity_id": "21365",
+                    "run_id": "run_2",
+                    "success": False,
+                    "skipped": True,
+                    "summary": "skip",
+                }
+            ],
+            "handled_campaign_run_ids": ["run_2"],
+            "continue_after_activity_failure": True,
+        },
+    )
+    failed_record = SimpleNamespace(
+        status=RunStatus.FAILED,
+        message="部分商品不可报名活动",
+        result={"results": [{"status": "failed", "error": "部分商品不可报名活动"}]},
+    )
+    with patch("pdd_agent.api.services.task_runner.TaskRunStore") as mock_store_cls:
+        mock_store_cls.return_value.load.return_value = failed_record
+        with patch("pdd_agent.api.services.pipeline_service._enqueue_pipeline_traffic") as enqueue_traffic:
+            _reconcile_stuck_pipeline_row(row)
+    enqueue_traffic.assert_not_called()

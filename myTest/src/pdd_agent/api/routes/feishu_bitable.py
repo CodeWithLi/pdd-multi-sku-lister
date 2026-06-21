@@ -196,6 +196,46 @@ def delete_field(
     )
 
 
+@router.post("/migrate-pdd-price-compare")
+def migrate_pdd_price_compare(
+    dry_run: bool = Query(default=False, description="仅预览匹配结果，不写入飞书"),
+    scope: str = Query(
+        default="all",
+        description="迁移范围：all=全部，range=pdd.xls，pricing=拼多多定价，control=拼多多控价",
+    ),
+):
+    """将定价/控价 Excel 迁移到飞书「拼多多比价定价」表。"""
+    from pdd_agent.integrations.feishu.pdd_price_compare_sync import (
+        migrate_all_price_compare_excels,
+        migrate_control_xls_to_feishu,
+        migrate_pdd_xls_to_feishu,
+        migrate_pricing_xls_to_feishu,
+    )
+
+    scope_key = str(scope or "all").strip().lower()
+    try:
+        if scope_key == "all":
+            result = migrate_all_price_compare_excels(dry_run=dry_run)
+        elif scope_key == "range":
+            result = migrate_pdd_xls_to_feishu(dry_run=dry_run)
+        elif scope_key == "pricing":
+            result = migrate_pricing_xls_to_feishu(dry_run=dry_run)
+        elif scope_key == "control":
+            result = migrate_control_xls_to_feishu(dry_run=dry_run)
+        else:
+            raise HTTPException(status_code=422, detail=f"未知 scope: {scope}")
+    except FeishuAPIError as exc:
+        raise HTTPException(
+            status_code=502,
+            detail={"message": str(exc), "code": exc.code},
+        ) from exc
+    if isinstance(result, dict) and result.get("failed"):
+        raise HTTPException(status_code=400, detail=result)
+    if isinstance(result, dict) and not result.get("success") and scope_key == "all":
+        raise HTTPException(status_code=400, detail=result)
+    return result
+
+
 @router.get("/tables/{table_id}/records")
 def list_records(
     table_id: str,

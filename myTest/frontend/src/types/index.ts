@@ -547,6 +547,8 @@ export interface IntegratedPipeline {
 export interface IntegratedPipelineListResponse {
   items: IntegratedPipeline[]
   total: number
+  page?: number
+  page_size?: number
 }
 
 export interface IntegratedPipelineStartPayload {
@@ -565,6 +567,7 @@ export interface IntegratedPipelineStartPayload {
   slot_alignment_test?: boolean
   skip_listing?: boolean
   listing_skip_selectors?: string[]
+  material_source?: 'local' | 'minio'
 }
 
 export interface IntegratedPipelineBatchStartPayload {
@@ -586,6 +589,7 @@ export interface IntegratedPipelineBatchStartPayload {
   max_concurrent_stores?: number
   skip_listing?: boolean
   listing_skip_selectors?: string[]
+  material_source?: 'local' | 'minio'
 }
 
 export interface IntegratedPipelineBatchRunItem {

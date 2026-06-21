@@ -12,9 +12,13 @@ from pdd_agent.integrations.minio.catalog import (
     extract_product_code,
     list_minio_listing_targets,
 )
+from pdd_agent.integrations.minio.index import find_sets_for_product_code, resolve_minio_set_prefix
+from pdd_agent.skills.listing.catalog import (
+    _parse_listing_target_product_selector,
+    is_image_set_dir,
+)
 from pdd_agent.integrations.minio.client import get_minio_client
 from pdd_agent.integrations.minio.config import MinioConfig, load_minio_config, minio_cache_root, minio_configured
-from pdd_agent.skills.listing.catalog import is_image_set_dir
 
 logger = get_logger(__name__)
 
@@ -37,14 +41,38 @@ def _resolve_image_set_folder(object_name: str) -> tuple[str, str, str] | None:
     return None
 
 
-def _sets_for_product_codes(product_codes: set[str], config: MinioConfig | None = None) -> set[tuple[str, str]]:
-    selected = {str(code or "").strip().upper() for code in product_codes if str(code or "").strip()}
-    if not selected:
-        return set()
+def _sets_for_product_inputs(
+    product_inputs: list[str],
+    config: MinioConfig | None = None,
+) -> set[tuple[str, str]]:
+    """从 selector（BD021/第一套图/BD021A）或裸编码解析需同步的套图，避免无谓全桶扫描。"""
     sets: set[tuple[str, str]] = set()
-    for target in list_minio_listing_targets(config):
-        if any(code.upper() in selected for code in target.product_codes):
-            sets.add((target.family_code, target.image_set))
+    lookup_codes: set[str] = set()
+
+    for raw in product_inputs:
+        selector = str(raw or "").strip()
+        if not selector:
+            continue
+        parsed = _parse_listing_target_product_selector(selector)
+        if parsed:
+            family_code, image_set, _product_code = parsed
+            sets.add((family_code, image_set))
+            continue
+        parts = [part.strip() for part in selector.split("/") if part.strip()]
+        if len(parts) == 2 and is_image_set_dir(parts[1]):
+            sets.add((parts[0], parts[1]))
+            continue
+        lookup_codes.add(selector.upper())
+
+    if lookup_codes:
+        for code in lookup_codes:
+            for record in find_sets_for_product_code(code, config):
+                sets.add((record.family_code, record.image_set))
+        if not sets:
+            for target in list_minio_listing_targets(config):
+                target_codes = {str(item or "").strip().upper() for item in target.product_codes}
+                if lookup_codes.intersection(target_codes):
+                    sets.add((target.family_code, target.image_set))
     return sets
 
 
@@ -62,14 +90,21 @@ def stage_minio_image_set(
 
     client = get_minio_client(cfg)
     dest_root = cache_root or minio_cache_root(cfg)
-    marker = f"/{family_code}/{image_set}/"
     grouped: dict[str, list[str]] = defaultdict(list)
+    object_prefix = resolve_minio_set_prefix(family_code, image_set, cfg)
+    list_prefixes: list[str] = []
+    if object_prefix:
+        list_prefixes = [object_prefix]
+    else:
+        set_suffix = f"{family_code}/{image_set}/"
+        list_prefixes = [
+            f"{scan_prefix}{set_suffix}" if scan_prefix else set_suffix
+            for scan_prefix in _scan_prefixes(cfg)
+        ]
 
-    for scan_prefix in _scan_prefixes(cfg):
-        for obj in client.list_objects(cfg.bucket, prefix=scan_prefix, recursive=True):
+    for list_prefix in list_prefixes:
+        for obj in client.list_objects(cfg.bucket, prefix=list_prefix, recursive=True):
             key = obj.object_name
-            if marker not in key:
-                continue
             resolved = _resolve_image_set_folder(key)
             if not resolved:
                 continue
@@ -101,11 +136,12 @@ def stage_minio_image_set(
 
 
 def stage_minio_for_product_codes(product_codes: list[str], config: MinioConfig | None = None) -> Path:
-    """按商品编码同步 MinIO 素材到本地缓存目录。"""
+    """按商品 selector/编码同步 MinIO 素材到本地缓存目录。"""
     cfg = config or load_minio_config()
     cache_root = minio_cache_root(cfg)
     cache_root.mkdir(parents=True, exist_ok=True)
-    sets = _sets_for_product_codes(set(product_codes), cfg)
+    inputs = [str(code or "").strip() for code in product_codes if str(code or "").strip()]
+    sets = _sets_for_product_inputs(inputs, cfg)
     total = 0
     for family_code, image_set in sorted(sets):
         total += stage_minio_image_set(

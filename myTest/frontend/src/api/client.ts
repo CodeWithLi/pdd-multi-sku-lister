@@ -167,6 +167,7 @@ export const api = {
     category_keyword: string
     background: boolean
     slot_alignment_test?: boolean
+    material_source?: 'local' | 'minio'
   }) => http.post<ListingTaskResponse>('/tasks/listing', body).then((r) => r.data),
 
   listingBatch: (body: {
@@ -179,6 +180,7 @@ export const api = {
     store_start_delay_min_seconds?: number
     store_start_delay_max_seconds?: number
     slot_alignment_test?: boolean
+    material_source?: 'local' | 'minio'
   }) => http.post<BatchTaskResponse>('/tasks/listing/batch', body).then((r) => r.data),
 
   retryListingItem: (sourceRunId: string, body: {
@@ -379,10 +381,14 @@ export const api = {
   startIntegratedPipelineBatch: (body: IntegratedPipelineBatchStartPayload) =>
     http.post<IntegratedPipelineBatchResponse>('/pipelines/integrated/batch', body).then((r) => r.data),
 
-  listIntegratedPipelines: (limit = 20, batchId = '') =>
+  listIntegratedPipelines: (params: { page?: number; page_size?: number; batch_id?: string } = {}) =>
     http
       .get<IntegratedPipelineListResponse>('/pipelines/integrated', {
-        params: { limit, batch_id: batchId || undefined },
+        params: {
+          page: params.page ?? 1,
+          page_size: params.page_size ?? 10,
+          batch_id: params.batch_id || undefined,
+        },
       })
       .then((r) => r.data),
 

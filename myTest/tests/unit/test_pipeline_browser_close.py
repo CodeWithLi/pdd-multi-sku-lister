@@ -34,9 +34,10 @@ def test_normalize_listing_reason_manual_close():
     ) == "browser_manually_closed"
 
 
+@patch("pdd_agent.api.services.pipeline_service.get_integrated_pipeline")
 @patch("pdd_agent.api.services.pipeline_service.update_integrated_pipeline")
 @patch("pdd_agent.api.services.pipeline_service.TaskRunStore")
-def test_reconcile_stuck_pipeline_when_listing_failed(mock_store_cls, mock_update):
+def test_reconcile_stuck_pipeline_when_listing_failed(mock_store_cls, mock_update, mock_get):
     row = MagicMock()
     row.pipeline_id = "pipe_1"
     row.status = "running"
@@ -48,10 +49,13 @@ def test_reconcile_stuck_pipeline_when_listing_failed(mock_store_cls, mock_updat
     record.status = RunStatus.FAILED
     record.message = "上架失败：浏览器被关闭"
     mock_store_cls.return_value.load.return_value = record
-    mock_update.return_value = MagicMock(pipeline_id="pipe_1", status="failed")
+    refreshed = MagicMock(pipeline_id="pipe_1", status="failed")
+    mock_update.return_value = refreshed
+    mock_get.return_value = refreshed
 
     updated = _reconcile_stuck_pipeline_row(row)
     mock_update.assert_called_once()
+    mock_get.assert_called_once_with("pipe_1")
     assert updated.status == "failed"
 
 

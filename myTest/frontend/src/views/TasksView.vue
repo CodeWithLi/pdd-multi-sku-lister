@@ -1,7 +1,7 @@
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { ElMessageBox } from 'element-plus'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import { api } from '@/api/client'
 import PageHeader from '@/components/PageHeader.vue'
 import ResultSummary from '@/components/ResultSummary.vue'
@@ -21,6 +21,9 @@ const activeTab = ref('listing')
 
 const accounts = ref<Account[]>([])
 const productOptions = ref<ListingTargetOption[]>([])
+const materialSource = ref<'local' | 'minio'>('minio')
+const minioHealth = ref<{ available?: boolean; error?: string; listing_poll_seconds?: number } | null>(null)
+const materialPolling = ref(false)
 const showOnlyUnlistedGroups = ref(false)
 const defaultConcurrentStores = ref(3)
 const defaultStartDelayMin = ref(30)
@@ -53,6 +56,8 @@ const delistConcurrentStores = ref(3)
 const delistStartDelayMin = ref(30)
 const delistStartDelayMax = ref(180)
 const queueStatus = ref<QueueStatus | null>(null)
+
+let materialPollTimer: ReturnType<typeof setInterval> | null = null
 
 const enabledAccounts = computed(() => accounts.value.filter((a) => a.enabled))
 const queuePaused = computed(() =>
@@ -224,8 +229,52 @@ function onMaterialGroupDropdownVisible(visible: boolean) {
   if (accounts.length) loadListingTargets(accounts[0]).catch(() => undefined)
 }
 
+async function loadMinioHealth() {
+  try {
+    minioHealth.value = await api.minioHealth()
+  } catch (e) {
+    minioHealth.value = { available: false, error: e instanceof Error ? e.message : 'MinIO 不可用' }
+  }
+}
+
+function stopMaterialPolling() {
+  materialPolling.value = false
+  if (materialPollTimer) {
+    clearInterval(materialPollTimer)
+    materialPollTimer = null
+  }
+}
+
+function startMaterialPolling() {
+  stopMaterialPolling()
+  if (materialSource.value !== 'minio') return
+  const seconds = minioHealth.value?.listing_poll_seconds ?? 30
+  if (!seconds || seconds <= 0) return
+  materialPolling.value = true
+  materialPollTimer = setInterval(() => {
+    const accounts = selectedListingAccounts().filter(Boolean)
+    if (accounts.length) loadListingTargets(accounts[0]).catch(() => undefined)
+  }, seconds * 1000)
+}
+
+async function onMaterialSourceChange(source: 'local' | 'minio') {
+  materialSource.value = source
+  productCodes.value = []
+  checkedProductsBySet.value = {}
+  stopMaterialPolling()
+  if (source === 'minio') {
+    await loadMinioHealth()
+    if (!minioHealth.value?.available) {
+      ElMessage.warning(minioHealth.value?.error || 'MinIO 未就绪，请检查 config/minio.yaml')
+    }
+  }
+  const accounts = selectedListingAccounts().filter(Boolean)
+  if (accounts.length) await loadListingTargets(accounts[0])
+  startMaterialPolling()
+}
+
 async function loadListingTargets(forAccountId = '') {
-  productOptions.value = await api.listingTargets(forAccountId || undefined)
+  productOptions.value = await api.listingTargets(forAccountId || undefined, materialSource.value)
 }
 
 watch(accountId, (id) => {
@@ -337,6 +386,7 @@ async function runListing() {
         store_start_delay_min_seconds: listingStartDelayMin.value,
         store_start_delay_max_seconds: listingStartDelayMax.value,
         slot_alignment_test: listingSlotAlignmentTest.value,
+        material_source: materialSource.value,
       })
       success.value = `批量上架任务已提交：${listingBatchResult.value.total} 家店铺，并发 ${listingBatchResult.value.max_concurrent_stores} 家，启动间隔 ${listingBatchResult.value.store_start_delay_min_seconds}-${listingBatchResult.value.store_start_delay_max_seconds} 秒`
       return
@@ -350,6 +400,7 @@ async function runListing() {
       category_keyword: categoryKeyword.value,
       background: !isCheck,
       slot_alignment_test: listingSlotAlignmentTest.value,
+      material_source: materialSource.value,
     })
     success.value = isCheck ? '素材检查完成' : '上架任务已提交，可在失败项工作台查看进度'
   } catch (e) {
@@ -406,8 +457,12 @@ function goRunDetail(runId: string) {
 
 onMounted(async () => {
   if (route.query.tab === 'delist') activeTab.value = 'delist'
-  loadMeta()
+  await loadMinioHealth()
+  await loadMeta()
+  startMaterialPolling()
 })
+
+onUnmounted(stopMaterialPolling)
 </script>
 
 <template>
@@ -491,6 +546,25 @@ onMounted(async () => {
             </el-row>
             <div v-if="listingBatchEnabled" class="form-tip">
               批量任务会先打开一家店，随机等待该区间后再打开下一家。
+            </div>
+
+            <div class="material-source-bar">
+              <el-radio-group
+                :model-value="materialSource"
+                size="small"
+                @change="onMaterialSourceChange($event as 'local' | 'minio')"
+              >
+                <el-radio-button label="local">本地文件夹</el-radio-button>
+                <el-radio-button label="minio">MinIO</el-radio-button>
+              </el-radio-group>
+              <el-tag
+                v-if="materialSource === 'minio'"
+                size="small"
+                :type="minioHealth?.available ? 'success' : 'danger'"
+              >
+                {{ minioHealth?.available ? 'MinIO 已连接' : (minioHealth?.error || 'MinIO 未连接') }}
+              </el-tag>
+              <el-tag v-if="materialSource === 'minio' && materialPolling" size="small" type="info">自动刷新</el-tag>
             </div>
 
             <el-form-item required>
@@ -841,6 +915,14 @@ onMounted(async () => {
   color: #2563eb;
   font-size: 12px;
   font-weight: 600;
+}
+
+.material-source-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-bottom: 12px;
 }
 
 .empty-set-tip {

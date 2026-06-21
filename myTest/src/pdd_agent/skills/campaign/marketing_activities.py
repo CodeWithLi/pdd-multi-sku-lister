@@ -2147,6 +2147,155 @@ _MODAL_PRODUCT_SCAN_JS = """
 """
 
 
+_MODAL_ELIGIBILITY_JS = """
+(ids, timeMarkers) => {
+    function norm(text) {
+        return (text || '').replace(/\\s+/g, ' ').trim();
+    }
+    function isVisible(el) {
+        if (!el || !el.getBoundingClientRect) return false;
+        const r = el.getBoundingClientRect();
+        const s = window.getComputedStyle(el);
+        return r.width > 2 && r.height > 2
+            && s.display !== 'none'
+            && s.visibility !== 'hidden'
+            && parseFloat(s.opacity || '1') > 0.05;
+    }
+    function findModalRoot() {
+        const roots = Array.from(document.querySelectorAll(
+            '[data-testid="beast-core-modal"], [class*="MDL_modal"], [class*="MDL_outer"], [role="dialog"]'
+        ))
+            .filter(isVisible)
+            .filter((el) => (el.innerText || el.textContent || '').includes('搜索商品'));
+        return roots.length ? roots[roots.length - 1] : null;
+    }
+    function findTables(scope) {
+        return Array.from(scope.querySelectorAll(
+            'table[data-testid="beast-core-table"],'
+            + '[class*="TB_tableWrapper"] table,'
+            + '[class*="tableWrapper"] table,'
+            + 'table'
+        )).filter(isVisible);
+    }
+    function isHeaderRow(row) {
+        const text = norm(row.innerText || row.textContent || '');
+        if (!text) return true;
+        if (text.includes('商品信息') && text.includes('库存')) return true;
+        return Boolean(row.querySelector('th') && !row.querySelector('td'));
+    }
+    function collectRows(scope) {
+        const rows = [];
+        const seen = new Set();
+        for (const table of findTables(scope)) {
+            for (const row of table.querySelectorAll('tbody tr, tr')) {
+                if (!isVisible(row) || isHeaderRow(row)) continue;
+                const text = norm(row.innerText || row.textContent || '');
+                if (!text || text.length < 4) continue;
+                const key = text.slice(0, 160);
+                if (seen.has(key)) continue;
+                seen.add(key);
+                rows.push(row);
+            }
+        }
+        for (const row of scope.querySelectorAll('[class*="TB_tr"], [class*="tableRow"], [data-testid="beast-core-table-body"] tr, [class*="goods"], [class*="Goods"]')) {
+            if (!isVisible(row)) continue;
+            const text = norm(row.innerText || row.textContent || '');
+            if (!text || text.length < 4) continue;
+            const key = text.slice(0, 160);
+            if (seen.has(key)) continue;
+            seen.add(key);
+            rows.push(row);
+        }
+        return rows;
+    }
+    function rowReason(rowText) {
+        const text = norm(rowText);
+        for (const marker of timeMarkers) {
+            if (text.includes(marker)) return marker;
+        }
+        return '';
+    }
+    function pushUnique(list, entry, key) {
+        if (!list.some((item) => item[key] === entry[key])) {
+            list.push(entry);
+        }
+    }
+
+    const root = findModalRoot();
+    if (!root) {
+        return {
+            eligible_ids: [],
+            time_blocked: [],
+            other_ineligible: [],
+            missing_ids: ids.slice(),
+            reason: 'search_modal_not_found',
+        };
+    }
+
+    const bodyText = norm(root.innerText || root.textContent || '');
+    const timeBlocked = [];
+    const otherIneligible = [];
+    const rowEligibleIds = [];
+
+    for (const row of collectRows(root)) {
+        const rowText = norm(row.innerText || row.textContent || '');
+        if (!rowText) continue;
+        for (const id of ids) {
+            if (!rowText.includes(id)) continue;
+            const reason = rowReason(rowText);
+            if (reason) {
+                pushUnique(timeBlocked, {
+                    product_id: id,
+                    reason_text: rowText.slice(0, 240),
+                    matched_marker: reason,
+                }, 'product_id');
+            } else if (!rowEligibleIds.includes(id)) {
+                rowEligibleIds.push(id);
+            }
+            break;
+        }
+    }
+
+    function isBlocked(id) {
+        return timeBlocked.some((item) => item.product_id === id)
+            || otherIneligible.some((item) => item.product_id === id);
+    }
+
+    for (const id of ids) {
+        if (isBlocked(id)) continue;
+        let searchFrom = 0;
+        while (searchFrom < bodyText.length) {
+            const idx = bodyText.indexOf(id, searchFrom);
+            if (idx < 0) break;
+            const snippet = bodyText.slice(Math.max(0, idx - 80), idx + 320);
+            const reason = rowReason(snippet);
+            if (reason) {
+                pushUnique(timeBlocked, {
+                    product_id: id,
+                    reason_text: snippet.slice(0, 240),
+                    matched_marker: reason,
+                }, 'product_id');
+                break;
+            }
+            searchFrom = idx + id.length;
+        }
+    }
+
+    const eligibleIds = rowEligibleIds.filter((id) => !isBlocked(id));
+    const missing = ids.filter((id) => !isBlocked(id) && !eligibleIds.includes(id));
+
+    return {
+        eligible_ids: eligibleIds,
+        time_blocked: timeBlocked,
+        other_ineligible: otherIneligible,
+        missing_ids: missing,
+        body_has_id: ids.filter((id) => bodyText.includes(id)),
+        row_count: collectRows(root).length,
+    };
+}
+"""
+
+
 def _scan_modal_products(modal, product_ids: list[str]) -> dict[str, Any]:
     ids = [str(item).strip() for item in product_ids if str(item).strip()]
     if not ids:
@@ -2190,9 +2339,15 @@ _TIME_REQUIREMENT_MARKERS: tuple[str, ...] = (
     "近期有过新建规格",
     "新建规格",
     "修改时间满1天",
+    "请待修改时间满1天",
 )
 
 ACTIVITY_TIME_REQUIREMENT_FEISHU_MESSAGE = "商品需过24h后才可以报活动"
+
+_PARTIAL_NOT_ELIGIBLE_MARKERS = (
+    "部分商品不可报名活动",
+    "部分商品不可报名",
+)
 
 
 def is_activity_time_requirement_text(text: str) -> bool:
@@ -2202,161 +2357,42 @@ def is_activity_time_requirement_text(text: str) -> bool:
     return any(marker in normalized for marker in _TIME_REQUIREMENT_MARKERS)
 
 
+def is_partial_product_not_eligible_text(text: str) -> bool:
+    normalized = str(text or "").strip()
+    if not normalized:
+        return False
+    return any(marker in normalized for marker in _PARTIAL_NOT_ELIGIBLE_MARKERS)
+
+
+def normalize_activity_register_failure_for_feishu(text: str) -> str:
+    """618 / 七折等活动报名失败原因写入飞书前的统一文案。"""
+    normalized = str(text or "").strip()
+    if not normalized:
+        return ""
+    if is_activity_time_requirement_text(normalized) or is_partial_product_not_eligible_text(normalized):
+        return ACTIVITY_TIME_REQUIREMENT_FEISHU_MESSAGE
+    return normalized
+
+
 def _analyze_modal_product_eligibility(modal, product_ids: list[str]) -> dict[str, Any]:
-    """检查搜索弹窗内可报名/不可报名商品，识别「需等待1天」等时间限制。"""
-    try:
-        result = modal.evaluate(
-            """
-            (root, ids, timeMarkers) => {
-                function norm(text) {
-                    return (text || '').replace(/\\s+/g, ' ').trim();
-                }
-                function isVisible(el) {
-                    if (!el || !el.getBoundingClientRect) return false;
-                    const r = el.getBoundingClientRect();
-                    const s = window.getComputedStyle(el);
-                    return r.width > 2 && r.height > 2
-                        && s.display !== 'none'
-                        && s.visibility !== 'hidden'
-                        && parseFloat(s.opacity || '1') > 0.05;
-                }
-                function tableIds(table) {
-                    const found = [];
-                    if (!table) return found;
-                    for (const row of table.querySelectorAll('tbody tr, tr')) {
-                        if (!isVisible(row)) continue;
-                        const text = norm(row.innerText || row.textContent || '');
-                        if (!text || (text.includes('商品信息') && text.includes('库存'))) continue;
-                        for (const id of ids) {
-                            if (text.includes(id) && !found.includes(id)) found.push(id);
-                        }
-                    }
-                    return found;
-                }
-                function findTable(scope) {
-                    return scope.querySelector('table[data-testid="beast-core-table"]')
-                        || scope.querySelector('[class*="TB_tableWrapper"] table')
-                        || scope.querySelector('table');
-                }
-                function clickTab(labelPart) {
-                    const nodes = Array.from(root.querySelectorAll('[role="tab"], span, div, a, button'))
-                        .filter(isVisible)
-                        .filter((el) => norm(el.innerText || el.textContent || '').includes(labelPart));
-                    if (!nodes.length) return false;
-                    nodes[0].click();
-                    return true;
-                }
-                function rowReason(rowText) {
-                    const text = norm(rowText);
-                    for (const marker of timeMarkers) {
-                        if (text.includes(marker)) return marker;
-                    }
-                    return '';
-                }
-                function classifyRow(rowText, id) {
-                    const text = norm(rowText);
-                    if (!text.includes(id)) return null;
-                    const reason = rowReason(text);
-                    return {
-                        product_id: id,
-                        reason_text: reason || text.slice(0, 200),
-                        time_blocked: Boolean(reason),
-                    };
-                }
-                function classifyTable(table, ineligibleTab) {
-                    if (!table) return;
-                    for (const row of table.querySelectorAll('tbody tr, tr')) {
-                        if (!isVisible(row)) continue;
-                        const rowText = norm(row.innerText || row.textContent || '');
-                        if (!rowText || (rowText.includes('商品信息') && rowText.includes('库存'))) continue;
-                        for (const id of ids) {
-                            const entry = classifyRow(rowText, id);
-                            if (!entry) continue;
-                            if (entry.time_blocked) {
-                                if (!timeBlocked.some((item) => item.product_id === id)) {
-                                    timeBlocked.push({
-                                        product_id: id,
-                                        reason_text: entry.reason_text,
-                                    });
-                                }
-                            } else if (ineligibleTab) {
-                                if (!otherIneligible.some((item) => item.product_id === id)) {
-                                    otherIneligible.push({
-                                        product_id: id,
-                                        reason_text: entry.reason_text,
-                                    });
-                                }
-                            } else if (!rowEligibleIds.includes(id)) {
-                                rowEligibleIds.push(id);
-                            }
-                            break;
-                        }
-                    }
-                }
-                function isBlocked(id) {
-                    return timeBlocked.some((item) => item.product_id === id)
-                        || otherIneligible.some((item) => item.product_id === id);
-                }
-
-                const bodyText = norm(root.innerText || root.textContent || '');
-                const timeBlocked = [];
-                const otherIneligible = [];
-                const rowEligibleIds = [];
-                const missing = [];
-
-                // 搜索结果行内可能同时展示商品 ID 与「需等待1天/新建规格」提示，不能仅因出现 ID 就视为可报名
-                classifyTable(findTable(root), false);
-
-                for (const id of ids) {
-                    if (isBlocked(id)) continue;
-                    const idx = bodyText.indexOf(id);
-                    if (idx < 0) continue;
-                    const snippet = bodyText.slice(Math.max(0, idx - 40), idx + 220);
-                    const reason = rowReason(snippet);
-                    if (reason) {
-                        timeBlocked.push({ product_id: id, reason_text: snippet.slice(0, 200) });
-                    }
-                }
-
-                clickTab('不可报名');
-                classifyTable(findTable(root), true);
-
-                for (const id of ids) {
-                    if (isBlocked(id)) continue;
-                    if (rowEligibleIds.includes(id)) continue;
-                    const idx = bodyText.indexOf(id);
-                    if (idx >= 0) {
-                        const snippet = bodyText.slice(Math.max(0, idx - 40), idx + 220);
-                        const reason = rowReason(snippet);
-                        if (reason) {
-                            timeBlocked.push({ product_id: id, reason_text: snippet.slice(0, 200) });
-                            continue;
-                        }
-                    }
-                    missing.push(id);
-                }
-
-                clickTab('可报名');
-
-                const eligibleIds = rowEligibleIds.filter((id) => !isBlocked(id));
-
-                return {
-                    eligible_ids: eligibleIds,
-                    time_blocked: timeBlocked,
-                    other_ineligible: otherIneligible,
-                    missing_ids: missing.filter((id) => !isBlocked(id) && !eligibleIds.includes(id)),
-                };
-            }
-            """,
-            product_ids,
-            list(_TIME_REQUIREMENT_MARKERS),
-        )
-    except Exception as exc:
+    """检查搜索弹窗内可报名/不可报名商品，识别「需等待1天 / 新建规格」等时间限制。"""
+    ids = [str(item).strip() for item in product_ids if str(item).strip()]
+    if not ids:
         return {
-            "eligible_ids": _modal_eligible_product_ids(modal, product_ids),
+            "eligible_ids": [],
             "time_blocked": [],
             "other_ineligible": [],
-            "missing_ids": product_ids,
+            "missing_ids": [],
+        }
+    try:
+        raw_page = modal.page
+        result = raw_page.evaluate(_MODAL_ELIGIBILITY_JS, ids, list(_TIME_REQUIREMENT_MARKERS))
+    except Exception as exc:
+        return {
+            "eligible_ids": [],
+            "time_blocked": [],
+            "other_ineligible": [],
+            "missing_ids": ids,
             "error": str(exc),
         }
     if not isinstance(result, dict):
@@ -2364,7 +2400,7 @@ def _analyze_modal_product_eligibility(modal, product_ids: list[str]) -> dict[st
             "eligible_ids": [],
             "time_blocked": [],
             "other_ineligible": [],
-            "missing_ids": product_ids,
+            "missing_ids": ids,
         }
     result["eligible_ids"] = [
         str(item).strip()
@@ -2379,10 +2415,12 @@ def _format_modal_eligibility_failure(eligibility: dict[str, Any], product_ids: 
         item for item in (eligibility.get("time_blocked") or []) if isinstance(item, dict)
     ]
     if time_blocked:
+        first_reason = str(time_blocked[0].get("reason_text") or "").strip()
         return {
             "status": "failed",
             "step": "product_time_requirement_not_met",
             "error": ACTIVITY_TIME_REQUIREMENT_FEISHU_MESSAGE,
+            "platform_reason": first_reason,
             "eligibility": eligibility,
         }
 
@@ -2407,8 +2445,9 @@ def _format_modal_eligibility_failure(eligibility: dict[str, Any], product_ids: 
         ) if other else ", ".join(blocked_ids)
         return {
             "status": "failed",
-            "step": "product_not_eligible_for_activity",
-            "error": f"部分商品不可报名活动，已取消操作：{detail or ', '.join(product_ids)}",
+            "step": "product_time_requirement_not_met",
+            "error": ACTIVITY_TIME_REQUIREMENT_FEISHU_MESSAGE,
+            "platform_reason": detail or ", ".join(blocked_ids),
             "eligibility": eligibility,
         }
     return {}
@@ -2785,6 +2824,7 @@ def _wait_modal_products_loaded(modal, product_ids: list[str], timeout: int = 15
             last_scan = _scan_modal_products(modal, product_ids)
             found = last_scan.get("found_ids") or []
             if found and all(pid in found for pid in product_ids):
+                eligibility = _analyze_modal_product_eligibility(modal, product_ids)
                 return {
                     "loaded": True,
                     "product_ids": product_ids,
@@ -2792,6 +2832,7 @@ def _wait_modal_products_loaded(modal, product_ids: list[str], timeout: int = 15
                     "row_count": int(last_scan.get("row_count") or 0),
                     "table_count": int(last_scan.get("table_count") or 0),
                     "scan": last_scan,
+                    "eligibility": eligibility,
                 }
         except Exception:
             pass
@@ -4560,9 +4601,19 @@ def _select_products_in_search_modal(
             **load_result,
         }
 
-    eligibility = _analyze_modal_product_eligibility(modal, product_ids)
+    eligibility = load_result.get("eligibility") if isinstance(load_result.get("eligibility"), dict) else None
+    if not eligibility:
+        eligibility = _analyze_modal_product_eligibility(modal, product_ids)
     failure = _format_modal_eligibility_failure(eligibility, product_ids)
     if failure:
+        blocked = eligibility.get("time_blocked") or []
+        if blocked:
+            detail = str(blocked[0].get("reason_text") or "").strip()
+            print(
+                f"[{account_id}] 活动搜索弹窗：商品不可报名（24h/新建规格限制）"
+                f" product_ids={product_ids} platform_reason={detail[:120]}",
+                flush=True,
+            )
         _click_modal_cancel_button(modal)
         return failure
 

@@ -31,6 +31,7 @@ class IntegratedPipelineStartRequest(BaseModel):
     slot_alignment_test: bool = True
     skip_listing: bool = False
     listing_skip_selectors: list[str] = Field(default_factory=list)
+    material_source: str = ""
 
     @model_validator(mode="after")
     def validate_activity_ids(self) -> "IntegratedPipelineStartRequest":
@@ -61,6 +62,7 @@ class IntegratedPipelineBatchStartRequest(BaseModel):
     slot_alignment_test: bool = True
     skip_listing: bool = False
     listing_skip_selectors: list[str] = Field(default_factory=list)
+    material_source: str = ""
     account_ids: list[str] = Field(default_factory=list)
     product_codes: list[str] = Field(default_factory=list)
     items: list[IntegratedPipelineBatchItem] = Field(default_factory=list)
@@ -160,3 +162,5 @@ class IntegratedPipelineBatchResponse(BaseModel):
 class IntegratedPipelineListResponse(BaseModel):
     items: list[IntegratedPipelineResponse]
     total: int
+    page: int = 1
+    page_size: int = 10

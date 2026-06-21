@@ -25,12 +25,15 @@ const success = ref('')
 
 const accounts = ref<Account[]>([])
 const productOptions = ref<ListingTargetOption[]>([])
-const materialSource = ref<'local' | 'minio'>('local')
+const materialSource = ref<'local' | 'minio'>('minio')
 const minioHealth = ref<{ available?: boolean; error?: string; listing_poll_seconds?: number } | null>(null)
 const materialPolling = ref(false)
 const showOnlyUnlistedGroups = ref(false)
 const activities = ref<MarketingActivityOption[]>([])
 const pipelines = ref<IntegratedPipeline[]>([])
+const pipelinePage = ref(1)
+const pipelinePageSize = ref(10)
+const pipelineTotal = ref(0)
 const activePipeline = ref<IntegratedPipeline | null>(null)
 
 const accountId = ref('')
@@ -378,12 +381,40 @@ async function loadBaseData() {
 }
 
 async function refreshPipelines() {
-  const data = await api.listIntegratedPipelines(30)
-  pipelines.value = data.items || []
+  const page = pipelinePage.value
+  const pageSize = pipelinePageSize.value
+  const data = await api.listIntegratedPipelines({ page, page_size: pageSize })
+  const resolvedPageSize = data.page_size ?? pageSize
+  const items = data.items || []
+  // 兼容旧后端一次返回全量的情况，避免表格行数超过每页条数
+  pipelines.value = items.length > resolvedPageSize ? items.slice(0, resolvedPageSize) : items
+  pipelineTotal.value = data.total ?? items.length
+  if (typeof data.page === 'number' && data.page > 0) {
+    pipelinePage.value = data.page
+  }
   if (activePipeline.value) {
     const latest = pipelines.value.find((p) => p.pipeline_id === activePipeline.value?.pipeline_id)
-    if (latest) activePipeline.value = latest
+    if (latest) {
+      activePipeline.value = latest
+    } else {
+      try {
+        activePipeline.value = await api.getIntegratedPipeline(activePipeline.value.pipeline_id)
+      } catch {
+        // 当前页未包含该链路时仍保留详情
+      }
+    }
   }
+}
+
+function onPipelinePageChange(page: number) {
+  pipelinePage.value = page
+  refreshPipelines().catch(() => undefined)
+}
+
+function onPipelinePageSizeChange(size: number) {
+  pipelinePageSize.value = size
+  pipelinePage.value = 1
+  refreshPipelines().catch(() => undefined)
 }
 
 async function startPipeline() {
@@ -424,8 +455,10 @@ async function startPipeline() {
         store_start_delay_max_seconds: startDelayMax.value,
         skip_listing: skipListing,
         listing_skip_selectors: listingSkipSelectors,
+        material_source: materialSource.value,
       })
       success.value = `批量整合链路已提交：${result.total} 条，批次 ${result.batch_id}，活动 ${activityIds.value.length} 个，启动间隔 ${result.store_start_delay_min_seconds}-${result.store_start_delay_max_seconds} 秒`
+      pipelinePage.value = 1
       if (result.pipelines.length) {
         const first = await api.getIntegratedPipeline(result.pipelines[0].pipeline_id)
         activePipeline.value = first
@@ -445,7 +478,9 @@ async function startPipeline() {
         slot_alignment_test: slotAlignmentTest.value,
         skip_listing: skipListing,
         listing_skip_selectors: listingSkipSelectors,
+        material_source: materialSource.value,
       })
+      pipelinePage.value = 1
       activePipeline.value = result
       const activityCount = activityIds.value.length
       const activityHint = activityCount > 1 ? `，${activityCount} 个活动将依次报名` : ''
@@ -529,8 +564,8 @@ onUnmounted(() => {
       description="选好店铺、一套图、一个或多个活动后点一次即可。上架完成后系统会按设定时间自动报活动；多个活动将按顺序依次报名，全部完成后再自动创建推广。拼多多要求新上架商品通常隔 1 天才能报活动，正式使用请关闭演示模式并设 24 小时。"
     />
 
-    <el-row :gutter="20">
-      <el-col :span="15">
+    <el-row :gutter="16" class="pipeline-layout">
+      <el-col :span="13" :xs="24">
         <el-card shadow="never" class="stat-card task-card">
           <template #header>新建整合任务</template>
 
@@ -846,7 +881,7 @@ onUnmounted(() => {
         </el-card>
       </el-col>
 
-      <el-col :span="9">
+      <el-col :span="11" :xs="24" class="pipeline-side-col">
         <el-card v-if="activePipeline" shadow="never" class="stat-card side-card">
           <template #header>
             <div class="card-head">
@@ -933,28 +968,33 @@ onUnmounted(() => {
           </el-steps>
         </el-card>
 
-        <el-card shadow="never" class="stat-card side-card">
+        <el-card shadow="never" class="stat-card side-card recent-pipelines-card">
           <template #header>
             <div class="card-head">
               <span>最近链路</span>
               <el-tag v-if="polling" size="small" type="info">自动刷新</el-tag>
             </div>
           </template>
-          <el-table :data="pipelines" size="small" empty-text="暂无整合链路">
-            <el-table-column prop="pipeline_id" label="ID" min-width="140" show-overflow-tooltip />
-            <el-table-column prop="account_id" label="店铺" width="90" />
-            <el-table-column prop="batch_id" label="批次" min-width="120" show-overflow-tooltip />
-            <el-table-column label="活动" width="90">
+          <el-table
+            :data="pipelines"
+            size="small"
+            empty-text="暂无整合链路"
+            class="recent-pipelines-table"
+          >
+            <el-table-column prop="pipeline_id" label="ID" min-width="108" show-overflow-tooltip />
+            <el-table-column prop="account_id" label="店铺" width="72" show-overflow-tooltip />
+            <el-table-column prop="batch_id" label="批次" min-width="88" show-overflow-tooltip />
+            <el-table-column label="活动" width="72" show-overflow-tooltip>
               <template #default="{ row }">
                 {{ pipelineActivitySummary(row) }}
               </template>
             </el-table-column>
-            <el-table-column prop="status" label="状态" width="110">
+            <el-table-column prop="status" label="状态" width="88">
               <template #default="{ row }">
                 <el-tag size="small" :type="pipelineTagType(row.status)">{{ row.status }}</el-tag>
               </template>
             </el-table-column>
-            <el-table-column label="操作" width="120">
+            <el-table-column label="操作" width="96" fixed="right" align="center">
               <template #default="{ row }">
                 <el-button link type="primary" size="small" @click="activePipeline = row">查看</el-button>
                 <el-button
@@ -970,6 +1010,19 @@ onUnmounted(() => {
               </template>
             </el-table-column>
           </el-table>
+          <div class="recent-pipelines-pagination">
+            <el-pagination
+              :current-page="pipelinePage"
+              :page-size="pipelinePageSize"
+              :total="pipelineTotal"
+              :page-sizes="[10, 20, 30]"
+              layout="total, sizes, prev, pager, next"
+              small
+              background
+              @current-change="onPipelinePageChange"
+              @size-change="onPipelinePageSizeChange"
+            />
+          </div>
         </el-card>
       </el-col>
     </el-row>
@@ -997,6 +1050,40 @@ onUnmounted(() => {
 
 .side-card:last-child {
   margin-bottom: 0;
+}
+
+.pipeline-layout {
+  align-items: flex-start;
+}
+
+.pipeline-side-col {
+  min-width: 0;
+}
+
+.recent-pipelines-card :deep(.el-card__body) {
+  padding-bottom: 12px;
+}
+
+.recent-pipelines-table {
+  width: 100%;
+}
+
+.recent-pipelines-table :deep(.el-table__body-wrapper) {
+  max-height: 420px;
+  overflow-y: auto;
+}
+
+.recent-pipelines-pagination {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 12px;
+  overflow-x: auto;
+}
+
+.recent-pipelines-pagination :deep(.el-pagination) {
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  row-gap: 8px;
 }
 
 .pipeline-form {

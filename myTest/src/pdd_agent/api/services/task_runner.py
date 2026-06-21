@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from datetime import datetime
+from pathlib import Path
 from typing import Any
 
 from pdd_agent.browser.sync_job import run_browser_job_async
@@ -217,19 +218,18 @@ def _extract_per_product_activity_errors(
     from pdd_agent.skills.campaign.marketing_activities import (
         ACTIVITY_TIME_REQUIREMENT_FEISHU_MESSAGE,
         is_activity_time_requirement_text,
+        normalize_activity_register_failure_for_feishu,
     )
 
     errors: dict[str, str] = {}
-    fallback = str(fallback_error or "").strip()
-    if is_activity_time_requirement_text(fallback):
-        fallback = ACTIVITY_TIME_REQUIREMENT_FEISHU_MESSAGE
+    fallback = normalize_activity_register_failure_for_feishu(fallback_error)
 
     for item in (result or {}).get("results") or []:
         if not isinstance(item, dict):
             continue
-        item_error = str(item.get("error") or item.get("message") or "").strip()
-        if is_activity_time_requirement_text(item_error):
-            item_error = ACTIVITY_TIME_REQUIREMENT_FEISHU_MESSAGE
+        item_error = normalize_activity_register_failure_for_feishu(
+            str(item.get("error") or item.get("message") or "").strip()
+        )
         step = str(item.get("step") or "").strip()
         eligibility = item.get("eligibility") if isinstance(item.get("eligibility"), dict) else {}
 
@@ -254,7 +254,7 @@ def _extract_per_product_activity_errors(
         for pid in eligibility.get("missing_ids") or []:
             pid = str(pid or "").strip()
             if pid and pid not in errors:
-                errors[pid] = item_error or "商品不可报名活动"
+                errors[pid] = item_error or ACTIVITY_TIME_REQUIREMENT_FEISHU_MESSAGE
 
         candidate_ids = [
             str(pid or "").strip()
@@ -269,7 +269,7 @@ def _extract_per_product_activity_errors(
             for pid in candidate_ids:
                 if pid not in errors:
                     errors[pid] = item_error
-        if step == "product_time_requirement_not_met":
+        if step in {"product_time_requirement_not_met", "product_not_eligible_for_activity"}:
             for pid in candidate_ids:
                 errors[pid] = ACTIVITY_TIME_REQUIREMENT_FEISHU_MESSAGE
 
@@ -839,16 +839,18 @@ def _schedule_feishu_listing_result_log(
 
 def _activity_registration_summary_line(item: dict[str, Any]) -> str:
     """从单次活动报名结果生成一眼可读的摘要。"""
-    from pdd_agent.skills.campaign.marketing_activities import ACTIVITY_TIME_REQUIREMENT_FEISHU_MESSAGE
+    from pdd_agent.skills.campaign.marketing_activities import (
+        ACTIVITY_TIME_REQUIREMENT_FEISHU_MESSAGE,
+        normalize_activity_register_failure_for_feishu,
+    )
 
     step = str(item.get("step") or "").strip()
     if step == "price_page_prepared":
         return "仅完成规格反查，未点击确认提交"
-    if step == "product_time_requirement_not_met":
-        return ACTIVITY_TIME_REQUIREMENT_FEISHU_MESSAGE
-    if step == "product_not_eligible_for_activity":
-        err = str(item.get("error") or "").strip()
-        return err or "商品暂不可报名活动"
+    if step in {"product_time_requirement_not_met", "product_not_eligible_for_activity"}:
+        return normalize_activity_register_failure_for_feishu(str(item.get("error") or "")) or (
+            ACTIVITY_TIME_REQUIREMENT_FEISHU_MESSAGE
+        )
 
     product_ids = [
         str(pid).strip()
@@ -1042,8 +1044,11 @@ async def execute_listing(
     platform_listing_code: str = "",
     retry_item: dict[str, Any] | None = None,
     slot_alignment_test: bool = False,
+    material_source: str | None = None,
 ) -> dict[str, Any]:
     """执行 listing 子图，更新 RunRecord。"""
+    from pdd_agent.integrations.minio.material import prepare_listing_assets
+
     store = TaskRunStore()
     settings = load_yaml_settings()
     account = get_account_config(settings, account_id)
@@ -1060,6 +1065,19 @@ async def execute_listing(
     store.update_status(run_id, RunStatus.RUNNING)
     store.update_phase(run_id, TaskPhase.PREFLIGHT)
 
+    resolved_source = "local"
+    assets_root_path: Path | None = None
+    try:
+        resolved_source, assets_root_path = await asyncio.to_thread(
+            prepare_listing_assets,
+            codes,
+            material_source=material_source,
+        )
+    except Exception as exc:
+        logger.exception("prepare listing assets failed run_id=%s", run_id)
+        store.finish(run_id, RunStatus.FAILED, str(exc), result={"error": str(exc)})
+        return {"error": str(exc)}
+
     try:
         graph = build_listing_graph()
         raw = await graph.ainvoke(
@@ -1072,6 +1090,8 @@ async def execute_listing(
                 "retry_item": retry_item or {},
                 "run_id": run_id,
                 "slot_alignment_test": slot_alignment_test,
+                "material_source": resolved_source,
+                "assets_root": str(assets_root_path) if assets_root_path else "",
             }
         )
         result = _json_safe(raw)

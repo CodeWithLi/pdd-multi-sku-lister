@@ -22,12 +22,19 @@ logger = get_logger(__name__)
 
 
 async def preflight_node(state: ListingState) -> dict:
+    from pathlib import Path
+
     settings = load_yaml_settings()
     codes = state.get("product_codes") or []
+    assets_root: Path | None = None
+    raw_root = str(state.get("assets_root") or "").strip()
+    if raw_root:
+        assets_root = Path(raw_root)
     report = run_preflight(
         codes,
         settings,
         slot_alignment_test=bool(state.get("slot_alignment_test")),
+        assets_root=assets_root,
     )
     run_id = str(state.get("run_id") or "")
     account_id = str(state.get("account_id") or "")

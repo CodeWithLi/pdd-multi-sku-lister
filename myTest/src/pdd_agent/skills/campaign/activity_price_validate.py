@@ -553,17 +553,52 @@ def _match_spec_to_sku(spec_name: str, skus: list[dict[str, Any]]) -> dict[str, 
 
 def _skip_reason_for_floor(floor_info: dict[str, Any], parsed: dict[str, Any]) -> str:
     """定价/控价表无数据时跳过校验，不阻断测试流程。"""
+    pricing_reason = str(floor_info.get("pricing_missing_reason") or "").strip()
+    control_reason = str(floor_info.get("control_missing_reason") or "").strip()
+
+    def _reason_code(text: str, *, pricing: bool) -> str:
+        if not text:
+            return ""
+        if "没找到" in text:
+            return "skipped_feishu_pricing_not_found" if pricing else "skipped_feishu_control_not_found"
+        return "skipped_feishu_pricing_missing" if pricing else "skipped_feishu_control_missing"
+
     pricing_value = floor_info.get("pricing")
     control_value = floor_info.get("control_price")
     if floor_info.get("is_combo"):
         if parsed.get("is_combo") and not floor_info.get("child_code"):
             return "skipped_child_code_not_found"
-        if pricing_value is None or control_value is None:
+        if pricing_value is None:
+            code = _reason_code(pricing_reason, pricing=True)
+            if code:
+                return code
+            return "skipped_price_rules_missing"
+        if control_value is None:
+            code = _reason_code(control_reason, pricing=False)
+            if code:
+                return code
             return "skipped_price_rules_missing"
         return ""
     if pricing_value is None:
+        code = _reason_code(pricing_reason, pricing=True)
+        if code:
+            return code
         return "skipped_pricing_missing"
     return ""
+
+
+def _lookup_code_price_with_reason(
+    code: str,
+    price_map: dict[str, float],
+    catalog: Any | None,
+) -> tuple[float | None, str]:
+    from pdd_agent.integrations.feishu.pdd_price_compare_sync import resolve_code_price_from_catalog
+
+    if not code:
+        return None, ""
+    if catalog is not None:
+        return resolve_code_price_from_catalog(catalog, code)
+    return find_code_price(price_map, code), ""
 
 
 def _resolve_floor_from_product_code(
@@ -573,6 +608,8 @@ def _resolve_floor_from_product_code(
     pricing_map: dict[str, float],
     control_map: dict[str, float],
     control_entries: list[CodePriceEntry],
+    pricing_catalog: Any | None = None,
+    control_catalog: Any | None = None,
 ) -> dict[str, Any]:
     """DB/catalog 无 SKU 时：用商品编码 + 规格名称反查定价/控价。"""
     parent_code = normalize_price_code(product_code)
@@ -586,8 +623,15 @@ def _resolve_floor_from_product_code(
             child_code = find_code_by_label(control_entries, right.strip())
 
     is_combo = bool(parsed.get("is_combo"))
-    pricing = find_code_price(pricing_map, parent_code)
-    control = find_code_price(control_map, child_code) if is_combo and child_code else None
+    pricing, pricing_missing_reason = _lookup_code_price_with_reason(
+        parent_code, pricing_map, pricing_catalog
+    )
+    control: float | None = None
+    control_missing_reason = ""
+    if is_combo and child_code:
+        control, control_missing_reason = _lookup_code_price_with_reason(
+            child_code, control_map, control_catalog
+        )
     floor = (pricing or 0.0) + (control or 0.0 if is_combo else 0.0)
 
     return {
@@ -596,6 +640,8 @@ def _resolve_floor_from_product_code(
         "child_code": child_code if is_combo else "",
         "pricing": pricing,
         "control_price": control if is_combo else None,
+        "pricing_missing_reason": pricing_missing_reason,
+        "control_missing_reason": control_missing_reason,
         "floor_price": floor,
         "combo_folder": f"{parent_code}+{child_code}" if is_combo and child_code else parent_code,
         "style_text": parsed.get("style_text") or "",
@@ -610,6 +656,8 @@ def _resolve_price_floor(
     product_code: str,
     pricing_map: dict[str, float],
     control_map: dict[str, float],
+    pricing_catalog: Any | None = None,
+    control_catalog: Any | None = None,
 ) -> dict[str, Any]:
     combo_folder = str(sku.get("combo_folder") or "")
     style_code = normalize_price_code(str(sku.get("style_code") or ""))
@@ -621,8 +669,15 @@ def _resolve_price_floor(
         child_code = model_code
 
     is_combo = bool(child_code and child_code != parent_code)
-    pricing = find_code_price(pricing_map, parent_code)
-    control = find_code_price(control_map, child_code) if is_combo else None
+    pricing, pricing_missing_reason = _lookup_code_price_with_reason(
+        parent_code, pricing_map, pricing_catalog
+    )
+    control: float | None = None
+    control_missing_reason = ""
+    if is_combo and child_code:
+        control, control_missing_reason = _lookup_code_price_with_reason(
+            child_code, control_map, control_catalog
+        )
     floor = (pricing or 0.0) + (control or 0.0 if is_combo else 0.0)
 
     return {
@@ -631,6 +686,8 @@ def _resolve_price_floor(
         "child_code": child_code if is_combo else "",
         "pricing": pricing,
         "control_price": control if is_combo else None,
+        "pricing_missing_reason": pricing_missing_reason,
+        "control_missing_reason": control_missing_reason,
         "floor_price": floor,
         "combo_folder": combo_folder,
         "style_code": style_code,
@@ -647,9 +704,29 @@ def validate_spec_prices(
     control_map: dict[str, float] | None = None,
     control_entries: list[CodePriceEntry] | None = None,
 ) -> dict[str, Any]:
-    pricing = pricing_map if pricing_map is not None else load_pdd_pricing()
-    control = control_map if control_map is not None else load_pdd_control_prices()
-    control_labels = control_entries if control_entries is not None else load_pdd_control_entries()
+    from pdd_agent.integrations.feishu.pdd_price_compare_sync import (
+        load_control_catalog,
+        load_pricing_catalog,
+    )
+
+    pricing_catalog = None
+    control_catalog = None
+    if pricing_map is None:
+        pricing_catalog = load_pricing_catalog()
+        pricing = pricing_catalog.prices
+    else:
+        pricing = pricing_map
+    if control_map is None:
+        control_catalog = load_control_catalog()
+        control = control_catalog.prices
+    else:
+        control = control_map
+    if control_entries is None:
+        if control_catalog is None:
+            control_catalog = load_control_catalog()
+        control_labels = control_catalog.entries or load_pdd_control_entries()
+    else:
+        control_labels = control_entries
     if not specs:
         return {"status": "failed", "reason": "no_specs_found", "results": []}
 
@@ -703,6 +780,8 @@ def validate_spec_prices(
                 product_code=_effective_product_code(row),
                 pricing_map=pricing,
                 control_map=control,
+                pricing_catalog=pricing_catalog,
+                control_catalog=control_catalog,
             )
             if parsed.get("is_combo") and not floor_info.get("is_combo"):
                 sku = None
@@ -715,6 +794,8 @@ def validate_spec_prices(
                 pricing_map=pricing,
                 control_map=control,
                 control_entries=control_labels,
+                pricing_catalog=pricing_catalog,
+                control_catalog=control_catalog,
             )
             sku = None
 
@@ -799,6 +880,10 @@ _REMOVAL_REASON_LABELS: dict[str, str] = {
     "skipped_pricing_missing": "定价表缺少母商品编码",
     "skipped_price_rules_missing": "定价/控价表数据不完整",
     "skipped_child_code_not_found": "未能识别子商品编码",
+    "skipped_feishu_pricing_not_found": "飞书没找到",
+    "skipped_feishu_pricing_missing": "飞书缺少数据",
+    "skipped_feishu_control_not_found": "飞书没找到",
+    "skipped_feishu_control_missing": "飞书缺少数据",
     "published_product_not_found": "未找到已发布商品映射",
     "delete_goods_not_found": "活动页未找到删除按钮",
     "delete_js_failed": "点击删除失败",
@@ -903,6 +988,11 @@ def _format_removal_reason_text(reason: str, item: dict[str, Any]) -> str:
             control_text = control if control is not None else "无"
             parts.append(f"子码 {child} 控价 {control_text}")
         return "；".join(parts)
+    feishu_reason = str(
+        item.get("pricing_missing_reason") or item.get("control_missing_reason") or ""
+    ).strip()
+    if feishu_reason and code.startswith("skipped_feishu_"):
+        return feishu_reason
     if code in _REMOVAL_REASON_LABELS:
         return _REMOVAL_REASON_LABELS[code]
     return code or "不符合条件"

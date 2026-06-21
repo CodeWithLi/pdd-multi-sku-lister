@@ -126,5 +126,5 @@ def test_price_filter_failure_message_includes_price_detail():
 
 def test_price_filter_failure_message_when_mapping_missing():
     message = _price_filter_failure_message({"status": "skipped", "reason": "no_published_mapping_ids"})
-    assert "pdd.xls" in message
+    assert "控价区间" in message
     assert "映射" in message

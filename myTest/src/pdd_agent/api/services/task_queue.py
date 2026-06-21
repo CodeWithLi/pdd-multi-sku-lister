@@ -192,6 +192,7 @@ class TaskQueueWorker:
                     platform_listing_code=str(payload.get("platform_listing_code") or ""),
                     retry_item=dict(payload.get("retry_item") or {}),
                     slot_alignment_test=bool(payload.get("slot_alignment_test")),
+                    material_source=str(payload.get("material_source") or ""),
                 )
             elif row.agent == AgentKind.DELIST.value:
                 result = await execute_delist(
@@ -340,6 +341,7 @@ def enqueue_listing_task(
     retry_item: dict | None = None,
     slot_alignment_test: bool = False,
     pipeline_id: str = "",
+    material_source: str = "",
 ):
     payload = {
         "product_codes": list(product_codes),
@@ -348,6 +350,7 @@ def enqueue_listing_task(
         "platform_listing_code": platform_listing_code,
         "retry_item": dict(retry_item or {}),
         "slot_alignment_test": bool(slot_alignment_test),
+        "material_source": str(material_source or ""),
     }
     if pipeline_id:
         payload["pipeline_id"] = pipeline_id

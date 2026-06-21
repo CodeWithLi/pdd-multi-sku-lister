@@ -54,7 +54,15 @@ def price_rule_candidates(value: str) -> list[str]:
     return [item for item in dict.fromkeys(candidates) if item]
 
 
-def load_pdd_price_ranges(path: Path | None = None) -> dict[str, CampaignPriceRange]:
+def load_pdd_price_ranges(path: Path | None = None, *, force_refresh: bool = False) -> dict[str, CampaignPriceRange]:
+    from pdd_agent.integrations.feishu.pdd_price_compare_sync import load_price_range_catalog
+
+    catalog = load_price_range_catalog(force_refresh=force_refresh, excel_path=path)
+    return catalog.ranges
+
+
+def load_pdd_price_ranges_from_excel(path: Path | None = None) -> dict[str, CampaignPriceRange]:
+    """仅从本地 pdd.xls 读取控价区间（迁移/回退用）。"""
     excel_path = path or (PROJECT_ROOT / "data" / "assets" / "pdd.xls")
     if not excel_path.is_file():
         return {}
@@ -131,16 +139,20 @@ def _load_code_price_map(
     return prices
 
 
-def load_pdd_pricing(path: Path | None = None) -> dict[str, float]:
+def load_pdd_pricing(path: Path | None = None, *, force_refresh: bool = False) -> dict[str, float]:
     """母商品定价表：商品编码 -> 拼多多定价。"""
-    excel_path = path or (PROJECT_ROOT / "data" / "assets" / "拼多多定价.xls")
-    return _load_code_price_map(excel_path, price_header="拼多多定价")
+    from pdd_agent.integrations.feishu.pdd_price_compare_sync import load_pricing_catalog
+
+    catalog = load_pricing_catalog(force_refresh=force_refresh, excel_path=path)
+    return catalog.prices
 
 
-def load_pdd_control_prices(path: Path | None = None) -> dict[str, float]:
+def load_pdd_control_prices(path: Path | None = None, *, force_refresh: bool = False) -> dict[str, float]:
     """子商品控价表：商品编码 -> PDD控价。"""
-    excel_path = path or (PROJECT_ROOT / "data" / "assets" / "拼多多控价.xls")
-    return _load_code_price_map(excel_path, price_header="PDD控价")
+    from pdd_agent.integrations.feishu.pdd_price_compare_sync import load_control_catalog
+
+    catalog = load_control_catalog(force_refresh=force_refresh, excel_path=path)
+    return catalog.prices
 
 
 def find_code_price(prices: dict[str, float], code: str) -> float | None:
@@ -195,12 +207,22 @@ def _load_code_price_entries(
     return entries
 
 
-def load_pdd_control_entries(path: Path | None = None) -> list[CodePriceEntry]:
+def load_pdd_control_entries(path: Path | None = None, *, force_refresh: bool = False) -> list[CodePriceEntry]:
+    from pdd_agent.integrations.feishu.pdd_price_compare_sync import load_control_catalog
+
+    catalog = load_control_catalog(force_refresh=force_refresh, excel_path=path)
+    if catalog.entries:
+        return catalog.entries
     excel_path = path or (PROJECT_ROOT / "data" / "assets" / "拼多多控价.xls")
     return _load_code_price_entries(excel_path, price_header="PDD控价")
 
 
-def load_pdd_pricing_entries(path: Path | None = None) -> list[CodePriceEntry]:
+def load_pdd_pricing_entries(path: Path | None = None, *, force_refresh: bool = False) -> list[CodePriceEntry]:
+    from pdd_agent.integrations.feishu.pdd_price_compare_sync import load_pricing_catalog
+
+    catalog = load_pricing_catalog(force_refresh=force_refresh, excel_path=path)
+    if catalog.entries:
+        return catalog.entries
     excel_path = path or (PROJECT_ROOT / "data" / "assets" / "拼多多定价.xls")
     return _load_code_price_entries(excel_path, price_header="拼多多定价")
 

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, ref } from 'vue'
+import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { api } from '@/api/client'
@@ -16,7 +16,7 @@ interface PreviewImage {
 const router = useRouter()
 const loading = ref(false)
 const products = ref<ProductSummary[]>([])
-const materialSource = ref<'local' | 'minio'>('local')
+const materialSource = ref<'local' | 'minio'>('minio')
 const minioHealth = ref<{
   available?: boolean
   error?: string
@@ -37,6 +37,21 @@ const activeUnit = ref<ListingUnit | null>(null)
 const activeSku = ref<SkuCombo | null>(null)
 
 let materialPollTimer: ReturnType<typeof setInterval> | null = null
+
+const productKeyword = ref('')
+const currentPage = ref(1)
+const pageSize = ref(15)
+
+const filteredProducts = computed(() => {
+  const keyword = productKeyword.value.trim().toUpperCase()
+  if (!keyword) return products.value
+  return products.value.filter((p) => p.product_code.toUpperCase().includes(keyword))
+})
+
+const paginatedProducts = computed(() => {
+  const start = (currentPage.value - 1) * pageSize.value
+  return filteredProducts.value.slice(start, start + pageSize.value)
+})
 
 const productOptions = computed(() => products.value.map((p) => p.product_code))
 const allPassed = computed(() => preflight.value?.ok === true)
@@ -84,6 +99,8 @@ function startMaterialPolling() {
 async function onMaterialSourceChange(source: 'local' | 'minio') {
   materialSource.value = source
   selectedCodes.value = []
+  productKeyword.value = ''
+  currentPage.value = 1
   preflight.value = null
   imagePanelTitle.value = ''
   previewImages.value = []
@@ -137,6 +154,27 @@ async function runPreflight() {
 function selectAll() {
   selectedCodes.value = [...productOptions.value]
 }
+
+function selectCurrentPage() {
+  const merged = new Set(selectedCodes.value)
+  for (const p of paginatedProducts.value) {
+    merged.add(p.product_code)
+  }
+  selectedCodes.value = [...merged]
+}
+
+function clearSelection() {
+  selectedCodes.value = []
+}
+
+watch([productKeyword, pageSize], () => {
+  currentPage.value = 1
+})
+
+watch(filteredProducts, (list) => {
+  const maxPage = Math.max(1, Math.ceil(list.length / pageSize.value) || 1)
+  if (currentPage.value > maxPage) currentPage.value = maxPage
+})
 
 function goListing() {
   router.push('/tasks')
@@ -244,7 +282,12 @@ onUnmounted(stopMaterialPolling)
           <template #header>
             <div class="card-head">
               <span>选择要检查的商品</span>
-              <el-button link type="primary" @click="selectAll">全选</el-button>
+              <span v-if="products.length" class="card-head-meta">共 {{ products.length }} 个</span>
+              <span class="card-head-actions">
+                <el-button link type="primary" @click="selectCurrentPage">本页全选</el-button>
+                <el-button link type="primary" @click="selectAll">全部全选</el-button>
+                <el-button link @click="clearSelection">清空</el-button>
+              </span>
             </div>
           </template>
 
@@ -281,6 +324,15 @@ onUnmounted(stopMaterialPolling)
             运营上传入口（Alist）：{{ minioHealth.alist_url }}
           </div>
 
+          <el-input
+            v-if="products.length"
+            v-model="productKeyword"
+            clearable
+            size="small"
+            placeholder="搜索商品编码"
+            class="product-search"
+          />
+
           <el-empty
             v-if="!products.length"
             :description="materialSource === 'minio' ? 'MinIO 中暂无可用笔袋素材' : '素材文件夹里还没有商品'"
@@ -294,17 +346,40 @@ onUnmounted(stopMaterialPolling)
             </div>
           </el-empty>
 
-          <el-checkbox-group v-else v-model="selectedCodes" class="code-list">
-            <div v-for="p in products" :key="p.product_code" class="code-row">
-              <el-checkbox :value="p.product_code">
-                <span class="code-name">{{ p.product_code }}</span>
-                <span class="code-meta">
-                  共 {{ p.listing_unit_count }} 套图
-                  <template v-if="p.image_sets.length"> · {{ p.image_sets.join('、') }}</template>
-                </span>
-              </el-checkbox>
+          <el-empty
+            v-else-if="!filteredProducts.length"
+            description="没有匹配的商品编码"
+          />
+
+          <template v-else>
+            <el-checkbox-group v-model="selectedCodes" class="code-list">
+              <div v-for="p in paginatedProducts" :key="p.product_code" class="code-row">
+                <el-checkbox :value="p.product_code">
+                  <span class="code-name">{{ p.product_code }}</span>
+                  <span class="code-meta">
+                    共 {{ p.listing_unit_count }} 套图
+                    <template v-if="p.image_sets.length"> · {{ p.image_sets.join('、') }}</template>
+                  </span>
+                </el-checkbox>
+              </div>
+            </el-checkbox-group>
+
+            <div class="product-pagination">
+              <el-pagination
+                v-model:current-page="currentPage"
+                v-model:page-size="pageSize"
+                :total="filteredProducts.length"
+                :page-sizes="[10, 15, 20, 30]"
+                layout="total, sizes, prev, pager, next"
+                small
+                background
+              />
             </div>
-          </el-checkbox-group>
+          </template>
+
+          <div v-if="selectedCodes.length" class="selection-summary">
+            已选 {{ selectedCodes.length }} 个商品
+          </div>
 
           <el-button
             type="primary"
@@ -473,6 +548,36 @@ onUnmounted(stopMaterialPolling)
   display: flex;
   justify-content: space-between;
   align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.card-head-meta {
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.card-head-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-left: auto;
+}
+
+.product-search {
+  margin-bottom: 12px;
+}
+
+.product-pagination {
+  display: flex;
+  justify-content: center;
+  margin-top: 12px;
+}
+
+.selection-summary {
+  margin-top: 10px;
+  font-size: 12px;
+  color: var(--text-secondary);
 }
 
 .material-source-bar {
@@ -496,6 +601,9 @@ onUnmounted(stopMaterialPolling)
   flex-direction: column;
   gap: 8px;
   width: 100%;
+  max-height: 420px;
+  overflow-y: auto;
+  padding-right: 4px;
 }
 
 .code-row {

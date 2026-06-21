@@ -71,12 +71,12 @@ def _brief_activity_failure_reason(error: str) -> str:
         return ""
     try:
         from pdd_agent.skills.campaign.marketing_activities import (
-            ACTIVITY_TIME_REQUIREMENT_FEISHU_MESSAGE,
-            is_activity_time_requirement_text,
+            normalize_activity_register_failure_for_feishu,
         )
 
-        if is_activity_time_requirement_text(text) or text == ACTIVITY_TIME_REQUIREMENT_FEISHU_MESSAGE:
-            return ACTIVITY_TIME_REQUIREMENT_FEISHU_MESSAGE
+        normalized = normalize_activity_register_failure_for_feishu(text)
+        if normalized:
+            return normalized[:500]
     except Exception:
         pass
     if "中文解释:" in text:
@@ -734,17 +734,24 @@ def push_pdd_activity_log_activity_register(
 
 def _push_pdd_activity_log_safe(*, log_label: str, push_fn: Any, **kwargs: Any) -> None:
     account_id = str(kwargs.get("account_id") or "")
-    try:
-        result = push_fn(**kwargs)
-        if result.get("updated") or result.get("created") or result.get("updated_count"):
-            print(f"[{account_id}] 飞书{log_label}已回写", flush=True)
-        elif result.get("skipped") and result.get("reason") != "unchanged":
-            logger.info("feishu %s skipped: %s", log_label, result.get("reason"))
-        elif result.get("failed"):
-            print(f"[{account_id}] 飞书{log_label}失败：{result.get('message') or result.get('reason')}", flush=True)
-    except Exception as exc:
-        logger.exception("feishu %s failed account=%s", log_label, account_id)
-        print(f"[{account_id}] 飞书{log_label}失败：{exc}", flush=True)
+    last_exc: Exception | None = None
+    for attempt in range(3):
+        try:
+            result = push_fn(**kwargs)
+            if result.get("updated") or result.get("created") or result.get("updated_count"):
+                print(f"[{account_id}] 飞书{log_label}已回写", flush=True)
+            elif result.get("skipped") and result.get("reason") != "unchanged":
+                logger.info("feishu %s skipped: %s", log_label, result.get("reason"))
+            elif result.get("failed"):
+                print(f"[{account_id}] 飞书{log_label}失败：{result.get('message') or result.get('reason')}", flush=True)
+            return
+        except Exception as exc:
+            last_exc = exc
+            if attempt + 1 >= 3:
+                logger.exception("feishu %s failed account=%s", log_label, account_id)
+                print(f"[{account_id}] 飞书{log_label}失败：{exc}", flush=True)
+                return
+            time.sleep(0.8 * (attempt + 1))
 
 
 def schedule_pdd_activity_log_seed(**kwargs: Any) -> None:

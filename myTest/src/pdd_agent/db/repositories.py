@@ -1591,7 +1591,23 @@ def get_integrated_pipeline(pipeline_id: str) -> IntegratedPipelineORM | None:
         return row
 
 
-def list_integrated_pipelines(*, limit: int = 50, batch_id: str = "") -> list[IntegratedPipelineORM]:
+def count_integrated_pipelines(*, batch_id: str = "") -> int:
+    if not is_database_available():
+        return 0
+    batch_id = str(batch_id or "").strip()
+    with session_scope() as session:
+        stmt = select(func.count()).select_from(IntegratedPipelineORM)
+        if batch_id:
+            stmt = stmt.where(IntegratedPipelineORM.meta["batch_id"].as_string() == batch_id)
+        return int(session.scalar(stmt) or 0)
+
+
+def list_integrated_pipelines(
+    *,
+    limit: int = 50,
+    offset: int = 0,
+    batch_id: str = "",
+) -> list[IntegratedPipelineORM]:
     if not is_database_available():
         return []
     batch_id = str(batch_id or "").strip()
@@ -1599,7 +1615,7 @@ def list_integrated_pipelines(*, limit: int = 50, batch_id: str = "") -> list[In
         stmt = select(IntegratedPipelineORM).order_by(IntegratedPipelineORM.created_at.desc())
         if batch_id:
             stmt = stmt.where(IntegratedPipelineORM.meta["batch_id"].as_string() == batch_id)
-        stmt = stmt.limit(max(1, min(limit, 200)))
+        stmt = stmt.offset(max(0, int(offset))).limit(max(1, min(limit, 200)))
         rows = session.scalars(stmt).all()
         for row in rows:
             session.expunge(row)
@@ -1649,6 +1665,7 @@ def update_integrated_pipeline(
             merged.update(meta_patch)
             row.meta = merged
         session.flush()
+        session.refresh(row)
         session.expunge(row)
         return row
 

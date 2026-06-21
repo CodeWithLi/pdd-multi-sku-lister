@@ -21,6 +21,7 @@ categories:
 prefix: ""
 cache_root: data/minio_cache/商品上架规格文件
 listing_poll_seconds: 30
+default_material_source: minio
 
 rabbitmq:
   enabled: false

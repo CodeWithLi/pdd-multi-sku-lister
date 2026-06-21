@@ -1,0 +1,6 @@
+enabled: true
+host: 192.168.23.128
+port: 6380
+password: redis123
+db: 0
+key_prefix: pdd

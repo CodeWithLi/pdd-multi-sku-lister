@@ -324,3 +324,34 @@ def map_fields_to_table_names(
             field_property=field_property,
         )
     return mapped
+
+
+def list_all_records(
+    client: FeishuClient,
+    app_token: str,
+    table_id: str,
+    *,
+    page_size: int = 500,
+) -> list[dict[str, Any]]:
+    """分页拉取表内全部记录。"""
+    items: list[dict[str, Any]] = []
+    page_token = ""
+    size = max(1, min(int(page_size), 500))
+    while True:
+        params: dict[str, Any] = {"page_size": size}
+        if page_token:
+            params["page_token"] = page_token
+        data = client.request(
+            "GET",
+            f"/bitable/v1/apps/{app_token}/tables/{table_id}/records",
+            params=params,
+        )
+        payload = data.get("data") or {}
+        batch = list(payload.get("items") or [])
+        items.extend(batch)
+        if not payload.get("has_more"):
+            break
+        page_token = str(payload.get("page_token") or "").strip()
+        if not page_token:
+            break
+    return items

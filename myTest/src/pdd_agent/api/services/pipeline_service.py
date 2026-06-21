@@ -14,6 +14,7 @@ from pdd_agent.db.repositories import (
     create_integrated_pipeline,
     enqueue_task,
     get_integrated_pipeline,
+    count_integrated_pipelines,
     get_published_product,
     list_integrated_pipelines,
     update_integrated_pipeline,
@@ -216,6 +217,55 @@ def _campaign_results(row) -> list[dict[str, Any]]:
     return [item for item in raw if isinstance(item, dict)]
 
 
+def _campaign_run_already_handled(row, run_id: str) -> bool:
+    run_id = str(run_id or "").strip()
+    if not run_id:
+        return False
+    handled = (row.meta or {}).get("handled_campaign_run_ids")
+    if isinstance(handled, list) and run_id in handled:
+        return True
+    return any(str(item.get("run_id") or "").strip() == run_id for item in _campaign_results(row))
+
+
+def _mark_campaign_run_handled(meta_patch: dict[str, Any], run_id: str) -> None:
+    run_id = str(run_id or "").strip()
+    if not run_id:
+        return
+    handled = [
+        str(item).strip()
+        for item in (meta_patch.get("handled_campaign_run_ids") or [])
+        if str(item).strip()
+    ]
+    if run_id not in handled:
+        handled.append(run_id)
+    meta_patch["handled_campaign_run_ids"] = handled
+
+
+def _traffic_run_is_live(run_id: str) -> bool:
+    run_id = str(run_id or "").strip()
+    if not run_id:
+        return False
+    record = TaskRunStore().load(run_id)
+    if not record:
+        return False
+    status = _run_status_value(record.status)
+    return status in {
+        RunStatus.PENDING.value,
+        RunStatus.RUNNING.value,
+        RunStatus.SUCCESS.value,
+        "pending",
+        "running",
+        "success",
+    }
+
+
+def _pipeline_traffic_already_enqueued(row) -> bool:
+    meta = row.meta if isinstance(row.meta, dict) else {}
+    if bool(meta.get("traffic_enqueued")):
+        return True
+    return _traffic_run_is_live(str(row.traffic_run_id or ""))
+
+
 def _append_campaign_result(
     meta_patch: dict[str, Any],
     row,
@@ -227,7 +277,11 @@ def _append_campaign_result(
     error: str,
     summary: str,
 ) -> None:
+    run_id = str(run_id or "").strip()
     results = list(_campaign_results(row))
+    if run_id and any(str(item.get("run_id") or "").strip() == run_id for item in results):
+        meta_patch["campaign_results"] = results
+        return
     results.append(
         {
             "activity_id": activity_id,
@@ -384,28 +438,38 @@ def _schedule_pipeline_activity_after_limited_time(
 
 
 def _enqueue_pipeline_traffic(row, *, meta_patch: dict[str, Any] | None = None) -> None:
-    pdd_ids = list(row.pdd_product_ids or [])
-    mapping_ids = list(row.mapping_ids or [])
-    traffic_run_id = create_traffic_run(row.account_id)
+    refreshed = get_integrated_pipeline(row.pipeline_id) or row
+    if _pipeline_traffic_already_enqueued(refreshed):
+        logger.info(
+            "skip duplicate traffic enqueue pipeline=%s traffic_run_id=%s",
+            refreshed.pipeline_id,
+            refreshed.traffic_run_id,
+        )
+        return
+    pdd_ids = list(refreshed.pdd_product_ids or [])
+    mapping_ids = list(refreshed.mapping_ids or [])
+    traffic_run_id = create_traffic_run(refreshed.account_id)
     enqueue_task(
         agent=AgentKind.TRAFFIC.value,
         run_id=traffic_run_id,
-        account_id=row.account_id,
+        account_id=refreshed.account_id,
         payload={
-            "pipeline_id": row.pipeline_id,
+            "pipeline_id": refreshed.pipeline_id,
             "traffic_type": "promotion_create",
             "pdd_product_ids": pdd_ids,
             "published_mapping_ids": mapping_ids,
         },
         scheduled_at=datetime.now(),
     )
+    patch = dict(meta_patch or {})
+    patch["traffic_enqueued"] = True
     update_integrated_pipeline(
-        row.pipeline_id,
+        refreshed.pipeline_id,
         status="running",
         current_step="traffic_queued",
         traffic_run_id=traffic_run_id,
         error="",
-        meta_patch=dict(meta_patch or {}),
+        meta_patch=patch,
     )
 
 
@@ -780,6 +844,7 @@ def start_integrated_pipeline(
     batch_id: str = "",
     skip_listing: bool = False,
     listing_skip_selectors: list[str] | None = None,
+    material_source: str = "",
 ) -> dict[str, Any]:
     account_id = str(account_id or "").strip()
     normalized_activity_ids = _normalize_pipeline_activity_ids(activity_id, activity_ids)
@@ -804,6 +869,7 @@ def start_integrated_pipeline(
         "category_keyword": category_keyword,
         "platform_listing_code": platform_listing_code,
         "slot_alignment_test": bool(slot_alignment_test),
+        "material_source": str(material_source or ""),
         "auto_limited_time_setup": bool(normalized_activity_ids),
         "continue_after_limited_time_failure": bool(continue_after_limited_time_failure),
         "continue_after_activity_failure": bool(continue_after_activity_failure),
@@ -906,6 +972,7 @@ def start_integrated_pipeline(
             "platform_listing_code": platform_listing_code,
             "pipeline_id": pipeline_id,
             "slot_alignment_test": bool(slot_alignment_test),
+            "material_source": str(material_source or ""),
         },
         scheduled_at=listing_scheduled_at or datetime.now(),
     )
@@ -939,6 +1006,7 @@ def start_integrated_pipeline_batch(
     max_concurrent_stores: int | None = None,
     skip_listing: bool = False,
     listing_skip_selectors: list[str] | None = None,
+    material_source: str = "",
 ) -> dict[str, Any]:
     """批量创建整合链路；各条链路上架任务按启动间隔错开入队。"""
     normalized_activity_ids = _normalize_pipeline_activity_ids(activity_id, activity_ids)
@@ -977,6 +1045,7 @@ def start_integrated_pipeline_batch(
             batch_id=batch_id,
             skip_listing=skip_listing,
             listing_skip_selectors=listing_skip_selectors,
+            material_source=material_source,
         )
         pipelines.append(
             {
@@ -1051,6 +1120,7 @@ def on_queue_task_finished(
         run_id=run_id,
         success=success,
         error=error,
+        result=result,
     )
 
 
@@ -1180,6 +1250,13 @@ def _format_multi_campaign_skip_reason(
 
 
 def _on_campaign_finished(row, *, run_id: str, success: bool, result: dict[str, Any], error: str) -> None:
+    if _campaign_run_already_handled(row, run_id):
+        logger.debug(
+            "skip duplicate campaign finished pipeline=%s run_id=%s",
+            row.pipeline_id,
+            run_id,
+        )
+        return
     activity_ids = _pipeline_activity_ids(row)
     current_index = _campaign_activity_index(row)
     current_activity_id = (
@@ -1193,6 +1270,7 @@ def _on_campaign_finished(row, *, run_id: str, success: bool, result: dict[str, 
     )
     campaign_summary = _summarize_run_message(run_id)
     meta_patch: dict[str, Any] = {"campaign_summary": campaign_summary}
+    _mark_campaign_run_handled(meta_patch, run_id)
 
     if not success and not activity_skipped and not activity_continue:
         _append_campaign_result(
@@ -1274,6 +1352,7 @@ def _on_campaign_finished(row, *, run_id: str, success: bool, result: dict[str, 
         )
         return
 
+    meta_patch["campaign_activity_index"] = len(activity_ids)
     refreshed = get_integrated_pipeline(row.pipeline_id) or row
     if not refreshed.auto_promotion:
         final_status = "completed"
@@ -1341,12 +1420,21 @@ def _on_limited_time_finished(row, *, run_id: str, success: bool, result: dict[s
 
 
 def _on_traffic_finished(row, *, run_id: str, success: bool, error: str) -> None:
+    meta = dict(row.meta or {})
+    if meta.get("traffic_finish_handled"):
+        logger.debug(
+            "skip duplicate traffic finished pipeline=%s run_id=%s",
+            row.pipeline_id,
+            run_id,
+        )
+        return
     if not success:
         update_integrated_pipeline(
             row.pipeline_id,
             status="failed",
             current_step="traffic_failed",
             error=error or "推广创建失败",
+            meta_patch={"traffic_finish_handled": True},
         )
         return
     update_integrated_pipeline(
@@ -1354,7 +1442,10 @@ def _on_traffic_finished(row, *, run_id: str, success: bool, error: str) -> None
         status="completed",
         current_step="completed",
         error="",
-        meta_patch={"traffic_summary": _summarize_run_message(run_id)},
+        meta_patch={
+            "traffic_summary": _summarize_run_message(run_id),
+            "traffic_finish_handled": True,
+        },
     )
 
 
@@ -1437,7 +1528,7 @@ def _reconcile_stuck_pipeline_row(row) -> Any:
                 run_id,
                 run_status,
             )
-            return updated
+            return get_integrated_pipeline(row.pipeline_id) or updated
     return row
 
 
@@ -1448,11 +1539,18 @@ def _ensure_pipeline_failed_after_task(
     run_id: str = "",
     success: bool,
     error: str,
+    result: dict[str, Any] | None = None,
 ) -> None:
     if success:
         return
     row = get_integrated_pipeline(pipeline_id)
     if not row or row.status in TERMINAL_PIPELINE_STATUSES:
+        return
+    if (
+        agent == AgentKind.CAMPAIGN.value
+        and _pipeline_limited_time_run_id(row) != run_id
+        and _should_skip_campaign_for_traffic(result if isinstance(result, dict) else None, error)
+    ):
         return
     if (
         agent == AgentKind.CAMPAIGN.value
@@ -1492,11 +1590,28 @@ def get_pipeline(pipeline_id: str) -> dict[str, Any] | None:
     return pipeline_to_dict(row) if row else None
 
 
-def list_pipelines(*, limit: int = 50, batch_id: str = "") -> dict[str, Any]:
-    rows = list_integrated_pipelines(limit=limit, batch_id=batch_id)
-    reconciled = [_reconcile_stuck_pipeline_row(row) for row in rows]
+def list_pipelines(
+    *,
+    page: int = 1,
+    page_size: int = 10,
+    batch_id: str = "",
+) -> dict[str, Any]:
+    page = max(1, int(page))
+    page_size = max(1, min(int(page_size), 50))
+    offset = (page - 1) * page_size
+    total = count_integrated_pipelines(batch_id=batch_id)
+    rows = list_integrated_pipelines(limit=page_size, offset=offset, batch_id=batch_id)
+    reconciled = [
+        _reconcile_stuck_pipeline_row(row) if row.status == "running" else row
+        for row in rows
+    ]
     items = [pipeline_to_dict(row) for row in reconciled]
-    return {"items": items, "total": len(items)}
+    return {
+        "items": items,
+        "total": total,
+        "page": page,
+        "page_size": page_size,
+    }
 
 
 def cancel_integrated_pipeline(pipeline_id: str) -> dict[str, Any]:

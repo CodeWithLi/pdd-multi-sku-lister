@@ -3,11 +3,20 @@
 from __future__ import annotations
 
 import re
+import time
 from collections import defaultdict
 from pathlib import Path
 
 from pdd_agent.integrations.minio.client import MinioAPIError, get_minio_client
 from pdd_agent.integrations.minio.config import MinioConfig, load_minio_config, minio_configured, minio_scan_prefixes
+from pdd_agent.integrations.minio.index import (
+    MinioSetIndexRecord,
+    is_minio_index_fresh,
+    load_listing_targets_from_redis,
+    object_prefix_from_object_key,
+    resolve_minio_set_prefix,
+    save_minio_index,
+)
 from pdd_agent.skills.listing.catalog import (
     IMAGE_EXTS,
     ListingTargetOption,
@@ -75,14 +84,28 @@ def _resolve_listing_path_parts(parts: list[str]) -> tuple[str, str, str] | None
     return None
 
 
-def list_minio_listing_targets(config: MinioConfig | None = None) -> list[ListingTargetOption]:
-    """扫描 MinIO bucket，返回与本地 assets 相同结构的 listing targets。"""
-    cfg = config or load_minio_config()
-    if not minio_configured(cfg):
-        return []
+_LISTING_TARGETS_CACHE: dict[str, object] = {
+    "loaded_at": 0.0,
+    "targets": None,
+    "config_key": "",
+}
 
+
+def _listing_targets_cache_key(cfg: MinioConfig) -> str:
+    prefixes = ",".join(_scan_prefixes(cfg))
+    return f"{cfg.bucket}|{cfg.endpoint}|{prefixes}"
+
+
+def clear_minio_listing_targets_cache() -> None:
+    _LISTING_TARGETS_CACHE["loaded_at"] = 0.0
+    _LISTING_TARGETS_CACHE["targets"] = None
+    _LISTING_TARGETS_CACHE["config_key"] = ""
+
+
+def _scan_minio_listing_targets(cfg: MinioConfig) -> tuple[list[ListingTargetOption], list[MinioSetIndexRecord]]:
     client = get_minio_client(cfg)
     grouped: dict[tuple[str, str], set[str]] = defaultdict(set)
+    prefixes: dict[tuple[str, str], str] = {}
 
     for scan_prefix in _scan_prefixes(cfg):
         for obj in client.list_objects(cfg.bucket, prefix=scan_prefix, recursive=True):
@@ -94,22 +117,75 @@ def list_minio_listing_targets(config: MinioConfig | None = None) -> list[Listin
             product_code = extract_product_code(product_folder)
             if not product_code:
                 continue
-            grouped[(family_code, image_set)].add(product_code)
+            key = (family_code, image_set)
+            grouped[key].add(product_code)
+            if key not in prefixes:
+                prefixes[key] = object_prefix_from_object_key(obj.object_name, family_code, image_set)
 
     targets: list[ListingTargetOption] = []
+    records: list[MinioSetIndexRecord] = []
     for (family_code, image_set), codes in sorted(
         grouped.items(),
         key=lambda item: (item[0][0], _image_set_sort_key(item[0][1])),
     ):
         sorted_codes = tuple(sorted(codes))
+        selector = f"{family_code}/{image_set}"
         targets.append(
             ListingTargetOption(
-                selector=f"{family_code}/{image_set}",
+                selector=selector,
                 family_code=family_code,
                 image_set=image_set,
+                product_codes=list(sorted_codes),
+            )
+        )
+        records.append(
+            MinioSetIndexRecord(
+                selector=selector,
+                family_code=family_code,
+                image_set=image_set,
+                object_prefix=prefixes.get((family_code, image_set), f"{family_code}/{image_set}/"),
                 product_codes=sorted_codes,
             )
         )
+    return targets, records
+
+
+def list_minio_listing_targets(
+    config: MinioConfig | None = None,
+    *,
+    force_refresh: bool = False,
+) -> list[ListingTargetOption]:
+    """读取套图列表：优先 Redis 索引，过期后 list MinIO 元数据并回写 Redis。"""
+    cfg = config or load_minio_config()
+    if not minio_configured(cfg):
+        return []
+
+    cache_seconds = max(0, int(cfg.listing_poll_seconds or 0))
+    cache_key = _listing_targets_cache_key(cfg)
+
+    if not force_refresh and cache_seconds > 0:
+        cached_targets = _LISTING_TARGETS_CACHE.get("targets")
+        loaded_at = float(_LISTING_TARGETS_CACHE.get("loaded_at") or 0.0)
+        if (
+            cached_targets is not None
+            and _LISTING_TARGETS_CACHE.get("config_key") == cache_key
+            and time.time() - loaded_at < cache_seconds
+        ):
+            return list(cached_targets)
+
+        if is_minio_index_fresh(cfg, cache_seconds=cache_seconds):
+            redis_targets = load_listing_targets_from_redis(cfg)
+            if redis_targets is not None:
+                _LISTING_TARGETS_CACHE["loaded_at"] = time.time()
+                _LISTING_TARGETS_CACHE["targets"] = redis_targets
+                _LISTING_TARGETS_CACHE["config_key"] = cache_key
+                return list(redis_targets)
+
+    targets, records = _scan_minio_listing_targets(cfg)
+    save_minio_index(cfg, records)
+    _LISTING_TARGETS_CACHE["loaded_at"] = time.time()
+    _LISTING_TARGETS_CACHE["targets"] = targets
+    _LISTING_TARGETS_CACHE["config_key"] = cache_key
     return targets
 
 
@@ -127,24 +203,31 @@ def list_minio_objects_for_product(
     product_code: str,
     config: MinioConfig | None = None,
 ) -> list[str]:
-    """列出某商品编码目录下的全部图片 object key（供后续下载/上架使用）。"""
+    """列出某商品编码目录下的全部图片 object key（按 Redis 前缀精准 list，不扫全桶）。"""
     cfg = config or load_minio_config()
     if not minio_configured(cfg):
         raise MinioAPIError("MinIO 未配置")
 
     client = get_minio_client(cfg)
-    prefixes = _scan_prefixes(cfg)
     product_code = str(product_code or "").strip()
-    suffix = f"/{family_code}/{image_set}/"
     matched: list[str] = []
 
-    for scan_prefix in prefixes:
-        for obj in client.list_objects(cfg.bucket, prefix=scan_prefix, recursive=True):
+    object_prefix = resolve_minio_set_prefix(family_code, image_set, cfg)
+    list_prefixes = [object_prefix] if object_prefix else []
+    if not list_prefixes:
+        suffix = f"{family_code}/{image_set}/"
+        list_prefixes = [
+            f"{scan_prefix}{suffix}" if scan_prefix else suffix
+            for scan_prefix in _scan_prefixes(cfg)
+        ]
+
+    for list_prefix in list_prefixes:
+        for obj in client.list_objects(cfg.bucket, prefix=list_prefix, recursive=True):
             key = obj.object_name
-            if suffix not in key or not _is_image_object_name(key):
+            if not _is_image_object_name(key):
                 continue
             folder_name = key.split("/")[-2]
             if extract_product_code(folder_name) != product_code:
                 continue
             matched.append(key)
-    return sorted(matched)
+    return sorted(set(matched))

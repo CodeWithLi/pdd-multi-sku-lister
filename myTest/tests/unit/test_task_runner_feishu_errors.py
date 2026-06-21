@@ -30,6 +30,25 @@ def test_summarize_campaign_message_time_requirement():
     assert msg == "商品需过24h后才可以报活动"
 
 
+def test_extract_per_product_activity_errors_maps_partial_not_eligible():
+    result = {
+        "results": [
+            {
+                "status": "failed",
+                "step": "product_not_eligible_for_activity",
+                "error": "部分商品不可报名活动，已取消操作：968628035598",
+                "product_ids": ["968628035598"],
+            }
+        ]
+    }
+    errors = _extract_per_product_activity_errors(
+        result,
+        fallback_error="部分商品不可报名活动，已取消操作：968628035598",
+        product_ids=["968628035598"],
+    )
+    assert errors["968628035598"] == "商品需过24h后才可以报活动"
+
+
 def test_extract_per_product_activity_errors_from_eligibility():
     result = {
         "results": [

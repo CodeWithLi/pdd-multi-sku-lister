@@ -154,3 +154,19 @@ pdd_activity_log:
     activity_618_failure_reason: 618失败原因
     activity_discount_status: 七折状态
     activity_discount_failure_reason: 七折失败原因
+pdd_price_compare:
+  enabled: true
+  table_id: tblDi8kC1f4WWRXe
+  table_name: 拼多多比价定价
+  excel_relpath: data/assets/pdd.xls
+  pricing_excel_relpath: data/assets/拼多多定价.xls
+  control_excel_relpath: data/assets/拼多多控价.xls
+  prefer_feishu: true
+  fallback_excel: true
+  cache_seconds: 300
+  field_names:
+    merchant_code: 商品编码
+    min_price: PDD控价下限价格
+    max_price: PDD控价上限价格
+    pdd_pricing: 拼多多定价
+    pdd_control_price: 拼多多控价

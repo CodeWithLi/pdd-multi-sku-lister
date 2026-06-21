@@ -69,9 +69,9 @@ def test_format_partial_ineligible_failure():
         eligibility,
         ["965182969751", "962138900436", "966631777744"],
     )
-    assert result["step"] == "product_not_eligible_for_activity"
-    assert "不可报名" in result["error"]
-    assert "966631777744" in result["error"]
+    assert result["step"] == "product_time_requirement_not_met"
+    assert result["error"] == ACTIVITY_TIME_REQUIREMENT_FEISHU_MESSAGE
+    assert "966631777744" in result.get("platform_reason", "")
 
 
 def test_format_all_eligible_returns_empty():
@@ -93,17 +93,27 @@ def test_analyze_modal_detects_inline_time_requirement_in_search_row():
                     {
                         "product_id": "968599179476",
                         "reason_text": "该商品近期有过新建规格，需等待1天后才可报名，请待修改时间满1天后再试",
+                        "matched_marker": "近期有过新建规格",
                     }
                 ],
                 "other_ineligible": [],
                 "missing_ids": [],
+                "body_has_id": ["968599179476"],
+                "row_count": 1,
             }
         ]
     )
+
+    class Page:
+        def evaluate(self, script, ids, markers):
+            return modal.evaluate(script, ids, markers)
+
+    modal.page = Page()
     eligibility = _analyze_modal_product_eligibility(modal, ["968599179476"])
     failure = _format_modal_eligibility_failure(eligibility, ["968599179476"])
     assert failure["step"] == "product_time_requirement_not_met"
     assert failure["error"] == ACTIVITY_TIME_REQUIREMENT_FEISHU_MESSAGE
+    assert "新建规格" in failure.get("platform_reason", "")
     assert eligibility["eligible_ids"] == []
 
 

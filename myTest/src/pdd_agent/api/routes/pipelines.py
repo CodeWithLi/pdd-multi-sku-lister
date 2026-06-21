@@ -66,6 +66,7 @@ def start_integrated(body: IntegratedPipelineStartRequest):
             slot_alignment_test=body.slot_alignment_test,
             skip_listing=body.skip_listing,
             listing_skip_selectors=body.listing_skip_selectors,
+            material_source=body.material_source,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -113,6 +114,7 @@ def start_integrated_batch(body: IntegratedPipelineBatchStartRequest):
             store_start_delay_min_seconds=body.store_start_delay_min_seconds,
             store_start_delay_max_seconds=body.store_start_delay_max_seconds,
             max_concurrent_stores=body.max_concurrent_stores,
+            material_source=body.material_source,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -120,13 +122,19 @@ def start_integrated_batch(body: IntegratedPipelineBatchStartRequest):
 
 
 @router.get("/integrated", response_model=IntegratedPipelineListResponse)
-def list_integrated(limit: int = 50, batch_id: str = ""):
+def list_integrated(
+    page: int = 1,
+    page_size: int = 10,
+    batch_id: str = "",
+):
     if not is_database_available():
-        return IntegratedPipelineListResponse(items=[], total=0)
-    data = list_pipelines(limit=limit, batch_id=batch_id)
+        return IntegratedPipelineListResponse(items=[], total=0, page=1, page_size=page_size)
+    data = list_pipelines(page=page, page_size=page_size, batch_id=batch_id)
     return IntegratedPipelineListResponse(
         items=[IntegratedPipelineResponse(**item) for item in data.get("items") or []],
         total=int(data.get("total") or 0),
+        page=int(data.get("page") or 1),
+        page_size=int(data.get("page_size") or page_size),
     )
 
 

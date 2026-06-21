@@ -15,8 +15,12 @@ from pdd_agent.db.repositories import (
 )
 from pdd_agent.skills.campaign.price_rules import (
     find_pdd_price_range,
-    load_pdd_price_ranges,
     price_rule_candidates,
+)
+from pdd_agent.integrations.feishu.pdd_price_compare_sync import (
+    FEISHU_DATA_MISSING_MESSAGE,
+    is_feishu_price_data_missing,
+    load_price_range_catalog,
 )
 
 MARKETING_TOOL_URLS = (
@@ -2897,8 +2901,15 @@ def _price_filter_failure_message(price_filter: dict[str, Any]) -> str:
     if price_filter.get("status") == "skipped":
         reason = str(price_filter.get("reason") or "").strip()
         if reason == "mapping_not_found":
-            return "无法进行 pdd.xls 价格校验（已发布商品映射不存在）"
-        return "无法进行 pdd.xls 价格校验（缺少已发布商品映射或未导入 SKU 编码）"
+            return "无法进行控价区间校验（已发布商品映射不存在）"
+        if reason == "feishu_data_missing":
+            return FEISHU_DATA_MISSING_MESSAGE
+        return "无法进行控价区间校验（缺少已发布商品映射或未导入 SKU 编码）"
+    if price_filter.get("reason") == "feishu_data_missing":
+        return FEISHU_DATA_MISSING_MESSAGE
+    decisions = price_filter.get("decisions") or []
+    if any(str(item.get("reason") or "") == "feishu_data_missing" for item in decisions):
+        return FEISHU_DATA_MISSING_MESSAGE
     return "活动价格不符合价格区间，不继续创建活动"
 
 
@@ -2921,20 +2932,27 @@ def _load_campaign_price_targets(
             "reason": "mapping_not_found" if ids else "no_published_mapping_ids",
             "targets": [],
         }
-    price_ranges = load_pdd_price_ranges()
+    catalog = load_price_range_catalog()
+    price_ranges = catalog.ranges
     targets: list[dict[str, Any]] = []
+    feishu_missing_targets: list[str] = []
     for row in rows:
         target = _campaign_price_candidates(row)
-        rule = find_pdd_price_range(price_ranges, target["price_rule_candidates"])
-        target["price_rule"] = (
-            {
+        candidates = target.get("price_rule_candidates") or []
+        rule = find_pdd_price_range(price_ranges, candidates)
+        if rule:
+            target["price_rule"] = {
                 "code": rule.code,
                 "min_price": rule.min_price,
                 "max_price": rule.max_price,
             }
-            if rule
-            else None
-        )
+        else:
+            target["price_rule"] = None
+            if is_feishu_price_data_missing(catalog, candidates):
+                target["price_rule_missing_reason"] = "feishu_data_missing"
+                pid = str(target.get("pdd_product_id") or "").strip()
+                if pid:
+                    feishu_missing_targets.append(pid)
         targets.append(target)
     missing_ids = [item for item in ids if item not in {target["mapping_id"] for target in targets}]
     return {
@@ -2942,6 +2960,8 @@ def _load_campaign_price_targets(
         "targets": targets,
         "missing_mapping_ids": missing_ids,
         "price_rule_count": len(price_ranges),
+        "price_range_source": catalog.source,
+        "feishu_missing_product_ids": feishu_missing_targets,
     }
 
 
@@ -3227,6 +3247,14 @@ def _filter_activity_products_by_price(
     if target_state.get("status") == "skipped":
         return target_state
 
+    if target_state.get("feishu_missing_product_ids"):
+        return {
+            "status": "skipped",
+            "reason": "feishu_data_missing",
+            "targets": target_state.get("targets") or [],
+            "feishu_missing_product_ids": target_state.get("feishu_missing_product_ids") or [],
+        }
+
     time.sleep(2)
     row_state = _collect_activity_discount_price_rows(page)
     rows = row_state.get("rows") or []
@@ -3251,6 +3279,10 @@ def _filter_activity_products_by_price(
             and isinstance(check_price, (int, float))
             and float(rule["min_price"]) <= float(check_price) <= float(rule["max_price"])
         )
+        missing_reason = str(target.get("price_rule_missing_reason") or "").strip()
+        fail_reason = "price_in_range" if ok else (
+            "feishu_data_missing" if missing_reason == "feishu_data_missing" else "price_out_of_range_or_missing_rule"
+        )
         decision: dict[str, Any] = {
             "product_id": product_id,
             "mapping_id": target.get("mapping_id"),
@@ -3262,7 +3294,7 @@ def _filter_activity_products_by_price(
             "check_price": check_price,
             "row_found": bool(row),
             "keep": ok,
-            "reason": "price_in_range" if ok else "price_out_of_range_or_missing_rule",
+            "reason": fail_reason,
         }
         if ok:
             kept.append(product_id)
@@ -3280,8 +3312,15 @@ def _filter_activity_products_by_price(
         f"[{account_id}] 活动价格筛选：保留 {len(kept)} 个，删除 {len(deleted)} 个",
         flush=True,
     )
+    all_feishu_missing = bool(decisions) and all(
+        str(item.get("reason") or "") == "feishu_data_missing" for item in decisions
+    )
+    status = "success"
+    if not kept:
+        status = "feishu_data_missing" if all_feishu_missing else "no_eligible_products"
     return {
-        "status": "success" if kept else "no_eligible_products",
+        "status": status,
+        "reason": "feishu_data_missing" if all_feishu_missing else "",
         "step": "campaign_price_filter",
         "kept_product_ids": kept,
         "deleted_product_ids": deleted,
@@ -3703,7 +3742,7 @@ def setup_limited_time_campaign(
                 "selected_pdd_product_ids": selected_pdd_product_ids,
                 "published_mapping_ids": selected_mapping_ids,
             }
-        if price_filter.get("status") == "no_eligible_products":
+        if price_filter.get("status") in {"no_eligible_products", "feishu_data_missing"}:
             return {
                 "status": "failed",
                 "step": "campaign_price_filter",
