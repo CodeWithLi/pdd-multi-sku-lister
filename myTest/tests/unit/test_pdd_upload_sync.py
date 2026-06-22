@@ -568,8 +568,8 @@ def test_schedule_feishu_listing_result_log_dedupes_one_failure(monkeypatch):
     )
 
     assert len(captured) == 1
-    assert captured[0]["merchant_code"] == ""
-    assert captured[0]["listing_label"] == ""
+    assert captured[0]["merchant_code"] == "BD722B"
+    assert captured[0]["listing_label"] == "BD722B/第一套图"
     assert captured[0]["reason_code"] == "slot_alignment_failed"
 
 

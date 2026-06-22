@@ -136,7 +136,7 @@ FEISHU_FAILURE_REASON_LABELS: dict[str, str] = {
     "slot_alignment_failed": "兄弟款预览图张数不一致，请核对各款图数",
     "task_cancelled": "任务已被用户停止",
     "user_cancelled": "任务已被用户停止",
-    "feishu_product_catalog_missing": "飞书拼多多所有商品没数据",
+    "feishu_product_catalog_missing": "飞书商品/定价数据缺失",
 }
 
 
@@ -682,6 +682,7 @@ def push_pdd_upload_failure_log(
     publish_start: datetime | None = None,
     publish_end: datetime | None = None,
     duration_seconds: float | None = None,
+    fallback_product_code: str = "",
     config: FeishuConfig | None = None,
     client: FeishuClient | None = None,
     **_ignored: Any,
@@ -701,7 +702,7 @@ def push_pdd_upload_failure_log(
     if not code and not label and raw_msg:
         label, code = parse_listing_label_from_text(raw_msg)
     if not code and not label:
-        code = str(account_id or "未知").strip() or "未知"
+        code = str(fallback_product_code or "").strip() or "未知"
 
     record_type_value = str(record_type or "").strip() or map_listing_failure_record_type(
         reason_code=reason_code,

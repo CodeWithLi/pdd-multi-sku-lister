@@ -44,24 +44,25 @@ async def preflight_node(state: ListingState) -> dict:
         try:
             from pdd_agent.integrations.feishu.config import load_feishu_config
             from pdd_agent.integrations.feishu.pdd_product_catalog_sync import (
-                feishu_product_catalog_missing_message,
-                find_missing_feishu_product_codes,
-                _collect_catalog_codes,
+                diagnose_feishu_listing_catalog_issues,
+                format_feishu_listing_catalog_issue_message,
             )
 
             feishu_cfg = load_feishu_config()
-            if feishu_cfg.pdd_product_catalog.enabled and feishu_cfg.pdd_product_catalog.prefer_feishu:
-                catalog_codes = _collect_catalog_codes(units=report.units, extra_codes=codes)
-                missing, _ = find_missing_feishu_product_codes(catalog_codes, config=feishu_cfg)
-                if missing:
-                    table_name = str(feishu_cfg.pdd_product_catalog.table_name or "拼多多所有商品").strip()
-                    report.issues.append(
-                        PreflightIssue(
-                            level="error",
-                            message=feishu_product_catalog_missing_message(table_name=table_name),
-                            listing_label="",
-                        )
+            catalog_issues = diagnose_feishu_listing_catalog_issues(
+                units=report.units,
+                product_codes=codes,
+                config=feishu_cfg,
+            )
+            if catalog_issues:
+                first = catalog_issues[0]
+                report.issues.append(
+                    PreflightIssue(
+                        level="error",
+                        message=format_feishu_listing_catalog_issue_message(first),
+                        listing_label=first.listing_label,
                     )
+                )
         except Exception:
             logger.exception("check feishu product catalog missing failed")
     if run_id:

@@ -5,10 +5,12 @@ from __future__ import annotations
 from pathlib import Path
 
 from pdd_agent.domain.models import ListingUnit
-from pdd_agent.integrations.feishu.config import FeishuConfig, PddProductCatalogConfig, PddUploadLogConfig
+from pdd_agent.integrations.feishu.config import FeishuConfig, PddProductCatalogConfig, PddUploadLogConfig, PddPriceCompareConfig
 from pdd_agent.integrations.feishu.pdd_product_catalog_sync import (
+    FeishuListingCatalogIssue,
     _entry_from_feishu_fields,
     feishu_product_catalog_missing_message,
+    format_feishu_listing_catalog_issue_message,
     load_unified_pdd_product_catalog,
     schedule_feishu_product_catalog_missing_logs,
 )
@@ -59,11 +61,22 @@ def test_resolve_combo_pricing_uses_different_float_when_base_price_differs():
     assert gp == "5"
 
 
-def test_feishu_product_catalog_missing_message_includes_table_and_code():
-    assert feishu_product_catalog_missing_message(table_name="拼多多所有商品", product_code="BD716A") == (
-        "飞书拼多多所有商品没数据(BD716A)"
+def test_feishu_product_catalog_missing_message_includes_code():
+    assert feishu_product_catalog_missing_message(product_code="BD716A") == "BD716A商品表没数据"
+
+
+def test_format_feishu_listing_catalog_issue_message():
+    issue = FeishuListingCatalogIssue(
+        listing_label="BD716A/第一套图",
+        merchant_code="BD716A",
+        code_details=(
+            ("BD716A", ("商品表没数据",)),
+            ("YKL001N", ("定价没数据", "控价没数据")),
+        ),
     )
-    assert feishu_product_catalog_missing_message(table_name="拼多多所有商品") == "飞书拼多多所有商品没数据"
+    assert format_feishu_listing_catalog_issue_message(issue) == (
+        "BD716A/第一套图：BD716A商品表没数据；YKL001N定价没数据、控价没数据"
+    )
 
 
 def test_schedule_feishu_product_catalog_missing_logs_writes_failure_rows(monkeypatch):
@@ -91,8 +104,14 @@ def test_schedule_feishu_product_catalog_missing_logs_writes_failure_rows(monkey
 
     monkeypatch.setattr(
         pdd_product_catalog_sync,
-        "find_missing_feishu_product_codes",
-        lambda codes, **kwargs: (["BD716A", "YKL001N"], "feishu_empty"),
+        "diagnose_feishu_listing_catalog_issues",
+        lambda **kwargs: [
+            FeishuListingCatalogIssue(
+                listing_label="BD716A/第一套图",
+                merchant_code="BD716A",
+                code_details=(("BD716A", ("商品表没数据",)), ("YKL001N", ("定价没数据",))),
+            )
+        ],
     )
     captured: list[dict] = []
 
@@ -110,9 +129,89 @@ def test_schedule_feishu_product_catalog_missing_logs_writes_failure_rows(monkey
         config=cfg,
     )
     assert logged == 1
-    assert captured[0]["failure_reason"] == "飞书拼多多所有商品没数据"
+    assert captured[0]["failure_reason"] == "BD716A/第一套图：BD716A商品表没数据；YKL001N定价没数据"
     assert captured[0]["reason_code"] == "feishu_product_catalog_missing"
-    assert captured[0]["merchant_code"] == ""
+    assert captured[0]["merchant_code"] == "BD716A"
+    assert captured[0]["listing_label"] == "BD716A/第一套图"
+
+
+def test_diagnose_feishu_listing_catalog_issues_marks_missing_fields(monkeypatch):
+    from pdd_agent.integrations.feishu import pdd_product_catalog_sync
+
+    cfg = FeishuConfig(
+        app_id="x",
+        app_secret="y",
+        bitable_app_token="z",
+        pdd_product_catalog=PddProductCatalogConfig(
+            enabled=True,
+            prefer_feishu=True,
+        ),
+        pdd_price_compare=PddPriceCompareConfig(
+            enabled=True,
+            prefer_feishu=True,
+        ),
+    )
+    unit = ListingUnit(
+        product_code="BD716A",
+        family_code="BD716",
+        image_set="第一套图",
+        root=Path("."),
+    )
+    unit.style_codes = ["BD716A"]
+    unit.model_codes = ["YKL001N"]
+
+    class PricingCatalog:
+        source = "feishu"
+        prices = {}
+        incomplete_codes = frozenset()
+        feishu_record_codes = frozenset()
+
+    class ControlCatalog:
+        source = "feishu"
+        prices = {}
+        incomplete_codes = frozenset({"YKL001N"})
+        feishu_record_codes = frozenset({"YKL001N"})
+
+    class RangeCatalog:
+        source = "feishu"
+        ranges = {}
+        incomplete_codes = frozenset()
+        feishu_record_codes = frozenset()
+
+    monkeypatch.setattr(
+        pdd_product_catalog_sync,
+        "load_pdd_product_catalog_from_feishu",
+        lambda **kwargs: pdd_product_catalog_sync.ProductCatalogLoadResult(
+            catalog={"BD716A": PddProductEntry("BD716A", "灰色笔袋", "笔袋", 10, 0.0)},
+            source="feishu",
+        ),
+    )
+    monkeypatch.setattr(
+        "pdd_agent.integrations.feishu.pdd_price_compare_sync.load_pricing_catalog",
+        lambda **kwargs: PricingCatalog(),
+    )
+    monkeypatch.setattr(
+        "pdd_agent.integrations.feishu.pdd_price_compare_sync.load_control_catalog",
+        lambda **kwargs: ControlCatalog(),
+    )
+    monkeypatch.setattr(
+        "pdd_agent.integrations.feishu.pdd_price_compare_sync.load_price_range_catalog",
+        lambda **kwargs: RangeCatalog(),
+    )
+    monkeypatch.setattr(
+        "pdd_agent.integrations.feishu.pdd_price_compare_sync.is_feishu_price_data_missing",
+        lambda catalog, candidates: False,
+    )
+
+    issues = pdd_product_catalog_sync.diagnose_feishu_listing_catalog_issues(units=[unit], config=cfg)
+    assert len(issues) == 1
+    assert issues[0].merchant_code == "BD716A"
+    assert issues[0].listing_label == "BD716A/第一套图"
+    details = dict(issues[0].code_details)
+    assert "定价没数据" in details["BD716A"]
+    assert "商品表没数据" in details["YKL001N"]
+    assert "定价没数据" in details["YKL001N"]
+    assert "控价没数据" in details["YKL001N"]
 
 
 def test_load_unified_pdd_product_catalog_falls_back_to_excel(monkeypatch, tmp_path):

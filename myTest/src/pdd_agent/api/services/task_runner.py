@@ -794,6 +794,10 @@ def _schedule_feishu_listing_result_log(
             reason_code = "preflight_no_detail"
         elif "图片" in message and ("不存在" in message or "无法" in message):
             reason_code = "image_file_missing"
+        elif "没数据" in message and any(
+            token in message for token in ("定价", "控价", "商品表", "颜色规格")
+        ):
+            reason_code = "feishu_product_catalog_missing"
         elif "飞书" in message and "没数据" in message:
             reason_code = "feishu_product_catalog_missing"
         else:
@@ -842,11 +846,14 @@ def _schedule_feishu_listing_result_log(
     if extra_count > 0 and message:
         message = f"{message}（另{extra_count}项失败）"
 
+    primary_label = str(primary.get("listing_label") or "")
+    primary_code = str(primary.get("merchant_code") or "") or fallback_code
+
     schedule_pdd_upload_failure_log(
         account_id=account_id,
         account_name=account_name,
-        listing_label="",
-        merchant_code="",
+        listing_label=primary_label,
+        merchant_code=primary_code,
         record_type=map_listing_failure_record_type(
             status=str(primary.get("status") or ""),
             reason_code=str(primary.get("reason_code") or ""),
@@ -859,6 +866,7 @@ def _schedule_feishu_listing_result_log(
         publish_start=publish_start,
         publish_end=publish_end,
         duration_seconds=duration_seconds,
+        fallback_product_code=fallback_code,
     )
 
 

@@ -175,11 +175,166 @@ def load_pdd_product_catalog_from_feishu(
     )
 
 
+@dataclass(frozen=True)
+class FeishuListingCatalogIssue:
+    """单个上架单元在飞书商品/定价表中的缺失项。"""
+
+    listing_label: str
+    merchant_code: str
+    code_details: tuple[tuple[str, tuple[str, ...]], ...]
+
+
 def feishu_product_catalog_missing_message(*, table_name: str = "", product_code: str = "") -> str:
-    label = str(table_name or "拼多多所有商品").strip() or "拼多多所有商品"
+    """兼容旧调用；新逻辑请用 format_feishu_listing_catalog_issue_message。"""
     code = _norm_code(product_code)
-    base = f"飞书{label}没数据"
-    return f"{base}({code})" if code else base
+    if code:
+        return f"{code}商品表没数据"
+    label = str(table_name or "拼多多所有商品").strip() or "拼多多所有商品"
+    return f"飞书{label}没数据"
+
+
+def format_feishu_listing_catalog_issue_message(issue: FeishuListingCatalogIssue) -> str:
+    segments: list[str] = []
+    for code, aspects in issue.code_details:
+        aspect_text = "、".join(dict.fromkeys(str(x) for x in aspects if str(x).strip()))
+        if not aspect_text:
+            continue
+        segments.append(f"{code}{aspect_text}")
+    detail = "；".join(segments)
+    label = str(issue.listing_label or "").strip()
+    if label and detail:
+        return f"{label}：{detail}"
+    return detail or label
+
+
+def _unit_catalog_codes(unit: Any) -> list[str]:
+    codes: list[str] = []
+    for raw in [
+        getattr(unit, "product_code", ""),
+        *(getattr(unit, "style_codes", None) or []),
+        *(getattr(unit, "model_codes", None) or []),
+    ]:
+        text = _norm_code(raw)
+        if text:
+            codes.append(text)
+    return list(dict.fromkeys(codes))
+
+
+def _product_catalog_missing_aspects(
+    code: str,
+    catalog: dict[str, PddProductEntry],
+    *,
+    source: str,
+) -> list[str]:
+    if source in {"feishu_empty", "feishu_table_missing", "feishu_not_configured"}:
+        return ["商品表没数据"]
+    entry = catalog.get(code)
+    if not entry:
+        return ["商品表没数据"]
+    aspects: list[str] = []
+    if float(entry.price or 0.0) <= 0:
+        aspects.append("定价没数据")
+    return aspects
+
+
+def _code_price_missing_aspect(
+    code: str,
+    catalog: Any,
+    *,
+    missing_label: str,
+) -> str | None:
+    from pdd_agent.integrations.feishu.pdd_price_compare_sync import resolve_code_price_from_catalog
+
+    if getattr(catalog, "source", "") != "feishu":
+        return None
+    _price, reason = resolve_code_price_from_catalog(catalog, code)
+    if reason:
+        return missing_label
+    return None
+
+
+def diagnose_feishu_listing_catalog_issues(
+    *,
+    units: list[Any] | None = None,
+    product_codes: list[str] | None = None,
+    config: FeishuConfig | None = None,
+    client: FeishuClient | None = None,
+) -> list[FeishuListingCatalogIssue]:
+    """检查飞书商品表/定价比价表，返回按套图聚合的缺失明细。"""
+    cfg = config or load_feishu_config()
+    cat_cfg = cfg.pdd_product_catalog
+    price_cfg = cfg.pdd_price_compare
+    if not (
+        (cat_cfg.enabled and cat_cfg.prefer_feishu)
+        or (price_cfg.enabled and price_cfg.prefer_feishu)
+    ):
+        return []
+
+    unit_list = list(units or [])
+    if not unit_list and product_codes:
+        unit_list = [
+            type("_U", (), {"product_code": code, "style_codes": [], "model_codes": [], "listing_label": code})()
+            for code in product_codes
+            if _norm_code(code)
+        ]
+
+    product_catalog: dict[str, PddProductEntry] = {}
+    product_source = ""
+    if cat_cfg.enabled and cat_cfg.prefer_feishu:
+        loaded = load_pdd_product_catalog_from_feishu(config=cfg, client=client)
+        product_catalog = loaded.catalog
+        product_source = loaded.source
+
+    pricing_catalog = control_catalog = range_catalog = None
+    if price_cfg.enabled and price_cfg.prefer_feishu:
+        from pdd_agent.integrations.feishu.pdd_price_compare_sync import (
+            is_feishu_price_data_missing,
+            load_control_catalog,
+            load_price_range_catalog,
+            load_pricing_catalog,
+        )
+
+        pricing_catalog = load_pricing_catalog(config=cfg, client=client)
+        control_catalog = load_control_catalog(config=cfg, client=client)
+        range_catalog = load_price_range_catalog(config=cfg, client=client)
+
+    issues: list[FeishuListingCatalogIssue] = []
+    for unit in unit_list:
+        code_details: list[tuple[str, tuple[str, ...]]] = []
+        for code in _unit_catalog_codes(unit):
+            aspects: list[str] = []
+            if cat_cfg.enabled and cat_cfg.prefer_feishu:
+                aspects.extend(
+                    _product_catalog_missing_aspects(code, product_catalog, source=product_source)
+                )
+            if price_cfg.enabled and price_cfg.prefer_feishu:
+                pricing_aspect = _code_price_missing_aspect(
+                    code, pricing_catalog, missing_label="定价没数据"
+                )
+                if pricing_aspect:
+                    aspects.append(pricing_aspect)
+                control_aspect = _code_price_missing_aspect(
+                    code, control_catalog, missing_label="控价没数据"
+                )
+                if control_aspect:
+                    aspects.append(control_aspect)
+                if range_catalog and is_feishu_price_data_missing(range_catalog, [code]):
+                    aspects.append("控价区间没数据")
+            deduped = tuple(dict.fromkeys(x for x in aspects if x))
+            if deduped:
+                code_details.append((code, deduped))
+        if not code_details:
+            continue
+        listing_label = str(getattr(unit, "listing_label", "") or getattr(unit, "product_code", "") or "").strip()
+        merchant_code = _norm_code(getattr(unit, "product_code", "")) or code_details[0][0]
+        issues.append(
+            FeishuListingCatalogIssue(
+                listing_label=listing_label,
+                merchant_code=merchant_code,
+                code_details=tuple(code_details),
+            )
+        )
+    return issues
 
 
 def _collect_catalog_codes(*, units: list[Any], extra_codes: list[str] | None = None) -> list[str]:
@@ -251,19 +406,22 @@ def schedule_feishu_product_catalog_missing_logs(
         return 0
 
     units = list(units or [])
-    codes = _collect_catalog_codes(units=units, extra_codes=product_codes)
-    missing, _source = find_missing_feishu_product_codes(codes, config=cfg)
-    if not missing:
+    issues = diagnose_feishu_listing_catalog_issues(
+        units=units,
+        product_codes=product_codes,
+        config=cfg,
+    )
+    if not issues:
         return 0
 
     from pdd_agent.integrations.feishu.pdd_upload_sync import schedule_pdd_upload_failure_log
 
-    table_name = str(cfg.pdd_product_catalog.table_name or "拼多多所有商品").strip()
-    message = feishu_product_catalog_missing_message(table_name=table_name)
+    first = issues[0]
+    message = format_feishu_listing_catalog_issue_message(first)
     schedule_pdd_upload_failure_log(
         account_id=account_id,
-        listing_label="",
-        merchant_code="",
+        listing_label=first.listing_label,
+        merchant_code=first.merchant_code,
         reason_code=FEISHU_PRODUCT_CATALOG_MISSING_REASON,
         failure_reason=message,
         message=message,
@@ -421,10 +579,13 @@ def migrate_pdd_product_catalog_xls_to_feishu(
 
 __all__ = [
     "FEISHU_PRODUCT_CATALOG_MISSING_REASON",
+    "FeishuListingCatalogIssue",
     "clear_pdd_product_catalog_cache",
+    "diagnose_feishu_listing_catalog_issues",
     "ensure_pdd_product_catalog_table_ready",
     "feishu_product_catalog_missing_message",
     "find_missing_feishu_product_codes",
+    "format_feishu_listing_catalog_issue_message",
     "load_pdd_product_catalog_from_feishu",
     "load_unified_pdd_product_catalog",
     "migrate_pdd_product_catalog_xls_to_feishu",
