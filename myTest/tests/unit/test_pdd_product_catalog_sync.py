@@ -7,9 +7,11 @@ from pathlib import Path
 from pdd_agent.domain.models import ListingUnit
 from pdd_agent.integrations.feishu.config import FeishuConfig, PddProductCatalogConfig, PddUploadLogConfig, PddPriceCompareConfig, PipelineIntegrationConfig
 from pdd_agent.integrations.feishu.pdd_product_catalog_sync import (
+    FeishuCatalogIssueDetail,
     FeishuListingCatalogIssue,
     _entry_from_feishu_fields,
     feishu_product_catalog_missing_message,
+    format_feishu_catalog_issue_detail_message,
     format_feishu_listing_catalog_issue_message,
     load_unified_pdd_product_catalog,
     schedule_feishu_product_catalog_missing_logs,
@@ -65,6 +67,35 @@ def test_feishu_product_catalog_missing_message_includes_code():
     assert feishu_product_catalog_missing_message(product_code="BD716A") == "BD716A商品表没数据"
 
 
+def test_format_feishu_catalog_issue_detail_message():
+    reason, msg = format_feishu_catalog_issue_detail_message(
+        listing_label="BD034B/第一套图",
+        code="BD034B",
+        merchant_code="BD034B",
+        aspect="pricing_missing",
+    )
+    assert reason == "feishu_pricing_missing"
+    assert msg == "失败: BD034B/第一套图: 定价数据缺失"
+
+    reason, msg = format_feishu_catalog_issue_detail_message(
+        listing_label="BD034B/第一套图",
+        code="YKL001N",
+        merchant_code="BD034B",
+        aspect="subcode_missing",
+    )
+    assert reason == "feishu_subcode_missing"
+    assert msg == "BD034B/第一套图：子编码 YKL001N 没数据"
+
+    reason, msg = format_feishu_catalog_issue_detail_message(
+        listing_label="BD034B/第一套图",
+        code="YKL001N",
+        merchant_code="BD034B",
+        aspect="control_missing",
+    )
+    assert reason == "feishu_subcode_control_missing"
+    assert msg == "BD034B/第一套图：子编码 YKL001N 控价数据缺失"
+
+
 def test_format_feishu_listing_catalog_issue_message():
     issue = FeishuListingCatalogIssue(
         listing_label="BD716A/第一套图",
@@ -73,8 +104,16 @@ def test_format_feishu_listing_catalog_issue_message():
             ("BD716A", ("商品表没数据",)),
             ("YKL001N", ("定价没数据", "控价没数据")),
         ),
+        details=(
+            FeishuCatalogIssueDetail(
+                code="BD716A",
+                reason_code="feishu_pricing_missing",
+                message="失败: BD716A/第一套图: 定价数据缺失",
+                aspect="pricing_missing",
+            ),
+        ),
     )
-    assert format_feishu_listing_catalog_issue_message(issue) == "BD716A/第一套图"
+    assert format_feishu_listing_catalog_issue_message(issue) == "失败: BD716A/第一套图: 定价数据缺失"
 
 
 def test_schedule_feishu_product_catalog_missing_logs_writes_failure_rows(monkeypatch):
@@ -107,7 +146,21 @@ def test_schedule_feishu_product_catalog_missing_logs_writes_failure_rows(monkey
             FeishuListingCatalogIssue(
                 listing_label="BD716A/第一套图",
                 merchant_code="BD716A",
-                code_details=(("BD716A", ("商品表没数据",)), ("YKL001N", ("定价没数据",))),
+                code_details=(("BD716A", ("定价没数据",)), ("YKL001N", ("控价没数据",))),
+                details=(
+                    FeishuCatalogIssueDetail(
+                        code="BD716A",
+                        reason_code="feishu_pricing_missing",
+                        message="失败: BD716A/第一套图: 定价数据缺失",
+                        aspect="pricing_missing",
+                    ),
+                    FeishuCatalogIssueDetail(
+                        code="YKL001N",
+                        reason_code="feishu_subcode_control_missing",
+                        message="BD716A/第一套图：子编码 YKL001N 控价数据缺失",
+                        aspect="control_missing",
+                    ),
+                ),
             )
         ],
     )
@@ -126,9 +179,11 @@ def test_schedule_feishu_product_catalog_missing_logs_writes_failure_rows(monkey
         units=[unit],
         config=cfg,
     )
-    assert logged == 1
-    assert captured[0]["message"] == "BD716A/第一套图"
-    assert captured[0]["reason_code"] == "feishu_product_catalog_missing"
+    assert logged == 2
+    assert captured[0]["message"] == "失败: BD716A/第一套图: 定价数据缺失"
+    assert captured[0]["reason_code"] == "feishu_pricing_missing"
+    assert captured[1]["message"] == "BD716A/第一套图：子编码 YKL001N 控价数据缺失"
+    assert captured[1]["reason_code"] == "feishu_subcode_control_missing"
     assert captured[0]["merchant_code"] == "BD716A"
     assert captured[0]["listing_label"] == "BD716A/第一套图"
 
@@ -208,8 +263,11 @@ def test_diagnose_feishu_listing_catalog_issues_marks_missing_fields(monkeypatch
     details = dict(issues[0].code_details)
     assert "定价没数据" in details["BD716A"]
     assert "商品表没数据" in details["YKL001N"]
-    assert "定价没数据" in details["YKL001N"]
     assert "控价没数据" in details["YKL001N"]
+    messages = [item.message for item in issues[0].details]
+    assert "失败: BD716A/第一套图: 定价数据缺失" in messages
+    assert "BD716A/第一套图：子编码 YKL001N 没数据" in messages
+    assert "BD716A/第一套图：子编码 YKL001N 控价数据缺失" in messages
 
 
 def test_load_unified_pdd_product_catalog_falls_back_to_excel(monkeypatch, tmp_path):

@@ -137,6 +137,16 @@ FEISHU_FAILURE_REASON_LABELS: dict[str, str] = {
     "task_cancelled": "任务已被用户停止",
     "user_cancelled": "任务已被用户停止",
     "feishu_product_catalog_missing": "飞书商品/定价数据缺失",
+    "feishu_pricing_missing": "定价数据缺失",
+    "feishu_control_missing": "控价数据缺失",
+    "feishu_price_range_missing": "控价区间数据缺失",
+    "feishu_color_spec_missing": "颜色规格没数据",
+    "feishu_product_row_missing": "商品表没数据",
+    "feishu_subcode_missing": "子编码没数据",
+    "feishu_subcode_pricing_missing": "子编码定价数据缺失",
+    "feishu_subcode_control_missing": "子编码控价数据缺失",
+    "feishu_subcode_range_missing": "子编码控价区间数据缺失",
+    "feishu_subcode_color_spec_missing": "子编码颜色规格没数据",
 }
 
 
@@ -157,6 +167,9 @@ def _humanize_listing_failure_message(
     raw = _strip_bracket_label_from_message(str(message or error or "").strip())
     raw = raw.split("\n")[0].strip()
     code = str(reason_code or "").strip()
+
+    if raw.startswith("失败:") or re.search(r"：子编码\s+\S+", raw):
+        return raw
 
     if "槽位对齐" in raw or code == "slot_alignment_failed":
         detail_match = re.search(r"[（(]([^）)]+)[）)]", raw)
@@ -398,6 +411,8 @@ def _format_brief_listing_failure_reason(
             label = parsed_label
 
     body = _humanize_listing_failure_message(reason_code=code, message=message, error=error)
+    if body.startswith("失败:") or "：子编码 " in body:
+        return body[:500]
     record = str(record_type or "").strip()
     if record and label:
         return f"{record}: {label}: {body}"[:500]

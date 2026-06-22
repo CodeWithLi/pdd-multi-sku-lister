@@ -40,6 +40,118 @@ from pdd_agent.skills.listing.pdd_product_catalog import (
 logger = get_logger(__name__)
 
 FEISHU_PRODUCT_CATALOG_MISSING_REASON = "feishu_product_catalog_missing"
+
+
+@dataclass(frozen=True)
+class FeishuCatalogIssueDetail:
+    """单条飞书商品/定价校验失败，便于分派处理。"""
+
+    code: str
+    reason_code: str
+    message: str
+    aspect: str = ""
+
+
+@dataclass(frozen=True)
+class FeishuListingCatalogIssue:
+    """单个上架单元在飞书商品/定价表中的缺失项。"""
+
+    listing_label: str
+    merchant_code: str
+    code_details: tuple[tuple[str, tuple[str, ...]], ...]
+    details: tuple[FeishuCatalogIssueDetail, ...] = ()
+
+
+def _is_sub_catalog_code(code: str, merchant_code: str) -> bool:
+    norm_code = _norm_code(code)
+    norm_merchant = _norm_code(merchant_code)
+    return bool(norm_code and norm_merchant and norm_code != norm_merchant)
+
+
+def format_feishu_catalog_issue_detail_message(
+    *,
+    listing_label: str,
+    code: str,
+    merchant_code: str,
+    aspect: str,
+) -> tuple[str, str]:
+    """生成 (reason_code, message)。主商品码带「失败:」前缀，子编码用「子编码 XXX …」格式。"""
+    label = str(listing_label or "").strip()
+    norm_code = _norm_code(code)
+    is_sub = _is_sub_catalog_code(code, merchant_code)
+
+    aspect_config: dict[str, tuple[str, str]] = {
+        "pricing_missing": ("feishu_pricing_missing", "定价数据缺失"),
+        "control_missing": ("feishu_control_missing", "控价数据缺失"),
+        "range_missing": ("feishu_price_range_missing", "控价区间数据缺失"),
+        "color_spec_missing": ("feishu_color_spec_missing", "颜色规格没数据"),
+        "product_row_missing": ("feishu_product_row_missing", "商品表没数据"),
+        "subcode_missing": ("feishu_subcode_missing", "没数据"),
+    }
+    reason_code, aspect_text = aspect_config.get(
+        aspect, ("feishu_product_catalog_missing", "飞书数据缺失")
+    )
+
+    if is_sub:
+        sub_reason_map = {
+            "pricing_missing": "feishu_subcode_pricing_missing",
+            "control_missing": "feishu_subcode_control_missing",
+            "range_missing": "feishu_subcode_range_missing",
+            "color_spec_missing": "feishu_subcode_color_spec_missing",
+            "product_row_missing": "feishu_subcode_missing",
+            "subcode_missing": "feishu_subcode_missing",
+        }
+        reason_code = sub_reason_map.get(aspect, reason_code)
+        if aspect in {"product_row_missing", "subcode_missing"}:
+            message = f"{label}：子编码 {norm_code} 没数据"
+        else:
+            message = f"{label}：子编码 {norm_code} {aspect_text}"
+    else:
+        message = f"失败: {label}: {aspect_text}" if label else f"失败: {aspect_text}"
+
+    return reason_code, message
+
+
+def _aspect_label(aspect: str) -> str:
+    labels = {
+        "pricing_missing": "定价没数据",
+        "control_missing": "控价没数据",
+        "range_missing": "控价区间没数据",
+        "color_spec_missing": "颜色规格没数据",
+        "product_row_missing": "商品表没数据",
+        "subcode_missing": "商品表没数据",
+    }
+    return labels.get(aspect, "飞书数据缺失")
+
+
+def _append_catalog_detail(
+    details: list[FeishuCatalogIssueDetail],
+    *,
+    listing_label: str,
+    merchant_code: str,
+    code: str,
+    aspect: str,
+) -> None:
+    norm_code = _norm_code(code)
+    for existing in details:
+        if existing.code == norm_code and existing.aspect == aspect:
+            return
+    reason_code, message = format_feishu_catalog_issue_detail_message(
+        listing_label=listing_label,
+        code=code,
+        merchant_code=merchant_code,
+        aspect=aspect,
+    )
+    details.append(
+        FeishuCatalogIssueDetail(
+            code=_norm_code(code),
+            reason_code=reason_code,
+            message=message,
+            aspect=aspect,
+        )
+    )
+
+
 _CACHE: dict[str, Any] = {"loaded_at": 0.0, "catalog": None, "source": ""}
 
 
@@ -189,15 +301,6 @@ def load_pdd_product_catalog_from_feishu(
     )
 
 
-@dataclass(frozen=True)
-class FeishuListingCatalogIssue:
-    """单个上架单元在飞书商品/定价表中的缺失项。"""
-
-    listing_label: str
-    merchant_code: str
-    code_details: tuple[tuple[str, tuple[str, ...]], ...]
-
-
 def feishu_product_catalog_missing_message(*, table_name: str = "", product_code: str = "") -> str:
     """兼容旧调用；新逻辑请用 format_feishu_listing_catalog_issue_message。"""
     code = _norm_code(product_code)
@@ -208,8 +311,113 @@ def feishu_product_catalog_missing_message(*, table_name: str = "", product_code
 
 
 def format_feishu_listing_catalog_issue_message(issue: FeishuListingCatalogIssue) -> str:
-    """对外展示/日志：只标明哪套图有问题。"""
+    """对外展示：优先返回首条分项说明。"""
+    if issue.details:
+        return issue.details[0].message
     return str(issue.listing_label or "").strip()
+
+
+def _collect_product_catalog_issue_details(
+    *,
+    code: str,
+    catalog: dict[str, PddProductEntry],
+    source: str,
+    raw_fields: dict[str, Any] | None,
+    names,
+    listing_label: str,
+    merchant_code: str,
+    details: list[FeishuCatalogIssueDetail],
+) -> list[str]:
+    """返回 legacy aspect 标签列表，并追加结构化 details。"""
+    aspects: list[str] = []
+    if source in {"feishu_empty", "feishu_table_missing", "feishu_not_configured"}:
+        aspect = "subcode_missing" if _is_sub_catalog_code(code, merchant_code) else "product_row_missing"
+        aspects.append(_aspect_label(aspect))
+        _append_catalog_detail(
+            details,
+            listing_label=listing_label,
+            merchant_code=merchant_code,
+            code=code,
+            aspect=aspect,
+        )
+        return aspects
+
+    if raw_fields:
+        color_spec = _field_text(raw_fields, names.color_spec)
+        if not color_spec:
+            aspect = "color_spec_missing"
+            aspects.append(_aspect_label(aspect))
+            _append_catalog_detail(
+                details,
+                listing_label=listing_label,
+                merchant_code=merchant_code,
+                code=code,
+                aspect=aspect,
+            )
+            return aspects
+
+    entry = catalog.get(code)
+    if not entry:
+        aspect = "subcode_missing" if _is_sub_catalog_code(code, merchant_code) else "product_row_missing"
+        aspects.append(_aspect_label(aspect))
+        _append_catalog_detail(
+            details,
+            listing_label=listing_label,
+            merchant_code=merchant_code,
+            code=code,
+            aspect=aspect,
+        )
+        return aspects
+
+    if float(entry.price or 0.0) <= 0:
+        aspect = "pricing_missing"
+        aspects.append(_aspect_label(aspect))
+        _append_catalog_detail(
+            details,
+            listing_label=listing_label,
+            merchant_code=merchant_code,
+            code=code,
+            aspect=aspect,
+        )
+    return aspects
+
+
+def _collect_price_catalog_issue_detail(
+    *,
+    code: str,
+    catalog: Any,
+    aspect: str,
+    listing_label: str,
+    merchant_code: str,
+    details: list[FeishuCatalogIssueDetail],
+) -> str | None:
+    from pdd_agent.integrations.feishu.pdd_price_compare_sync import (
+        FEISHU_DATA_MISSING_MESSAGE,
+        FEISHU_PRICE_NOT_FOUND_MESSAGE,
+        resolve_code_price_from_catalog,
+    )
+
+    if getattr(catalog, "source", "") != "feishu":
+        return None
+    _price, reason = resolve_code_price_from_catalog(catalog, code)
+    if not reason:
+        return None
+    if reason == FEISHU_PRICE_NOT_FOUND_MESSAGE:
+        resolved_aspect = (
+            "subcode_missing" if _is_sub_catalog_code(code, merchant_code) else "product_row_missing"
+        )
+    elif reason == FEISHU_DATA_MISSING_MESSAGE:
+        resolved_aspect = aspect
+    else:
+        resolved_aspect = aspect
+    _append_catalog_detail(
+        details,
+        listing_label=listing_label,
+        merchant_code=merchant_code,
+        code=code,
+        aspect=resolved_aspect,
+    )
+    return _aspect_label(resolved_aspect)
 
 
 def _unit_catalog_codes(unit: Any) -> list[str]:
@@ -223,39 +431,6 @@ def _unit_catalog_codes(unit: Any) -> list[str]:
         if text:
             codes.append(text)
     return list(dict.fromkeys(codes))
-
-
-def _product_catalog_missing_aspects(
-    code: str,
-    catalog: dict[str, PddProductEntry],
-    *,
-    source: str,
-) -> list[str]:
-    if source in {"feishu_empty", "feishu_table_missing", "feishu_not_configured"}:
-        return ["商品表没数据"]
-    entry = catalog.get(code)
-    if not entry:
-        return ["商品表没数据"]
-    aspects: list[str] = []
-    if float(entry.price or 0.0) <= 0:
-        aspects.append("定价没数据")
-    return aspects
-
-
-def _code_price_missing_aspect(
-    code: str,
-    catalog: Any,
-    *,
-    missing_label: str,
-) -> str | None:
-    from pdd_agent.integrations.feishu.pdd_price_compare_sync import resolve_code_price_from_catalog
-
-    if getattr(catalog, "source", "") != "feishu":
-        return None
-    _price, reason = resolve_code_price_from_catalog(catalog, code)
-    if reason:
-        return missing_label
-    return None
 
 
 def diagnose_feishu_listing_catalog_issues(
@@ -315,39 +490,75 @@ def diagnose_feishu_listing_catalog_issues(
             range_catalog = load_price_range_catalog(config=cfg, client=client)
 
     issues: list[FeishuListingCatalogIssue] = []
+    names = cat_cfg.field_names
     for unit in unit_list:
+        listing_label = str(
+            getattr(unit, "listing_label", "") or getattr(unit, "product_code", "") or ""
+        ).strip()
+        merchant_code = _norm_code(getattr(unit, "product_code", ""))
         code_details: list[tuple[str, tuple[str, ...]]] = []
+        details: list[FeishuCatalogIssueDetail] = []
         for code in _unit_catalog_codes(unit):
             aspects: list[str] = []
+            raw_fields = None
+            if snapshot is not None:
+                raw_fields = snapshot.records_by_code.get(code)
             if cat_cfg.enabled and cat_cfg.prefer_feishu:
                 aspects.extend(
-                    _product_catalog_missing_aspects(code, product_catalog, source=product_source)
+                    _collect_product_catalog_issue_details(
+                        code=code,
+                        catalog=product_catalog,
+                        source=product_source,
+                        raw_fields=raw_fields,
+                        names=names,
+                        listing_label=listing_label,
+                        merchant_code=merchant_code,
+                        details=details,
+                    )
                 )
             if price_cfg.enabled and price_cfg.prefer_feishu:
-                pricing_aspect = _code_price_missing_aspect(
-                    code, pricing_catalog, missing_label="定价没数据"
+                pricing_aspect = _collect_price_catalog_issue_detail(
+                    code=code,
+                    catalog=pricing_catalog,
+                    aspect="pricing_missing",
+                    listing_label=listing_label,
+                    merchant_code=merchant_code,
+                    details=details,
                 )
                 if pricing_aspect:
                     aspects.append(pricing_aspect)
-                control_aspect = _code_price_missing_aspect(
-                    code, control_catalog, missing_label="控价没数据"
+                control_aspect = _collect_price_catalog_issue_detail(
+                    code=code,
+                    catalog=control_catalog,
+                    aspect="control_missing",
+                    listing_label=listing_label,
+                    merchant_code=merchant_code,
+                    details=details,
                 )
                 if control_aspect:
                     aspects.append(control_aspect)
                 if range_catalog and is_feishu_price_data_missing(range_catalog, [code]):
-                    aspects.append("控价区间没数据")
+                    aspects.append(_aspect_label("range_missing"))
+                    _append_catalog_detail(
+                        details,
+                        listing_label=listing_label,
+                        merchant_code=merchant_code,
+                        code=code,
+                        aspect="range_missing",
+                    )
             deduped = tuple(dict.fromkeys(x for x in aspects if x))
             if deduped:
                 code_details.append((code, deduped))
         if not code_details:
             continue
-        listing_label = str(getattr(unit, "listing_label", "") or getattr(unit, "product_code", "") or "").strip()
-        merchant_code = _norm_code(getattr(unit, "product_code", "")) or code_details[0][0]
+        if not merchant_code:
+            merchant_code = code_details[0][0]
         issues.append(
             FeishuListingCatalogIssue(
                 listing_label=listing_label,
                 merchant_code=merchant_code,
                 code_details=tuple(code_details),
+                details=tuple(details),
             )
         )
     return issues
@@ -434,17 +645,28 @@ def schedule_feishu_product_catalog_missing_logs(
 
     written = 0
     for issue in issues:
-        label = str(issue.listing_label or "").strip()
-        if not label:
-            continue
-        schedule_pdd_upload_failure_log(
-            account_id=account_id,
-            listing_label=label,
-            merchant_code=issue.merchant_code,
-            reason_code=FEISHU_PRODUCT_CATALOG_MISSING_REASON,
-            message=label,
-        )
-        written += 1
+        detail_rows = list(issue.details)
+        if not detail_rows:
+            label = str(issue.listing_label or "").strip()
+            if not label:
+                continue
+            detail_rows = [
+                FeishuCatalogIssueDetail(
+                    code=issue.merchant_code,
+                    reason_code=FEISHU_PRODUCT_CATALOG_MISSING_REASON,
+                    message=label,
+                    aspect="",
+                )
+            ]
+        for detail in detail_rows:
+            schedule_pdd_upload_failure_log(
+                account_id=account_id,
+                listing_label=issue.listing_label,
+                merchant_code=issue.merchant_code,
+                reason_code=detail.reason_code,
+                message=detail.message,
+            )
+            written += 1
     return written
 
 

@@ -71,14 +71,26 @@ async def preflight_node(state: ListingState) -> dict:
                 config=feishu_cfg,
             )
             for catalog_issue in catalog_issues:
-                report.issues.append(
-                    PreflightIssue(
-                        level="error",
-                        message=catalog_issue.listing_label,
-                        listing_label=catalog_issue.listing_label,
-                        reason_code="feishu_product_catalog_missing",
+                detail_rows = list(catalog_issue.details)
+                if not detail_rows:
+                    report.issues.append(
+                        PreflightIssue(
+                            level="error",
+                            message=catalog_issue.listing_label,
+                            listing_label=catalog_issue.listing_label,
+                            reason_code="feishu_product_catalog_missing",
+                        )
                     )
-                )
+                    continue
+                for detail in detail_rows:
+                    report.issues.append(
+                        PreflightIssue(
+                            level="error",
+                            message=detail.message,
+                            listing_label=catalog_issue.listing_label,
+                            reason_code=detail.reason_code,
+                        )
+                    )
         except Exception:
             logger.exception("check feishu product catalog missing failed")
     if run_id:

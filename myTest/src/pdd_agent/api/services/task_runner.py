@@ -830,7 +830,7 @@ def _schedule_feishu_listing_result_log(
         _queue_failure(
             listing_label=listing_label,
             reason_code=reason_code,
-            message=listing_label or message,
+            message=message or listing_label,
             retryable="槽位对齐" in message,
             priority=3,
         )
@@ -874,7 +874,7 @@ def _schedule_feishu_listing_result_log(
             ),
             reason_code=str(row.get("reason_code") or ""),
             error=str(row.get("error") or ""),
-            message=row_label,
+            message=str(row.get("message") or row_label),
             publish_start=publish_start,
             publish_end=publish_end,
             duration_seconds=duration_seconds,
