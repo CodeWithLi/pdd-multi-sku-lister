@@ -21,36 +21,9 @@ from pdd_agent.storage import TaskRunStore
 
 FAILURE_STATUSES = {"failed", "retryable", "submit_uncertain", "skipped"}
 
-RETRYABLE_REASON_CODES = frozenset({
-    "preview_not_ready",
-    "preview_missing",
-    "platform_listing_code_not_filled",
-    "platform_listing_code_verify_failed",
-    "validation_errors",
-    "validation_incomplete",
-    "validation_required",
-    "submit_blocked",
-    "submit_uncertain",
-    "submit_button_missing",
-    "submit_exception",
-    "listed",
-    "published_but_not_found_in_on_sale_or_rejected",
-    "needs_manual_login_or_captcha",
-    "page_or_material_changed",
-    "browser_transient_error",
-    "unexpected_error",
-    "preflight_no_skus",
-    "preflight_no_carousel",
-    "preflight_no_detail",
-    "preflight_catalog",
-    "image_file_missing",
-    "price_fill_partial",
-    "price_fill_row_not_found",
-    "price_fill_by_index_failed",
-    "catalog_parse_warning",
-    "no_valid_units",
-    "slot_alignment_failed",
-})
+from pdd_agent.domain.listing_errors import ListingErrors
+
+RETRYABLE_REASON_CODES = ListingErrors.RETRYABLE_REASON_CODES
 
 
 def resolve_failure_item_status(reason_code: str) -> tuple[str, bool]:

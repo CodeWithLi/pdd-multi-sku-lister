@@ -507,24 +507,26 @@ def test_format_brief_listing_failure_reason_is_short():
         listing_label="BD736/第三套图/BD736A",
         reason_code="preflight_no_carousel",
         record_type="跳过",
+        merchant_code="BD736A",
     )
-    assert text == "跳过: BD736/第三套图/BD736A: 缺少主图（需 1-5 编号图）"
+    assert text == "BD736A主图缺失"
 
 
 def test_humanize_slot_alignment_uses_plain_language():
     text = _humanize_listing_failure_message(
         reason_code="slot_alignment_failed",
-        message="[BD722C/第一套图] 槽位对齐失败：兄弟款预览图数量不一致（BD722B=3张，BD722C=2张）",
+        message="兄弟款规格不齐：BD716A缺YKL004（应为5个）",
     )
-    assert text == "兄弟款预览图张数不一致（BD722B=3张，BD722C=2张）"
+    assert text == "BD716A缺YKL004"
 
     brief = _format_brief_listing_failure_reason(
         listing_label="BD722C/第一套图",
         reason_code="slot_alignment_failed",
-        message="槽位对齐失败：兄弟款规格数量不一致",
+        message="兄弟款规格不齐：BD722B缺YKL001（应为5个）",
         record_type="跳过",
+        merchant_code="BD722B",
     )
-    assert brief == "跳过: BD722C/第一套图: 兄弟款预览图张数不一致，请核对各款图数"
+    assert brief == "BD722B缺YKL001"
 
 
 def test_humanize_skip_missing_numbered_images():
@@ -533,8 +535,9 @@ def test_humanize_skip_missing_numbered_images():
         reason_code="preflight_catalog",
         message="无任何数字命名图 (1-9)",
         record_type="跳过",
+        merchant_code="BD736A",
     )
-    assert text == "跳过: BD736/第三套图/BD736A: 缺少按数字命名的图片 (1-9)"
+    assert text == "图片缺失 1 2 3 4 5 6 7 8 9"
 
 
 def test_schedule_feishu_listing_result_log_writes_one_row_per_failure(monkeypatch):
@@ -686,9 +689,9 @@ def test_humanize_post_submit_failure_messages():
         reason_code="published_but_not_found_in_on_sale_or_rejected",
         error="提交后在在售/驳回列表没找到刚上的商品，请人工核对",
         record_type="失败",
+        merchant_code="BD722D",
     )
-    assert not_found.startswith("失败: BD722D/第一套图:")
-    assert "没找到刚上" in not_found
+    assert not_found == "提交后在在售/驳回列表没找到刚上的商品，请人工核对"
 
 
 def test_build_pdd_upload_failure_log_fields():
@@ -737,6 +740,18 @@ def test_parse_listing_label_from_text():
     assert label == "BD722B/第一套图"
     assert code == "BD722B"
 
+    label, code = parse_listing_label_from_text("兄弟款规格不齐：BD722B缺YKL001（应为5个）")
+    assert label == ""
+    assert code == "BD722B"
+
+    label, code = parse_listing_label_from_text("失败: BD025A/第一套图: 定价数据缺失")
+    assert label == "BD025A/第一套图"
+    assert code == "BD025A"
+
+    label, code = parse_listing_label_from_text("BD030A/第一套图：子编码 YKL001 没数据")
+    assert label == "BD030A/第一套图"
+    assert code == "BD030A"
+
 
 def test_push_pdd_upload_failure_log_without_merchant_code(monkeypatch):
     from pdd_agent.integrations.feishu import pdd_upload_sync
@@ -761,7 +776,7 @@ def test_push_pdd_upload_failure_log_without_merchant_code(monkeypatch):
     result = push_pdd_upload_failure_log(
         account_id="store_A",
         account_name="测试店",
-        message="[BD722B/第一套图] 槽位对齐失败：兄弟款规格数量不一致",
+        message="兄弟款规格不齐：BD722B缺YKL001（应为5个）",
         reason_code="slot_alignment_failed",
         config=FeishuConfig(
             app_id="x",
@@ -772,5 +787,4 @@ def test_push_pdd_upload_failure_log_without_merchant_code(monkeypatch):
     )
     assert result.get("created") is True
     assert result["fields"]["商品编码"] == "BD722B"
-    assert "兄弟款预览图张数不一致" in result["fields"]["失败原因"]
-    assert "槽位对齐" not in result["fields"]["失败原因"]
+    assert result["fields"]["失败原因"] == "BD722B缺YKL001"

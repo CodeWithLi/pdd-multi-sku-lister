@@ -99,7 +99,7 @@ async def lifespan(app: FastAPI):
             print(
                 "[feishu] PDD发布日志表已就绪："
                 f"{upload_ready.get('success_table_id')} / "
-                f"{upload_ready.get('failure_table_id')}",
+                f"失败表(淘宝+拼多多)={upload_ready.get('failure_table_id')}",
                 flush=True,
             )
         elif not upload_ready.get("skipped"):

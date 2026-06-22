@@ -62,6 +62,7 @@ class LoginStatusORM(Base):
     status: Mapped[str] = mapped_column(String(32), index=True, nullable=False)
     reason: Mapped[str] = mapped_column(Text, default="", nullable=False)
     current_url: Mapped[str] = mapped_column(Text, default="", nullable=False)
+    shop_display_name: Mapped[str] = mapped_column(String(128), default="", nullable=False)
     checked_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime, server_default=func.now(), nullable=False

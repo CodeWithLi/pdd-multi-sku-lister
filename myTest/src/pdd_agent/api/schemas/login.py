@@ -10,6 +10,7 @@ class LoginStatusOut(BaseModel):
     status: str = "unknown"
     reason: str = ""
     current_url: str = ""
+    shop_display_name: str = ""
     checked_at: datetime | None = None
 
 

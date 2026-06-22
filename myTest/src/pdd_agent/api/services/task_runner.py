@@ -577,11 +577,9 @@ def ensure_feishu_logged_for_terminal_run(
 
 
 def _account_display_name(account_id: str) -> str:
-    settings = load_yaml_settings()
-    account = get_account_config(settings, account_id)
-    if account and str(account.username or "").strip():
-        return str(account.username).strip()
-    return str(account_id or "").strip()
+    from pdd_agent.core.account_display import resolve_account_display_name
+
+    return resolve_account_display_name(account_id)
 
 
 def _listing_run_timing(run_id: str) -> tuple[datetime | None, datetime | None]:
@@ -809,7 +807,7 @@ def _schedule_feishu_listing_result_log(
         ).strip()
         if issue_reason:
             reason_code = issue_reason
-        elif "槽位对齐" in message:
+        elif "兄弟款规格不齐" in message or "槽位对齐" in message:
             reason_code = "slot_alignment_failed"
         elif "无有效 SKU" in message or "未解析到任何有效 SKU" in message:
             reason_code = "preflight_no_skus"
@@ -831,7 +829,7 @@ def _schedule_feishu_listing_result_log(
             listing_label=listing_label,
             reason_code=reason_code,
             message=message or listing_label,
-            retryable="槽位对齐" in message,
+            retryable="兄弟款规格不齐" in message or "槽位对齐" in message,
             priority=3,
         )
 
@@ -839,11 +837,12 @@ def _schedule_feishu_listing_result_log(
         text = str(err or "").strip()
         if not text:
             continue
-        reason_code = "slot_alignment_failed" if "槽位对齐" in text else "unexpected_error"
+        is_slot = "兄弟款规格不齐" in text or "槽位对齐" in text
+        reason_code = "slot_alignment_failed" if is_slot else "unexpected_error"
         _queue_failure(
             message=text,
             reason_code=reason_code,
-            retryable="槽位对齐" in text,
+            retryable=is_slot,
             priority=2,
         )
 
@@ -858,23 +857,46 @@ def _schedule_feishu_listing_result_log(
     if not rows:
         return
 
+    from collections import defaultdict
+
+    from pdd_agent.domain.listing_errors import ListingErrors
+    from pdd_agent.integrations.feishu.pdd_upload_sync import _format_brief_listing_failure_reason
+
+    grouped_rows: dict[str, list[dict[str, Any]]] = defaultdict(list)
     for row in rows:
-        row_label = str(row.get("listing_label") or "")
         row_code = str(row.get("merchant_code") or "") or fallback_code
+        grouped_rows[row_code.upper()].append(row)
+
+    for row_code, group in grouped_rows.items():
+        lines: list[str] = []
+        primary = group[0]
+        for row in group:
+            brief = _format_brief_listing_failure_reason(
+                listing_label=str(row.get("listing_label") or ""),
+                reason_code=str(row.get("reason_code") or ""),
+                error=str(row.get("error") or ""),
+                message=str(row.get("message") or ""),
+                merchant_code=row_code,
+            )
+            if brief:
+                lines.append(brief)
+        combined = ListingErrors.format_numbered(lines)
+        row_label = str(primary.get("listing_label") or "")
         schedule_pdd_upload_failure_log(
             account_id=account_id,
             account_name=account_name,
             listing_label=row_label,
             merchant_code=row_code,
             record_type=map_listing_failure_record_type(
-                status=str(row.get("status") or ""),
-                reason_code=str(row.get("reason_code") or ""),
-                retryable=bool(row.get("retryable")),
-                legacy_status=str(row.get("legacy_status") or ""),
+                status=str(primary.get("status") or ""),
+                reason_code=str(primary.get("reason_code") or ""),
+                retryable=any(bool(r.get("retryable")) for r in group),
+                legacy_status=str(primary.get("legacy_status") or ""),
             ),
-            reason_code=str(row.get("reason_code") or ""),
-            error=str(row.get("error") or ""),
-            message=str(row.get("message") or row_label),
+            reason_code=str(primary.get("reason_code") or ""),
+            error=str(primary.get("error") or ""),
+            message=combined or str(primary.get("message") or row_label),
+            failure_reason=combined,
             publish_start=publish_start,
             publish_end=publish_end,
             duration_seconds=duration_seconds,

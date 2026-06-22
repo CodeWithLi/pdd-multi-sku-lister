@@ -63,6 +63,7 @@ export interface Account {
   account_id: string
   enabled: boolean
   username: string
+  display_name?: string
   has_password: boolean
   product_codes: string[]
 }
@@ -173,6 +174,21 @@ export interface PreflightResponse {
   warning_count: number
   units: ListingUnit[]
   issues: PreflightIssue[]
+}
+
+export interface MinioSyncJob {
+  job_id: string
+  status: 'pending' | 'running' | 'success' | 'failed' | string
+  product_codes: string[]
+  total_sets: number
+  completed_sets: number
+  current_label: string
+  downloaded_files: number
+  skipped_files: number
+  error: string
+  progress_percent: number
+  started_at: number
+  finished_at: number
 }
 
 export interface PlanResponse {
@@ -474,6 +490,7 @@ export interface LoginStatus {
   status: string
   reason: string
   current_url: string
+  shop_display_name?: string
   checked_at: string | null
 }
 

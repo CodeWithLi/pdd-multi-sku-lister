@@ -14,44 +14,13 @@ from pdd_agent.domain.models import ListingUnit, PreflightIssue
 
 logger = get_logger(__name__)
 
-# 机器 reason → 人工可读说明（可再拼接 error 字段里的具体信息）
-REASON_LABELS: dict[str, str] = {
-    "preview_not_ready": "预览图未全部上传，页面仍有规格行缺图",
-    "preview_missing": "页面提示预览图缺失或未通过校验",
-    "platform_listing_code_not_filled": "底部商品编码未填写",
-    "platform_listing_code_verify_failed": "底部商品编码与期望货号不一致",
-    "validation_errors": "提交前页面校验失败（库存/价格等未填完整）",
-    "validation_incomplete": "提交前页面校验未通过（信息不完整）",
-    "validation_required": "提交前页面有必填项未处理",
-    "submit_blocked": "点击提交被页面拦截（通常仍有红色错误项）",
-    "submit_uncertain": "提交结果不确定，需人工到在售/驳回列表核对",
-    "submit_button_missing": "未找到「提交并上架」按钮",
-    "submit_exception": "点击提交时发生异常",
-    "listed": "已提交但后续抓取商品 ID 失败",
-    "rejected_after_publish": "提交后被平台驳回",
-    "published_but_not_found_in_on_sale_or_rejected": "提交后未在售列表/驳回列表中找到商品",
-    "needs_manual_login_or_captcha": "需要人工登录或处理验证码/滑块",
-    "page_or_material_changed": "页面结构或素材异常（分类/规格/上传相关）",
-    "browser_transient_error": "浏览器超时或连接断开",
-    "unexpected_error": "未分类的运行异常",
-    "preflight_no_skus": "上架前校验：无有效 SKU",
-    "preflight_no_carousel": "上架前校验：主图为空",
-    "preflight_no_detail": "上架前校验：详情图为空",
-    "preflight_catalog": "上架前校验：商品表或素材目录问题",
-    "image_file_missing": "图片文件不存在或无法读取",
-    "price_fill_partial": "价格表文字字段未全部填写（库存/拼团价/单买价/编码）",
-    "price_fill_row_not_found": "价格表找不到对应规格行",
-    "price_fill_by_index_failed": "按行号填写价格表失败",
-    "catalog_parse_warning": "素材目录解析警告",
-    "no_valid_units": "无有效上架单元",
-    "slot_alignment_failed": "槽位对齐失败（兄弟款图数不一致或结构不齐）",
-}
+from pdd_agent.domain.listing_errors import ListingErrorCode, ListingErrors
 
 
 def _human_message(reason_code: str, error: str = "", message: str = "") -> str:
     if message:
         return message
-    base = REASON_LABELS.get(reason_code or "", reason_code or "上架失败")
+    base = ListingErrors.label(reason_code or "", fallback=reason_code or ListingErrors.DEFAULT_LABEL)
     err = (error or "").strip()
     if err and err not in base:
         return f"{base}。详情：{err}"
@@ -202,16 +171,16 @@ def record_preflight_issue(
     issue: PreflightIssue,
 ) -> None:
     level = issue.level or "error"
-    reason_code = str(issue.reason_code or "").strip() or "preflight_catalog"
+    reason_code = str(issue.reason_code or "").strip() or ListingErrorCode.PREFLIGHT_CATALOG
     if not issue.reason_code:
         if "无有效 SKU" in issue.message:
-            reason_code = "preflight_no_skus"
+            reason_code = ListingErrorCode.PREFLIGHT_NO_SKUS
         elif "主图为空" in issue.message:
-            reason_code = "preflight_no_carousel"
+            reason_code = ListingErrorCode.PREFLIGHT_NO_CAROUSEL
         elif "详情图为空" in issue.message:
-            reason_code = "preflight_no_detail"
+            reason_code = ListingErrorCode.PREFLIGHT_NO_DETAIL
         elif "商品表" in issue.message or "Excel" in issue.message:
-            reason_code = "preflight_catalog"
+            reason_code = ListingErrorCode.PREFLIGHT_CATALOG
 
     record_listing_failure_detail(
         source_run_id=source_run_id,
@@ -261,8 +230,8 @@ def validate_unit_image_files(
                 phase="preflight",
                 step="check_image_files",
                 severity="error",
-                reason_code="image_file_missing",
-                message=f"图片无法打开或不存在（{kind}）",
+                reason_code=ListingErrorCode.IMAGE_FILE_MISSING,
+                message=ListingErrors.Msg.IMAGE_FILE_BAD.format(kind=kind),
                 error=path_str,
                 detail={"image_kind": kind, "path": path_str},
             )
@@ -293,8 +262,8 @@ def record_price_fill_summary(
         phase="price_fill",
         step="fill_inventory_price",
         severity="error",
-        reason_code="price_fill_partial",
-        message=f"价格表仅填写 {filled}/{total} 行，其余行库存/价格/编码未写入",
+        reason_code=ListingErrorCode.PRICE_FILL_PARTIAL,
+        message=ListingErrors.Msg.PRICE_FILL_PARTIAL.format(filled=filled, total=total),
         detail={
             "filled": filled,
             "total": total,
@@ -313,9 +282,9 @@ def record_price_fill_summary(
     )
     for item in failed_items:
         reason = str(item.get("reason") or "row_not_found")
-        code = "price_fill_row_not_found"
+        code = ListingErrorCode.PRICE_FILL_ROW_NOT_FOUND
         if reason == "fill_by_index_failed":
-            code = "price_fill_by_index_failed"
+            code = ListingErrorCode.PRICE_FILL_BY_INDEX_FAILED
         record_listing_failure_detail(
             source_run_id=source_run_id,
             account_id=account_id,

@@ -13,6 +13,7 @@ class AccountOut(BaseModel):
     account_id: str
     enabled: bool
     username: str = ""
+    display_name: str = ""
     has_password: bool = False
     product_codes: list[str] = Field(default_factory=list)
 

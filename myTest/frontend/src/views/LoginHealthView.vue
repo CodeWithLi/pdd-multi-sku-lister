@@ -167,7 +167,10 @@ onUnmounted(stopPolling)
 
     <el-card shadow="never" class="stat-card">
       <el-table :data="statuses" stripe>
-        <el-table-column prop="account_id" label="店铺" width="130" />
+        <el-table-column prop="account_id" label="店铺 ID" width="110" />
+        <el-table-column label="店铺名" width="140" show-overflow-tooltip>
+          <template #default="{ row }">{{ row.shop_display_name || row.account_id }}</template>
+        </el-table-column>
         <el-table-column label="登录状态" width="110">
           <template #default="{ row }">
             <el-tag :type="statusType(row.status) as any" size="small">

@@ -8,9 +8,99 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from pathlib import Path
 
+from pdd_agent.domain.listing_errors import ListingErrors
 from pdd_agent.domain.models import ListingUnit, SkuCombo
-from pdd_agent.skills.listing.catalog import _preview_sort_key
+from pdd_agent.skills.listing.catalog import (
+    _collect_flat_preview_images,
+    _filter_preview_images_for_code_dir,
+    _preview_sort_key,
+)
+
+
+def _sibling_style_dir(unit: ListingUnit, style_code: str) -> Path | None:
+    """同套图下某款式编码目录（如 .../第一套图/BD716A）。"""
+    root = unit.root
+    image_set = str(unit.image_set or "").strip()
+    if image_set and root.parent.name == image_set:
+        set_dir = root.parent
+    elif root.parent.is_dir():
+        set_dir = root.parent
+    else:
+        return None
+    candidate = set_dir / style_code
+    return candidate if candidate.is_dir() else None
+
+
+def count_style_preview_files(unit: ListingUnit, style_code: str) -> int:
+    """该款式目录下非数字命名的规格预览图张数（与素材检查「全部图片」里 SKU 图一致）。"""
+    style_dir = _sibling_style_dir(unit, style_code)
+    if style_dir is None:
+        return 0
+    previews = _filter_preview_images_for_code_dir(
+        style_dir,
+        _collect_flat_preview_images(style_dir),
+    )
+    return len(previews)
+
+
+def _missing_sku_labels(unit: ListingUnit, style_code: str) -> list[str]:
+    """目录里有规格图但未纳入 SKU 的子编码（多为商品表缺行）。"""
+    from pdd_agent.skills.listing.catalog import _parse_combo_code
+
+    style_dir = _sibling_style_dir(unit, style_code)
+    if style_dir is None:
+        return []
+    previews = _filter_preview_images_for_code_dir(
+        style_dir,
+        _collect_flat_preview_images(style_dir),
+    )
+    sku_folders = {sku.combo_folder for sku in _skus_for_style(unit, style_code)}
+    labels: list[str] = []
+    for preview in previews:
+        if preview.stem in sku_folders:
+            continue
+        parsed = _parse_combo_code(preview.stem, style_code)
+        if parsed:
+            _, model = parsed
+            norm_style = style_code.strip().upper()
+            if model.strip().upper() == norm_style:
+                labels.append("单款图")
+            else:
+                labels.append(model)
+        elif "+" in preview.stem:
+            labels.append(preview.stem.split("+", 1)[1])
+        else:
+            labels.append(preview.stem)
+    return labels
+
+
+def format_slot_mismatch_message(unit: ListingUnit) -> str:
+    """短小精悍的兄弟款规格不齐说明，供飞书失败表与前端展示。"""
+    style_codes = sorted({sku.style_code.strip().upper() for sku in unit.skus if sku.style_code})
+    if len(style_codes) < 2:
+        return ""
+
+    counts = {code: len(_skus_for_style(unit, code)) for code in style_codes}
+    target = max(counts.values())
+    if len(set(counts.values())) == 1:
+        return ""
+
+    parts: list[str] = []
+    for code in style_codes:
+        if counts[code] >= target:
+            continue
+        missing = _missing_sku_labels(unit, code)
+        if missing:
+            parts.append(f"{code}缺{'/'.join(missing)}")
+        else:
+            parts.append(f"{code}{counts[code]}个")
+
+    if not parts:
+        detail = "，".join(f"{code}{counts[code]}个" for code in style_codes)
+        return ListingErrors.format_slot_mismatch(detail, target)
+    return ListingErrors.format_slot_mismatch("，".join(parts), target)
 
 
 @dataclass
@@ -45,22 +135,9 @@ def _pick_reference_style(unit: ListingUnit) -> str:
 
 
 def validate_slot_structure(unit: ListingUnit) -> list[str]:
-    """检查各兄弟款预览图数量是否一致（未改 SKU 前）。"""
-    style_codes = sorted({sku.style_code.strip().upper() for sku in unit.skus if sku.style_code})
-    if len(style_codes) < 2:
-        return []
-
-    counts: dict[str, int] = {}
-    for code in style_codes:
-        counts[code] = len(_skus_for_style(unit, code))
-    values = list(counts.values())
-    if len(set(values)) == 1:
-        return []
-
-    detail = "，".join(f"{code}={counts[code]}张" for code in style_codes)
-    return [
-        f"[{unit.listing_label}] 槽位对齐失败：兄弟款预览图数量不一致（{detail}）"
-    ]
+    """检查各兄弟款 SKU 数量是否一致（未改 SKU 前）。"""
+    msg = format_slot_mismatch_message(unit)
+    return [msg] if msg else []
 
 
 def apply_slot_alignment(unit: ListingUnit, *, account_id: str = "") -> SlotAlignmentResult:
@@ -75,7 +152,7 @@ def apply_slot_alignment(unit: ListingUnit, *, account_id: str = "") -> SlotAlig
 
     style_codes = sorted({sku.style_code.strip().upper() for sku in unit.skus if sku.style_code})
     if not style_codes:
-        return SlotAlignmentResult(ok=False, errors=[f"[{unit.listing_label}] 无有效款式编码"])
+        return SlotAlignmentResult(ok=False, errors=[ListingErrors.Msg.SLOT_NO_STYLE.format(label=unit.listing_label)])
 
     reference = _pick_reference_style(unit)
     groups = {code: _sort_skus_by_slot(_skus_for_style(unit, code), code) for code in style_codes}
@@ -83,7 +160,7 @@ def apply_slot_alignment(unit: ListingUnit, *, account_id: str = "") -> SlotAlig
     if not ref_skus:
         return SlotAlignmentResult(
             ok=False,
-            errors=[f"[{unit.listing_label}] 主款 {reference} 无 SKU"],
+            errors=[ListingErrors.Msg.SLOT_REF_NO_SKU.format(label=unit.listing_label, reference=reference)],
         )
 
     slot_labels = [sku.model_name for sku in ref_skus]
@@ -91,11 +168,15 @@ def apply_slot_alignment(unit: ListingUnit, *, account_id: str = "") -> SlotAlig
 
     for code, skus in groups.items():
         if len(skus) != slot_count:
+            msg = format_slot_mismatch_message(unit)
             return SlotAlignmentResult(
                 ok=False,
                 errors=[
-                    f"[{unit.listing_label}] 槽位对齐失败：{code} 有 {len(skus)} 张图，"
-                    f"主款 {reference} 有 {slot_count} 张"
+                    msg
+                    if msg
+                    else ListingErrors.Msg.SLOT_MISMATCH_FALLBACK.format(
+                        code=code, reference=reference, count=slot_count
+                    )
                 ],
             )
 
@@ -118,8 +199,11 @@ def apply_slot_alignment(unit: ListingUnit, *, account_id: str = "") -> SlotAlig
         return SlotAlignmentResult(
             ok=False,
             errors=[
-                f"[{unit.listing_label}] 槽位对齐后 SKU 数异常："
-                f"期望 {expected_skus}，实际 {len(unit.skus)}"
+                ListingErrors.Msg.SLOT_COUNT_ABNORMAL.format(
+                    label=unit.listing_label,
+                    expected=expected_skus,
+                    actual=len(unit.skus),
+                )
             ],
         )
 

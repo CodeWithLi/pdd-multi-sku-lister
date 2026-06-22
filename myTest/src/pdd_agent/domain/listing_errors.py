@@ -1,0 +1,545 @@
+"""
+上架错误文案与 reason_code 常量。
+
+改上架报错、飞书失败原因、跳过/失败分类，请只改本文件。
+"""
+
+from __future__ import annotations
+
+import re
+
+
+class ListingErrorCode:
+    """上架 reason_code 常量。"""
+
+    # 上架前 / 素材
+    PREFLIGHT_NO_SKUS = "preflight_no_skus"
+    PREFLIGHT_NO_CAROUSEL = "preflight_no_carousel"
+    PREFLIGHT_NO_DETAIL = "preflight_no_detail"
+    PREFLIGHT_CATALOG = "preflight_catalog"
+    IMAGE_FILE_MISSING = "image_file_missing"
+    CATALOG_PARSE_WARNING = "catalog_parse_warning"
+    NO_VALID_UNITS = "no_valid_units"
+    SLOT_ALIGNMENT_FAILED = "slot_alignment_failed"
+
+    # 飞书商品表
+    FEISHU_PRODUCT_CATALOG_MISSING = "feishu_product_catalog_missing"
+    FEISHU_PRICING_MISSING = "feishu_pricing_missing"
+    FEISHU_CONTROL_MISSING = "feishu_control_missing"
+    FEISHU_PRICE_RANGE_MISSING = "feishu_price_range_missing"
+    FEISHU_COLOR_SPEC_MISSING = "feishu_color_spec_missing"
+    FEISHU_PRODUCT_ROW_MISSING = "feishu_product_row_missing"
+    FEISHU_SUBCODE_MISSING = "feishu_subcode_missing"
+    FEISHU_SUBCODE_PRICING_MISSING = "feishu_subcode_pricing_missing"
+    FEISHU_SUBCODE_CONTROL_MISSING = "feishu_subcode_control_missing"
+    FEISHU_SUBCODE_RANGE_MISSING = "feishu_subcode_range_missing"
+    FEISHU_SUBCODE_COLOR_SPEC_MISSING = "feishu_subcode_color_spec_missing"
+
+    # 页面填写 / 提交
+    PREVIEW_NOT_READY = "preview_not_ready"
+    PREVIEW_MISSING = "preview_missing"
+    PLATFORM_LISTING_CODE_NOT_FILLED = "platform_listing_code_not_filled"
+    PLATFORM_LISTING_CODE_VERIFY_FAILED = "platform_listing_code_verify_failed"
+    VALIDATION_ERRORS = "validation_errors"
+    VALIDATION_INCOMPLETE = "validation_incomplete"
+    VALIDATION_REQUIRED = "validation_required"
+    SUBMIT_BLOCKED = "submit_blocked"
+    SUBMIT_UNCERTAIN = "submit_uncertain"
+    SUBMIT_BUTTON_MISSING = "submit_button_missing"
+    SUBMIT_EXCEPTION = "submit_exception"
+    LISTED = "listed"
+    REJECTED_AFTER_PUBLISH = "rejected_after_publish"
+    PUBLISHED_BUT_NOT_FOUND = "published_but_not_found_in_on_sale_or_rejected"
+
+    # 价格表
+    PRICE_FILL_PARTIAL = "price_fill_partial"
+    PRICE_FILL_ROW_NOT_FOUND = "price_fill_row_not_found"
+    PRICE_FILL_BY_INDEX_FAILED = "price_fill_by_index_failed"
+
+    # 浏览器 / 任务
+    NEEDS_MANUAL_LOGIN_OR_CAPTCHA = "needs_manual_login_or_captcha"
+    PAGE_OR_MATERIAL_CHANGED = "page_or_material_changed"
+    BROWSER_TRANSIENT_ERROR = "browser_transient_error"
+    BROWSER_MANUALLY_CLOSED = "browser_manually_closed"
+    TASK_CANCELLED = "task_cancelled"
+    USER_CANCELLED = "user_cancelled"
+    UNEXPECTED_ERROR = "unexpected_error"
+
+
+class ListingErrors:
+    """上架错误：文案、模板、飞书/跳过/失败分类。"""
+
+    DEFAULT_LABEL = "上架失败"
+    FEISHU_RECORD_FAIL = "失败"
+    FEISHU_RECORD_SKIP = "跳过"
+
+    # 内部库 / 操作记录用（偏技术说明）
+    LABELS: dict[str, str] = {
+        ListingErrorCode.PREVIEW_NOT_READY: "预览图未全部上传，页面仍有规格行缺图",
+        ListingErrorCode.PREVIEW_MISSING: "页面提示预览图缺失或未通过校验",
+        ListingErrorCode.PLATFORM_LISTING_CODE_NOT_FILLED: "底部商品编码未填写",
+        ListingErrorCode.PLATFORM_LISTING_CODE_VERIFY_FAILED: "底部商品编码与期望货号不一致",
+        ListingErrorCode.VALIDATION_ERRORS: "提交前页面校验失败（库存/价格等未填完整）",
+        ListingErrorCode.VALIDATION_INCOMPLETE: "提交前页面校验未通过（信息不完整）",
+        ListingErrorCode.VALIDATION_REQUIRED: "提交前页面有必填项未处理",
+        ListingErrorCode.SUBMIT_BLOCKED: "点击提交被页面拦截（通常仍有红色错误项）",
+        ListingErrorCode.SUBMIT_UNCERTAIN: "提交结果不确定，需人工到在售/驳回列表核对",
+        ListingErrorCode.SUBMIT_BUTTON_MISSING: "未找到「提交并上架」按钮",
+        ListingErrorCode.SUBMIT_EXCEPTION: "点击提交时发生异常",
+        ListingErrorCode.LISTED: "已提交但后续抓取商品 ID 失败",
+        ListingErrorCode.REJECTED_AFTER_PUBLISH: "提交后被平台驳回",
+        ListingErrorCode.PUBLISHED_BUT_NOT_FOUND: "提交后未在售列表/驳回列表中找到商品",
+        ListingErrorCode.NEEDS_MANUAL_LOGIN_OR_CAPTCHA: "需要人工登录或处理验证码/滑块",
+        ListingErrorCode.PAGE_OR_MATERIAL_CHANGED: "页面结构或素材异常（分类/规格/上传相关）",
+        ListingErrorCode.BROWSER_TRANSIENT_ERROR: "浏览器超时或连接断开",
+        ListingErrorCode.UNEXPECTED_ERROR: "未分类的运行异常",
+        ListingErrorCode.PREFLIGHT_NO_SKUS: "上架前校验：无有效 SKU",
+        ListingErrorCode.PREFLIGHT_NO_CAROUSEL: "上架前校验：主图为空",
+        ListingErrorCode.PREFLIGHT_NO_DETAIL: "上架前校验：详情图为空",
+        ListingErrorCode.PREFLIGHT_CATALOG: "上架前校验：商品表或素材目录问题",
+        ListingErrorCode.IMAGE_FILE_MISSING: "图片文件不存在或无法读取",
+        ListingErrorCode.PRICE_FILL_PARTIAL: "价格表文字字段未全部填写（库存/拼团价/单买价/编码）",
+        ListingErrorCode.PRICE_FILL_ROW_NOT_FOUND: "价格表找不到对应规格行",
+        ListingErrorCode.PRICE_FILL_BY_INDEX_FAILED: "按行号填写价格表失败",
+        ListingErrorCode.CATALOG_PARSE_WARNING: "素材目录解析警告",
+        ListingErrorCode.NO_VALID_UNITS: "无有效上架单元",
+        ListingErrorCode.SLOT_ALIGNMENT_FAILED: "兄弟款规格数量不一致",
+        ListingErrorCode.FEISHU_PRODUCT_CATALOG_MISSING: "飞书商品/定价数据缺失",
+        ListingErrorCode.FEISHU_PRICING_MISSING: "定价数据缺失",
+        ListingErrorCode.FEISHU_CONTROL_MISSING: "控价数据缺失",
+        ListingErrorCode.FEISHU_PRICE_RANGE_MISSING: "控价区间数据缺失",
+        ListingErrorCode.FEISHU_COLOR_SPEC_MISSING: "颜色规格没数据",
+        ListingErrorCode.FEISHU_PRODUCT_ROW_MISSING: "商品表没数据",
+        ListingErrorCode.FEISHU_SUBCODE_MISSING: "子编码没数据",
+        ListingErrorCode.FEISHU_SUBCODE_PRICING_MISSING: "子编码定价数据缺失",
+        ListingErrorCode.FEISHU_SUBCODE_CONTROL_MISSING: "子编码控价数据缺失",
+        ListingErrorCode.FEISHU_SUBCODE_RANGE_MISSING: "子编码控价区间数据缺失",
+        ListingErrorCode.FEISHU_SUBCODE_COLOR_SPEC_MISSING: "子编码颜色规格没数据",
+        ListingErrorCode.TASK_CANCELLED: "任务已被用户停止",
+        ListingErrorCode.USER_CANCELLED: "任务已被用户停止",
+        ListingErrorCode.BROWSER_MANUALLY_CLOSED: "浏览器被手动关闭，任务中断",
+    }
+
+    # 飞书失败表一行说明（极短，带商品编码，给运营直接找文件）
+    FEISHU_BRIEF_ASPECT: dict[str, str] = {
+        "pricing_missing": "定价为空",
+        "control_missing": "控价为空",
+        "range_missing": "控价区间为空",
+        "color_spec_missing": "颜色规格为空",
+        "product_row_missing": "商品表为空",
+        "subcode_missing": "商品表为空",
+    }
+
+    FEISHU_BRIEF_ASPECT_TEXT: dict[str, str] = {
+        "定价数据缺失": "定价为空",
+        "定价没数据": "定价为空",
+        "控价数据缺失": "控价为空",
+        "控价没数据": "控价为空",
+        "控价区间数据缺失": "控价区间为空",
+        "控价区间没数据": "控价区间为空",
+        "颜色规格没数据": "颜色规格为空",
+        "商品表没数据": "商品表为空",
+        "没数据": "商品表为空",
+        "飞书数据缺失": "数据缺失",
+    }
+
+    # 飞书「淘宝+拼多多发布日志表（失败）」通用短句（无编码前缀时）
+    FEISHU_LABELS: dict[str, str] = {
+        ListingErrorCode.PREVIEW_NOT_READY: "预览图还没全部上传完，暂不能提交",
+        ListingErrorCode.PREVIEW_MISSING: "页面提示还有预览图没上传",
+        ListingErrorCode.PLATFORM_LISTING_CODE_NOT_FILLED: "底部商品编码没填",
+        ListingErrorCode.PLATFORM_LISTING_CODE_VERIFY_FAILED: "底部商品编码与货号不一致",
+        ListingErrorCode.VALIDATION_ERRORS: "页面还有红色错误项没改完",
+        ListingErrorCode.VALIDATION_INCOMPLETE: "页面提示信息未填完整",
+        ListingErrorCode.VALIDATION_REQUIRED: "页面还有必填项没填",
+        ListingErrorCode.SUBMIT_BLOCKED: "点击提交被页面拦住",
+        ListingErrorCode.SUBMIT_UNCERTAIN: "提交结果不确定，请到拼多多后台核对",
+        ListingErrorCode.SUBMIT_BUTTON_MISSING: "找不到「提交并上架」按钮",
+        ListingErrorCode.SUBMIT_EXCEPTION: "点击提交时出错",
+        ListingErrorCode.LISTED: "已提交但未抓到商品 ID",
+        ListingErrorCode.REJECTED_AFTER_PUBLISH: "提交后在「已驳回」找到商品，平台已驳回",
+        ListingErrorCode.PUBLISHED_BUT_NOT_FOUND: "提交后在在售/驳回列表没找到刚上的商品，请人工核对",
+        ListingErrorCode.NEEDS_MANUAL_LOGIN_OR_CAPTCHA: "需要人工处理验证码或重新登录",
+        ListingErrorCode.PAGE_OR_MATERIAL_CHANGED: "页面或素材异常（分类/规格/上传相关）",
+        ListingErrorCode.BROWSER_TRANSIENT_ERROR: "浏览器超时或断连，可重试",
+        ListingErrorCode.BROWSER_MANUALLY_CLOSED: "浏览器被手动关闭，任务中断",
+        ListingErrorCode.UNEXPECTED_ERROR: "运行异常，请查看操作记录",
+        ListingErrorCode.PREFLIGHT_NO_SKUS: "Excel 与预览图对不上，没有可上架规格",
+        ListingErrorCode.PREFLIGHT_NO_CAROUSEL: "缺少主图（需 1-5 编号图）",
+        ListingErrorCode.PREFLIGHT_NO_DETAIL: "缺少详情图（需 7-9 编号图）",
+        ListingErrorCode.PREFLIGHT_CATALOG: "商品目录或素材有问题",
+        ListingErrorCode.IMAGE_FILE_MISSING: "图片文件不存在或打不开",
+        ListingErrorCode.PRICE_FILL_PARTIAL: "价格表没填完整（库存/拼团价/单买价/编码）",
+        ListingErrorCode.PRICE_FILL_ROW_NOT_FOUND: "价格表找不到对应规格行",
+        ListingErrorCode.PRICE_FILL_BY_INDEX_FAILED: "按行号填写价格表失败",
+        ListingErrorCode.CATALOG_PARSE_WARNING: "素材目录解析有问题",
+        ListingErrorCode.NO_VALID_UNITS: "没有可上架的套图（素材或校验未通过）",
+        ListingErrorCode.SLOT_ALIGNMENT_FAILED: "兄弟款规格数量不一致",
+        ListingErrorCode.TASK_CANCELLED: "任务已被用户停止",
+        ListingErrorCode.USER_CANCELLED: "任务已被用户停止",
+        ListingErrorCode.FEISHU_PRODUCT_CATALOG_MISSING: "飞书商品/定价数据缺失",
+        ListingErrorCode.FEISHU_PRICING_MISSING: "定价数据缺失",
+        ListingErrorCode.FEISHU_CONTROL_MISSING: "控价数据缺失",
+        ListingErrorCode.FEISHU_PRICE_RANGE_MISSING: "控价区间数据缺失",
+        ListingErrorCode.FEISHU_COLOR_SPEC_MISSING: "颜色规格没数据",
+        ListingErrorCode.FEISHU_PRODUCT_ROW_MISSING: "商品表没数据",
+        ListingErrorCode.FEISHU_SUBCODE_MISSING: "子编码没数据",
+        ListingErrorCode.FEISHU_SUBCODE_PRICING_MISSING: "子编码定价数据缺失",
+        ListingErrorCode.FEISHU_SUBCODE_CONTROL_MISSING: "子编码控价数据缺失",
+        ListingErrorCode.FEISHU_SUBCODE_RANGE_MISSING: "子编码控价区间数据缺失",
+        ListingErrorCode.FEISHU_SUBCODE_COLOR_SPEC_MISSING: "子编码颜色规格没数据",
+    }
+
+    # 飞书 humanize 时按原文匹配的补充文案（无独立 reason_code）
+    FEISHU_HUMANIZE_EXTRA: dict[str, str] = {
+        "catalog_dir_missing": "找不到商品目录或套图文件夹",
+        "numbered_images_missing": "缺少按数字命名的图片",
+        "preview_image_missing": "缺少规格预览图",
+        "page_action_timeout": "页面操作等待超时",
+    }
+
+    # 飞书商品表缺项：aspect → (reason_code, 缺项说明)
+    FEISHU_CATALOG_ASPECT: dict[str, tuple[str, str]] = {
+        "pricing_missing": (ListingErrorCode.FEISHU_PRICING_MISSING, "定价数据缺失"),
+        "control_missing": (ListingErrorCode.FEISHU_CONTROL_MISSING, "控价数据缺失"),
+        "range_missing": (ListingErrorCode.FEISHU_PRICE_RANGE_MISSING, "控价区间数据缺失"),
+        "color_spec_missing": (ListingErrorCode.FEISHU_COLOR_SPEC_MISSING, "颜色规格没数据"),
+        "product_row_missing": (ListingErrorCode.FEISHU_PRODUCT_ROW_MISSING, "商品表没数据"),
+        "subcode_missing": (ListingErrorCode.FEISHU_SUBCODE_MISSING, "没数据"),
+    }
+
+    FEISHU_CATALOG_SUB_ASPECT: dict[str, str] = {
+        "pricing_missing": ListingErrorCode.FEISHU_SUBCODE_PRICING_MISSING,
+        "control_missing": ListingErrorCode.FEISHU_SUBCODE_CONTROL_MISSING,
+        "range_missing": ListingErrorCode.FEISHU_SUBCODE_RANGE_MISSING,
+        "color_spec_missing": ListingErrorCode.FEISHU_SUBCODE_COLOR_SPEC_MISSING,
+        "product_row_missing": ListingErrorCode.FEISHU_SUBCODE_MISSING,
+        "subcode_missing": ListingErrorCode.FEISHU_SUBCODE_MISSING,
+    }
+
+    # 诊断摘要用短标签（code_details 展示）
+    FEISHU_CATALOG_ASPECT_SHORT: dict[str, str] = {
+        "pricing_missing": "定价没数据",
+        "control_missing": "控价没数据",
+        "range_missing": "控价区间没数据",
+        "color_spec_missing": "颜色规格没数据",
+        "product_row_missing": "商品表没数据",
+        "subcode_missing": "商品表没数据",
+    }
+
+    # 提交页拦截检测：页面文案片段 → reason_code
+    SUBMIT_BLOCK_DETECTORS: tuple[tuple[str, str], ...] = (
+        ("text:错误项未处理", ListingErrorCode.VALIDATION_ERRORS),
+        ("text:个错误项", ListingErrorCode.VALIDATION_ERRORS),
+        ("text:请完善", ListingErrorCode.VALIDATION_INCOMPLETE),
+        ("text:请填写", ListingErrorCode.VALIDATION_REQUIRED),
+        ("text:不能为空", ListingErrorCode.VALIDATION_REQUIRED),
+    )
+
+    SUBMIT_BLOCK_LOG: dict[str, str] = {
+        ListingErrorCode.VALIDATION_ERRORS: "提交被拦截：页面仍有错误项未处理",
+        ListingErrorCode.VALIDATION_INCOMPLETE: "提交被拦截：页面提示请完善信息",
+        ListingErrorCode.VALIDATION_REQUIRED: "提交被拦截：页面仍有必填项未填写",
+    }
+
+    SKIP_REASON_CODES: frozenset[str] = frozenset(
+        {
+            ListingErrorCode.SLOT_ALIGNMENT_FAILED,
+            ListingErrorCode.PREFLIGHT_NO_SKUS,
+            ListingErrorCode.PREFLIGHT_NO_CAROUSEL,
+            ListingErrorCode.PREFLIGHT_NO_DETAIL,
+            ListingErrorCode.PREFLIGHT_CATALOG,
+            ListingErrorCode.CATALOG_PARSE_WARNING,
+            ListingErrorCode.NO_VALID_UNITS,
+            ListingErrorCode.IMAGE_FILE_MISSING,
+        }
+    )
+
+    FAIL_REASON_CODES: frozenset[str] = frozenset(
+        {
+            ListingErrorCode.REJECTED_AFTER_PUBLISH,
+            ListingErrorCode.PUBLISHED_BUT_NOT_FOUND,
+            ListingErrorCode.SUBMIT_UNCERTAIN,
+            ListingErrorCode.SUBMIT_BLOCKED,
+            ListingErrorCode.SUBMIT_EXCEPTION,
+            ListingErrorCode.SUBMIT_BUTTON_MISSING,
+            ListingErrorCode.PREVIEW_NOT_READY,
+            ListingErrorCode.PREVIEW_MISSING,
+            ListingErrorCode.VALIDATION_ERRORS,
+            ListingErrorCode.VALIDATION_INCOMPLETE,
+            ListingErrorCode.VALIDATION_REQUIRED,
+            ListingErrorCode.PLATFORM_LISTING_CODE_NOT_FILLED,
+            ListingErrorCode.PLATFORM_LISTING_CODE_VERIFY_FAILED,
+            ListingErrorCode.NEEDS_MANUAL_LOGIN_OR_CAPTCHA,
+            ListingErrorCode.BROWSER_TRANSIENT_ERROR,
+            ListingErrorCode.BROWSER_MANUALLY_CLOSED,
+            ListingErrorCode.PAGE_OR_MATERIAL_CHANGED,
+            ListingErrorCode.UNEXPECTED_ERROR,
+            ListingErrorCode.PRICE_FILL_PARTIAL,
+            ListingErrorCode.PRICE_FILL_ROW_NOT_FOUND,
+            ListingErrorCode.PRICE_FILL_BY_INDEX_FAILED,
+            ListingErrorCode.LISTED,
+            ListingErrorCode.FEISHU_PRODUCT_CATALOG_MISSING,
+        }
+    )
+
+    RETRYABLE_REASON_CODES: frozenset[str] = frozenset(
+        {
+            ListingErrorCode.PREVIEW_NOT_READY,
+            ListingErrorCode.PREVIEW_MISSING,
+            ListingErrorCode.PLATFORM_LISTING_CODE_NOT_FILLED,
+            ListingErrorCode.PLATFORM_LISTING_CODE_VERIFY_FAILED,
+            ListingErrorCode.VALIDATION_ERRORS,
+            ListingErrorCode.VALIDATION_INCOMPLETE,
+            ListingErrorCode.VALIDATION_REQUIRED,
+            ListingErrorCode.SUBMIT_BLOCKED,
+            ListingErrorCode.SUBMIT_UNCERTAIN,
+            ListingErrorCode.SUBMIT_BUTTON_MISSING,
+            ListingErrorCode.SUBMIT_EXCEPTION,
+            ListingErrorCode.LISTED,
+            ListingErrorCode.PUBLISHED_BUT_NOT_FOUND,
+            ListingErrorCode.NEEDS_MANUAL_LOGIN_OR_CAPTCHA,
+            ListingErrorCode.PAGE_OR_MATERIAL_CHANGED,
+            ListingErrorCode.BROWSER_TRANSIENT_ERROR,
+            ListingErrorCode.UNEXPECTED_ERROR,
+            ListingErrorCode.PREFLIGHT_NO_SKUS,
+            ListingErrorCode.PREFLIGHT_NO_CAROUSEL,
+            ListingErrorCode.PREFLIGHT_NO_DETAIL,
+            ListingErrorCode.PREFLIGHT_CATALOG,
+            ListingErrorCode.IMAGE_FILE_MISSING,
+            ListingErrorCode.PRICE_FILL_PARTIAL,
+            ListingErrorCode.PRICE_FILL_ROW_NOT_FOUND,
+            ListingErrorCode.PRICE_FILL_BY_INDEX_FAILED,
+            ListingErrorCode.CATALOG_PARSE_WARNING,
+            ListingErrorCode.NO_VALID_UNITS,
+            ListingErrorCode.SLOT_ALIGNMENT_FAILED,
+        }
+    )
+
+    class Msg:
+        """带变量的动态报错模板。"""
+
+        # preflight / catalog
+        CATALOG_DIR_MISSING = "商品目录不存在或无套图: {code}"
+        CAROUSEL_EMPTY = "主图为空"
+        DETAIL_EMPTY = "详情图为空"
+        NO_VALID_SKU = "未解析到任何有效 SKU"
+        CAROUSEL_MISSING = "[{label}] 未找到 1-5 主图"
+        DETAIL_MISSING = "[{label}] 未找到 7-9 详情图"
+        NO_SKU_PARSED = "[{label}] 未解析到任何有效 SKU"
+        PREVIEW_MISSING = "[{label}] 缺少预览图: {style}/{combo}"
+        STYLE_CODE_MISSING_SKIP = "[{label}] 商品表无款式编码[{style}]，跳过"
+        COMBO_FOLDER_INVALID = "[{label}] 组合文件夹格式错误: {folder}"
+        MODEL_CODE_MISSING_SKIP = "[{label}] 商品表无型号编码[{model}]，跳过"
+        PREVIEW_FILENAME_UNPARSEABLE = "{prefix} 规格图文件名无法解析组合编码: {name}"
+        STYLE_NOT_IN_CATALOG_SKIP = "{prefix} 商品表无编码[{style}]，不上架 {name}"
+        STYLE_NOT_IN_CATALOG_WARN = "{prefix} 商品表无款式编码[{style}]，不上架 {name}"
+        STYLE_NOT_IN_CATALOG_DISPLAY = "{prefix} 商品表无款式编码[{style}]，仅后台展示不上架 {name}"
+        SUBCODE_NOT_IN_CATALOG_SKIP = "{prefix} 商品表无子编码[{model}]，不上架 {name}"
+        SUBCODE_NOT_IN_CATALOG_DISPLAY = "{prefix} 商品表无子编码[{model}]，仅后台展示不上架 {name}"
+        NO_NUMBERED_IMAGES = "无任何数字命名图 ({range})"
+
+        # 兄弟款规格
+        SLOT_MISMATCH = "兄弟款规格不齐：{detail}（应为{target}个）"
+        SLOT_MISMATCH_FALLBACK = "兄弟款规格不齐：{code}（主款{reference}{count}个）"
+        SLOT_PREFIX = "兄弟款规格不齐："
+
+        # 槽位对齐（旧格式兼容）
+        SLOT_NO_STYLE = "[{label}] 无有效款式编码"
+        SLOT_REF_NO_SKU = "[{label}] 主款 {reference} 无 SKU"
+        SLOT_COUNT_ABNORMAL = "[{label}] 槽位对齐后 SKU 数异常：期望 {expected}，实际 {actual}"
+
+        # 飞书失败表（编码+短说明，不含套图路径/子编码字样）
+        FEISHU_CATALOG_LINE = "{code}{aspect}"
+        FEISHU_SLOT_LINE = "{detail}"
+        FEISHU_IMAGES_MISSING = "图片缺失 {nums}"
+        FEISHU_CAROUSEL_MISSING = "{code}主图缺失"
+        FEISHU_DETAIL_MISSING = "{code}详情图缺失"
+
+        # 上传 / 提交
+        PREVIEW_VERIFY_DETAIL = (
+            "预览图页面校验 {verified}/{need}，上传成功 {uploaded}/{need}"
+        )
+        IMAGE_FILE_BAD = "图片无法打开或不存在（{kind}）"
+        PRICE_FILL_PARTIAL = "价格表仅填写 {filled}/{total} 行，其余行库存/价格/编码未写入"
+        SUBMIT_SUCCESS_NO_CAPTURE = "提交成功页已出现，但商品列表未匹配到本次发布记录"
+        NO_VALID_UNITS_SUMMARY = "没有通过校验的上架单元"
+        UNKNOWN_ACCOUNT = "unknown account: {account_id}"
+
+        # 飞书 humanize 补充
+        NUMBERED_IMAGES_SUFFIX = "缺少按数字命名的图片 ({detail})"
+        PREVIEW_IMAGE_SUFFIX = "缺少规格预览图（{detail}）"
+
+    @classmethod
+    def label(cls, reason_code: str, *, fallback: str = "") -> str:
+        code = str(reason_code or "").strip()
+        return cls.LABELS.get(code, fallback or code or cls.DEFAULT_LABEL)
+
+    @classmethod
+    def feishu_label(cls, reason_code: str, *, fallback: str = "") -> str:
+        code = str(reason_code or "").strip()
+        return cls.FEISHU_LABELS.get(code, fallback or code or cls.DEFAULT_LABEL)
+
+    @classmethod
+    def _aspect_text_to_brief(cls, aspect_text: str) -> str:
+        text = str(aspect_text or "").strip()
+        return cls.FEISHU_BRIEF_ASPECT_TEXT.get(text, text.replace("数据缺失", "为空").replace("没数据", "为空"))
+
+    @classmethod
+    def feishu_catalog_line(cls, code: str, aspect: str) -> str:
+        norm = str(code or "").strip().upper()
+        suffix = cls.FEISHU_BRIEF_ASPECT.get(aspect, "数据缺失")
+        return cls.Msg.FEISHU_CATALOG_LINE.format(code=norm, aspect=suffix)
+
+    @classmethod
+    def format_numbered(cls, lines: list[str]) -> str:
+        """多条失败合并：1、xxx，2、yyy；单条不加序号。"""
+        cleaned: list[str] = []
+        seen: set[str] = set()
+        for line in lines:
+            text = str(line or "").strip()
+            if not text or text in seen:
+                continue
+            seen.add(text)
+            cleaned.append(text)
+        if not cleaned:
+            return ""
+        if len(cleaned) == 1:
+            return cleaned[0][:500]
+        return "，".join(f"{idx}、{line}" for idx, line in enumerate(cleaned, 1))[:500]
+
+    @classmethod
+    def compact_feishu_line(
+        cls,
+        raw: str,
+        *,
+        reason_code: str = "",
+        merchant_code: str = "",
+    ) -> str:
+        """把旧格式/内部 message 压成飞书失败表一行短说明。"""
+        text = str(raw or "").strip()
+        if not text:
+            code = str(merchant_code or "").strip().upper()
+            rc = str(reason_code or "").strip()
+            if rc == ListingErrorCode.PREFLIGHT_NO_CAROUSEL and code:
+                return cls.Msg.FEISHU_CAROUSEL_MISSING.format(code=code)
+            if rc == ListingErrorCode.PREFLIGHT_NO_DETAIL and code:
+                return cls.Msg.FEISHU_DETAIL_MISSING.format(code=code)
+            if rc == ListingErrorCode.PREFLIGHT_NO_SKUS and code:
+                return f"{code}无有效SKU"
+            if code and rc.startswith("feishu_"):
+                aspect = rc.replace("feishu_subcode_", "").replace("feishu_", "")
+                aspect_key = aspect.replace("_missing", "_missing")
+                mapping = {
+                    "pricing_missing": "pricing_missing",
+                    "control_missing": "control_missing",
+                    "range_missing": "range_missing",
+                    "color_spec_missing": "color_spec_missing",
+                    "product_row_missing": "product_row_missing",
+                    "subcode_missing": "subcode_missing",
+                    "product_catalog_missing": "product_row_missing",
+                }
+                return cls.feishu_catalog_line(code, mapping.get(aspect, "product_row_missing"))
+            return cls.feishu_label(rc) if rc else ""
+
+        text = re.sub(r"^(失败|跳过)\s*[:：]\s*", "", text)
+        path_msg = re.match(r"^([A-Z0-9]+)/[^:：]+[:：]\s*(.+)", text, flags=re.I)
+        if path_msg:
+            if not merchant_code:
+                merchant_code = path_msg.group(1).upper()
+            text = path_msg.group(2).strip()
+
+        if text.startswith(cls.Msg.SLOT_PREFIX):
+            inner = text[len(cls.Msg.SLOT_PREFIX) :]
+            inner = re.sub(r"[（(]应为\d+个[）)]", "", inner).strip()
+            return inner
+
+        sub = re.search(r"子编码\s+(\S+)\s+(.+)", text, flags=re.I)
+        if sub:
+            sub_code = str(sub.group(1) or "").strip().upper()
+            aspect_brief = cls._aspect_text_to_brief(sub.group(2))
+            if re.match(r"^[A-Z0-9]{3,}", sub_code):
+                return f"{sub_code}{aspect_brief}"
+            code_from_raw = re.search(r"(BD\d{3}[A-Z]?)", raw, flags=re.I)
+            if code_from_raw:
+                return f"{code_from_raw.group(1).upper()}{aspect_brief}"
+            return aspect_brief
+
+        fail = re.search(r"失败:\s*[^:]+:\s*(.+)", raw)
+        if fail:
+            aspect = fail.group(1).strip()
+            code = str(merchant_code or "").strip().upper()
+            if code and not re.match(r"^[A-Z0-9]+$", aspect[:6] if aspect else ""):
+                return f"{code}{cls._aspect_text_to_brief(aspect)}"
+
+        code_match = re.match(r"^([A-Z0-9]{3,}[A-Z]?)(定价|控价|控价区间|颜色规格|商品表)", text, flags=re.I)
+        if code_match:
+            return text
+
+        if "未找到 1-5 主图" in text or text == cls.Msg.CAROUSEL_EMPTY:
+            code = str(merchant_code or "").strip().upper()
+            return cls.Msg.FEISHU_CAROUSEL_MISSING.format(code=code) if code else "主图缺失"
+        if "未找到 7-9 详情图" in text or text == cls.Msg.DETAIL_EMPTY:
+            code = str(merchant_code or "").strip().upper()
+            return cls.Msg.FEISHU_DETAIL_MISSING.format(code=code) if code else "详情图缺失"
+        if "数字命名图" in text:
+            range_m = re.search(r"\((\d+)\s*-\s*(\d+)\)", text)
+            if range_m:
+                start_n, end_n = int(range_m.group(1)), int(range_m.group(2))
+                if end_n >= start_n and end_n - start_n <= 12:
+                    nums = " ".join(str(n) for n in range(start_n, end_n + 1))
+                    return cls.Msg.FEISHU_IMAGES_MISSING.format(nums=nums)
+            nums = re.findall(r"\d+", text)
+            return cls.Msg.FEISHU_IMAGES_MISSING.format(nums=" ".join(nums)) if nums else "图片缺失"
+        if "缺少预览图" in text:
+            m = re.search(r"缺少预览图[:：]\s*(\S+)/(\S+)", text)
+            if m:
+                return f"{m.group(1)}缺预览图{m.group(2)}"
+            return "缺预览图"
+
+        rc = str(reason_code or "").strip()
+        if rc:
+            brief = cls.compact_feishu_line("", reason_code=rc, merchant_code=merchant_code)
+            if brief:
+                return brief
+
+        text = re.sub(r"^\[[^\]]+\]\s*", "", text)
+        return text[:120]
+
+    @classmethod
+    def format_feishu_catalog_issue(
+        cls,
+        *,
+        listing_label: str,
+        code: str,
+        aspect: str,
+        is_sub: bool,
+    ) -> tuple[str, str]:
+        """生成飞书商品表缺项 (reason_code, message)。"""
+        norm_code = str(code or "").strip().upper()
+        reason_code, _ = cls.FEISHU_CATALOG_ASPECT.get(
+            aspect,
+            (ListingErrorCode.FEISHU_PRODUCT_CATALOG_MISSING, "飞书数据缺失"),
+        )
+        if is_sub:
+            reason_code = cls.FEISHU_CATALOG_SUB_ASPECT.get(aspect, reason_code)
+        message = cls.feishu_catalog_line(norm_code, aspect)
+        return reason_code, message
+
+    @classmethod
+    def format_slot_mismatch(cls, detail: str, target: int) -> str:
+        _ = target
+        return cls.Msg.SLOT_MISMATCH.format(detail=detail, target=target)
+
+    @classmethod
+    def format_slot_mismatch_feishu(cls, detail: str, target: int) -> str:
+        _ = target
+        return cls.Msg.FEISHU_SLOT_LINE.format(detail=detail)
+
+    @classmethod
+    def all_reason_codes(cls) -> list[str]:
+        """列出所有已登记 reason_code（便于对照）。"""
+        codes = {v for k, v in vars(ListingErrorCode).items() if not k.startswith("_")}
+        codes.update(cls.LABELS)
+        codes.update(cls.FEISHU_LABELS)
+        return sorted(codes)

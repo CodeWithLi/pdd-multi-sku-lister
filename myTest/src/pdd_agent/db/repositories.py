@@ -137,6 +137,32 @@ def get_login_status_row(account_id: str) -> LoginStatusORM | None:
         return session.get(LoginStatusORM, account_id)
 
 
+def get_cached_shop_display_name(account_id: str) -> str:
+    row = get_login_status_row(account_id)
+    if row and str(row.shop_display_name or "").strip():
+        return str(row.shop_display_name).strip()
+    return ""
+
+
+def update_shop_display_name(account_id: str, shop_display_name: str) -> None:
+    name = str(shop_display_name or "").strip()
+    aid = str(account_id or "").strip()
+    if not aid or not name or not is_database_available():
+        return
+    with session_scope() as session:
+        row = session.get(LoginStatusORM, aid)
+        if row:
+            row.shop_display_name = name
+        else:
+            session.add(
+                LoginStatusORM(
+                    account_id=aid,
+                    status="unknown",
+                    shop_display_name=name,
+                )
+            )
+
+
 def upsert_login_status(
     *,
     account_id: str,

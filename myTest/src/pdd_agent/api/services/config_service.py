@@ -20,6 +20,7 @@ from pdd_agent.api.schemas.config import (
     RuntimeConfigOut,
     RuntimeConfigUpdateIn,
 )
+from pdd_agent.core.account_display import resolve_account_display_name
 from pdd_agent.core.config import (
     AccountConfig,
     BrowserConfig,
@@ -49,6 +50,7 @@ def _to_account_out(acc: AccountConfig) -> AccountOut:
         account_id=acc.account_id,
         enabled=acc.enabled,
         username=acc.username,
+        display_name=resolve_account_display_name(acc.account_id),
         has_password=bool(acc.password),
         product_codes=acc.product_codes,
     )

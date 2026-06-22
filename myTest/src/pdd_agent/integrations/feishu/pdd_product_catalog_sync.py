@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from pdd_agent.core.logging import get_logger
+from pdd_agent.domain.listing_errors import ListingErrorCode, ListingErrors
 from pdd_agent.integrations.feishu.bitable import (
     FIELD_NUMBER,
     FIELD_TEXT,
@@ -76,52 +77,16 @@ def format_feishu_catalog_issue_detail_message(
     aspect: str,
 ) -> tuple[str, str]:
     """生成 (reason_code, message)。主商品码带「失败:」前缀，子编码用「子编码 XXX …」格式。"""
-    label = str(listing_label or "").strip()
-    norm_code = _norm_code(code)
-    is_sub = _is_sub_catalog_code(code, merchant_code)
-
-    aspect_config: dict[str, tuple[str, str]] = {
-        "pricing_missing": ("feishu_pricing_missing", "定价数据缺失"),
-        "control_missing": ("feishu_control_missing", "控价数据缺失"),
-        "range_missing": ("feishu_price_range_missing", "控价区间数据缺失"),
-        "color_spec_missing": ("feishu_color_spec_missing", "颜色规格没数据"),
-        "product_row_missing": ("feishu_product_row_missing", "商品表没数据"),
-        "subcode_missing": ("feishu_subcode_missing", "没数据"),
-    }
-    reason_code, aspect_text = aspect_config.get(
-        aspect, ("feishu_product_catalog_missing", "飞书数据缺失")
+    return ListingErrors.format_feishu_catalog_issue(
+        listing_label=listing_label,
+        code=_norm_code(code),
+        aspect=aspect,
+        is_sub=_is_sub_catalog_code(code, merchant_code),
     )
-
-    if is_sub:
-        sub_reason_map = {
-            "pricing_missing": "feishu_subcode_pricing_missing",
-            "control_missing": "feishu_subcode_control_missing",
-            "range_missing": "feishu_subcode_range_missing",
-            "color_spec_missing": "feishu_subcode_color_spec_missing",
-            "product_row_missing": "feishu_subcode_missing",
-            "subcode_missing": "feishu_subcode_missing",
-        }
-        reason_code = sub_reason_map.get(aspect, reason_code)
-        if aspect in {"product_row_missing", "subcode_missing"}:
-            message = f"{label}：子编码 {norm_code} 没数据"
-        else:
-            message = f"{label}：子编码 {norm_code} {aspect_text}"
-    else:
-        message = f"失败: {label}: {aspect_text}" if label else f"失败: {aspect_text}"
-
-    return reason_code, message
 
 
 def _aspect_label(aspect: str) -> str:
-    labels = {
-        "pricing_missing": "定价没数据",
-        "control_missing": "控价没数据",
-        "range_missing": "控价区间没数据",
-        "color_spec_missing": "颜色规格没数据",
-        "product_row_missing": "商品表没数据",
-        "subcode_missing": "商品表没数据",
-    }
-    return labels.get(aspect, "飞书数据缺失")
+    return ListingErrors.FEISHU_CATALOG_ASPECT_SHORT.get(aspect, "飞书数据缺失")
 
 
 def _append_catalog_detail(
@@ -621,7 +586,7 @@ def schedule_feishu_product_catalog_missing_logs(
     product_codes: list[str] | None = None,
     config: FeishuConfig | None = None,
 ) -> int:
-    """飞书商品表缺数据时写入 PDD发布日志表(失败)（每店铺每次仅一条）。"""
+    """飞书商品表缺数据时写入淘宝+拼多多发布日志表（失败）（每条分项一行）。"""
     cfg = config or load_feishu_config()
     if not cfg.pdd_upload_log.enabled:
         return 0
@@ -643,30 +608,48 @@ def schedule_feishu_product_catalog_missing_logs(
 
     from pdd_agent.integrations.feishu.pdd_upload_sync import schedule_pdd_upload_failure_log
 
-    written = 0
+    from collections import defaultdict
+
+    from pdd_agent.domain.listing_errors import ListingErrors
+
+    grouped: dict[str, list[str]] = defaultdict(list)
+    meta: dict[str, dict[str, str]] = {}
+
     for issue in issues:
         detail_rows = list(issue.details)
+        merchant_code = str(issue.merchant_code or "").strip().upper()
+        listing_label = str(issue.listing_label or "").strip()
+        if not merchant_code:
+            continue
         if not detail_rows:
-            label = str(issue.listing_label or "").strip()
-            if not label:
-                continue
-            detail_rows = [
-                FeishuCatalogIssueDetail(
-                    code=issue.merchant_code,
-                    reason_code=FEISHU_PRODUCT_CATALOG_MISSING_REASON,
-                    message=label,
-                    aspect="",
-                )
-            ]
+            if listing_label:
+                grouped[merchant_code].append(listing_label)
+            continue
         for detail in detail_rows:
-            schedule_pdd_upload_failure_log(
-                account_id=account_id,
-                listing_label=issue.listing_label,
-                merchant_code=issue.merchant_code,
+            line = ListingErrors.compact_feishu_line(
+                detail.message,
                 reason_code=detail.reason_code,
-                message=detail.message,
+                merchant_code=detail.code or merchant_code,
             )
-            written += 1
+            grouped[merchant_code].append(line)
+        meta[merchant_code] = {
+            "listing_label": listing_label,
+            "reason_code": detail_rows[-1].reason_code if detail_rows else FEISHU_PRODUCT_CATALOG_MISSING_REASON,
+        }
+
+    written = 0
+    for merchant_code, lines in grouped.items():
+        brief = ListingErrors.format_numbered(lines)
+        info = meta.get(merchant_code, {})
+        schedule_pdd_upload_failure_log(
+            account_id=account_id,
+            listing_label=info.get("listing_label", ""),
+            merchant_code=merchant_code,
+            reason_code=info.get("reason_code", FEISHU_PRODUCT_CATALOG_MISSING_REASON),
+            message=brief,
+            failure_reason=brief,
+        )
+        written += 1
     return written
 
 

@@ -18,6 +18,7 @@ from pdd_agent.browser.login_health import (
     mark_checking,
     open_manual_login_window_sync,
 )
+from pdd_agent.core.account_display import resolve_account_display_name
 from pdd_agent.core.config import AccountConfig, load_yaml_settings
 from pdd_agent.db.repositories import (
     get_account_config,
@@ -43,6 +44,11 @@ def list_login_statuses(enabled_only: bool = True):
                 status=row.status if row else "unknown",
                 reason=row.reason if row else "",
                 current_url=row.current_url if row else "",
+                shop_display_name=(
+                    str(row.shop_display_name or "").strip()
+                    if row and str(row.shop_display_name or "").strip()
+                    else resolve_account_display_name(acc.account_id)
+                ),
                 checked_at=row.checked_at if row else None,
             )
         )
@@ -151,5 +157,6 @@ def _to_out(result) -> LoginStatusOut:
         status=result.status,
         reason=result.reason,
         current_url=result.current_url,
+        shop_display_name=resolve_account_display_name(result.account_id),
         checked_at=result.checked_at,
     )

@@ -65,6 +65,25 @@ def _ensure_task_queue_claim_index(engine: Engine) -> None:
         return
 
 
+def _ensure_login_statuses_columns(engine: Engine) -> None:
+    try:
+        inspector = inspect(engine)
+        if "login_statuses" not in inspector.get_table_names():
+            return
+        existing = {col["name"] for col in inspector.get_columns("login_statuses")}
+        if "shop_display_name" in existing:
+            return
+        with engine.begin() as conn:
+            conn.execute(
+                text(
+                    "ALTER TABLE login_statuses "
+                    "ADD COLUMN shop_display_name VARCHAR(128) NOT NULL DEFAULT ''"
+                )
+            )
+    except Exception:
+        return
+
+
 def _ensure_published_products_columns(engine: Engine) -> None:
     try:
         inspector = inspect(engine)
@@ -142,6 +161,7 @@ def init_database() -> bool:
         )
         Base.metadata.create_all(engine)
         _ensure_task_queue_claim_index(engine)
+        _ensure_login_statuses_columns(engine)
         _ensure_published_products_columns(engine)
         _ensure_listed_folders_backfill(engine)
         _engine = engine

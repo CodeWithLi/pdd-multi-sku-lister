@@ -78,3 +78,22 @@ class PreflightResponse(BaseModel):
     warning_count: int
     units: list[ListingUnitOut] = Field(default_factory=list)
     issues: list[PreflightIssueOut] = Field(default_factory=list)
+
+
+class MinioSyncStartRequest(BaseModel):
+    product_codes: list[str] = Field(..., min_length=1)
+
+
+class MinioSyncJobOut(BaseModel):
+    job_id: str
+    status: str
+    product_codes: list[str] = Field(default_factory=list)
+    total_sets: int = 0
+    completed_sets: int = 0
+    current_label: str = ""
+    downloaded_files: int = 0
+    skipped_files: int = 0
+    error: str = ""
+    progress_percent: float = 0.0
+    started_at: float = 0.0
+    finished_at: float = 0.0

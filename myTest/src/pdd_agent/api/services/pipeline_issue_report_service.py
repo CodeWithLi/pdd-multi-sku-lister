@@ -58,7 +58,7 @@ ISSUE_TITLE_MAP: dict[str, str] = {
     "price_fill_by_index_failed": "按行号填价失败",
     "catalog_parse_warning": "素材目录解析警告",
     "no_valid_units": "无有效上架单元",
-    "slot_alignment_failed": "槽位对齐失败",
+    "slot_alignment_failed": "兄弟款规格数量不一致",
     "sku_not_found": "SKU 编码找不到对应商品",
     "merchant_code_mismatch": "货号/编码不匹配",
     # campaign

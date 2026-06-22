@@ -55,14 +55,9 @@ def _date_to_ms(day: date) -> int:
 
 
 def _resolve_account_display_name(account_id: str, config: FeishuConfig) -> str:
-    from pdd_agent.core.config import load_yaml_settings
-    from pdd_agent.db.repositories import get_account_config
+    from pdd_agent.core.account_display import resolve_account_display_name
 
-    settings = load_yaml_settings()
-    account = get_account_config(settings, account_id)
-    if account and str(account.username or "").strip():
-        return str(account.username).strip()
-    return str(account_id or "").strip()
+    return resolve_account_display_name(account_id)
 
 
 def _brief_activity_failure_reason(error: str) -> str:

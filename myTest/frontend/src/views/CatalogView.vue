@@ -4,6 +4,7 @@ import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { api } from '@/api/client'
 import PageHeader from '@/components/PageHeader.vue'
+import { useMinioSync } from '@/composables/useMinioSync'
 import { issueLevelLabel } from '@/utils/labels'
 import type { ListingUnit, PreflightResponse, ProductSummary, SkuCombo } from '@/types'
 
@@ -28,6 +29,7 @@ const materialPolling = ref(false)
 const selectedCodes = ref<string[]>([])
 const preflight = ref<PreflightResponse | null>(null)
 const error = ref('')
+const { minioSyncJob, syncing, startSync, resumeActiveSync } = useMinioSync()
 
 const imagePanelTitle = ref('')
 const previewImages = ref<PreviewImage[]>([])
@@ -127,9 +129,24 @@ async function loadProducts() {
   }
 }
 
+async function runMinioSync() {
+  if (!selectedCodes.value.length) {
+    error.value = '请至少勾选一个商品'
+    return
+  }
+  error.value = ''
+  await startSync(selectedCodes.value, (msg) => {
+    error.value = msg
+  })
+}
+
 async function runPreflight() {
   if (!selectedCodes.value.length) {
     error.value = '请至少勾选一个商品'
+    return
+  }
+  if (materialSource.value === 'minio' && syncing.value) {
+    ElMessage.warning('MinIO 仍在同步中，请稍候或等同步完成后再检查')
     return
   }
   loading.value = true
@@ -253,10 +270,17 @@ function openSkuPreview(sku: SkuCombo) {
 onMounted(async () => {
   await loadMinioHealth()
   await loadProducts()
+  if (materialSource.value === 'minio') {
+    await resumeActiveSync((msg) => {
+      error.value = msg
+    })
+  }
   startMaterialPolling()
 })
 
-onUnmounted(stopMaterialPolling)
+onUnmounted(() => {
+  stopMaterialPolling()
+})
 </script>
 
 <template>
@@ -381,14 +405,87 @@ onUnmounted(stopMaterialPolling)
             已选 {{ selectedCodes.length }} 个商品
           </div>
 
+          <div
+            v-if="materialSource === 'minio' && minioSyncJob"
+            class="minio-sync-progress"
+          >
+            <div class="minio-sync-progress-head">
+              <span>MinIO 同步</span>
+              <el-tag
+                size="small"
+                :type="
+                  minioSyncJob.status === 'success'
+                    ? 'success'
+                    : minioSyncJob.status === 'failed'
+                      ? 'danger'
+                      : 'warning'
+                "
+              >
+                {{
+                  minioSyncJob.status === 'success'
+                    ? '已完成'
+                    : minioSyncJob.status === 'failed'
+                      ? '失败'
+                      : '进行中'
+                }}
+              </el-tag>
+            </div>
+            <el-progress
+              :percentage="minioSyncJob.progress_percent"
+              :status="
+                minioSyncJob.status === 'success'
+                  ? 'success'
+                  : minioSyncJob.status === 'failed'
+                    ? 'exception'
+                    : undefined
+              "
+              :stroke-width="10"
+            />
+            <div class="form-tip">
+              {{ minioSyncJob.completed_sets }}/{{ minioSyncJob.total_sets }} 套图
+              <template v-if="minioSyncJob.current_label">
+                · 当前 {{ minioSyncJob.current_label }}
+              </template>
+              <template v-if="minioSyncJob.downloaded_files || minioSyncJob.skipped_files">
+                · 新下载 {{ minioSyncJob.downloaded_files }} · 跳过 {{ minioSyncJob.skipped_files }}
+              </template>
+            </div>
+          </div>
+
+          <template v-if="materialSource === 'minio'">
+            <el-button
+              type="primary"
+              size="large"
+              style="width: 100%; margin-top: 16px"
+              :disabled="!selectedCodes.length"
+              :loading="syncing"
+              @click="runMinioSync"
+            >
+              {{ syncing ? 'MinIO 同步中…' : '① 从 MinIO 同步素材' }}
+            </el-button>
+            <el-button
+              size="large"
+              style="width: 100%; margin-top: 8px"
+              :disabled="!selectedCodes.length || syncing"
+              :loading="loading"
+              @click="runPreflight"
+            >
+              ② 开始检查（读本地缓存）
+            </el-button>
+            <div class="form-tip" style="margin-top: 8px">
+              同步在后台进行，不阻塞页面；检查前请先完成同步。
+            </div>
+          </template>
           <el-button
+            v-else
             type="primary"
             size="large"
             style="width: 100%; margin-top: 16px"
             :disabled="!selectedCodes.length"
+            :loading="loading"
             @click="runPreflight"
           >
-            {{ materialSource === 'minio' ? '从 MinIO 同步并检查' : '开始检查' }}
+            开始检查
           </el-button>
         </el-card>
       </el-col>
@@ -575,9 +672,27 @@ onUnmounted(stopMaterialPolling)
 }
 
 .selection-summary {
-  margin-top: 10px;
-  font-size: 12px;
+  margin-top: 12px;
+  font-size: 13px;
   color: var(--text-secondary);
+}
+
+.minio-sync-progress {
+  margin-top: 12px;
+  padding: 12px;
+  border-radius: 8px;
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+}
+
+.minio-sync-progress-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 8px;
+  font-size: 13px;
+  font-weight: 600;
+  color: #334155;
 }
 
 .material-source-bar {

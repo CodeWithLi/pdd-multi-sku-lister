@@ -116,6 +116,9 @@ def _run_manual_login_window(
     page.goto(HOME_URL, wait_until="domcontentloaded")
     time.sleep(2)
     if "login" not in page.url:
+        from pdd_agent.browser.shop_display_name import maybe_refresh_shop_display_name
+
+        maybe_refresh_shop_display_name(account.account_id, dp, login_username=account.username)
         result = LoginCheckResult(
             account_id=account.account_id,
             status="logged_in",
@@ -139,6 +142,9 @@ def _run_manual_login_window(
 
     for _ in range(max(1, keep_open_seconds)):
         if "login" not in page.url:
+            from pdd_agent.browser.shop_display_name import maybe_refresh_shop_display_name
+
+            maybe_refresh_shop_display_name(account.account_id, dp, login_username=account.username)
             result = LoginCheckResult(
                 account_id=account.account_id,
                 status="logged_in",
@@ -196,6 +202,13 @@ def _prepare_password_login(dp: DpPage, account: AccountConfig) -> None:
 def _classify_login_page(account: AccountConfig, dp: DpPage) -> LoginCheckResult:
     now = datetime.now()
     if "login" not in dp.url:
+        from pdd_agent.browser.shop_display_name import maybe_refresh_shop_display_name
+
+        maybe_refresh_shop_display_name(
+            account.account_id,
+            dp,
+            login_username=account.username,
+        )
         return LoginCheckResult(
             account_id=account.account_id,
             status="logged_in",

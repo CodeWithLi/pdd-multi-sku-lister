@@ -26,6 +26,7 @@ from pathlib import Path
 from langchain_core.tools import StructuredTool
 
 from pdd_agent.core.config import YamlSettings
+from pdd_agent.domain.listing_errors import ListingErrorCode, ListingErrors
 from pdd_agent.domain.models import ListingUnit, SkuCombo
 from pdd_agent.skills.base import Skill
 from pdd_agent.skills.listing.pdd_product_catalog import (
@@ -56,6 +57,16 @@ PREVIEW_NAMES = ("预览图.png", "预览图.jpg", "预览图.jpeg", "预览图.
 IMAGE_SET_PATTERN = re.compile(
     r"^(?:第?\s*[一二三四五六七八九十\d]+\s*套(?:图)?|套图\s*[一二三四五六七八九十\d]+)(?:[\s\-_（(].*)?$"
 )
+_PRODUCT_CODE_PREFIX = re.compile(r"^([A-Z0-9]+)")
+
+
+def _extract_product_code_prefix(name: str) -> str:
+    """从文件夹/文件名前缀提取商品编码，如 BD023A毛绒小狗笔袋 → BD023A。"""
+    text = str(name or "").strip()
+    if not text:
+        return ""
+    match = _PRODUCT_CODE_PREFIX.match(text)
+    return match.group(1) if match else text
 
 
 @dataclass(frozen=True)
@@ -172,16 +183,25 @@ def _collect_flat_preview_images(folder: Path) -> list[Path]:
 def _filter_preview_images_for_code_dir(code_dir: Path, previews: list[Path]) -> list[Path]:
     """
     兄弟目录合并规格图时，只保留与文件夹商品编码匹配的规格图。
-    例如 BD046B/ 目录仅接受 BD046B.png、BD046B+AXBD001A.png，忽略误放的 BD046A.png。
+    例如 BD046B/ 目录接受 BD046B.png、BD046B+AXBD001A.png；
+    MinIO 同步后亦接受 BD046B毛绒小狗笔袋+YKL001N.png（按编码前缀匹配）。
     """
-    code = code_dir.name.strip()
-    if not code:
+    dir_code = _extract_product_code_prefix(code_dir.name.strip())
+    if not dir_code:
         return previews
-    combo_prefix = f"{code}+"
     filtered: list[Path] = []
     for preview in previews:
         stem = preview.stem.strip()
-        if stem == code or stem.startswith(combo_prefix):
+        if not stem:
+            continue
+        if "+" in stem:
+            style_part = stem.split("+", 1)[0].strip()
+            style_code = _extract_product_code_prefix(style_part)
+            if style_code.upper() == dir_code.upper():
+                filtered.append(preview)
+            continue
+        stem_code = _extract_product_code_prefix(stem)
+        if stem_code.upper() == dir_code.upper():
             filtered.append(preview)
     return filtered
 
@@ -207,21 +227,28 @@ def _parse_combo_code(name: str, default_style_code: str = "") -> tuple[str, str
 
     - ``BD719A`` → 单款
     - ``BD719A+GJ361A`` → 款式 + 子配件
+    - ``BD719A毛绒小狗笔袋+YKL001N`` → 按编码前缀解析（MinIO 常见命名）
     - ``BD719A+YKL001A+YKL020A+GJ361A`` → 多段组合按套装处理 → (BD719A, 套装)
     """
     stem = Path(name).stem.strip()
     if not stem:
         return None
+    default_style = _extract_product_code_prefix(default_style_code) or default_style_code
     if "+" in stem:
         parts = [part.strip() for part in stem.split("+") if part.strip()]
         if len(parts) >= 3:
-            return parts[0], BUNDLE_MODEL_CODE
+            style = _extract_product_code_prefix(parts[0]) or parts[0]
+            return style, BUNDLE_MODEL_CODE
         if len(parts) == 2:
-            return parts[0], parts[1]
+            style = _extract_product_code_prefix(parts[0]) or parts[0]
+            model = _extract_product_code_prefix(parts[1]) or parts[1]
+            return style, model
         return None
-    if default_style_code:
-        return default_style_code, stem
-    return stem, stem
+    if default_style:
+        model = _extract_product_code_prefix(stem) or stem
+        return default_style, model
+    code = _extract_product_code_prefix(stem) or stem
+    return code, code
 
 
 def _new_layout_units(product_code: str, assets_root: Path) -> list[tuple[str, Path]]:
@@ -409,7 +436,9 @@ def _append_skus_from_previews(
     for preview in previews:
         parsed = _parse_combo_code(preview.stem, default_style_code)
         if not parsed:
-            unit.warnings.append(f"{prefix} 规格图文件名无法解析组合编码: {preview.name}")
+            unit.warnings.append(
+                ListingErrors.Msg.PREVIEW_FILENAME_UNPARSEABLE.format(prefix=prefix, name=preview.name)
+            )
             continue
 
         style_code, model_code = parsed
@@ -427,18 +456,38 @@ def _append_skus_from_previews(
 
         if not catalog:
             if not include_excel_missing_previews:
-                unit.warnings.append(f"{prefix} 商品表无编码[{style_code}]，不上架 {preview.name}")
+                unit.warnings.append(
+                    ListingErrors.Msg.STYLE_NOT_IN_CATALOG_SKIP.format(
+                        prefix=prefix, style=style_code, name=preview.name
+                    )
+                )
                 continue
         elif not style_entry:
             if not include_excel_missing_previews:
-                unit.warnings.append(f"{prefix} 商品表无款式编码[{style_code}]，不上架 {preview.name}")
+                unit.warnings.append(
+                    ListingErrors.Msg.STYLE_NOT_IN_CATALOG_WARN.format(
+                        prefix=prefix, style=style_code, name=preview.name
+                    )
+                )
                 continue
-            unit.warnings.append(f"{prefix} 商品表无款式编码[{style_code}]，仅后台展示不上架 {preview.name}")
+            unit.warnings.append(
+                ListingErrors.Msg.STYLE_NOT_IN_CATALOG_DISPLAY.format(
+                    prefix=prefix, style=style_code, name=preview.name
+                )
+            )
         elif is_combo and not is_bundle and not model_entry:
             if not include_excel_missing_previews:
-                unit.warnings.append(f"{prefix} 商品表无子编码[{model_code}]，不上架 {preview.name}")
+                unit.warnings.append(
+                    ListingErrors.Msg.SUBCODE_NOT_IN_CATALOG_SKIP.format(
+                        prefix=prefix, model=model_code, name=preview.name
+                    )
+                )
                 continue
-            unit.warnings.append(f"{prefix} 商品表无子编码[{model_code}]，仅后台展示不上架 {preview.name}")
+            unit.warnings.append(
+                ListingErrors.Msg.SUBCODE_NOT_IN_CATALOG_DISPLAY.format(
+                    prefix=prefix, model=model_code, name=preview.name
+                )
+            )
 
         style_name = lookup_catalog_spec(style_code, catalog) or style_code
         model_name = lookup_catalog_spec(model_code, catalog) or model_code
@@ -522,9 +571,9 @@ def parse_new_listing_unit(
     unit.detail_images = _collect_numbered_images(unit_root, {7, 8, 9})
 
     if not unit.carousel_images:
-        unit.warnings.append(f"[{label}] 未找到 1-5 主图")
+        unit.warnings.append(ListingErrors.Msg.CAROUSEL_MISSING.format(label=label))
     if not unit.detail_images:
-        unit.warnings.append(f"[{label}] 未找到 7-9 详情图")
+        unit.warnings.append(ListingErrors.Msg.DETAIL_MISSING.format(label=label))
 
     # 规格图：同套图下所有兄弟商品编码文件夹（A-Z），依次合并到当前上架单元。
     set_dir = unit_root.parent if unit_root.parent.name == image_set else unit_root
@@ -553,7 +602,7 @@ def parse_new_listing_unit(
         )
 
     if not unit.skus:
-        unit.warnings.append(f"[{label}] 未解析到任何有效 SKU")
+        unit.warnings.append(ListingErrors.Msg.NO_SKU_PARSED.format(label=label))
     else:
         for msg in apply_unit_listing_specs(
             unit,
@@ -588,7 +637,9 @@ def parse_legacy_listing_unit(
         style_code = style_dir.name
         style_name = lookup_catalog_spec(style_code, catalog)
         if style_name is None:
-            unit.warnings.append(f"[{label}] 商品表无款式编码[{style_code}]，跳过")
+            unit.warnings.append(
+                ListingErrors.Msg.STYLE_CODE_MISSING_SKIP.format(label=label, style=style_code)
+            )
             continue
 
         unit.style_codes.append(style_code)
@@ -600,18 +651,26 @@ def parse_legacy_listing_unit(
         for combo_dir in combo_dirs:
             parsed = _parse_combo_code(combo_dir.name, style_code)
             if not parsed:
-                unit.warnings.append(f"[{label}] 组合文件夹格式错误: {combo_dir.name}")
+                unit.warnings.append(
+                    ListingErrors.Msg.COMBO_FOLDER_INVALID.format(label=label, folder=combo_dir.name)
+                )
                 continue
 
             _, model_code = parsed
             model_name = lookup_catalog_spec(model_code, catalog)
             if model_name is None:
-                unit.warnings.append(f"[{label}] 商品表无型号编码[{model_code}]，跳过")
+                unit.warnings.append(
+                    ListingErrors.Msg.MODEL_CODE_MISSING_SKIP.format(label=label, model=model_code)
+                )
                 continue
 
             preview = _find_preview_image(combo_dir)
             if not preview:
-                unit.warnings.append(f"[{label}] 缺少预览图: {style_code}/{combo_dir.name}")
+                unit.warnings.append(
+                    ListingErrors.Msg.PREVIEW_MISSING.format(
+                        label=label, style=style_code, combo=combo_dir.name
+                    )
+                )
                 continue
 
             if model_code not in unit.model_codes:
@@ -643,7 +702,7 @@ def parse_legacy_listing_unit(
             )
 
     if not unit.skus:
-        unit.warnings.append(f"[{label}] 未解析到任何有效 SKU")
+        unit.warnings.append(ListingErrors.Msg.NO_SKU_PARSED.format(label=label))
     return unit
 
 

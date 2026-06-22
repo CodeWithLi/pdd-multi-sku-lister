@@ -207,10 +207,6 @@ def run_preflight_api(
 ) -> PreflightResponse:
     settings = load_yaml_settings()
     assets_root = _assets_root_for_source(material_source) or settings.paths.resolve("assets_root")
-    if material_source == "minio":
-        from pdd_agent.integrations.minio.staging import stage_minio_for_product_codes
-
-        stage_minio_for_product_codes(product_codes)
     report = run_preflight(
         product_codes,
         settings,

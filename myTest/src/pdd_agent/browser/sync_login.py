@@ -32,6 +32,9 @@ def ensure_login_sync(account: AccountConfig, page: Page) -> DpPage:
 
     if not is_login_url(dp.url):
         print(f"[{account_id}] 读取本地 Session 成功，已免密进入后台")
+        from pdd_agent.browser.shop_display_name import maybe_refresh_shop_display_name
+
+        maybe_refresh_shop_display_name(account_id, dp, login_username=account.username)
         return dp
 
     return _perform_password_login_sync(account, page)
@@ -121,6 +124,9 @@ def _perform_password_login_sync(account: AccountConfig, page: Page) -> DpPage:
         if not is_login_url(dp.url):
             print(f"[{account_id}] 登录成功")
             time.sleep(2)
+            from pdd_agent.browser.shop_display_name import maybe_refresh_shop_display_name
+
+            maybe_refresh_shop_display_name(account_id, dp, login_username=account.username)
             return dp
         if wait_sec == 180 and remaining % 15 == 0:
             print(f"[{account_id}] 等待人工验证… 剩余约 {remaining}s")

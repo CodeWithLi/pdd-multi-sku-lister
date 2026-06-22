@@ -7,6 +7,8 @@ from fastapi.responses import FileResponse
 
 from pdd_agent.api.schemas.catalog import (
     ListingTargetOptionOut,
+    MinioSyncJobOut,
+    MinioSyncStartRequest,
     PreflightRequest,
     PreflightResponse,
     ProductDetailOut,
@@ -18,6 +20,11 @@ from pdd_agent.api.services.catalog_service import (
     list_listing_target_options,
     list_products,
     run_preflight_api,
+)
+from pdd_agent.api.services.minio_sync_service import (
+    get_active_minio_sync_job,
+    get_minio_sync_job,
+    start_minio_sync_job,
 )
 from pdd_agent.integrations.minio.client import check_minio_health
 from pdd_agent.integrations.minio.config import load_minio_config, minio_configured
@@ -144,8 +151,40 @@ def catalog_asset(
 
 @router.post("/preflight", response_model=PreflightResponse)
 def catalog_preflight(body: PreflightRequest):
-    """上架前校验（不打开浏览器）。"""
+    """上架前校验（不打开浏览器）；MinIO 模式仅读本地缓存，需先调用 /minio/sync。"""
     source = body.material_source if body.material_source in {"local", "minio"} else "local"
     if source == "minio" and not minio_configured():
         raise HTTPException(status_code=503, detail="MinIO 未配置，请填写 config/minio.yaml")
     return run_preflight_api(body.product_codes, material_source=source)
+
+
+@router.post("/minio/sync", response_model=MinioSyncJobOut)
+def catalog_minio_sync_start(body: MinioSyncStartRequest):
+    """异步从 MinIO 同步素材到本地缓存，立即返回 job_id。"""
+    if not minio_configured():
+        raise HTTPException(status_code=503, detail="MinIO 未配置，请填写 config/minio.yaml")
+    try:
+        job = start_minio_sync_job(body.product_codes)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return MinioSyncJobOut.model_validate(job.to_dict())
+
+
+@router.get("/minio/sync/active", response_model=MinioSyncJobOut | None)
+def catalog_minio_sync_active():
+    """当前进行中的 MinIO 同步任务（无则 null）。"""
+    job = get_active_minio_sync_job()
+    if not job:
+        return None
+    return MinioSyncJobOut.model_validate(job.to_dict())
+
+
+@router.get("/minio/sync/{job_id}", response_model=MinioSyncJobOut)
+def catalog_minio_sync_status(job_id: str):
+    """查询 MinIO 同步任务进度。"""
+    job = get_minio_sync_job(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail=f"sync job not found: {job_id}")
+    return MinioSyncJobOut.model_validate(job.to_dict())

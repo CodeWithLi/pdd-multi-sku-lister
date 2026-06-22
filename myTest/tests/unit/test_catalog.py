@@ -59,6 +59,10 @@ def test_new_flat_image_layout(tmp_path, monkeypatch):
     assert [sku.combo_folder for sku in unit.skus] == ["BD046A", "BD046A+AXBD001A", "BD046A+AXBD888"]
     assert unit.family_code == "BD046"
 
+    monkeypatch.setattr(
+        "pdd_agent.skills.listing.catalog._load_product_catalog",
+        lambda settings=None: {},
+    )
     listing_units = parse_all_listings("BD046A", settings)
     assert [sku.combo_folder for sku in listing_units[0].skus] == []
 
@@ -216,3 +220,38 @@ def test_sibling_spec_merge_ignores_misnamed_preview_files(tmp_path, monkeypatch
         "BD046C",
         "BD046C+AXBD001A",
     ]
+
+
+def test_minio_style_preview_filenames_with_chinese_suffix(tmp_path, monkeypatch):
+    """MinIO 同步后目录为 BD023A，但规格图仍带中文商品名前缀。"""
+    monkeypatch.setattr("pdd_agent.core.config.PROJECT_ROOT", tmp_path)
+    monkeypatch.setattr("pdd_agent.paths.PROJECT_ROOT", tmp_path)
+    get_pdd_product_catalog.cache_clear()
+    root = tmp_path / "data/assets/商品上架规格文件"
+    unit_root = root / "BD023" / "第一套图" / "BD023A"
+    unit_root.mkdir(parents=True)
+    for index in [1, 2, 3, 4, 5, 7, 8, 9]:
+        (unit_root / f"{index}.png").write_bytes(b"img")
+    (unit_root / "BD023A毛绒小狗笔袋.png").write_bytes(b"preview")
+    (unit_root / "BD023A毛绒小狗笔袋+YKL001N.png").write_bytes(b"preview")
+    (unit_root / "BD023A毛绒小狗笔袋+YKL001L.png").write_bytes(b"preview")
+    (unit_root / "BD023A毛绒小狗笔袋+YKL020A+YKL001N+YKL004L.png").write_bytes(b"preview")
+
+    settings = YamlSettings(
+        paths=PathsConfig(assets_root="data/assets/商品上架规格文件"),
+        multi_spec=MultiSpecConfig(excel="missing.xlsx"),
+    )
+    units = parse_all_listings("BD023A", settings, include_excel_missing_previews=True)
+    assert len(units) == 1
+    unit = units[0]
+    assert len(unit.carousel_images) == 5
+    assert len(unit.detail_images) == 3
+    combo_folders = [sku.combo_folder for sku in unit.skus]
+    assert len(unit.skus) == 4
+    assert "BD023A毛绒小狗笔袋" in combo_folders
+    assert "BD023A毛绒小狗笔袋+YKL001N" in combo_folders
+    assert "BD023A毛绒小狗笔袋+YKL001L" in combo_folders
+    assert "BD023A毛绒小狗笔袋+YKL020A+YKL001N+YKL004L" in combo_folders
+    style_models = {(sku.style_code, sku.model_code) for sku in unit.skus}
+    assert ("BD023A", "YKL001N") in style_models
+    assert ("BD023A", "YKL001L") in style_models

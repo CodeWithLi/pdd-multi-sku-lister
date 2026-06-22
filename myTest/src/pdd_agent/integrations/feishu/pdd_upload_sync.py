@@ -2,7 +2,7 @@
 
 流程：
 1. 上架核验成功 → 写入「PDD发布日志表」（按商品ID去重）
-2. 上架失败/跳过 → 写入「PDD发布日志表(失败)」（简短失败原因）
+2. 上架失败/跳过 → 写入「淘宝+拼多多发布日志表（失败）」（简短失败原因，与淘宝共用）
 3. 限时限量购 / 活动报名 / 推广 → 按商品ID检索成功表记录后 update 对应列
 """
 
@@ -16,6 +16,7 @@ from datetime import time as dt_time
 from typing import Any
 
 from pdd_agent.core.logging import get_logger
+from pdd_agent.domain.listing_errors import ListingErrorCode, ListingErrors
 from pdd_agent.integrations.feishu.bitable import (
     FIELD_DATETIME,
     FIELD_NUMBER,
@@ -57,97 +58,13 @@ _FEISHU_UPLOAD_STATUS_FAILURE = "报错上架失败"
 _FEISHU_UPLOAD_STATUS_LISTED = "已上架"
 _FEISHU_LIMITED_TIME_SUCCESS = "成功"
 _FEISHU_LIMITED_TIME_FAILURE = "失败"
-_FEISHU_FAILURE_RECORD_FAIL = "失败"
-_FEISHU_FAILURE_RECORD_SKIP = "跳过"
 
-_SKIP_LISTING_REASON_CODES = frozenset(
-    {
-        "slot_alignment_failed",
-        "preflight_no_skus",
-        "preflight_no_carousel",
-        "preflight_no_detail",
-        "preflight_catalog",
-        "catalog_parse_warning",
-        "no_valid_units",
-        "image_file_missing",
-    }
-)
+_FEISHU_FAILURE_RECORD_FAIL = ListingErrors.FEISHU_RECORD_FAIL
+_FEISHU_FAILURE_RECORD_SKIP = ListingErrors.FEISHU_RECORD_SKIP
 
-# 提交后核验/页面操作类失败：即使 retryable 也记「失败」，不能记「跳过」
-_FAIL_LISTING_REASON_CODES = frozenset(
-    {
-        "rejected_after_publish",
-        "published_but_not_found_in_on_sale_or_rejected",
-        "submit_uncertain",
-        "submit_blocked",
-        "submit_exception",
-        "submit_button_missing",
-        "preview_not_ready",
-        "preview_missing",
-        "validation_errors",
-        "validation_incomplete",
-        "validation_required",
-        "platform_listing_code_not_filled",
-        "platform_listing_code_verify_failed",
-        "needs_manual_login_or_captcha",
-        "browser_transient_error",
-        "browser_manually_closed",
-        "page_or_material_changed",
-        "unexpected_error",
-        "price_fill_partial",
-        "price_fill_row_not_found",
-        "price_fill_by_index_failed",
-        "listed",
-        "feishu_product_catalog_missing",
-    }
-)
-
-# 飞书失败表专用文案：运营可读、一行说清（对齐淘宝发布日志表风格）
-FEISHU_FAILURE_REASON_LABELS: dict[str, str] = {
-    "preview_not_ready": "预览图还没全部上传完，暂不能提交",
-    "preview_missing": "页面提示还有预览图没上传",
-    "platform_listing_code_not_filled": "底部商品编码没填",
-    "platform_listing_code_verify_failed": "底部商品编码与货号不一致",
-    "validation_errors": "页面还有红色错误项没改完",
-    "validation_incomplete": "页面提示信息未填完整",
-    "validation_required": "页面还有必填项没填",
-    "submit_blocked": "点击提交被页面拦住",
-    "submit_uncertain": "提交结果不确定，请到拼多多后台核对",
-    "submit_button_missing": "找不到「提交并上架」按钮",
-    "submit_exception": "点击提交时出错",
-    "listed": "已提交但未抓到商品 ID",
-    "rejected_after_publish": "提交后在「已驳回」找到商品，平台已驳回",
-    "published_but_not_found_in_on_sale_or_rejected": "提交后在在售/驳回列表没找到刚上的商品，请人工核对",
-    "needs_manual_login_or_captcha": "需要人工处理验证码或重新登录",
-    "page_or_material_changed": "页面或素材异常（分类/规格/上传相关）",
-    "browser_transient_error": "浏览器超时或断连，可重试",
-    "browser_manually_closed": "浏览器被手动关闭，任务中断",
-    "unexpected_error": "运行异常，请查看操作记录",
-    "preflight_no_skus": "Excel 与预览图对不上，没有可上架规格",
-    "preflight_no_carousel": "缺少主图（需 1-5 编号图）",
-    "preflight_no_detail": "缺少详情图（需 7-9 编号图）",
-    "preflight_catalog": "商品目录或素材有问题",
-    "image_file_missing": "图片文件不存在或打不开",
-    "price_fill_partial": "价格表没填完整（库存/拼团价/单买价/编码）",
-    "price_fill_row_not_found": "价格表找不到对应规格行",
-    "price_fill_by_index_failed": "按行号填写价格表失败",
-    "catalog_parse_warning": "素材目录解析有问题",
-    "no_valid_units": "没有可上架的套图（素材或校验未通过）",
-    "slot_alignment_failed": "兄弟款预览图张数不一致，请核对各款图数",
-    "task_cancelled": "任务已被用户停止",
-    "user_cancelled": "任务已被用户停止",
-    "feishu_product_catalog_missing": "飞书商品/定价数据缺失",
-    "feishu_pricing_missing": "定价数据缺失",
-    "feishu_control_missing": "控价数据缺失",
-    "feishu_price_range_missing": "控价区间数据缺失",
-    "feishu_color_spec_missing": "颜色规格没数据",
-    "feishu_product_row_missing": "商品表没数据",
-    "feishu_subcode_missing": "子编码没数据",
-    "feishu_subcode_pricing_missing": "子编码定价数据缺失",
-    "feishu_subcode_control_missing": "子编码控价数据缺失",
-    "feishu_subcode_range_missing": "子编码控价区间数据缺失",
-    "feishu_subcode_color_spec_missing": "子编码颜色规格没数据",
-}
+_SKIP_LISTING_REASON_CODES = ListingErrors.SKIP_REASON_CODES
+_FAIL_LISTING_REASON_CODES = ListingErrors.FAIL_REASON_CODES
+FEISHU_FAILURE_REASON_LABELS: dict[str, str] = ListingErrors.FEISHU_LABELS
 
 
 def _strip_bracket_label_from_message(text: str) -> str:
@@ -162,94 +79,15 @@ def _humanize_listing_failure_message(
     reason_code: str = "",
     message: str = "",
     error: str = "",
+    merchant_code: str = "",
 ) -> str:
-    """把机器报错转成飞书失败表的一行白话。"""
+    """把机器报错转成飞书失败表的一行短说明（编码+短句，无跳过/套图路径）。"""
     raw = _strip_bracket_label_from_message(str(message or error or "").strip())
-    raw = raw.split("\n")[0].strip()
-    code = str(reason_code or "").strip()
-
-    if raw.startswith("失败:") or re.search(r"：子编码\s+\S+", raw):
-        return raw
-
-    if "槽位对齐" in raw or code == "slot_alignment_failed":
-        detail_match = re.search(r"[（(]([^）)]+)[）)]", raw)
-        detail = str(detail_match.group(1) or "").strip() if detail_match else ""
-        if detail and ("=" in detail or "张" in detail):
-            return f"兄弟款预览图张数不一致（{detail}）"
-        count_match = re.search(
-            r"(\S+)\s*有\s*(\d+)\s*张图[，,]\s*主款\s*(\S+)\s*有\s*(\d+)\s*张",
-            raw,
-        )
-        if count_match:
-            style, count, ref, ref_count = count_match.groups()
-            return f"{style} 预览图 {count} 张，主款 {ref} 为 {ref_count} 张，数量对不上"
-        if any(token in raw for token in ("兄弟款", "规格数量", "预览图数量", "SKU 数")):
-            return "兄弟款预览图张数不一致，请核对各款图数"
-        return FEISHU_FAILURE_REASON_LABELS["slot_alignment_failed"]
-
-    if "未找到 1-5 主图" in raw or "1-5 主图" in raw or raw == "主图为空":
-        return FEISHU_FAILURE_REASON_LABELS["preflight_no_carousel"]
-    if "未找到 7-9 详情图" in raw or "7-9 详情图" in raw or raw == "详情图为空":
-        return FEISHU_FAILURE_REASON_LABELS["preflight_no_detail"]
-    if "无任何数字命名图" in raw or "数字命名图" in raw:
-        num_match = re.search(r"[（(]([^）)]+)[）)]", raw)
-        suffix = f" ({num_match.group(1)})" if num_match else ""
-        return f"缺少按数字命名的图片{suffix}"
-    if "商品目录不存在" in raw or "无套图" in raw:
-        return "找不到商品目录或套图文件夹"
-    if "无有效 SKU" in raw or "未解析到任何有效 SKU" in raw:
-        return FEISHU_FAILURE_REASON_LABELS["preflight_no_skus"]
-    if "缺少预览图" in raw:
-        preview_match = re.search(r"缺少预览图[:：]\s*(\S+/\S+)", raw)
-        if preview_match:
-            return f"缺少规格预览图（{preview_match.group(1)}）"
-        return "缺少规格预览图"
-    if "图片无法打开" in raw or "图片文件" in raw or "不存在" in raw and "图" in raw:
-        return FEISHU_FAILURE_REASON_LABELS["image_file_missing"]
-    if "验证码" in raw or "滑块" in raw:
-        return FEISHU_FAILURE_REASON_LABELS["needs_manual_login_or_captcha"]
-    if "用户停止" in raw or "任务已取消" in raw or "cancel" in raw.lower():
-        return FEISHU_FAILURE_REASON_LABELS["task_cancelled"]
-    if code == "rejected_after_publish" or ("已驳回" in raw and "槽位" not in raw):
-        return FEISHU_FAILURE_REASON_LABELS["rejected_after_publish"]
-    if code in {
-        "published_but_not_found_in_on_sale_or_rejected",
-        "submit_uncertain",
-    } or any(token in raw for token in ("没找到刚上", "未在在售", "未匹配到本次", "没找到本次")):
-        if code == "submit_uncertain" and "不确定" not in raw and "未确认" not in raw:
-            return FEISHU_FAILURE_REASON_LABELS["submit_uncertain"]
-        if code == "published_but_not_found_in_on_sale_or_rejected" or "没找到" in raw or "未匹配" in raw:
-            return FEISHU_FAILURE_REASON_LABELS["published_but_not_found_in_on_sale_or_rejected"]
-        return FEISHU_FAILURE_REASON_LABELS["submit_uncertain"]
-    if "timeout" in raw.lower() or "超时" in raw or "timed out" in raw.lower():
-        if "点击" in raw or "按钮" in raw:
-            retry_match = re.search(r"(\d+)\s*次", raw)
-            suffix = f"（{retry_match.group(1)} 次重试后）" if retry_match else ""
-            return f"页面操作等待超时{suffix}"
-        return FEISHU_FAILURE_REASON_LABELS["browser_transient_error"]
-    if "点击" in raw and "失败" in raw:
-        retry_match = re.search(r"(\d+)\s*次", raw)
-        suffix = f"（{retry_match.group(1)} 次重试后）" if retry_match else ""
-        action = raw.split("失败", 1)[0].strip(" ：:")
-        if action.startswith("点击"):
-            return f"{action}失败{suffix}"
-        return f"{raw.split('失败')[0]}失败{suffix}".strip()
-
-    label = FEISHU_FAILURE_REASON_LABELS.get(code, "")
-    if label:
-        if raw and raw not in label and not label.startswith(raw[:8]):
-            # 原始信息已是白话时优先保留（如 preflight 自定义 message）
-            if len(raw) <= 80 and not re.search(r"\b(traceback|exception|error code)\b", raw, re.I):
-                if any(token in raw for token in ("跳过", "缺少", "找不到", "未", "没", "无法", "不一致")):
-                    return raw
-        return label
-
-    if raw:
-        cleaned = re.sub(r"^(error|failed|failure)\s*[:：]\s*", "", raw, flags=re.I).strip()
-        if len(cleaned) > 120:
-            cleaned = cleaned[:117] + "..."
-        return cleaned or "上架失败"
-    return code or "上架失败"
+    return ListingErrors.compact_feishu_line(
+        raw,
+        reason_code=str(reason_code or "").strip(),
+        merchant_code=str(merchant_code or "").strip(),
+    )
 
 
 def _extract_error_code(raw_error: str) -> str:
@@ -400,25 +238,21 @@ def _format_brief_listing_failure_reason(
     error: str = "",
     message: str = "",
     record_type: str = "",
+    merchant_code: str = "",
 ) -> str:
-    """失败表用：淘宝同款一行说明 —— 「跳过/失败: 套图路径: 原因」。"""
-    code = str(reason_code or "").strip()
+    """失败表失败原因：仅一行短说明，不加跳过/失败/套图路径前缀。"""
+    _ = record_type
     label = str(listing_label or "").strip()
-    raw = str(message or error or "").strip()
-    if raw and not label:
-        parsed_label, _ = parse_listing_label_from_text(raw)
-        if parsed_label:
-            label = parsed_label
-
-    body = _humanize_listing_failure_message(reason_code=code, message=message, error=error)
-    if body.startswith("失败:") or "：子编码 " in body:
-        return body[:500]
-    record = str(record_type or "").strip()
-    if record and label:
-        return f"{record}: {label}: {body}"[:500]
-    if label and label not in body:
-        return f"{label}: {body}"[:200]
-    return body[:200]
+    code = str(merchant_code or "").strip()
+    if not code and label:
+        _, code = parse_listing_label_from_text(label)
+    body = _humanize_listing_failure_message(
+        reason_code=reason_code,
+        message=message,
+        error=error,
+        merchant_code=code,
+    )
+    return body[:500]
 
 
 def parse_listing_label_from_text(text: str) -> tuple[str, str]:
@@ -442,6 +276,23 @@ def parse_listing_label_from_text(text: str) -> tuple[str, str]:
     if bracket:
         label = bracket.group(1).strip()
         return label, _merchant_code_from_label(label)
+
+    slot = re.search(r"兄弟款规格不齐：([A-Z0-9]{3,}[A-Z]?)", raw, flags=re.IGNORECASE)
+    if slot:
+        return "", slot.group(1).upper()
+
+    fail = re.match(r"^失败:\s*([^:]+):", raw)
+    if fail:
+        label = fail.group(1).strip()
+        if label:
+            return label, _merchant_code_from_label(label)
+
+    for sep in ("：子编码", ": 子编码"):
+        if sep in raw:
+            head = raw.split(sep, 1)[0].strip()
+            if "/" in head and len(head) <= 80:
+                return head, _merchant_code_from_label(head)
+
     head = raw.split("：", 1)[0].split(":", 1)[0].strip()
     if "/" in head and len(head) <= 80:
         return head, _merchant_code_from_label(head)
@@ -735,6 +586,7 @@ def push_pdd_upload_failure_log(
         error=error,
         message=message,
         record_type=record_type_value,
+        merchant_code=code,
     )
 
     fields = build_pdd_upload_failure_log_fields(
@@ -1381,17 +1233,9 @@ def format_pdd_upload_log_context(
 
 
 def _resolve_account_display_name(account_id: str) -> str:
-    try:
-        from pdd_agent.core.config import load_yaml_settings
-        from pdd_agent.db.repositories import get_account_config
+    from pdd_agent.core.account_display import resolve_account_display_name
 
-        settings = load_yaml_settings()
-        account = get_account_config(settings, str(account_id or "").strip())
-        if account and str(account.username or "").strip():
-            return str(account.username).strip()
-    except Exception:
-        pass
-    return str(account_id or "").strip()
+    return resolve_account_display_name(account_id)
 
 
 def build_pdd_upload_log_fields(

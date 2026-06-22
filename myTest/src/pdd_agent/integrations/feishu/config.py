@@ -51,7 +51,7 @@ class FeishuFieldNames(BaseModel):
 
 
 class PddUploadFailureLogFieldNames(BaseModel):
-    """PDD发布日志表(失败) 表列名。"""
+    """淘宝+拼多多发布日志表（失败）列名。"""
 
     date: str = "日期"
     merchant_code: str = "商品编码"
@@ -273,11 +273,11 @@ class PddUploadLogConfig(BaseModel):
     )
     failure_table_id: str = Field(
         default="",
-        description="PDD发布日志表(失败) table_id",
+        description="淘宝+拼多多发布日志表（失败）table_id",
     )
     failure_table_name: str = Field(
-        default="PDD发布日志表(失败)",
-        description="上架失败/跳过写入的飞书表名",
+        default="淘宝+拼多多发布日志表（失败）",
+        description="上架失败/跳过写入的飞书表名（与淘宝共用）",
     )
     failure_record_type_options: list[str] = Field(
         default_factory=lambda: ["失败", "跳过"],
@@ -583,7 +583,7 @@ def save_pdd_upload_table_id_to_config(table_id: str, path: Path | None = None) 
 
 
 def save_pdd_upload_failure_table_id_to_config(table_id: str, path: Path | None = None) -> None:
-    """解析到 PDD 发布失败日志表后，把 failure_table_id 写回 feishu.yaml。"""
+    """解析到淘宝+拼多多发布失败日志表后，把 failure_table_id 写回 feishu.yaml。"""
     cfg_path = path or Path(os.getenv("FEISHU_CONFIG_PATH", DEFAULT_FEISHU_CONFIG_PATH))
     data: dict = {}
     if cfg_path.is_file():

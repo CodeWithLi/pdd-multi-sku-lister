@@ -76,14 +76,31 @@ def _sets_for_product_inputs(
     return sets
 
 
+def _object_needs_download(client, bucket: str, key: str, dest_path: Path) -> bool:
+    """本地已有且大小/时间与 MinIO 一致时跳过下载。"""
+    if not dest_path.is_file():
+        return True
+    try:
+        stat = client.stat_object(bucket, key)
+        local_stat = dest_path.stat()
+        if local_stat.st_size != stat.size:
+            return True
+        remote_ts = stat.last_modified.timestamp()
+        if local_stat.st_mtime + 2 < remote_ts:
+            return True
+        return False
+    except Exception:
+        return True
+
+
 def stage_minio_image_set(
     *,
     family_code: str,
     image_set: str,
     config: MinioConfig | None = None,
     cache_root: Path | None = None,
-) -> int:
-    """下载某套图下全部兄弟商品文件夹到本地缓存，返回写入文件数。"""
+) -> tuple[int, int]:
+    """下载某套图下全部兄弟商品文件夹到本地缓存，返回 (downloaded, skipped)。"""
     cfg = config or load_minio_config()
     if not minio_configured(cfg):
         return 0
@@ -114,6 +131,7 @@ def stage_minio_image_set(
             grouped[product_folder].append(key)
 
     written = 0
+    skipped = 0
     for product_folder, keys in grouped.items():
         product_code = extract_product_code(product_folder)
         if not product_code:
@@ -123,16 +141,20 @@ def stage_minio_image_set(
         for key in keys:
             filename = key.split("/")[-1]
             dest_path = dest_dir / filename
-            client.fget_object(cfg.bucket, key, str(dest_path))
-            written += 1
-    if written:
+            if _object_needs_download(client, cfg.bucket, key, dest_path):
+                client.fget_object(cfg.bucket, key, str(dest_path))
+                written += 1
+            else:
+                skipped += 1
+    if written or skipped:
         logger.info(
-            "minio staged set %s/%s -> %s files",
+            "minio staged set %s/%s -> downloaded=%s skipped=%s",
             family_code,
             image_set,
             written,
+            skipped,
         )
-    return written
+    return written, skipped
 
 
 def stage_minio_for_product_codes(product_codes: list[str], config: MinioConfig | None = None) -> Path:
@@ -142,13 +164,22 @@ def stage_minio_for_product_codes(product_codes: list[str], config: MinioConfig 
     cache_root.mkdir(parents=True, exist_ok=True)
     inputs = [str(code or "").strip() for code in product_codes if str(code or "").strip()]
     sets = _sets_for_product_inputs(inputs, cfg)
-    total = 0
+    downloaded = 0
+    skipped = 0
     for family_code, image_set in sorted(sets):
-        total += stage_minio_image_set(
+        d, s = stage_minio_image_set(
             family_code=family_code,
             image_set=image_set,
             config=cfg,
             cache_root=cache_root,
         )
-    logger.info("minio staged product_codes=%s sets=%s files=%s", product_codes, len(sets), total)
+        downloaded += d
+        skipped += s
+    logger.info(
+        "minio staged product_codes=%s sets=%s downloaded=%s skipped=%s",
+        product_codes,
+        len(sets),
+        downloaded,
+        skipped,
+    )
     return cache_root

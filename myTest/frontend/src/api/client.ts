@@ -29,6 +29,7 @@ import type {
   LoginBatchCheckResponse,
   LoginStatus,
   PlanResponse,
+  MinioSyncJob,
   PreflightResponse,
   PublishedProductListResponse,
   PublishedProductDetailResponse,
@@ -58,9 +59,11 @@ import type {
   TrafficReportScheduleTriggerResult,
 } from '@/types'
 
+const DEFAULT_TIMEOUT_MS = 120_000
+
 const http = axios.create({
   baseURL: '/api',
-  timeout: 120_000,
+  timeout: DEFAULT_TIMEOUT_MS,
 })
 
 http.interceptors.response.use(
@@ -155,6 +158,31 @@ export const api = {
         material_source: materialSource,
       })
       .then((r) => r.data),
+
+  startMinioSync: (product_codes: string[]) =>
+    http.post<MinioSyncJob>('/catalog/minio/sync', { product_codes }).then((r) => r.data),
+
+  getMinioSyncStatus: (jobId: string) =>
+    http.get<MinioSyncJob>(`/catalog/minio/sync/${jobId}`).then((r) => r.data),
+
+  getActiveMinioSync: () =>
+    http.get<MinioSyncJob | null>('/catalog/minio/sync/active').then((r) => r.data),
+
+  async waitMinioSync(
+    jobId: string,
+    onProgress?: (job: MinioSyncJob) => void,
+    intervalMs = 1500,
+  ): Promise<MinioSyncJob> {
+    while (true) {
+      const job = await this.getMinioSyncStatus(jobId)
+      onProgress?.(job)
+      if (job.status === 'success') return job
+      if (job.status === 'failed') {
+        throw new Error(job.error || 'MinIO 同步失败')
+      }
+      await new Promise((resolve) => setTimeout(resolve, intervalMs))
+    }
+  },
 
   plan: (message: string) =>
     http.post<PlanResponse>('/tasks/plan', { message }).then((r) => r.data),

@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 from langchain_core.tools import StructuredTool
 
+from pdd_agent.domain.listing_errors import ListingErrorCode, ListingErrors
 from pdd_agent.core.config import YamlSettings
 from pdd_agent.domain.models import PreflightIssue, PreflightReport
 from pdd_agent.skills.base import Skill
@@ -33,7 +36,11 @@ def run_preflight(
         )
         if not units:
             report.issues.append(
-                PreflightIssue(level="error", message=f"商品目录不存在或无套图: {code}", listing_label=code)
+                PreflightIssue(
+                    level="error",
+                    message=ListingErrors.Msg.CATALOG_DIR_MISSING.format(code=code),
+                    listing_label=code,
+                )
             )
             continue
         for unit in units:
@@ -44,14 +51,14 @@ def run_preflight(
                         level="error",
                         message=unit.listing_label,
                         listing_label=unit.listing_label,
-                        reason_code="preflight_no_skus",
+                        reason_code=ListingErrorCode.PREFLIGHT_NO_SKUS,
                     )
                 )
             if not unit.carousel_images:
                 report.issues.append(
                     PreflightIssue(
                         level="warning",
-                        message="主图为空",
+                        message=ListingErrors.Msg.CAROUSEL_EMPTY,
                         listing_label=unit.listing_label,
                     )
                 )
@@ -59,7 +66,7 @@ def run_preflight(
                 report.issues.append(
                     PreflightIssue(
                         level="warning",
-                        message="详情图为空",
+                        message=ListingErrors.Msg.DETAIL_EMPTY,
                         listing_label=unit.listing_label,
                     )
                 )

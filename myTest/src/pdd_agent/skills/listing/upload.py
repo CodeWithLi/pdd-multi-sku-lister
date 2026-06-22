@@ -9,6 +9,7 @@ from datetime import datetime
 from typing import Any
 
 from pdd_agent.browser.dp_compat_sync import DpPage
+from pdd_agent.domain.listing_errors import ListingErrorCode, ListingErrors
 from pdd_agent.domain.models import ListingUnit
 from pdd_agent.paths import PROJECT_ROOT
 from pdd_agent.skills.delist.time_utils import (
@@ -331,15 +332,9 @@ def _click_visible_button(page: DpPage, texts: list[str], timeout: float = 0.4) 
 
 
 def _detect_submit_blocked(page: DpPage) -> str:
-    checks = [
-        ("text:请上传预览图", "preview_missing"),
-        ("text:错误项未处理", "validation_errors"),
-        ("text:个错误项", "validation_errors"),
-        ("text:请完善", "validation_incomplete"),
-        ("text:请填写", "validation_required"),
-        ("text:不能为空", "validation_required"),
-    ]
-    for selector, reason in checks:
+    if page.ele("text:请上传预览图", timeout=0.4):
+        return ListingErrorCode.PREVIEW_MISSING
+    for selector, reason in ListingErrors.SUBMIT_BLOCK_DETECTORS:
         try:
             if page.ele(selector, timeout=0.4):
                 return reason
@@ -381,17 +376,15 @@ def _click_submit(page: DpPage, account_id: str, label: str) -> tuple[bool, date
         submit_btn = page.ele("text:提交并上架", timeout=3)
         if not submit_btn:
             print(f"[{account_id}] [{label}] 未找到「提交并上架」按钮", flush=True)
-            return False, None, "submit_button_missing"
+            return False, None, ListingErrorCode.SUBMIT_BUTTON_MISSING
         submitted_at = datetime.now()
         submit_btn.click(by_js=True)
         time.sleep(1.5)
         blocked = _detect_submit_blocked(page)
         if blocked:
             reason_map = {
-                "preview_missing": "提交被拦截：仍有预览图未上传",
-                "validation_errors": "提交被拦截：页面仍有错误项未处理",
-                "validation_incomplete": "提交被拦截：页面提示请完善信息",
-                "validation_required": "提交被拦截：页面仍有必填项未填写",
+                ListingErrorCode.PREVIEW_MISSING: "提交被拦截：仍有预览图未上传",
+                **ListingErrors.SUBMIT_BLOCK_LOG,
             }
             print(f"[{account_id}] [{label}] {reason_map.get(blocked, blocked)}", flush=True)
             return False, submitted_at, blocked

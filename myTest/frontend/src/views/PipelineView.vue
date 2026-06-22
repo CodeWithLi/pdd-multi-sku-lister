@@ -4,6 +4,7 @@ import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { api } from '@/api/client'
 import PageHeader from '@/components/PageHeader.vue'
+import { useMinioSync } from '@/composables/useMinioSync'
 import {
   formatMaterialGroupLabel,
   formatMaterialGroupMeta,
@@ -60,6 +61,7 @@ const startDelayMin = ref(30)
 const startDelayMax = ref(180)
 const preflightChecking = ref(false)
 const preflightResult = ref<PreflightResponse | null>(null)
+const { minioSyncJob, syncing, startSync, resumeActiveSync } = useMinioSync()
 
 let pollTimer: ReturnType<typeof setInterval> | null = null
 let materialPollTimer: ReturnType<typeof setInterval> | null = null
@@ -137,9 +139,23 @@ function listingUnitReasonText(reasonCode: string) {
   return failureReasonLabel[reasonCode] || reasonCode
 }
 
+async function syncSelectedFromMinio() {
+  if (!resolvedListingSelectors.value.length) {
+    ElMessage.warning('请先选择要上架的套图')
+    return
+  }
+  await startSync(resolvedListingSelectors.value, (msg) => {
+    ElMessage.error(msg)
+  })
+}
+
 async function checkSelectedSets() {
   if (!resolvedListingSelectors.value.length) {
     ElMessage.warning('请先选择要上架的套图')
+    return
+  }
+  if (materialSource.value === 'minio' && syncing.value) {
+    ElMessage.warning('MinIO 仍在同步中，请稍候再检查')
     return
   }
   preflightChecking.value = true
@@ -616,6 +632,11 @@ onMounted(async () => {
     await loadBaseData()
     await loadExcelFallbackSetting()
     await refreshPipelines()
+    if (materialSource.value === 'minio') {
+      await resumeActiveSync((msg) => {
+        ElMessage.error(msg)
+      })
+    }
     startPolling()
     startMaterialPolling()
   } catch (e) {
@@ -966,11 +987,64 @@ onUnmounted(() => {
               </el-form-item>
             </div>
 
+            <div
+              v-if="materialSource === 'minio' && minioSyncJob"
+              class="minio-sync-progress"
+            >
+              <div class="minio-sync-progress-head">
+                <span>MinIO 同步</span>
+                <el-tag
+                  size="small"
+                  :type="
+                    minioSyncJob.status === 'success'
+                      ? 'success'
+                      : minioSyncJob.status === 'failed'
+                        ? 'danger'
+                        : 'warning'
+                  "
+                >
+                  {{
+                    minioSyncJob.status === 'success'
+                      ? '已完成'
+                      : minioSyncJob.status === 'failed'
+                        ? '失败'
+                        : '进行中'
+                  }}
+                </el-tag>
+              </div>
+              <el-progress
+                :percentage="minioSyncJob.progress_percent"
+                :status="
+                  minioSyncJob.status === 'success'
+                    ? 'success'
+                    : minioSyncJob.status === 'failed'
+                      ? 'exception'
+                      : undefined
+                "
+                :stroke-width="10"
+              />
+              <div class="form-tip">
+                {{ minioSyncJob.completed_sets }}/{{ minioSyncJob.total_sets }} 套图
+                <template v-if="minioSyncJob.current_label">
+                  · {{ minioSyncJob.current_label }}
+                </template>
+              </div>
+            </div>
+
             <div class="submit-actions">
+              <el-button
+                v-if="materialSource === 'minio'"
+                size="large"
+                :loading="syncing"
+                :disabled="!resolvedListingSelectors.length"
+                @click="syncSelectedFromMinio"
+              >
+                {{ syncing ? 'MinIO 同步中…' : '同步 MinIO 素材' }}
+              </el-button>
               <el-button
                 size="large"
                 :loading="preflightChecking"
-                :disabled="!resolvedListingSelectors.length"
+                :disabled="!resolvedListingSelectors.length || syncing"
                 @click="checkSelectedSets"
               >
                 检查所选套图
@@ -1569,6 +1643,24 @@ onUnmounted(() => {
 .submit-btn {
   flex: 1;
   margin-top: 4px;
+}
+
+.minio-sync-progress {
+  margin: 12px 0 4px;
+  padding: 12px;
+  border-radius: 8px;
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+}
+
+.minio-sync-progress-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 8px;
+  font-size: 13px;
+  font-weight: 600;
+  color: #334155;
 }
 
 .submit-actions {

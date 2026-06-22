@@ -45,13 +45,13 @@ status_options:
   - 已下架
   - 未知
 
-# 上架核验成功（20s 后在售）后异步写入「PDD发布日志表」；失败写入「PDD发布日志表(失败)」
+# 上架核验成功（20s 后在售）后异步写入「PDD发布日志表」；失败写入「淘宝+拼多多发布日志表（失败）」
 pdd_upload_log:
   enabled: true
   table_id: ""
   table_name: PDD发布日志表
   failure_table_id: ""
-  failure_table_name: PDD发布日志表(失败)
+  failure_table_name: 淘宝+拼多多发布日志表（失败）
   dedupe_field: 商品ID
   failure_record_type_options:
     - 失败

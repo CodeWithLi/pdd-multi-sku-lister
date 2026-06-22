@@ -56,7 +56,7 @@ export const issueLevelLabel: Record<string, string> = {
   warning: '警告',
 }
 
-/** 上架失败 reason_code → 人工可读说明 */
+/** 上架失败 reason_code → 人工可读说明（与后端 ListingErrors.LABELS 对齐，改文案请同步 domain/listing_errors.py） */
 export const failureReasonLabel: Record<string, string> = {
   preview_not_ready: '预览图未全部上传',
   preview_missing: '预览图缺失或未通过校验',
@@ -97,7 +97,7 @@ export const failureReasonLabel: Record<string, string> = {
   feishu_subcode_color_spec_missing: '子编码颜色规格没数据',
   skipped_already_listed: '商品已上架，已跳过',
   listing_failed: '上架失败',
-  slot_alignment_failed: '兄弟款预览图张数不一致',
+  slot_alignment_failed: '兄弟款规格数量不一致',
 }
 
 export const listingUnitStatusType: Record<string, string> = {
