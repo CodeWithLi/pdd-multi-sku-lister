@@ -79,14 +79,32 @@ def _compact_run_result_for_storage(result: dict[str, Any]) -> dict[str, Any]:
     return compacted if isinstance(compacted, dict) else result
 
 
+def _listing_item_succeeded(item: dict[str, Any]) -> bool:
+    status = str(item.get("status") or "").strip().lower()
+    product_id = str(item.get("pdd_product_id") or "").strip()
+    return status in {"success", "listed"} and bool(product_id or status == "listed")
+
+
+def _resolve_listing_run_status(result: dict[str, Any]) -> RunStatus:
+    """至少一套上架成功即 SUCCESS，便于整合链路用成功商品继续后续步骤。"""
+    items = [r for r in result.get("results") or [] if isinstance(r, dict)]
+    if any(_listing_item_succeeded(item) for item in items):
+        return RunStatus.SUCCESS
+    return RunStatus.FAILED
+
+
 def _summarize_listing_message(result: dict[str, Any]) -> str:
     """上架任务 message 只存摘要，完整结果在 result 字段。"""
     errors = result.get("errors") or []
     if isinstance(errors, list):
-        for item in errors:
-            text = str(item or "").strip()
-            if text:
-                return _truncate_db_text(text, _DB_MESSAGE_MAX)
+        labels = [str(item or "").strip() for item in errors if str(item or "").strip()]
+        if labels:
+            if len(labels) == 1:
+                return _truncate_db_text(labels[0], _DB_MESSAGE_MAX)
+            preview = "、".join(labels[:5])
+            if len(labels) > 5:
+                preview = f"{preview} 等{len(labels)}套"
+            return _truncate_db_text(f"{len(labels)}套图有问题：{preview}", _DB_MESSAGE_MAX)
     items = [r for r in result.get("results") or [] if isinstance(r, dict)]
     if not items:
         return "上架任务完成"
@@ -784,7 +802,14 @@ def _schedule_feishu_listing_result_log(
         message = str(
             getattr(issue, "message", None) or (issue.get("message") if isinstance(issue, dict) else "") or ""
         )
-        if "槽位对齐" in message:
+        issue_reason = str(
+            getattr(issue, "reason_code", None)
+            or (issue.get("reason_code") if isinstance(issue, dict) else "")
+            or ""
+        ).strip()
+        if issue_reason:
+            reason_code = issue_reason
+        elif "槽位对齐" in message:
             reason_code = "slot_alignment_failed"
         elif "无有效 SKU" in message or "未解析到任何有效 SKU" in message:
             reason_code = "preflight_no_skus"
@@ -805,7 +830,7 @@ def _schedule_feishu_listing_result_log(
         _queue_failure(
             listing_label=listing_label,
             reason_code=reason_code,
-            message=message,
+            message=listing_label or message,
             retryable="槽位对齐" in message,
             priority=3,
         )
@@ -833,41 +858,28 @@ def _schedule_feishu_listing_result_log(
     if not rows:
         return
 
-    primary = max(
-        rows,
-        key=lambda row: (
-            int(row.get("priority") or 0),
-            1 if str(row.get("status") or "").strip().lower() == "failed" else 0,
-            len(str(row.get("message") or row.get("error") or "")),
-        ),
-    )
-    extra_count = max(0, len(rows) - 1)
-    message = str(primary.get("message") or primary.get("error") or "").strip()
-    if extra_count > 0 and message:
-        message = f"{message}（另{extra_count}项失败）"
-
-    primary_label = str(primary.get("listing_label") or "")
-    primary_code = str(primary.get("merchant_code") or "") or fallback_code
-
-    schedule_pdd_upload_failure_log(
-        account_id=account_id,
-        account_name=account_name,
-        listing_label=primary_label,
-        merchant_code=primary_code,
-        record_type=map_listing_failure_record_type(
-            status=str(primary.get("status") or ""),
-            reason_code=str(primary.get("reason_code") or ""),
-            retryable=bool(primary.get("retryable")),
-            legacy_status=str(primary.get("legacy_status") or ""),
-        ),
-        reason_code=str(primary.get("reason_code") or ""),
-        error=str(primary.get("error") or ""),
-        message=message,
-        publish_start=publish_start,
-        publish_end=publish_end,
-        duration_seconds=duration_seconds,
-        fallback_product_code=fallback_code,
-    )
+    for row in rows:
+        row_label = str(row.get("listing_label") or "")
+        row_code = str(row.get("merchant_code") or "") or fallback_code
+        schedule_pdd_upload_failure_log(
+            account_id=account_id,
+            account_name=account_name,
+            listing_label=row_label,
+            merchant_code=row_code,
+            record_type=map_listing_failure_record_type(
+                status=str(row.get("status") or ""),
+                reason_code=str(row.get("reason_code") or ""),
+                retryable=bool(row.get("retryable")),
+                legacy_status=str(row.get("legacy_status") or ""),
+            ),
+            reason_code=str(row.get("reason_code") or ""),
+            error=str(row.get("error") or ""),
+            message=row_label,
+            publish_start=publish_start,
+            publish_end=publish_end,
+            duration_seconds=duration_seconds,
+            fallback_product_code=fallback_code,
+        )
 
 
 def _activity_registration_summary_line(item: dict[str, Any]) -> str:
@@ -1168,8 +1180,7 @@ async def execute_listing(
                 labels.append(r["listing_label"])
 
         item_results = [r for r in result.get("results") or [] if isinstance(r, dict)]
-        item_failed = any(r.get("status") in {"failed", "retryable"} for r in item_results)
-        status = RunStatus.SUCCESS if not result.get("errors") and not item_failed else RunStatus.FAILED
+        status = _resolve_listing_run_status(result)
         _schedule_feishu_listing_result_log(
             account_id=account_id,
             run_id=run_id,

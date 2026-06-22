@@ -74,9 +74,7 @@ def test_format_feishu_listing_catalog_issue_message():
             ("YKL001N", ("定价没数据", "控价没数据")),
         ),
     )
-    assert format_feishu_listing_catalog_issue_message(issue) == (
-        "BD716A/第一套图：BD716A商品表没数据；YKL001N定价没数据、控价没数据"
-    )
+    assert format_feishu_listing_catalog_issue_message(issue) == "BD716A/第一套图"
 
 
 def test_schedule_feishu_product_catalog_missing_logs_writes_failure_rows(monkeypatch):
@@ -129,7 +127,7 @@ def test_schedule_feishu_product_catalog_missing_logs_writes_failure_rows(monkey
         config=cfg,
     )
     assert logged == 1
-    assert captured[0]["failure_reason"] == "BD716A/第一套图：BD716A商品表没数据；YKL001N定价没数据"
+    assert captured[0]["message"] == "BD716A/第一套图"
     assert captured[0]["reason_code"] == "feishu_product_catalog_missing"
     assert captured[0]["merchant_code"] == "BD716A"
     assert captured[0]["listing_label"] == "BD716A/第一套图"

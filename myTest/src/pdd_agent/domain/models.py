@@ -58,6 +58,7 @@ class PreflightIssue(BaseModel):
     level: str  # error | warning
     message: str
     listing_label: str = ""
+    reason_code: str = ""
 
 
 class PreflightReport(BaseModel):

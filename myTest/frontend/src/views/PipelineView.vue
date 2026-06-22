@@ -9,11 +9,16 @@ import {
   formatMaterialGroupMeta,
   groupListingTargetsByFamily,
 } from '@/utils/listingTargets'
+import {
+  failureReasonLabel,
+  listingUnitStatusType,
+} from '@/utils/labels'
 import type {
   Account,
   IntegratedPipeline,
   ListingTargetOption,
   MarketingActivityOption,
+  PreflightResponse,
 } from '@/types'
 
 const router = useRouter()
@@ -53,6 +58,8 @@ const pipelineBatchEnabled = ref(false)
 const batchAccountIds = ref<string[]>([])
 const startDelayMin = ref(30)
 const startDelayMax = ref(180)
+const preflightChecking = ref(false)
+const preflightResult = ref<PreflightResponse | null>(null)
 
 let pollTimer: ReturnType<typeof setInterval> | null = null
 let materialPollTimer: ReturnType<typeof setInterval> | null = null
@@ -97,6 +104,55 @@ const allSelectedAreListed = computed(() => {
 })
 
 const listedSelectors = computed(() => resolvedListingSelectors.value.filter(isSelectorListed))
+
+const preflightReadyLabels = computed(() => {
+  if (!preflightResult.value) return new Set<string>()
+  const errors = new Set(
+    preflightResult.value.issues
+      .filter((item) => item.level === 'error')
+      .map((item) => item.listing_label)
+      .filter(Boolean),
+  )
+  return new Set(
+    preflightResult.value.units
+      .map((unit) => unit.listing_label)
+      .filter((label) => label && !errors.has(label)),
+  )
+})
+
+const activeListingUnitStatuses = computed(() => activePipeline.value?.listing_unit_statuses || [])
+
+const listingUnitStatusSummary = computed(() => {
+  const rows = activeListingUnitStatuses.value
+  if (!rows.length) return null
+  const counts: Record<string, number> = {}
+  for (const row of rows) {
+    counts[row.status] = (counts[row.status] || 0) + 1
+  }
+  return counts
+})
+
+function listingUnitReasonText(reasonCode: string) {
+  if (!reasonCode) return ''
+  return failureReasonLabel[reasonCode] || reasonCode
+}
+
+async function checkSelectedSets() {
+  if (!resolvedListingSelectors.value.length) {
+    ElMessage.warning('请先选择要上架的套图')
+    return
+  }
+  preflightChecking.value = true
+  preflightResult.value = null
+  try {
+    preflightResult.value = await api.preflight(resolvedListingSelectors.value, materialSource.value)
+  } catch (e: unknown) {
+    const msg = e instanceof Error ? e.message : String(e)
+    ElMessage.error(msg || '检查失败')
+  } finally {
+    preflightChecking.value = false
+  }
+}
 
 const unlistedSelectors = computed(() =>
   resolvedListingSelectors.value.filter((selector) => !isSelectorListed(selector)),
@@ -547,6 +603,9 @@ function openRun(runId: string) {
 }
 
 watch(productCodes, (codes) => syncCheckedProductsForSets(codes), { deep: true })
+watch(resolvedListingSelectors, () => {
+  preflightResult.value = null
+})
 watch(accountId, (id) => {
   if (id) loadListingTargets(id).catch(() => undefined)
 })
@@ -907,9 +966,55 @@ onUnmounted(() => {
               </el-form-item>
             </div>
 
-            <el-button type="primary" size="large" class="submit-btn" :loading="loading" @click="startPipeline">
-              {{ pipelineBatchEnabled ? '批量启动整合链路' : '一键启动整合链路' }}
-            </el-button>
+            <div class="submit-actions">
+              <el-button
+                size="large"
+                :loading="preflightChecking"
+                :disabled="!resolvedListingSelectors.length"
+                @click="checkSelectedSets"
+              >
+                检查所选套图
+              </el-button>
+              <el-button type="primary" size="large" class="submit-btn" :loading="loading" @click="startPipeline">
+                {{ pipelineBatchEnabled ? '批量启动整合链路' : '一键启动整合链路' }}
+              </el-button>
+            </div>
+
+            <el-card v-if="preflightResult" shadow="never" class="preflight-card">
+              <template #header>
+                <div class="card-head">
+                  <span>上架前检查</span>
+                  <el-tag :type="preflightReadyLabels.size ? 'success' : 'danger'" size="small">
+                    可上架 {{ preflightReadyLabels.size }} / {{ preflightResult.unit_count }}
+                  </el-tag>
+                </div>
+              </template>
+              <el-table
+                :data="preflightResult.units"
+                size="small"
+                stripe
+                max-height="240"
+                class="preflight-table"
+              >
+                <el-table-column prop="listing_label" label="套图" min-width="140" />
+                <el-table-column label="状态" width="108">
+                  <template #default="{ row }">
+                    <el-tag
+                      size="small"
+                      :type="preflightReadyLabels.has(row.listing_label) ? 'success' : 'danger'"
+                    >
+                      {{ preflightReadyLabels.has(row.listing_label) ? '可上架' : '有问题' }}
+                    </el-tag>
+                  </template>
+                </el-table-column>
+                <el-table-column label="SKU" width="72" align="center">
+                  <template #default="{ row }">{{ row.sku_count }}</template>
+                </el-table-column>
+              </el-table>
+              <p v-if="preflightResult.error_count" class="form-tip">
+                有问题的套图不会上架，其余套图仍会正常执行。
+              </p>
+            </el-card>
           </el-form>
 
           <el-alert v-if="error" type="error" :title="error" show-icon :closable="false" class="msg" />
@@ -952,6 +1057,51 @@ onUnmounted(() => {
           <p v-if="activePipeline.listing_skip_reason" class="warn-text">
             上架：{{ activePipeline.listing_skip_reason }}
           </p>
+
+          <div v-if="activeListingUnitStatuses.length" class="listing-unit-panel">
+            <div class="listing-unit-head">
+              <span>套图进度</span>
+              <span v-if="listingUnitStatusSummary" class="listing-unit-summary">
+                <template v-if="listingUnitStatusSummary.success">
+                  已上架 {{ listingUnitStatusSummary.success }}
+                </template>
+                <template v-if="listingUnitStatusSummary.listing">
+                  · 进行中 {{ listingUnitStatusSummary.listing }}
+                </template>
+                <template v-if="listingUnitStatusSummary.ready">
+                  · 待上架 {{ listingUnitStatusSummary.ready }}
+                </template>
+                <template v-if="listingUnitStatusSummary.preflight_failed">
+                  · 有问题 {{ listingUnitStatusSummary.preflight_failed }}
+                </template>
+                <template v-if="listingUnitStatusSummary.failed">
+                  · 失败 {{ listingUnitStatusSummary.failed }}
+                </template>
+              </span>
+            </div>
+            <el-table
+              :data="activeListingUnitStatuses"
+              size="small"
+              stripe
+              max-height="280"
+              class="listing-unit-table"
+            >
+              <el-table-column prop="listing_label" label="套图" min-width="132" show-overflow-tooltip />
+              <el-table-column label="状态" width="100">
+                <template #default="{ row }">
+                  <el-tag size="small" :type="(listingUnitStatusType[row.status] || 'info') as any">
+                    {{ row.status_label || row.status }}
+                  </el-tag>
+                </template>
+              </el-table-column>
+              <el-table-column label="说明" min-width="120" show-overflow-tooltip>
+                <template #default="{ row }">
+                  {{ listingUnitReasonText(row.reason_code) }}
+                </template>
+              </el-table-column>
+            </el-table>
+          </div>
+
           <p v-if="activePipeline.campaign_skip_reason" class="warn-text">
             活动：{{ activePipeline.campaign_skip_reason }}
           </p>
@@ -1417,8 +1567,46 @@ onUnmounted(() => {
 }
 
 .submit-btn {
-  width: 100%;
+  flex: 1;
   margin-top: 4px;
+}
+
+.submit-actions {
+  display: flex;
+  gap: 12px;
+  align-items: stretch;
+  margin-top: 4px;
+}
+
+.preflight-card {
+  margin-top: 16px;
+}
+
+.preflight-table {
+  width: 100%;
+}
+
+.listing-unit-panel {
+  margin: 12px 0 16px;
+}
+
+.listing-unit-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 8px;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.listing-unit-summary {
+  font-weight: 400;
+  color: var(--el-text-color-secondary);
+  font-size: 12px;
+}
+
+.listing-unit-table {
+  width: 100%;
 }
 
 .card-head {

@@ -16,37 +16,34 @@ def _unit(code: str, image_set: str) -> ListingUnit:
     )
 
 
-def test_run_listing_uploads_stops_after_first_failure(monkeypatch):
+def test_run_listing_uploads_stops_after_manual_cancel(monkeypatch):
     units = [_unit("BD722A", "第一套图"), _unit("BD722B", "第一套图")]
     calls: list[str] = []
 
     def fake_upload(page, account_id, unit, *args, **kwargs):
         calls.append(unit.listing_label)
-        if unit.product_code == "BD722A":
-            return {
-                "status": "failed",
-                "reason": "rejected_after_publish",
-                "error": "平台已驳回",
-                "listing_label": unit.listing_label,
-            }
         return {
             "status": "success",
             "pdd_product_id": "123",
             "listing_label": unit.listing_label,
         }
 
+    def fake_is_cancelled(run_id: str) -> bool:
+        return run_id == "run-cancel" and len(calls) >= 1
+
     monkeypatch.setattr(listing_upload, "upload_one_listing", fake_upload)
     monkeypatch.setattr(listing_upload, "time", MagicMock(sleep=lambda *_: None))
+    monkeypatch.setattr("pdd_agent.api.services.run_cancel.is_cancelled", fake_is_cancelled)
 
     results = listing_upload.run_listing_uploads(
         page=MagicMock(),
         account_id="store_A",
         units=units,
+        run_id="run-cancel",
     )
 
     assert calls == ["BD722A/第一套图"]
     assert len(results) == 1
-    assert results[0]["status"] == "failed"
 
 
 def test_run_listing_uploads_runs_all_when_everything_succeeds(monkeypatch):

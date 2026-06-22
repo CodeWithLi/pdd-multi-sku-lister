@@ -474,6 +474,168 @@ def _enqueue_pipeline_traffic(row, *, meta_patch: dict[str, Any] | None = None) 
 
 
 LISTING_SKIPPED_OUTCOME = "skipped_already_listed"
+LISTING_PARTIAL_OUTCOME = "partial_listing_failure"
+
+LISTING_UNIT_STATUS_LABELS: dict[str, str] = {
+    "skipped": "已跳过",
+    "preflight_failed": "校验未通过",
+    "ready": "可上架",
+    "pending": "等待中",
+    "listing": "上架中",
+    "success": "已上架",
+    "failed": "上架失败",
+    "canceled": "未执行",
+}
+
+
+def _selector_to_listing_label(selector: str) -> str:
+    from pdd_agent.skills.listing.catalog import _parse_listing_target_product_selector
+
+    text = str(selector or "").strip()
+    parsed = _parse_listing_target_product_selector(text)
+    if parsed:
+        _family, image_set, product_code = parsed
+        return f"{product_code}/{image_set}" if image_set else product_code
+    parts = [part.strip() for part in text.split("/") if part.strip()]
+    if len(parts) >= 3:
+        return f"{parts[-1]}/{parts[-2]}"
+    if len(parts) == 2:
+        return f"{parts[0]}/{parts[1]}"
+    return text
+
+
+def _issue_field(issue: Any, name: str) -> str:
+    if isinstance(issue, dict):
+        return str(issue.get(name) or "").strip()
+    return str(getattr(issue, name, "") or "").strip()
+
+
+def _unit_label(unit: Any) -> str:
+    if isinstance(unit, dict):
+        product_code = str(unit.get("product_code") or "").strip()
+        image_set = str(unit.get("image_set") or "").strip()
+        if image_set:
+            return f"{product_code}/{image_set}"
+        return product_code
+    product_code = str(getattr(unit, "product_code", "") or "").strip()
+    image_set = str(getattr(unit, "image_set", "") or "").strip()
+    if image_set:
+        return f"{product_code}/{image_set}"
+    return product_code
+
+
+def _parse_preflight_snapshot(result: dict[str, Any]) -> tuple[dict[str, str], set[str]]:
+    """返回 (error_label->reason_code, valid_labels)。"""
+    preflight_raw = result.get("preflight")
+    if not preflight_raw:
+        return {}, set()
+
+    if isinstance(preflight_raw, dict):
+        issues = list(preflight_raw.get("issues") or [])
+        units = list(preflight_raw.get("units") or [])
+    else:
+        issues = list(getattr(preflight_raw, "issues", None) or [])
+        units = list(getattr(preflight_raw, "units", None) or [])
+
+    errors: dict[str, str] = {}
+    for issue in issues:
+        if _issue_field(issue, "level") != "error":
+            continue
+        label = _issue_field(issue, "listing_label") or _issue_field(issue, "message")
+        if not label:
+            continue
+        reason = _issue_field(issue, "reason_code") or "preflight_catalog"
+        errors[label] = reason
+
+    valid: set[str] = set()
+    for unit in units:
+        label = _unit_label(unit)
+        if label and label not in errors:
+            valid.add(label)
+    return errors, valid
+
+
+def build_listing_unit_statuses(row) -> list[dict[str, Any]]:
+    """整合链路：按套图汇总可上架/失败/进行中等状态，供前端展示。"""
+    if row is None:
+        return []
+
+    meta = dict(row.meta or {})
+    skip_selectors = {
+        str(item).strip() for item in (meta.get("listing_skip_selectors") or []) if str(item).strip()
+    }
+    selectors = [str(item).strip() for item in (row.product_codes or []) if str(item).strip()]
+    if not selectors:
+        return []
+
+    preflight_errors: dict[str, str] = {}
+    valid_labels: set[str] = set()
+    result_by_label: dict[str, dict[str, Any]] = {}
+    run_status = ""
+    run_phase = ""
+
+    if row.listing_run_id:
+        record = TaskRunStore().load(row.listing_run_id)
+        if record:
+            run_status = str(
+                record.status.value if hasattr(record.status, "value") else record.status
+            )
+            run_phase = str(record.phase.value if hasattr(record.phase, "value") else record.phase)
+            result = dict(record.result or {})
+            preflight_errors, valid_labels = _parse_preflight_snapshot(result)
+            for item in result.get("results") or []:
+                if not isinstance(item, dict):
+                    continue
+                label = str(item.get("listing_label") or "").strip()
+                if label:
+                    result_by_label[label] = item
+
+    for label in meta.get("listing_failed_labels") or []:
+        text = str(label or "").strip()
+        if text:
+            preflight_errors.setdefault(text, "preflight_catalog")
+
+    statuses: list[dict[str, Any]] = []
+    for selector in selectors:
+        label = _selector_to_listing_label(selector)
+        reason_code = ""
+        if selector in skip_selectors:
+            status = "skipped"
+            reason_code = "skipped_already_listed"
+        elif label in result_by_label:
+            item = result_by_label[label]
+            item_status = str(item.get("status") or "").strip().lower()
+            product_id = str(item.get("pdd_product_id") or "").strip()
+            if item_status in {"success", "listed"} and bool(product_id or item_status == "listed"):
+                status = "success"
+            else:
+                status = "failed"
+                reason_code = str(item.get("reason") or item.get("reason_code") or "listing_failed").strip()
+        elif label in preflight_errors:
+            status = "preflight_failed"
+            reason_code = preflight_errors[label]
+        elif label in valid_labels:
+            if run_status == RunStatus.RUNNING.value:
+                status = "listing"
+            elif run_status == RunStatus.CANCELED.value:
+                status = "canceled"
+            else:
+                status = "ready"
+        elif run_status in {RunStatus.RUNNING.value, ""} and not preflight_errors:
+            status = "pending"
+        else:
+            status = "pending"
+
+        statuses.append(
+            {
+                "selector": selector,
+                "listing_label": label,
+                "status": status,
+                "status_label": LISTING_UNIT_STATUS_LABELS.get(status, status),
+                "reason_code": reason_code,
+            }
+        )
+    return statuses
 
 
 def _parse_pipeline_product_selector(selector: str) -> tuple[str, str, str]:
@@ -795,6 +957,7 @@ def pipeline_to_dict(row) -> dict[str, Any]:
         "campaign_skip_reason": str((row.meta or {}).get("campaign_skip_reason") or ""),
         "listing_outcome": str((row.meta or {}).get("listing_outcome") or ""),
         "listing_skip_reason": str((row.meta or {}).get("listing_skip_reason") or ""),
+        "listing_unit_statuses": build_listing_unit_statuses(row),
         "campaign_results": _campaign_results(row),
         "steps": _step_infos(row),
         "created_at": row.created_at,
@@ -1124,6 +1287,52 @@ def on_queue_task_finished(
     )
 
 
+def _listing_failure_meta(result: dict[str, Any]) -> dict[str, Any]:
+    """统计 preflight/上架失败套图，成功商品仍继续整合链路。"""
+    failed_labels: list[str] = []
+
+    for item in result.get("results") or []:
+        if not isinstance(item, dict):
+            continue
+        status = str(item.get("status") or "").strip().lower()
+        product_id = str(item.get("pdd_product_id") or "").strip()
+        if status in {"success", "listed"} and bool(product_id or status == "listed"):
+            continue
+        if status in {"failed", "retryable"} or item.get("error") or item.get("reason"):
+            label = str(item.get("listing_label") or "").strip()
+            if label:
+                failed_labels.append(label)
+
+    preflight = result.get("preflight")
+    issues: list[Any] = []
+    if isinstance(preflight, dict):
+        issues = list(preflight.get("issues") or [])
+    elif preflight is not None:
+        issues = list(getattr(preflight, "issues", None) or [])
+    for issue in issues:
+        level = str(
+            getattr(issue, "level", None) or (issue.get("level") if isinstance(issue, dict) else "") or ""
+        )
+        if level != "error":
+            continue
+        label = str(
+            getattr(issue, "listing_label", None)
+            or (issue.get("listing_label") if isinstance(issue, dict) else "")
+            or ""
+        ).strip()
+        if label:
+            failed_labels.append(label)
+
+    unique = list(dict.fromkeys(failed_labels))
+    if not unique:
+        return {}
+    return {
+        "listing_outcome": LISTING_PARTIAL_OUTCOME,
+        "listing_failed_labels": unique,
+        "listing_failed_count": len(unique),
+    }
+
+
 def _on_listing_finished(row, *, run_id: str, success: bool, result: dict[str, Any], error: str) -> None:
     if not success:
         update_integrated_pipeline(
@@ -1185,6 +1394,7 @@ def _on_listing_finished(row, *, run_id: str, success: bool, result: dict[str, A
     listing_meta = {
         "listing_summary": _summarize_run_message(run_id),
     }
+    listing_meta.update(_listing_failure_meta(result))
     refreshed = get_integrated_pipeline(row.pipeline_id) or row
     if _pipeline_auto_limited_time(refreshed):
         limited_time_at = datetime.now() + timedelta(seconds=LIMITED_TIME_POST_LISTING_DELAY_SECONDS)

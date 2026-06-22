@@ -106,6 +106,14 @@ class IntegratedPipelineCampaignResult(BaseModel):
     summary: str = ""
 
 
+class IntegratedPipelineListingUnitStatus(BaseModel):
+    selector: str = ""
+    listing_label: str = ""
+    status: str = ""
+    status_label: str = ""
+    reason_code: str = ""
+
+
 class IntegratedPipelineResponse(BaseModel):
     pipeline_id: str
     account_id: str
@@ -136,6 +144,7 @@ class IntegratedPipelineResponse(BaseModel):
     campaign_skip_reason: str = ""
     listing_outcome: str = ""
     listing_skip_reason: str = ""
+    listing_unit_statuses: list[IntegratedPipelineListingUnitStatus] = Field(default_factory=list)
     campaign_results: list[IntegratedPipelineCampaignResult] = Field(default_factory=list)
     steps: list[IntegratedPipelineStepInfo] = []
     created_at: datetime | None = None

@@ -202,15 +202,16 @@ def record_preflight_issue(
     issue: PreflightIssue,
 ) -> None:
     level = issue.level or "error"
-    reason_code = "preflight_catalog"
-    if "无有效 SKU" in issue.message:
-        reason_code = "preflight_no_skus"
-    elif "主图为空" in issue.message:
-        reason_code = "preflight_no_carousel"
-    elif "详情图为空" in issue.message:
-        reason_code = "preflight_no_detail"
-    elif "商品表" in issue.message or "Excel" in issue.message:
-        reason_code = "preflight_catalog"
+    reason_code = str(issue.reason_code or "").strip() or "preflight_catalog"
+    if not issue.reason_code:
+        if "无有效 SKU" in issue.message:
+            reason_code = "preflight_no_skus"
+        elif "主图为空" in issue.message:
+            reason_code = "preflight_no_carousel"
+        elif "详情图为空" in issue.message:
+            reason_code = "preflight_no_detail"
+        elif "商品表" in issue.message or "Excel" in issue.message:
+            reason_code = "preflight_catalog"
 
     record_listing_failure_detail(
         source_run_id=source_run_id,
@@ -221,7 +222,7 @@ def record_preflight_issue(
         step="validate_assets",
         severity="warning" if level == "warning" else "error",
         reason_code=reason_code,
-        message=issue.message,
+        message=issue.listing_label or issue.message,
         detail={"preflight_level": level},
     )
 

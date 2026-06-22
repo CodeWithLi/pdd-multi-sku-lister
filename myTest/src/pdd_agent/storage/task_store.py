@@ -216,6 +216,18 @@ class TaskRunStore:
             record.listing_labels = list(record.listing_labels) + [label]
         self.save(record)
 
+    def merge_run_result(self, run_id: str, patch: dict[str, Any]) -> None:
+        """合并写入运行中 result 片段（如 preflight 快照）。"""
+        if not patch:
+            return
+        record = self.load(run_id)
+        if not record:
+            return
+        current = dict(record.result or {})
+        current.update(patch)
+        record.result = current
+        self.save(record)
+
 
 def _record_to_orm_data(record: RunRecord) -> dict[str, Any]:
     return {

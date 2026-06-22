@@ -1,9 +1,11 @@
 """
 Listing Agent — LangGraph 上架子图。
 
-    preflight ──(校验失败/dry_run)──→ report → END
+    preflight ──(无有效单元 / dry_run)──→ report → END
          │
-         └──(校验通过且非 dry_run)──→ browser → END
+         └──(有 valid_units 且非 dry_run)──→ browser → END
+
+单套 preflight/上架失败只记日志，不阻断其余套图；手动取消除外。
 """
 
 from __future__ import annotations
@@ -60,7 +62,6 @@ async def preflight_node(state: ListingState) -> dict:
             from pdd_agent.integrations.feishu.config import load_feishu_config
             from pdd_agent.integrations.feishu.pdd_product_catalog_sync import (
                 diagnose_feishu_listing_catalog_issues,
-                format_feishu_listing_catalog_issue_message,
             )
 
             feishu_cfg = load_feishu_config()
@@ -69,13 +70,13 @@ async def preflight_node(state: ListingState) -> dict:
                 product_codes=codes,
                 config=feishu_cfg,
             )
-            if catalog_issues:
-                first = catalog_issues[0]
+            for catalog_issue in catalog_issues:
                 report.issues.append(
                     PreflightIssue(
                         level="error",
-                        message=format_feishu_listing_catalog_issue_message(first),
-                        listing_label=first.listing_label,
+                        message=catalog_issue.listing_label,
+                        listing_label=catalog_issue.listing_label,
+                        reason_code="feishu_product_catalog_missing",
                     )
                 )
         except Exception:
@@ -90,10 +91,19 @@ async def preflight_node(state: ListingState) -> dict:
                     account_id=account_id,
                     issue=issue,
                 )
+        try:
+            from pdd_agent.storage import TaskRunStore
+
+            TaskRunStore().merge_run_result(
+                run_id,
+                {"preflight": report.model_dump(mode="json")},
+            )
+        except Exception:
+            logger.exception("persist listing preflight snapshot failed run_id=%s", run_id)
     logger.info(
-        "preflight: units=%s ok=%s errors=%s",
+        "preflight: units=%s valid=%s errors=%s",
         len(report.units),
-        report.ok,
+        len(report.valid_units),
         sum(1 for i in report.issues if i.level == "error"),
     )
     return {
@@ -181,12 +191,12 @@ async def browser_listing_node(state: ListingState) -> dict:
 
 
 def should_continue_after_preflight(state: ListingState) -> str:
-    preflight = state.get("preflight")
-    if not preflight or not preflight.ok:
-        return "report"
     if state.get("dry_run"):
         return "report"
-    return "browser"
+    preflight = state.get("preflight")
+    if preflight and preflight.valid_units:
+        return "browser"
+    return "report"
 
 
 async def report_node(state: ListingState) -> dict:
@@ -197,7 +207,14 @@ async def report_node(state: ListingState) -> dict:
     preflight = state.get("preflight")
     errors: list[str] = []
     if preflight and not preflight.ok:
-        errors = [i.message for i in preflight.issues if i.level == "error"]
+        seen: set[str] = set()
+        for issue in preflight.issues:
+            if issue.level != "error":
+                continue
+            label = str(issue.listing_label or issue.message or "").strip()
+            if label and label not in seen:
+                seen.add(label)
+                errors.append(label)
     if not units and not errors:
         errors = ["no valid listing units"]
     result = {"phase": "report", "finished": True, "results": [{"summary": msg}]}

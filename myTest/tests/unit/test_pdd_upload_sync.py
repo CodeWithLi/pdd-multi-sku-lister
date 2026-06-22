@@ -537,6 +537,48 @@ def test_humanize_skip_missing_numbered_images():
     assert text == "跳过: BD736/第三套图/BD736A: 缺少按数字命名的图片 (1-9)"
 
 
+def test_schedule_feishu_listing_result_log_writes_one_row_per_failure(monkeypatch):
+    from pdd_agent.api.services import task_runner
+    from pdd_agent.integrations.feishu import pdd_upload_sync
+
+    captured: list[dict] = []
+
+    def fake_schedule_failure(**kwargs):
+        captured.append(kwargs)
+        return {"created": True}
+
+    monkeypatch.setattr(pdd_upload_sync, "schedule_pdd_upload_failure_log", fake_schedule_failure)
+
+    task_runner._schedule_feishu_listing_result_log(
+        account_id="store_A",
+        product_codes=["BD025", "BD030"],
+        result={
+            "preflight": {
+                "issues": [
+                    {
+                        "level": "error",
+                        "listing_label": "BD025A/第一套图",
+                        "message": "BD025A/第一套图",
+                        "reason_code": "feishu_product_catalog_missing",
+                    },
+                    {
+                        "level": "error",
+                        "listing_label": "BD030A/第一套图",
+                        "message": "BD030A/第一套图",
+                        "reason_code": "preflight_no_skus",
+                    },
+                ]
+            },
+        },
+    )
+
+    assert len(captured) == 2
+    assert captured[0]["listing_label"] == "BD025A/第一套图"
+    assert captured[1]["listing_label"] == "BD030A/第一套图"
+    assert captured[0]["reason_code"] == "feishu_product_catalog_missing"
+    assert captured[1]["reason_code"] == "preflight_no_skus"
+
+
 def test_schedule_feishu_listing_result_log_dedupes_one_failure(monkeypatch):
     from pdd_agent.api.services import task_runner
     from pdd_agent.integrations.feishu import pdd_upload_sync
@@ -623,9 +665,9 @@ def test_schedule_feishu_listing_result_log_records_post_submit_failures(monkeyp
         },
     )
 
-    assert len(captured) == 1
+    assert len(captured) == 2
     assert captured[0]["reason_code"] == "rejected_after_publish"
-    assert "另1项失败" in captured[0]["message"]
+    assert captured[1]["reason_code"] == "published_but_not_found_in_on_sale_or_rejected"
     assert map_listing_failure_record_type(
         reason_code=captured[0]["reason_code"],
         status="failed",

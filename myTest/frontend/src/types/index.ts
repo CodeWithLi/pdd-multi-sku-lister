@@ -509,6 +509,14 @@ export interface IntegratedPipelineCampaignResult {
   summary?: string
 }
 
+export interface IntegratedPipelineListingUnitStatus {
+  selector: string
+  listing_label: string
+  status: string
+  status_label: string
+  reason_code: string
+}
+
 export interface IntegratedPipeline {
   pipeline_id: string
   account_id: string
@@ -538,6 +546,7 @@ export interface IntegratedPipeline {
   campaign_skip_reason?: string
   listing_outcome?: string
   listing_skip_reason?: string
+  listing_unit_statuses?: IntegratedPipelineListingUnitStatus[]
   campaign_results?: IntegratedPipelineCampaignResult[]
   steps: IntegratedPipelineStepInfo[]
   created_at: string | null

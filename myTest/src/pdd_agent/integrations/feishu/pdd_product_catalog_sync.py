@@ -208,17 +208,8 @@ def feishu_product_catalog_missing_message(*, table_name: str = "", product_code
 
 
 def format_feishu_listing_catalog_issue_message(issue: FeishuListingCatalogIssue) -> str:
-    segments: list[str] = []
-    for code, aspects in issue.code_details:
-        aspect_text = "、".join(dict.fromkeys(str(x) for x in aspects if str(x).strip()))
-        if not aspect_text:
-            continue
-        segments.append(f"{code}{aspect_text}")
-    detail = "；".join(segments)
-    label = str(issue.listing_label or "").strip()
-    if label and detail:
-        return f"{label}：{detail}"
-    return detail or label
+    """对外展示/日志：只标明哪套图有问题。"""
+    return str(issue.listing_label or "").strip()
 
 
 def _unit_catalog_codes(unit: Any) -> list[str]:
@@ -441,17 +432,20 @@ def schedule_feishu_product_catalog_missing_logs(
 
     from pdd_agent.integrations.feishu.pdd_upload_sync import schedule_pdd_upload_failure_log
 
-    first = issues[0]
-    message = format_feishu_listing_catalog_issue_message(first)
-    schedule_pdd_upload_failure_log(
-        account_id=account_id,
-        listing_label=first.listing_label,
-        merchant_code=first.merchant_code,
-        reason_code=FEISHU_PRODUCT_CATALOG_MISSING_REASON,
-        failure_reason=message,
-        message=message,
-    )
-    return 1
+    written = 0
+    for issue in issues:
+        label = str(issue.listing_label or "").strip()
+        if not label:
+            continue
+        schedule_pdd_upload_failure_log(
+            account_id=account_id,
+            listing_label=label,
+            merchant_code=issue.merchant_code,
+            reason_code=FEISHU_PRODUCT_CATALOG_MISSING_REASON,
+            message=label,
+        )
+        written += 1
+    return written
 
 
 def clear_pdd_product_catalog_cache() -> None:

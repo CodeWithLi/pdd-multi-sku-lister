@@ -84,4 +84,19 @@ export const failureReasonLabel: Record<string, string> = {
   price_fill_row_not_found: '价格表找不到规格行',
   price_fill_by_index_failed: '按行号填价格表失败',
   no_valid_units: '无有效上架单元',
+  feishu_product_catalog_missing: '飞书商品/定价数据缺失',
+  skipped_already_listed: '商品已上架，已跳过',
+  listing_failed: '上架失败',
+  slot_alignment_failed: '兄弟款预览图张数不一致',
+}
+
+export const listingUnitStatusType: Record<string, string> = {
+  skipped: 'info',
+  preflight_failed: 'danger',
+  ready: 'success',
+  pending: 'info',
+  listing: 'warning',
+  success: 'success',
+  failed: 'danger',
+  canceled: 'info',
 }

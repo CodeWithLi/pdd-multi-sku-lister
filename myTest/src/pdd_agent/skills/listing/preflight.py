@@ -42,8 +42,9 @@ def run_preflight(
                 report.issues.append(
                     PreflightIssue(
                         level="error",
-                        message="无有效 SKU（检查 Excel 与预览图）",
+                        message=unit.listing_label,
                         listing_label=unit.listing_label,
+                        reason_code="preflight_no_skus",
                     )
                 )
             if not unit.carousel_images:

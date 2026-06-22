@@ -1513,7 +1513,7 @@ def run_listing_uploads(
     run_id: str = "",
     slot_alignment_test: bool = False,
 ) -> list[dict[str, Any]]:
-    """顺序上架多个单元；任一单元失败即停止，不再继续后续套图。"""
+    """顺序上架多个单元；单套失败记日志并继续，手动取消时停止。"""
     from pdd_agent.api.services.run_cancel import is_cancelled
 
     product_info = {
@@ -1547,10 +1547,10 @@ def run_listing_uploads(
                 _persist_unit_progress(run_id, item_result)
             if not _listing_unit_succeeded(item_result):
                 print(
-                    f"[{account_id}] [{unit.listing_label}] 上架失败，停止剩余单元",
+                    f"[{account_id}] [{unit.listing_label}] 上架失败，继续下一单元",
                     flush=True,
                 )
-                break
+                continue
         except Exception as e:
             err = _safe_exc(e)
             reason, retryable = _classify_exception(e)
@@ -1582,8 +1582,8 @@ def run_listing_uploads(
             if run_id:
                 _persist_unit_progress(run_id, exc_result)
             print(
-                f"[{account_id}] [{unit.listing_label}] 上架异常，停止剩余单元",
+                f"[{account_id}] [{unit.listing_label}] 上架异常，继续下一单元",
                 flush=True,
             )
-            break
+            continue
     return results
