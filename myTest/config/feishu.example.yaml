@@ -105,14 +105,14 @@ pdd_promotion_log:
     failure_reason: 失败原因
     run_id: 运行ID
 
-# 拼多多所有商品.xls → 飞书「拼多多所有商品」
+# 拼多多所有商品.xls → 飞书「拼多多比价定价」（商品编码/颜色规格/商品类型/可用库存/拼多多定价）
 pdd_product_catalog:
   enabled: true
   table_id: ""
-  table_name: 拼多多所有商品
+  table_name: 拼多多比价定价
   excel_relpath: data/assets/拼多多所有商品.xls
   prefer_feishu: true
-  fallback_excel: true
+  fallback_excel: false
   cache_seconds: 300
   price_float_enabled: true
   price_float_min: 0
@@ -122,7 +122,7 @@ pdd_product_catalog:
     color_spec: 颜色规格
     product_type: 商品类型
     available_inventory: 可用库存
-    pricing: 定价
+    pricing: 拼多多定价
 
 # pdd.xls 控价区间 → 飞书「拼多多比价定价」
 pdd_price_compare:
@@ -133,7 +133,7 @@ pdd_price_compare:
   pricing_excel_relpath: data/assets/拼多多定价.xls
   control_excel_relpath: data/assets/拼多多控价.xls
   prefer_feishu: true
-  fallback_excel: true
+  fallback_excel: false
   cache_seconds: 300
   field_names:
     merchant_code: 商品编码
@@ -141,3 +141,5 @@ pdd_price_compare:
     max_price: PDD控价上限价格
     pdd_pricing: 拼多多定价
     pdd_control_price: 拼多多控价
+pipeline:
+  excel_fallback_enabled: false

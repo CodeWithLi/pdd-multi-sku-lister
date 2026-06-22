@@ -398,6 +398,14 @@ export const api = {
   cancelIntegratedPipeline: (pipelineId: string) =>
     http.post<IntegratedPipeline>(`/pipelines/integrated/${pipelineId}/cancel`).then((r) => r.data),
 
+  getPipelineExcelFallback: () =>
+    http.get<{ enabled: boolean }>('/pipelines/integrated/excel-fallback').then((r) => r.data),
+
+  updatePipelineExcelFallback: (enabled: boolean) =>
+    http
+      .put<{ enabled: boolean }>('/pipelines/integrated/excel-fallback', { enabled })
+      .then((r) => r.data),
+
   pipelineIssues: (params: {
     page?: number
     page_size?: number

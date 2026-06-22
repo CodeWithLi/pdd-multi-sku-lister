@@ -10,6 +10,8 @@ from pdd_agent.api.schemas.pipelines import (
     IntegratedPipelineListResponse,
     IntegratedPipelineResponse,
     IntegratedPipelineStartRequest,
+    PipelineExcelFallbackOut,
+    PipelineExcelFallbackUpdateIn,
 )
 from pdd_agent.api.services.config_service import get_account_or_none
 from pdd_agent.api.services.pipeline_service import (
@@ -21,6 +23,7 @@ from pdd_agent.api.services.pipeline_service import (
 )
 from pdd_agent.core.config import load_yaml_settings
 from pdd_agent.db.session import is_database_available
+from pdd_agent.integrations.feishu.config import excel_fallback_enabled, save_pipeline_excel_fallback_to_config
 
 router = APIRouter(prefix="/pipelines", tags=["pipelines"])
 
@@ -41,6 +44,33 @@ def _normalize_batch_items(body: IntegratedPipelineBatchStartRequest) -> list[di
     account_ids = _dedupe_account_ids(body.account_ids)
     product_codes = list(dict.fromkeys(c.strip() for c in body.product_codes if c.strip()))
     return [{"account_id": account_id, "product_codes": product_codes} for account_id in account_ids]
+
+
+def _clear_excel_data_caches() -> None:
+    try:
+        from pdd_agent.integrations.feishu.pdd_price_compare_sync import clear_price_compare_caches
+        from pdd_agent.integrations.feishu.pdd_product_catalog_sync import clear_pdd_product_catalog_cache
+        from pdd_agent.skills.listing.pdd_product_catalog import get_pdd_product_catalog
+
+        clear_pdd_product_catalog_cache()
+        clear_price_compare_caches()
+        get_pdd_product_catalog.cache_clear()
+    except Exception:
+        pass
+
+
+@router.get("/integrated/excel-fallback", response_model=PipelineExcelFallbackOut)
+def get_integrated_excel_fallback():
+    """读取整合链路「飞书无数据时回退本地 Excel」开关。"""
+    return PipelineExcelFallbackOut(enabled=excel_fallback_enabled())
+
+
+@router.put("/integrated/excel-fallback", response_model=PipelineExcelFallbackOut)
+def update_integrated_excel_fallback(body: PipelineExcelFallbackUpdateIn):
+    """保存整合链路 Excel 回退开关（写入 feishu.yaml）。"""
+    save_pipeline_excel_fallback_to_config(body.enabled)
+    _clear_excel_data_caches()
+    return PipelineExcelFallbackOut(enabled=bool(body.enabled))
 
 
 @router.post("/integrated", response_model=IntegratedPipelineResponse)

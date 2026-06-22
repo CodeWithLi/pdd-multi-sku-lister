@@ -12,6 +12,7 @@ import yaml
 from pydantic import BaseModel, Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from pdd_agent.integrations.feishu.traffic_metric_columns import DEFAULT_TRAFFIC_METRIC_COLUMNS
 from pdd_agent.paths import CONFIG_DIR, PROJECT_ROOT
 
 DEFAULT_FEISHU_CONFIG_PATH = CONFIG_DIR / "feishu.yaml"
@@ -84,14 +85,6 @@ class PddMarketingLogFieldNames(BaseModel):
     product_id: str = "商品ID"
     traffic_result: str = "投流数据日志回写结果"
     traffic_error_reason: str = "投流数据日志报错原因"
-    traffic_spend: str = "成交花费(元)"
-    traffic_amount: str = "交易额(元)"
-    traffic_roi: str = "实际投产比"
-    traffic_total_cost: str = "总花费(元)"
-    traffic_net_amount: str = "净交易额(元)"
-    traffic_net_roi: str = "净实际投产比"
-    traffic_net_orders: str = "净成交笔数"
-    traffic_cost_per_order: str = "每笔净成交花费(元)"
 
 
 class PddActivityLogFieldNames(BaseModel):
@@ -136,8 +129,8 @@ class PddPriceCompareConfig(BaseModel):
     )
     prefer_feishu: bool = Field(default=True, description="运行时优先读飞书，而非本地 Excel")
     fallback_excel: bool = Field(
-        default=True,
-        description="飞书无数据时是否回退读本地 Excel",
+        default=False,
+        description="飞书无数据时是否回退读本地 Excel（由 pipeline.excel_fallback_enabled 统一控制）",
     )
     cache_seconds: int = Field(default=300, ge=0, le=3600, description="飞书定价/控价缓存秒数")
     field_names: PddPriceCompareFieldNames = Field(default_factory=PddPriceCompareFieldNames)
@@ -150,24 +143,33 @@ class PddProductCatalogFieldNames(BaseModel):
     color_spec: str = "颜色规格"
     product_type: str = "商品类型"
     available_inventory: str = "可用库存"
-    pricing: str = "定价"
+    pricing: str = "拼多多定价"
 
 
 class PddProductCatalogConfig(BaseModel):
-    enabled: bool = Field(default=True, description="是否从飞书「拼多多所有商品」读取上架商品表")
+    enabled: bool = Field(default=True, description="是否从飞书「拼多多比价定价」读取上架商品表")
     table_id: str = Field(default="", description="拼多多所有商品 table_id")
-    table_name: str = Field(default="拼多多所有商品", description="上架商品飞书表名")
+    table_name: str = Field(default="拼多多比价定价", description="上架商品飞书表名（与比价定价表合并）")
     excel_relpath: str = Field(
         default="data/assets/拼多多所有商品.xls",
         description="本地商品表 Excel 路径",
     )
     prefer_feishu: bool = Field(default=True, description="运行时优先读飞书")
-    fallback_excel: bool = Field(default=True, description="飞书无数据时回退本地 Excel")
+    fallback_excel: bool = Field(default=False, description="飞书无数据时回退本地 Excel（由 pipeline.excel_fallback_enabled 统一控制）")
     cache_seconds: int = Field(default=300, ge=0, le=3600, description="飞书商品表缓存秒数")
     price_float_enabled: bool = Field(default=True, description="上架拼单价是否在定价基础上加随机浮动")
     price_float_min: float = Field(default=0.0, ge=0, description="定价浮动下限（元）")
     price_float_max: float = Field(default=5.0, ge=0, description="定价浮动上限（元）")
     field_names: PddProductCatalogFieldNames = Field(default_factory=PddProductCatalogFieldNames)
+
+
+class PipelineIntegrationConfig(BaseModel):
+    """整合链路相关运行时开关（写入 feishu.yaml）。"""
+
+    excel_fallback_enabled: bool = Field(
+        default=False,
+        description="开启后飞书商品/定价表无数据时回退本地 Excel；关闭则一律不回退",
+    )
 
 
 class PddActivityLogConfig(BaseModel):
@@ -212,6 +214,10 @@ class PddMarketingLogConfig(BaseModel):
     lookup_retries: int = Field(default=3, ge=1, le=20)
     lookup_interval_seconds: float = Field(default=1.0, ge=0.5, le=30.0)
     traffic_result_options: list[str] = Field(default_factory=lambda: ["成功", "失败"])
+    traffic_metric_columns: list[str] = Field(
+        default_factory=lambda: list(DEFAULT_TRAFFIC_METRIC_COLUMNS),
+        description="投流推广列表右侧指标列（飞书表头名，与拼多多一致）",
+    )
     field_names: PddMarketingLogFieldNames = Field(default_factory=PddMarketingLogFieldNames)
 
 
@@ -430,6 +436,7 @@ class FeishuYamlConfig(BaseModel):
     pdd_promotion_log: PddPromotionLogConfig = Field(default_factory=PddPromotionLogConfig)
     pdd_price_compare: PddPriceCompareConfig = Field(default_factory=PddPriceCompareConfig)
     pdd_product_catalog: PddProductCatalogConfig = Field(default_factory=PddProductCatalogConfig)
+    pipeline: PipelineIntegrationConfig = Field(default_factory=PipelineIntegrationConfig)
 
 
 class FeishuConfig(BaseModel):
@@ -458,6 +465,13 @@ class FeishuConfig(BaseModel):
     pdd_promotion_log: PddPromotionLogConfig = Field(default_factory=PddPromotionLogConfig)
     pdd_price_compare: PddPriceCompareConfig = Field(default_factory=PddPriceCompareConfig)
     pdd_product_catalog: PddProductCatalogConfig = Field(default_factory=PddProductCatalogConfig)
+    pipeline: PipelineIntegrationConfig = Field(default_factory=PipelineIntegrationConfig)
+
+
+def excel_fallback_enabled(cfg: FeishuConfig | None = None) -> bool:
+    """整合链路 Excel 回退总开关。"""
+    cfg = cfg or load_feishu_config()
+    return bool(cfg.pipeline.excel_fallback_enabled)
 
 
 def load_feishu_config(path: Path | None = None) -> FeishuConfig:
@@ -501,6 +515,10 @@ def load_feishu_config(path: Path | None = None) -> FeishuConfig:
     if "pdd_product_catalog" in raw and isinstance(raw.get("pdd_product_catalog"), dict):
         pdd_product_catalog = PddProductCatalogConfig.model_validate(raw["pdd_product_catalog"])
 
+    pipeline = yaml_cfg.pipeline
+    if "pipeline" in raw and isinstance(raw.get("pipeline"), dict):
+        pipeline = PipelineIntegrationConfig.model_validate(raw["pipeline"])
+
     return FeishuConfig(
         app_id=env.feishu_app_id or yaml_cfg.app_id,
         app_secret=env.feishu_app_secret or yaml_cfg.app_secret,
@@ -525,6 +543,7 @@ def load_feishu_config(path: Path | None = None) -> FeishuConfig:
         pdd_promotion_log=pdd_promotion_log,
         pdd_price_compare=pdd_price_compare,
         pdd_product_catalog=pdd_product_catalog,
+        pipeline=pipeline,
     )
 
 
@@ -642,6 +661,23 @@ def save_pdd_product_catalog_table_id_to_config(table_id: str, path: Path | None
         catalog_raw = {}
     catalog_raw["table_id"] = table_id
     data["pdd_product_catalog"] = catalog_raw
+    cfg_path.parent.mkdir(parents=True, exist_ok=True)
+    with open(cfg_path, "w", encoding="utf-8") as f:
+        yaml.dump(data, f, allow_unicode=True, default_flow_style=False, sort_keys=False)
+
+
+def save_pipeline_excel_fallback_to_config(enabled: bool, path: Path | None = None) -> None:
+    """整合链路：写入 Excel 回退总开关到 feishu.yaml。"""
+    cfg_path = path or Path(os.getenv("FEISHU_CONFIG_PATH", DEFAULT_FEISHU_CONFIG_PATH))
+    data: dict = {}
+    if cfg_path.is_file():
+        with open(cfg_path, encoding="utf-8") as f:
+            data = yaml.safe_load(f) or {}
+    pipeline_raw = data.get("pipeline")
+    if not isinstance(pipeline_raw, dict):
+        pipeline_raw = {}
+    pipeline_raw["excel_fallback_enabled"] = bool(enabled)
+    data["pipeline"] = pipeline_raw
     cfg_path.parent.mkdir(parents=True, exist_ok=True)
     with open(cfg_path, "w", encoding="utf-8") as f:
         yaml.dump(data, f, allow_unicode=True, default_flow_style=False, sort_keys=False)

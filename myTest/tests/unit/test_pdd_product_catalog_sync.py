@@ -5,7 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from pdd_agent.domain.models import ListingUnit
-from pdd_agent.integrations.feishu.config import FeishuConfig, PddProductCatalogConfig, PddUploadLogConfig, PddPriceCompareConfig
+from pdd_agent.integrations.feishu.config import FeishuConfig, PddProductCatalogConfig, PddUploadLogConfig, PddPriceCompareConfig, PipelineIntegrationConfig
 from pdd_agent.integrations.feishu.pdd_product_catalog_sync import (
     FeishuListingCatalogIssue,
     _entry_from_feishu_fields,
@@ -226,6 +226,7 @@ def test_load_unified_pdd_product_catalog_falls_back_to_excel(monkeypatch, tmp_p
             prefer_feishu=True,
             fallback_excel=True,
         ),
+        pipeline=PipelineIntegrationConfig(excel_fallback_enabled=True),
     )
     monkeypatch.setattr(
         pdd_product_catalog_sync,

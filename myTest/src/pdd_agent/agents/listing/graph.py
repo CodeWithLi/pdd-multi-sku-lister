@@ -32,12 +32,27 @@ async def preflight_node(state: ListingState) -> dict:
     raw_root = str(state.get("assets_root") or "").strip()
     if raw_root:
         assets_root = Path(raw_root)
+    try:
+        from pdd_agent.integrations.feishu.listing_feishu_snapshot import warm_listing_feishu_snapshot
+        from pdd_agent.skills.listing.catalog import collect_feishu_catalog_codes_for_targets
+
+        if assets_root and codes:
+            warm_listing_feishu_snapshot(collect_feishu_catalog_codes_for_targets(codes, assets_root))
+    except Exception:
+        logger.exception("warm listing feishu snapshot before preflight failed")
     report = run_preflight(
         codes,
         settings,
         slot_alignment_test=bool(state.get("slot_alignment_test")),
         assets_root=assets_root,
     )
+    try:
+        from pdd_agent.integrations.feishu.listing_feishu_snapshot import warm_listing_feishu_snapshot
+        from pdd_agent.integrations.feishu.pdd_product_catalog_sync import _collect_catalog_codes
+
+        warm_listing_feishu_snapshot(_collect_catalog_codes(units=report.units, extra_codes=codes))
+    except Exception:
+        logger.exception("warm listing feishu snapshot after preflight failed")
     run_id = str(state.get("run_id") or "")
     account_id = str(state.get("account_id") or "")
     if account_id:

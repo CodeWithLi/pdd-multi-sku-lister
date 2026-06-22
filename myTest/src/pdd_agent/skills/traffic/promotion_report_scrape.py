@@ -10,26 +10,37 @@ from typing import Any
 from pdd_agent.browser.dp_compat_sync import DpPage
 from pdd_agent.core.config import AccountConfig
 from pdd_agent.skills.campaign.limited_time import (
+    _bind_page,
     _body_text,
     _click_text,
     _dismiss_message_popup,
+    _live_context_pages,
     _safe_exc,
     _switch_to_latest_tab,
 )
+from pdd_agent.integrations.feishu.traffic_metric_columns import (
+    is_known_metric_header,
+    normalize_traffic_header,
+    normalize_traffic_metrics,
+)
 from pdd_agent.skills.delist.automation import _go_next_page, _read_pagination_summary
 from pdd_agent.skills.traffic.promotion_create import (
+    _close_mms_tabs_when_yingxiao_ready,
     _ensure_session,
     _open_promotion_overview,
     _page_url,
 )
+from pdd_agent.browser.sync_login import is_login_url
 
 MAX_PAGES = 200
 PROMOTION_LIST_URL = "https://yingxiao.pinduoduo.com/goods/promotion/list"
 
 PRODUCT_ID_PATTERN = re.compile(r"商品\s*ID[：:]\s*(\d{6,})", re.IGNORECASE)
 
-_EXTRACT_PROMOTION_TABLE_JS = """
-function isVisible(el) {
+_SCROLL_MARK_ATTR = "data-pdd-traffic-scroll"
+
+_PREPARE_PROMOTION_TABLE_JS = f"""
+function isVisible(el) {{
     if (!el || !el.getBoundingClientRect) return false;
     const r = el.getBoundingClientRect();
     const s = window.getComputedStyle(el);
@@ -37,212 +48,391 @@ function isVisible(el) {
         && s.display !== 'none'
         && s.visibility !== 'hidden'
         && parseFloat(s.opacity || '1') > 0.05;
-}
-function norm(text) {
+}}
+function norm(text) {{
     return String(text || '').replace(/\\s+/g, ' ').trim();
-}
-function hasProductId(text) {
-    return /商品\\s*ID/i.test(String(text || ''));
-}
-function hasSpendMetric(text) {
-    const t = String(text || '');
-    return t.includes('成交花费') || t.includes('总花费') || t.includes('花费(元)');
-}
-function findListTableRoot() {
-    const tbody = document.querySelector('.anq-table-tbody');
-    if (tbody && isVisible(tbody)) {
-        return tbody.closest('.anq-table, .anq-table-wrapper, table') || tbody;
-    }
+}}
+function findScrollHeaderCells(root) {{
+    const sorterCells = Array.from(root.querySelectorAll(
+        '.anq-table-content .anq-table-header .anq-table-cell.column-with-sorter, '
+        + '.anq-table-header:not(.anq-table-fixed-left *) .anq-table-cell.column-with-sorter, '
+        + '.anq-table-body thead .anq-table-cell.column-with-sorter, '
+        + '.ant-table-header .ant-table-cell.column-with-sorter'
+    ));
+    if (sorterCells.length >= 3) return sorterCells;
+    const selectors = [
+        '.anq-table-content > .anq-table-header .anq-table-thead .anq-table-cell',
+        '.anq-table-content .anq-table-header .anq-table-cell',
+        '.anq-table-header:not(.anq-table-fixed-left .anq-table-header) .anq-table-thead .anq-table-cell',
+        '.ant-table-content > .ant-table-header .ant-table-cell',
+        '.anq-table-body table thead .anq-table-cell',
+        '.ant-table-body table thead .ant-table-cell',
+    ];
+    for (const sel of selectors) {{
+        const cells = Array.from(root.querySelectorAll(sel));
+        if (cells.length >= 3) return cells;
+    }}
+    return [];
+}}
+function extractScrollMetricHeaders(root) {{
+    const headers = [];
+    const seen = new Set();
+    for (const cell of findScrollHeaderCells(root)) {{
+        const text = norm(cell.innerText || cell.textContent || '');
+        if (!text || seen.has(text)) continue;
+        seen.add(text);
+        headers.push(text);
+    }}
+    return headers;
+}}
+function syncTableScroll(root, scrollEl, pos) {{
+    if (scrollEl) scrollEl.scrollLeft = pos;
+    if (!root) return;
+    for (const sel of [
+        '.anq-table-header',
+        '.anq-table-sticky-scroll',
+        '.ant-table-header',
+        '.ant-table-sticky-scroll',
+        '[class*="sticky-scroll"]',
+    ]) {{
+        for (const node of Array.from(root.querySelectorAll(sel))) {{
+            if (!node || node === scrollEl) continue;
+            try {{ node.scrollLeft = pos; }} catch (e) {{}}
+        }}
+    }}
+}}
+function findListTableRoot() {{
     const picker = document.querySelector('[class*="ListDatePicker"]');
-    if (picker) {
+    if (picker) {{
         let node = picker.parentElement;
-        for (let i = 0; i < 10 && node; i++) {
-            const table = node.querySelector('.anq-table, .anq-table-wrapper');
+        for (let i = 0; i < 12 && node; i++) {{
+            const table = node.querySelector('.anq-table-wrapper, .anq-table, .ant-table-wrapper, .ant-table');
             if (table && isVisible(table)) return table;
             node = node.parentElement;
-        }
-    }
+        }}
+    }}
+    const tbody = document.querySelector('.anq-table-tbody, .ant-table-tbody');
+    if (tbody && isVisible(tbody)) {{
+        return tbody.closest('.anq-table-wrapper, .anq-table, .ant-table-wrapper, .ant-table, table') || tbody;
+    }}
     return null;
-}
-function normalizeHeader(h) {
-    return String(h || '').replace(/\\s+/g, '');
-}
-function isMetricValue(v) {
+}}
+function findFixedTbody(root) {{
+    const fixed = root.querySelector(
+        '.anq-table-fixed-left .anq-table-tbody, .anq-table-ping-left .anq-table-tbody, '
+        + '.ant-table-fixed-left .ant-table-tbody'
+    );
+    if (fixed && isVisible(fixed)) return fixed;
+    const tbodies = Array.from(root.querySelectorAll('.anq-table-tbody, .ant-table-tbody, tbody'));
+    for (const tb of tbodies) {{
+        if (!isVisible(tb)) continue;
+        if (/商品\\s*ID/i.test(tb.innerText || '')) return tb;
+    }}
+    return root.querySelector('.anq-table-tbody, .ant-table-tbody, tbody');
+}}
+function findScrollContainer(root) {{
+    const selectors = [
+        '.anq-table-body',
+        '.anq-table-content',
+        '.ant-table-body',
+        '.ant-table-content',
+        '[class*="table-content"]',
+        '[class*="TableContent"]',
+    ];
+    let best = null;
+    let bestOverflow = 0;
+    for (const sel of selectors) {{
+        for (const el of Array.from(root.querySelectorAll(sel))) {{
+            if (!isVisible(el)) continue;
+            if (el.closest('.anq-table-fixed-left, .anq-table-ping-left, .ant-table-fixed-left')) continue;
+            const overflow = el.scrollWidth - el.clientWidth;
+            if (overflow > bestOverflow) {{
+                bestOverflow = overflow;
+                best = el;
+            }}
+        }}
+    }}
+    if (best) return best;
+    return root.querySelector('.anq-table-body, .anq-table-content, .ant-table-body') || root;
+}}
+function clearScrollMark() {{
+    document.querySelectorAll('[{_SCROLL_MARK_ATTR}]').forEach((el) => {{
+        el.removeAttribute('{_SCROLL_MARK_ATTR}');
+    }});
+}}
+const root = findListTableRoot();
+if (!root) {{
+    clearScrollMark();
+    return {{ ready: false, reason: 'table_not_found' }};
+}}
+const scrollEl = findScrollContainer(root);
+const fixedTbody = findFixedTbody(root);
+scrollEl.setAttribute('{_SCROLL_MARK_ATTR}', '1');
+syncTableScroll(root, scrollEl, 0);
+const maxScroll = Math.max(0, scrollEl.scrollWidth - scrollEl.clientWidth);
+const scrollStep = Math.max(200, Math.floor(scrollEl.clientWidth * 0.55));
+return {{
+    ready: true,
+    reason: 'ok',
+    max_scroll: maxScroll,
+    scroll_step: scrollStep,
+    has_fixed_split: !!(fixedTbody && fixedTbody !== scrollEl.querySelector('.anq-table-tbody, .ant-table-tbody, tbody')),
+}};
+"""
+
+_EXTRACT_PROMOTION_TABLE_SLICE_JS = f"""
+function isVisible(el) {{
+    if (!el || !el.getBoundingClientRect) return false;
+    const r = el.getBoundingClientRect();
+    const s = window.getComputedStyle(el);
+    return r.width > 4 && r.height > 4
+        && s.display !== 'none'
+        && s.visibility !== 'hidden'
+        && parseFloat(s.opacity || '1') > 0.05;
+}}
+function norm(text) {{
+    return String(text || '').replace(/\\s+/g, ' ').trim();
+}}
+function isCellValue(v) {{
     const s = String(v == null ? '' : v).trim();
     if (!s || s === '-') return false;
-    return /^-?\\d+(?:\\.\\d+)?$/.test(s);
-}
-function buildMetricColIndex(headers) {
-    const index = {};
-    const rules = [
-        ['cost_per_order', '每笔净成交花费'],
-        ['net_orders', '净成交笔数'],
-        ['net_roi', '净实际投产比'],
-        ['net_amount', '净交易额'],
-        ['total_cost', '总花费'],
-        ['roi', '实际投产比'],
-        ['amount', '交易额'],
-        ['spend', '成交花费'],
-    ];
-    for (let i = 0; i < headers.length; i++) {
-        const h = normalizeHeader(headers[i]);
-        for (const [key, kw] of rules) {
-            if (index[key] !== undefined) continue;
-            if (h.includes(kw)) index[key] = i;
-        }
-    }
-    return index;
-}
-function extractHeaders(root) {
-    const headerCells = Array.from(root.querySelectorAll(
-        '.anq-table-thead .anq-table-cell, .anq-table-thead th, thead th, .ant-table-thead th'
-    )).filter(isVisible);
-    if (headerCells.length) {
-        return headerCells.map((th) => norm(th.innerText || th.textContent || ''));
-    }
-    const headerRow = Array.from(root.querySelectorAll('tr, [class*="header-row"], [class*="table-head"]'))
-        .find((row) => isVisible(row) && hasSpendMetric(row.innerText || ''));
-    if (headerRow) {
-        const cells = Array.from(headerRow.querySelectorAll('th, td, .ant-table-cell, [class*="cell"]'));
-        if (cells.length) return cells.map((c) => norm(c.innerText || c.textContent || ''));
-    }
-    return [];
-}
-function getAlignedCells(row, headerCount) {
-    let cells = Array.from(row.querySelectorAll(':scope > .anq-table-cell, :scope > td'))
-        .filter(isVisible)
-        .map((c) => norm(c.innerText || c.textContent || ''));
-    if (!cells.length) {
-        cells = Array.from(row.querySelectorAll('.anq-table-cell, td'))
-            .filter(isVisible)
-            .map((c) => norm(c.innerText || c.textContent || ''));
-    }
-    if (headerCount > 0 && cells.length > headerCount) {
-        cells = cells.slice(cells.length - headerCount);
-    }
+    if (!/^-?\\d+(?:\\.\\d+)?%?$/.test(s)) return false;
+    const junk = ['详情', '数据', '更多', '手动暂停', '去开启', '预算日限额', '净目标投产比', '拼单价', '商品 ID', '商品ID'];
+    for (const m of junk) {{
+        if (s.includes(m)) return false;
+    }}
+    return true;
+}}
+function isMetricHeaderText(text) {{
+    const t = norm(text);
+    if (!t || t === '操作') return false;
+    if (t.includes('推广状态') || t.includes('预算及出价') || t.includes('预算日限额')) return false;
+    if (t.includes('推广/分组') || t === '推广' || t.startsWith('推广添加')) return false;
+    if (t.includes('详情') || t.includes('操作')) return false;
+    return true;
+}}
+function getSorterCellNodes(row) {{
+    if (!row) return [];
+    let cells = Array.from(row.querySelectorAll(
+        ':scope > td.anq-table-cell.column-with-sorter, :scope > .anq-table-cell.column-with-sorter, '
+        + ':scope > td.column-with-sorter'
+    ));
+    if (!cells.length) {{
+        cells = Array.from(row.querySelectorAll('td.anq-table-cell.column-with-sorter, .anq-table-cell.column-with-sorter'));
+    }}
     return cells;
-}
-function extractMetrics(cells, colIndex) {
-    const metrics = {};
-    for (const [key, idx] of Object.entries(colIndex)) {
-        const i = parseInt(idx, 10);
-        if (i >= cells.length) continue;
-        const v = String(cells[i] || '').trim();
-        if (isMetricValue(v)) metrics[key] = v;
-    }
-    return metrics;
-}
-function parseRow(row, headers, colIndex) {
+}}
+function isInScrollViewport(node, scrollContainer) {{
+    if (!node || !scrollContainer) return false;
+    const rect = node.getBoundingClientRect();
+    const containerRect = scrollContainer.getBoundingClientRect();
+    return rect.right > containerRect.left + 2 && rect.left < containerRect.right - 2;
+}}
+function findScrollHeaderCells(root) {{
+    const sorterCells = Array.from(root.querySelectorAll(
+        '.anq-table-content .anq-table-header .anq-table-cell.column-with-sorter, '
+        + '.anq-table-header:not(.anq-table-fixed-left *) .anq-table-cell.column-with-sorter, '
+        + '.anq-table-body thead .anq-table-cell.column-with-sorter, '
+        + '.ant-table-header .ant-table-cell.column-with-sorter'
+    ));
+    if (sorterCells.length >= 3) {{
+        return sorterCells.filter((cell) => isMetricHeaderText(norm(cell.innerText || cell.textContent || '')));
+    }}
+    const selectors = [
+        '.anq-table-content > .anq-table-header .anq-table-thead .anq-table-cell',
+        '.anq-table-content .anq-table-header .anq-table-cell',
+        '.anq-table-body table thead .anq-table-cell',
+    ];
+    for (const sel of selectors) {{
+        const cells = Array.from(root.querySelectorAll(sel))
+            .filter((cell) => isMetricHeaderText(norm(cell.innerText || cell.textContent || '')));
+        if (cells.length >= 3) return cells;
+    }}
+    return [];
+}}
+function extractScrollMetricHeaders(root) {{
+    const headers = [];
+    const seen = new Set();
+    for (const cell of findScrollHeaderCells(root)) {{
+        const text = norm(cell.innerText || cell.textContent || '');
+        if (!text || seen.has(text) || !isMetricHeaderText(text)) continue;
+        seen.add(text);
+        headers.push(text);
+    }}
+    return headers;
+}}
+function mapCellsToHeaders(cells, headers) {{
+    const out = {{}};
+    const n = Math.min(headers.length, cells.length);
+    for (let i = 0; i < n; i++) {{
+        const header = headers[i];
+        const value = String(cells[i] || '').trim();
+        if (!header || !isCellValue(value)) continue;
+        out[header] = value;
+    }}
+    return out;
+}}
+function extractRowMetricValues(scrollRow, scrollContainer, allHeaders) {{
+    const cellNodes = getSorterCellNodes(scrollRow);
+    const headerValues = {{}};
+    if (allHeaders.length && cellNodes.length === allHeaders.length) {{
+        const cells = cellNodes.map((c) => norm(c.innerText || c.textContent || ''));
+        Object.assign(headerValues, mapCellsToHeaders(cells, allHeaders));
+        return headerValues;
+    }}
+    if (allHeaders.length && scrollContainer) {{
+        for (let i = 0; i < cellNodes.length; i++) {{
+            if (i >= allHeaders.length) break;
+            const node = cellNodes[i];
+            if (!isInScrollViewport(node, scrollContainer)) continue;
+            const header = allHeaders[i];
+            const value = norm(node.innerText || node.textContent || '');
+            if (header && isCellValue(value)) headerValues[header] = value;
+        }}
+    }}
+    return headerValues;
+}}
+function syncTableScroll(root, scrollEl, pos) {{
+    if (scrollEl) scrollEl.scrollLeft = pos;
+    if (!root) return;
+    for (const sel of [
+        '.anq-table-header',
+        '.anq-table-sticky-scroll',
+        '.ant-table-header',
+        '.ant-table-sticky-scroll',
+        '[class*="sticky-scroll"]',
+    ]) {{
+        for (const node of Array.from(root.querySelectorAll(sel))) {{
+            if (!node || node === scrollEl) continue;
+            try {{ node.scrollLeft = pos; }} catch (e) {{}}
+        }}
+    }}
+}}
+function findListTableRoot() {{
+    const picker = document.querySelector('[class*="ListDatePicker"]');
+    if (picker) {{
+        let node = picker.parentElement;
+        for (let i = 0; i < 12 && node; i++) {{
+            const table = node.querySelector('.anq-table-wrapper, .anq-table, .ant-table-wrapper, .ant-table');
+            if (table && isVisible(table)) return table;
+            node = node.parentElement;
+        }}
+    }}
+    const tbody = document.querySelector('.anq-table-tbody, .ant-table-tbody');
+    if (tbody && isVisible(tbody)) {{
+        return tbody.closest('.anq-table-wrapper, .anq-table, .ant-table-wrapper, .ant-table, table') || tbody;
+    }}
+    return null;
+}}
+function findFixedTbody(root) {{
+    const fixed = root.querySelector(
+        '.anq-table-fixed-left .anq-table-tbody, .anq-table-ping-left .anq-table-tbody, '
+        + '.ant-table-fixed-left .ant-table-tbody'
+    );
+    if (fixed && isVisible(fixed)) return fixed;
+    const tbodies = Array.from(root.querySelectorAll('.anq-table-tbody, .ant-table-tbody, tbody'));
+    for (const tb of tbodies) {{
+        if (!isVisible(tb)) continue;
+        if (/商品\\s*ID/i.test(tb.innerText || '')) return tb;
+    }}
+    return root.querySelector('.anq-table-tbody, .ant-table-tbody, tbody');
+}}
+function findScrollContainer(root) {{
+    const marked = document.querySelector('[{_SCROLL_MARK_ATTR}]');
+    if (marked && isVisible(marked)) return marked;
+    const selectors = [
+        '.anq-table-body',
+        '.anq-table-content',
+        '.ant-table-body',
+        '.ant-table-content',
+        '[class*="table-content"]',
+        '[class*="TableContent"]',
+    ];
+    let best = null;
+    let bestOverflow = 0;
+    for (const sel of selectors) {{
+        for (const el of Array.from(root.querySelectorAll(sel))) {{
+            if (!isVisible(el)) continue;
+            if (el.closest('.anq-table-fixed-left, .anq-table-ping-left, .ant-table-fixed-left')) continue;
+            const overflow = el.scrollWidth - el.clientWidth;
+            if (overflow > bestOverflow) {{
+                bestOverflow = overflow;
+                best = el;
+            }}
+        }}
+    }}
+    if (best) return best;
+    return root.querySelector('.anq-table-body, .anq-table-content, .ant-table-body') || root;
+}}
+function findScrollTbody(scrollContainer) {{
+    const tbodies = Array.from(scrollContainer.querySelectorAll('.anq-table-tbody, .ant-table-tbody, tbody'));
+    for (const tb of tbodies) {{
+        if (!isVisible(tb)) continue;
+        if (tb.closest('.anq-table-fixed-left, .anq-table-ping-left, .ant-table-fixed-left')) continue;
+        return tb;
+    }}
+    return scrollContainer.querySelector('.anq-table-tbody, .ant-table-tbody, tbody');
+}}
+function extractAllScrollHeaders(root, scrollContainer) {{
+    return extractScrollMetricHeaders(root);
+}}
+function parseUnifiedRow(row, scrollContainer, allHeaders) {{
     const rowText = norm(row.innerText || row.textContent || '');
     if (!rowText || rowText.includes('合计数据')) return null;
-    const idMatch = rowText.match(/商品\\s*ID[：:]\\s*(\\d{6,})/i);
+    const idMatch = rowText.match(/商品\\s*ID[：:]\\s*(\\d{{6,}})/i);
     if (!idMatch) return null;
-    const cells = getAlignedCells(row, headers.length);
-    const metrics = extractMetrics(cells, colIndex);
-    return {
+    return {{
         product_id: idMatch[1],
-        cells,
-        metrics,
-        row_text: rowText,
-    };
-}
-function collectRows(root, headers, colIndex) {
-    const selectors = [
-        '.anq-table-tbody tr',
-        '.anq-table-row',
-        'tbody tr',
-        '.ant-table-tbody tr',
-        '.ant-table-tbody .ant-table-row',
-        '.ant-table-row',
-        '[class*="table-body"] tr',
-        '[class*="table-body"] [class*="row"]',
-        '[class*="TableBody"] [class*="row"]',
-    ];
-    const seen = new Set();
-    const rows = [];
-    for (const sel of selectors) {
-        for (const row of Array.from(root.querySelectorAll(sel)).filter(isVisible)) {
-            const parsed = parseRow(row, headers, colIndex);
-            if (!parsed || seen.has(parsed.product_id)) continue;
-            seen.add(parsed.product_id);
-            rows.push(parsed);
-        }
-        if (rows.length) break;
-    }
-    return rows;
-}
-function findRoots() {
-    const listTable = findListTableRoot();
-    if (listTable) return [listTable];
-    const nodes = Array.from(document.querySelectorAll('.anq-table,.anq-table-wrapper,table,.ant-table,[class*="table"],[class*="list"],main,section,div'));
-    const scored = [];
-    for (const el of nodes) {
-        if (!isVisible(el)) continue;
-        const text = norm(el.innerText || '');
-        if (!hasProductId(text) || !hasSpendMetric(text)) continue;
-        const rect = el.getBoundingClientRect();
-        scored.push({ el, score: rect.width * rect.height });
-    }
-    scored.sort((a, b) => b.score - a.score);
-    return scored.map((x) => x.el);
-}
-function fallbackRows(headers, colIndex) {
-    const scope = findListTableRoot() || document.querySelector('.anq-table, .anq-table-wrapper');
-    if (!scope) return [];
-    const rows = [];
-    const seen = new Set();
-    for (const row of Array.from(scope.querySelectorAll('.anq-table-tbody tr, tbody tr, .anq-table-row')).filter(isVisible)) {
-        const parsed = parseRow(row, headers, colIndex);
+        header_values: extractRowMetricValues(row, scrollContainer, allHeaders),
+        row_text: rowText.slice(0, 200),
+    }};
+}}
+const root = findListTableRoot();
+if (!root) return {{ headers: [], rows: [], scroll_left: 0 }};
+const scrollContainer = findScrollContainer(root);
+const fixedTbody = findFixedTbody(root);
+const scrollTbody = findScrollTbody(scrollContainer);
+const allHeaders = extractAllScrollHeaders(root, scrollContainer);
+const scrollLeft = scrollContainer.scrollLeft || 0;
+const rows = [];
+const seen = new Set();
+if (fixedTbody && scrollTbody && fixedTbody !== scrollTbody) {{
+    const fixedRows = Array.from(fixedTbody.querySelectorAll('tr.anq-table-row, tr')).filter(isVisible);
+    const scrollRows = Array.from(scrollTbody.querySelectorAll('tr.anq-table-row, tr')).filter(isVisible);
+    const count = Math.max(fixedRows.length, scrollRows.length);
+    for (let i = 0; i < count; i++) {{
+        const fixedText = norm(fixedRows[i]?.innerText || fixedRows[i]?.textContent || '');
+        if (!fixedText || fixedText.includes('合计数据')) continue;
+        const idMatch = fixedText.match(/商品\\s*ID[：:]\\s*(\\d{{6,}})/i);
+        if (!idMatch || seen.has(idMatch[1])) continue;
+        seen.add(idMatch[1]);
+        rows.push({{
+            product_id: idMatch[1],
+            header_values: extractRowMetricValues(scrollRows[i], scrollContainer, allHeaders),
+            row_text: fixedText.slice(0, 200),
+        }});
+    }}
+}}
+if (!rows.length && scrollTbody) {{
+    for (const row of Array.from(scrollTbody.querySelectorAll('tr.anq-table-row, tr')).filter(isVisible)) {{
+        const parsed = parseUnifiedRow(row, scrollContainer, allHeaders);
         if (!parsed || seen.has(parsed.product_id)) continue;
         seen.add(parsed.product_id);
         rows.push(parsed);
-    }
-    return rows;
-}
-
-const roots = findRoots();
-let headers = [];
-let colIndex = {};
-let rows = [];
-for (const root of roots) {
-    headers = extractHeaders(root);
-    colIndex = buildMetricColIndex(headers);
-    rows = collectRows(root, headers, colIndex);
-    if (rows.length) break;
-}
-if (!rows.length) {
-    if (!headers.length) {
-        for (const root of roots) {
-            headers = extractHeaders(root);
-            if (headers.length) break;
-        }
-        colIndex = buildMetricColIndex(headers);
-    }
-    rows = fallbackRows(headers, colIndex);
-}
-if (!headers.length && rows.length) {
-    headers = ['成交花费(元)','交易额(元)','实际投产比','总花费(元)','净交易额(元)','净实际投产比','净成交笔数','每笔净成交花费(元)'];
-}
-return {
-    ready: rows.length > 0 || (roots.length > 0 && hasProductId(document.body?.innerText || '') && hasSpendMetric(document.body?.innerText || '')),
-    headers,
-    rows,
-    row_count: rows.length,
-    root_count: roots.length,
-    reason: rows.length ? 'ok' : 'table_not_found',
-};
+    }}
+}}
+return {{ headers: allHeaders, rows, scroll_left: scrollLeft }};
 """
 
-METRIC_HEADERS: dict[str, str] = {
-    "成交花费": "spend",
-    "交易额": "amount",
-    "实际投产比": "roi",
-    "总花费": "total_cost",
-    "净交易额": "net_amount",
-    "净实际投产比": "net_roi",
-    "净成交笔数": "net_orders",
-    "每笔净成交花费": "cost_per_order",
-}
+_RESET_PROMOTION_TABLE_SCROLL_JS = f"""
+(() => {{
+    const el = document.querySelector('[{_SCROLL_MARK_ATTR}]');
+    if (el) el.scrollLeft = 0;
+    document.querySelectorAll('[{_SCROLL_MARK_ATTR}]').forEach((node) => {{
+        node.removeAttribute('{_SCROLL_MARK_ATTR}');
+    }});
+}})();
+"""
 
 
 def _log(account_id: str, message: str) -> None:
@@ -265,12 +455,112 @@ def _fail(
     return {"status": "failed", "error": error, "message": message, "url": url, **extra}
 
 
-def _extract_promotion_table(page: DpPage) -> dict[str, Any]:
-    return page.run_js(_EXTRACT_PROMOTION_TABLE_JS) or {
-        "ready": False,
-        "headers": [],
-        "rows": [],
-        "reason": "extract_failed",
+def _scroll_positions(max_scroll: int, step: int) -> list[int]:
+    if max_scroll <= 0:
+        return [0]
+    step = max(200, int(step or 400))
+    positions = [0]
+    pos = step
+    while pos < max_scroll:
+        positions.append(pos)
+        pos += step
+    if positions[-1] != max_scroll:
+        positions.append(max_scroll)
+    return positions
+
+
+def _set_promotion_table_scroll(page: DpPage, scroll_left: int) -> None:
+    page.run_js(
+        f"""
+        (() => {{
+            const pos = {int(scroll_left)};
+            const el = document.querySelector('[{_SCROLL_MARK_ATTR}]');
+            if (!el) return;
+            const root = el.closest('.anq-table-wrapper, .anq-table, .ant-table-wrapper, .ant-table');
+            el.scrollLeft = pos;
+            if (!root) return;
+            for (const sel of [
+                '.anq-table-header',
+                '.anq-table-sticky-scroll',
+                '.ant-table-header',
+                '.ant-table-sticky-scroll',
+                '[class*="sticky-scroll"]',
+            ]) {{
+                for (const node of Array.from(root.querySelectorAll(sel))) {{
+                    if (!node || node === el) continue;
+                    try {{ node.scrollLeft = pos; }} catch (e) {{}}
+                }}
+            }}
+        }})();
+        """
+    )
+
+
+def _reset_promotion_table_scroll(page: DpPage) -> None:
+    page.run_js(_RESET_PROMOTION_TABLE_SCROLL_JS)
+
+
+def _extract_promotion_table(page: DpPage, account_id: str = "") -> dict[str, Any]:
+    """从固定列 + 横向滚动列拆分表格中提取全部指标。"""
+    prep = page.run_js(_PREPARE_PROMOTION_TABLE_JS) or {}
+    if not prep.get("ready"):
+        return {
+            "ready": False,
+            "headers": [],
+            "rows": [],
+            "reason": str(prep.get("reason") or "table_not_found"),
+        }
+
+    max_scroll = int(prep.get("max_scroll") or 0)
+    step = int(prep.get("scroll_step") or 400)
+    positions = _scroll_positions(max_scroll, step)
+
+    merged_headers: list[str] = []
+    merged_rows: dict[str, dict[str, Any]] = {}
+
+    try:
+        for pos in positions:
+            _set_promotion_table_scroll(page, pos)
+            time.sleep(0.35)
+            slice_data = page.run_js(_EXTRACT_PROMOTION_TABLE_SLICE_JS) or {}
+            for header in slice_data.get("headers") or []:
+                text = normalize_traffic_header(str(header or "").strip())
+                if text and is_known_metric_header(text) and text not in merged_headers:
+                    merged_headers.append(text)
+            for item in slice_data.get("rows") or []:
+                if not isinstance(item, dict):
+                    continue
+                product_id = str(item.get("product_id") or "").strip()
+                if not product_id:
+                    continue
+                bucket = merged_rows.setdefault(
+                    product_id,
+                    {"product_id": product_id, "header_values": {}, "row_text": ""},
+                )
+                header_values = item.get("header_values")
+                if isinstance(header_values, dict):
+                    bucket["header_values"].update(normalize_traffic_metrics(header_values))
+                row_text = str(item.get("row_text") or "").strip()
+                if row_text:
+                    bucket["row_text"] = row_text[:500]
+    finally:
+        _reset_promotion_table_scroll(page)
+
+    rows = list(merged_rows.values())
+    if rows and account_id:
+        sample = rows[0].get("header_values") or {}
+        _log(
+            account_id,
+            f"表格解析：{len(rows)} 行，{len(merged_headers)} 列表头，"
+            f"样例指标 {len(sample)} 个（横向扫描 {len(positions)} 次）",
+        )
+    return {
+        "ready": bool(rows),
+        "headers": merged_headers,
+        "rows": rows,
+        "row_count": len(rows),
+        "scroll_positions": len(positions),
+        "reason": "ok" if rows else "no_rows",
     }
 
 
@@ -321,6 +611,95 @@ def _read_consumption_date_state(page: DpPage, target_str: str) -> dict[str, Any
         }};
         """
     ) or {}
+
+
+def _close_promotion_tabs_keep_list(page: DpPage, account_id: str) -> dict[str, Any]:
+    """只保留推广列表页标签，关闭其余标签。"""
+    kept = None
+    for item in _live_context_pages(page):
+        try:
+            if item.is_closed():
+                continue
+            url = str(item.url or "")
+            if _is_promotion_list_url(url):
+                kept = item
+                break
+        except Exception:
+            continue
+
+    if kept is None:
+        return {"closed": [], "kept": False}
+
+    closed_urls: list[str] = []
+    for item in list(_live_context_pages(page)):
+        if item is kept:
+            continue
+        try:
+            if item.is_closed():
+                continue
+            url = str(item.url or "")
+            item.close()
+            closed_urls.append(url)
+            _log(account_id, f"已关闭多余标签页: {url}")
+        except Exception:
+            continue
+
+    _bind_page(page, kept)
+    try:
+        kept.bring_to_front()
+    except Exception:
+        pass
+    time.sleep(0.5)
+    return {"closed": closed_urls, "kept": True, "kept_url": str(getattr(kept, "url", "") or "")}
+
+
+def _open_promotion_list_for_report(
+    page: DpPage,
+    account_id: str,
+    *,
+    account: AccountConfig | None = None,
+) -> bool:
+    """直达推广列表页，避免概况→查看全部推广多开标签。"""
+    session = _ensure_session(page, account, account_id)
+    if not session.get("logged_in"):
+        return False
+
+    _dismiss_message_popup(page)
+    _log(account_id, f"直达推广列表页：{PROMOTION_LIST_URL}")
+    try:
+        page.get(PROMOTION_LIST_URL)
+        time.sleep(4)
+        _switch_to_latest_tab(page)
+        _dismiss_message_popup(page)
+        if is_login_url(_page_url(page)):
+            relogin = _ensure_session(page, account, account_id)
+            if not relogin.get("logged_in"):
+                return False
+            page.get(PROMOTION_LIST_URL)
+            time.sleep(4)
+            _switch_to_latest_tab(page)
+    except Exception as exc:
+        _log(account_id, f"直达推广列表页失败：{_safe_exc(exc)}")
+        return False
+
+    _close_mms_tabs_when_yingxiao_ready(page, account_id)
+    cleanup = _close_promotion_tabs_keep_list(page, account_id)
+    if cleanup.get("closed"):
+        _log(account_id, f"已清理 {len(cleanup.get('closed') or [])} 个多余标签页")
+
+    if _is_promotion_list_url(_page_url(page)):
+        _log(account_id, f"推广列表页已就绪：{_page_url(page)}")
+        return True
+
+    _log(account_id, "直达失败，回退：推广概况 → 查看全部推广")
+    if not _open_promotion_overview(page, account_id, account=account):
+        return False
+    time.sleep(2)
+    if not _ensure_promotion_list_page(page, account_id):
+        return False
+    _close_mms_tabs_when_yingxiao_ready(page, account_id)
+    _close_promotion_tabs_keep_list(page, account_id)
+    return _is_promotion_list_url(_page_url(page))
 
 
 def _navigate_promotion_list_direct(page: DpPage, account_id: str) -> bool:
@@ -652,31 +1031,37 @@ def _select_yesterday_report_range(
     return False
 
 
-def _scrape_current_page_rows(page: DpPage) -> tuple[list[dict[str, Any]], list[str]]:
-    payload = _extract_promotion_table(page)
+def _wait_promotion_table_ready(
+    page: DpPage,
+    account_id: str,
+    *,
+    min_rows: int = 1,
+    timeout: int = 20,
+) -> bool:
+    """等待推广列表表格加载出可解析的商品行。"""
+    for attempt in range(timeout):
+        payload = _extract_promotion_table(page, account_id)
+        rows = payload.get("rows") or []
+        metric_rows = sum(
+            1
+            for row in rows
+            if isinstance(row, dict) and len(dict(row.get("header_values") or {})) > 0
+        )
+        if len(rows) >= min_rows and metric_rows >= min(1, len(rows)):
+            _log(
+                account_id,
+                f"表格已加载：{len(rows)} 行，含指标 {metric_rows} 行",
+            )
+            return True
+        if rows and attempt >= 8:
+            _log(account_id, f"表格已有 {len(rows)} 行但指标仍为空，继续等待({attempt + 1}/{timeout})")
+        time.sleep(1)
+    return False
+
+
+def _scrape_current_page_rows(page: DpPage, account_id: str = "") -> tuple[list[dict[str, Any]], list[str]]:
+    payload = _extract_promotion_table(page, account_id)
     return list(payload.get("rows") or []), list(payload.get("headers") or [])
-
-
-def _normalize_header(header: str) -> str:
-    return re.sub(r"\s+", "", str(header or ""))
-
-
-def _map_row_metrics(headers: list[str], cells: list[str]) -> dict[str, str]:
-    metrics: dict[str, str] = {}
-    normalized_headers = [_normalize_header(h) for h in headers]
-    # 优先匹配更长的表头关键字，避免「每笔净成交花费」被「成交花费」误匹配。
-    ordered_keys = sorted(METRIC_HEADERS.items(), key=lambda item: len(item[0]), reverse=True)
-    for idx, header in enumerate(normalized_headers):
-        if idx >= len(cells):
-            continue
-        value = str(cells[idx] or "").strip()
-        if value == "" or not re.fullmatch(r"-?\d+(?:\.\d+)?", value):
-            continue
-        for key, field in ordered_keys:
-            if key in header:
-                metrics[field] = value
-                break
-    return metrics
 
 
 def _parse_rows_with_headers(raw_rows: list[dict[str, Any]], headers: list[str]) -> list[dict[str, Any]]:
@@ -685,57 +1070,16 @@ def _parse_rows_with_headers(raw_rows: list[dict[str, Any]], headers: list[str])
         product_id = str(item.get("product_id") or "").strip()
         if not product_id:
             continue
-        cells = list(item.get("cells") or [])
-        metrics = dict(item.get("metrics") or {})
-        if not metrics:
-            metrics = _map_row_metrics(headers, cells)
-        if not metrics:
-            metrics = _parse_metrics_from_text(str(item.get("row_text") or ""))
+        header_values = normalize_traffic_metrics(dict(item.get("header_values") or {}))
         parsed.append(
             {
                 "product_id": product_id,
-                "metrics": metrics,
+                "metrics": header_values,
+                "header_values": header_values,
                 "row_text": str(item.get("row_text") or "")[:500],
             }
         )
     return parsed
-
-
-def _parse_metrics_from_text(row_text: str) -> dict[str, str]:
-    """表头映射失败时，从行文本按字段名或数值顺序兜底解析（含 0.00）。"""
-    text = str(row_text or "")
-    patterns: list[tuple[str, str]] = [
-        (r"成交花费(?:\(元\))?\s*([\d.]+|-)", "spend"),
-        (r"交易额(?:\(元\))?\s*([\d.]+|-)", "amount"),
-        (r"实际投产比\s*([\d.]+|-)", "roi"),
-        (r"总花费(?:\(元\))?\s*([\d.]+|-)", "total_cost"),
-        (r"净交易额(?:\(元\))?\s*([\d.]+|-)", "net_amount"),
-        (r"净实际投产比\s*([\d.]+|-)", "net_roi"),
-        (r"净成交笔数\s*(\d+|-)", "net_orders"),
-        (r"每笔净成交花费(?:\(元\))?\s*([\d.]+|-)", "cost_per_order"),
-    ]
-    metrics: dict[str, str] = {}
-    for pattern, field in patterns:
-        match = re.search(pattern, text)
-        if not match:
-            continue
-        value = str(match.group(1) or "").strip()
-        if value == "-" or value == "":
-            continue
-        metrics[field] = value
-    if len(metrics) >= 3:
-        return metrics
-
-    match = PRODUCT_ID_PATTERN.search(text)
-    tail = text[match.end() :] if match else text
-    tail = re.sub(r"\d{4}/\d{1,2}/\d{1,2}", " ", tail)
-    tail = re.sub(r"净目标投产比[:：]\s*[\d.]+", " ", tail)
-    tail = re.sub(r"预算日限额[:：][^\d]*", " ", tail)
-    values = re.findall(r"\d+\.\d{2}|\b0\b", tail)
-    keys = list(METRIC_HEADERS.values())
-    if len(values) >= 4:
-        return {keys[i]: values[i] for i in range(min(len(values), len(keys)))}
-    return metrics
 
 
 def _scrape_all_pages(page: DpPage, account_id: str) -> tuple[list[dict[str, Any]], list[str]]:
@@ -744,7 +1088,7 @@ def _scrape_all_pages(page: DpPage, account_id: str) -> tuple[list[dict[str, Any
     seen_ids: set[str] = set()
 
     for page_no in range(1, MAX_PAGES + 1):
-        raw_rows, page_headers = _scrape_current_page_rows(page)
+        raw_rows, page_headers = _scrape_current_page_rows(page, account_id)
         if page_headers:
             headers = page_headers
 
@@ -759,9 +1103,10 @@ def _scrape_all_pages(page: DpPage, account_id: str) -> tuple[list[dict[str, Any
             new_count += 1
 
         summary = _read_pagination_summary(page)
+        metric_count = sum(len(row.get("metrics") or {}) for row in parsed)
         _log(
             account_id,
-            f"投流数据第{page_no}页：本页{len(parsed)}条，新增{new_count}条，累计{len(all_rows)}条"
+            f"投流数据第{page_no}页：本页{len(parsed)}条，有效指标{metric_count}条，新增{new_count}条，累计{len(all_rows)}条"
             + (f"；{summary}" if summary else ""),
         )
         if page_no >= MAX_PAGES:
@@ -791,16 +1136,7 @@ def scrape_stable_cost_promotion_report(
         }
 
     _dismiss_message_popup(page)
-    if not _open_promotion_overview(page, account_id, account=account):
-        return _fail(
-            account_id,
-            page,
-            error="promotion_overview_not_found",
-            message="未能进入推广概况页",
-        )
-
-    time.sleep(2)
-    if not _ensure_promotion_list_page(page, account_id):
+    if not _open_promotion_list_for_report(page, account_id, account=account):
         return _fail(
             account_id,
             page,
@@ -838,8 +1174,8 @@ def scrape_stable_cost_promotion_report(
     expected = int(state.get("rowCount") or 0)
     if expected:
         _log(account_id, f"表格合计数据：{expected} 条")
-    page.run_js("window.scrollTo(0, document.body.scrollHeight * 0.35);")
-    time.sleep(1)
+    if not _wait_promotion_table_ready(page, account_id, min_rows=max(1, expected)):
+        _log(account_id, "警告：表格数据加载较慢，将尝试继续抓取")
 
     rows, headers = _scrape_all_pages(page, account_id)
     if expected and len(rows) != expected:

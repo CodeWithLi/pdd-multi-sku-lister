@@ -164,3 +164,11 @@ class IntegratedPipelineListResponse(BaseModel):
     total: int
     page: int = 1
     page_size: int = 10
+
+
+class PipelineExcelFallbackOut(BaseModel):
+    enabled: bool
+
+
+class PipelineExcelFallbackUpdateIn(BaseModel):
+    enabled: bool

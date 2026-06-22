@@ -22,6 +22,7 @@ from pdd_agent.integrations.feishu.bitable import (
 from pdd_agent.integrations.feishu.client import FeishuAPIError, FeishuClient
 from pdd_agent.integrations.feishu.config import (
     FeishuConfig,
+    excel_fallback_enabled,
     load_feishu_config,
     save_pdd_product_catalog_table_id_to_config,
 )
@@ -142,17 +143,30 @@ def load_pdd_product_catalog_from_feishu(
     config: FeishuConfig | None = None,
     client: FeishuClient | None = None,
 ) -> ProductCatalogLoadResult:
+    """从飞书「拼多多比价定价」读取商品编码/规格/库存/定价。"""
     cfg = config or load_feishu_config()
     catalog_cfg = cfg.pdd_product_catalog
     if not catalog_cfg.enabled:
         return ProductCatalogLoadResult(catalog={}, source="disabled")
 
+    from pdd_agent.integrations.feishu.listing_feishu_snapshot import get_listing_feishu_snapshot
+
+    snapshot = get_listing_feishu_snapshot()
+    if snapshot is not None:
+        catalog = snapshot.product_catalog(cfg)
+        return ProductCatalogLoadResult(
+            catalog=catalog,
+            source=snapshot.source if catalog else "feishu_empty",
+        )
+
     app_token = str(cfg.bitable_app_token or "").strip()
     if not app_token or not cfg.app_id or not cfg.app_secret:
         return ProductCatalogLoadResult(catalog={}, source="feishu_not_configured")
 
+    from pdd_agent.integrations.feishu.pdd_price_compare_sync import resolve_pdd_price_compare_table_id
+
     api = client or FeishuClient(cfg)
-    table_id, _ = resolve_pdd_product_catalog_table_id(cfg, api, save_table_id=False)
+    table_id, _ = resolve_pdd_price_compare_table_id(cfg, api, save_table_id=False)
     if not table_id:
         return ProductCatalogLoadResult(catalog={}, source="feishu_table_missing")
 
@@ -280,7 +294,13 @@ def diagnose_feishu_listing_catalog_issues(
 
     product_catalog: dict[str, PddProductEntry] = {}
     product_source = ""
-    if cat_cfg.enabled and cat_cfg.prefer_feishu:
+    from pdd_agent.integrations.feishu.listing_feishu_snapshot import get_listing_feishu_snapshot
+
+    snapshot = get_listing_feishu_snapshot()
+    if snapshot is not None:
+        product_catalog = snapshot.product_catalog(cfg)
+        product_source = snapshot.source
+    elif cat_cfg.enabled and cat_cfg.prefer_feishu:
         loaded = load_pdd_product_catalog_from_feishu(config=cfg, client=client)
         product_catalog = loaded.catalog
         product_source = loaded.source
@@ -294,9 +314,14 @@ def diagnose_feishu_listing_catalog_issues(
             load_pricing_catalog,
         )
 
-        pricing_catalog = load_pricing_catalog(config=cfg, client=client)
-        control_catalog = load_control_catalog(config=cfg, client=client)
-        range_catalog = load_price_range_catalog(config=cfg, client=client)
+        if snapshot is not None:
+            pricing_catalog = snapshot.pricing_catalog(cfg)
+            control_catalog = snapshot.control_catalog(cfg)
+            range_catalog = snapshot.range_catalog(cfg)
+        else:
+            pricing_catalog = load_pricing_catalog(config=cfg, client=client)
+            control_catalog = load_control_catalog(config=cfg, client=client)
+            range_catalog = load_price_range_catalog(config=cfg, client=client)
 
     issues: list[FeishuListingCatalogIssue] = []
     for unit in unit_list:
@@ -456,6 +481,17 @@ def load_unified_pdd_product_catalog(
     ):
         return dict(_CACHE["catalog"])
 
+    from pdd_agent.integrations.feishu.listing_feishu_snapshot import get_listing_feishu_snapshot
+
+    snapshot = get_listing_feishu_snapshot()
+    if snapshot is not None and catalog_cfg.enabled and catalog_cfg.prefer_feishu:
+        catalog = snapshot.product_catalog(cfg)
+        if catalog:
+            _CACHE["loaded_at"] = time.time()
+            _CACHE["catalog"] = catalog
+            _CACHE["source"] = snapshot.source
+            return dict(catalog)
+
     if catalog_cfg.enabled and catalog_cfg.prefer_feishu:
         try:
             loaded = load_pdd_product_catalog_from_feishu(config=cfg, client=client)
@@ -467,7 +503,7 @@ def load_unified_pdd_product_catalog(
         except Exception:
             logger.exception("load pdd product catalog from feishu failed")
 
-    if catalog_cfg.fallback_excel:
+    if excel_fallback_enabled(cfg):
         path = excel_path
         if path is None and settings is not None:
             path = settings.multi_spec.excel_path

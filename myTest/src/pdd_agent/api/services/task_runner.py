@@ -1126,6 +1126,12 @@ async def execute_listing(
         return {"error": str(exc)}
 
     try:
+        from pdd_agent.integrations.feishu.listing_feishu_snapshot import (
+            clear_listing_feishu_snapshot,
+            init_listing_feishu_snapshot,
+        )
+
+        init_listing_feishu_snapshot()
         graph = build_listing_graph()
         raw = await graph.ainvoke(
             {
@@ -1204,6 +1210,13 @@ async def execute_listing(
             product_codes=codes,
         )
         return {"error": str(exc)}
+    finally:
+        try:
+            from pdd_agent.integrations.feishu.listing_feishu_snapshot import clear_listing_feishu_snapshot
+
+            clear_listing_feishu_snapshot()
+        except Exception:
+            logger.exception("clear listing feishu snapshot failed run_id=%s", run_id)
 
 
 def create_listing_run(account_id: str) -> str:

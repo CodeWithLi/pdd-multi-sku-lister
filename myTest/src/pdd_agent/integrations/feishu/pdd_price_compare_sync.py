@@ -27,6 +27,7 @@ from pdd_agent.integrations.feishu.bitable import (
 from pdd_agent.integrations.feishu.client import FeishuAPIError, FeishuClient
 from pdd_agent.integrations.feishu.config import (
     FeishuConfig,
+    excel_fallback_enabled,
     load_feishu_config,
     save_pdd_price_compare_table_id_to_config,
 )
@@ -587,6 +588,12 @@ def load_price_range_catalog(
 ) -> PriceRangeCatalog:
     """优先飞书；无数据且允许回退时读本地 pdd.xls。"""
     cfg = config or load_feishu_config()
+    from pdd_agent.integrations.feishu.listing_feishu_snapshot import get_listing_feishu_snapshot
+
+    snapshot = get_listing_feishu_snapshot()
+    if snapshot is not None:
+        return snapshot.range_catalog(cfg)
+
     compare_cfg = cfg.pdd_price_compare
     cache_seconds = int(compare_cfg.cache_seconds or 0)
 
@@ -605,7 +612,7 @@ def load_price_range_catalog(
     if catalog.ranges:
         return _cache_set("range_catalog", catalog)
 
-    if compare_cfg.fallback_excel:
+    if excel_fallback_enabled(cfg):
         rows = load_pdd_xls_rows(path=excel_path, config=cfg)
         excel_ranges = _ranges_from_excel_rows(rows)
         catalog = PriceRangeCatalog(ranges=excel_ranges, source="excel" if excel_ranges else "empty")
@@ -622,6 +629,12 @@ def load_pricing_catalog(
     client: FeishuClient | None = None,
 ) -> CodePriceCatalog:
     cfg = config or load_feishu_config()
+    from pdd_agent.integrations.feishu.listing_feishu_snapshot import get_listing_feishu_snapshot
+
+    snapshot = get_listing_feishu_snapshot()
+    if snapshot is not None:
+        return snapshot.pricing_catalog(cfg)
+
     compare_cfg = cfg.pdd_price_compare
     cache_seconds = int(compare_cfg.cache_seconds or 0)
 
@@ -640,7 +653,7 @@ def load_pricing_catalog(
     if catalog.prices:
         return _cache_set("pricing_catalog", catalog)
 
-    if compare_cfg.fallback_excel:
+    if excel_fallback_enabled(cfg):
         rows = load_pricing_xls_rows(path=excel_path, config=cfg)
         prices = _prices_from_excel_rows(rows)
         entries = _entries_from_excel_rows(rows)
@@ -662,6 +675,12 @@ def load_control_catalog(
     client: FeishuClient | None = None,
 ) -> CodePriceCatalog:
     cfg = config or load_feishu_config()
+    from pdd_agent.integrations.feishu.listing_feishu_snapshot import get_listing_feishu_snapshot
+
+    snapshot = get_listing_feishu_snapshot()
+    if snapshot is not None:
+        return snapshot.control_catalog(cfg)
+
     compare_cfg = cfg.pdd_price_compare
     cache_seconds = int(compare_cfg.cache_seconds or 0)
 
@@ -680,7 +699,7 @@ def load_control_catalog(
     if catalog.prices:
         return _cache_set("control_catalog", catalog)
 
-    if compare_cfg.fallback_excel:
+    if excel_fallback_enabled(cfg):
         rows = load_control_xls_rows(path=excel_path, config=cfg)
         prices = _prices_from_excel_rows(rows)
         entries = _entries_from_excel_rows(rows)

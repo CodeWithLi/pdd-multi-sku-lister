@@ -26,6 +26,10 @@ from pdd_agent.integrations.feishu.config import (
     save_pdd_marketing_table_id_to_config,
 )
 from pdd_agent.integrations.feishu.pdd_upload_sync import _format_listing_error_reason
+from pdd_agent.integrations.feishu.traffic_metric_columns import (
+    collect_metric_columns,
+    normalize_traffic_metrics,
+)
 
 logger = get_logger(__name__)
 
@@ -33,10 +37,18 @@ _FEISHU_TRAFFIC_SUCCESS = "成功"
 _FEISHU_TRAFFIC_FAILURE = "失败"
 
 
-def _field_defs_for_pdd_marketing_log(config: FeishuConfig) -> list[dict[str, Any]]:
+def _field_defs_for_pdd_marketing_log(
+    config: FeishuConfig,
+    *,
+    extra_columns: list[str] | None = None,
+) -> list[dict[str, Any]]:
     names = config.pdd_marketing_log.field_names
     marketing_cfg = config.pdd_marketing_log
-    return [
+    metric_columns = collect_metric_columns(
+        configured=marketing_cfg.traffic_metric_columns,
+        scraped_headers=extra_columns,
+    )
+    defs: list[dict[str, Any]] = [
         {
             "field_name": names.date,
             "type": FIELD_DATETIME,
@@ -50,15 +62,9 @@ def _field_defs_for_pdd_marketing_log(config: FeishuConfig) -> list[dict[str, An
             "property": {"options": [{"name": x} for x in marketing_cfg.traffic_result_options]},
         },
         {"field_name": names.traffic_error_reason, "type": FIELD_TEXT},
-        {"field_name": names.traffic_spend, "type": FIELD_TEXT},
-        {"field_name": names.traffic_amount, "type": FIELD_TEXT},
-        {"field_name": names.traffic_roi, "type": FIELD_TEXT},
-        {"field_name": names.traffic_total_cost, "type": FIELD_TEXT},
-        {"field_name": names.traffic_net_amount, "type": FIELD_TEXT},
-        {"field_name": names.traffic_net_roi, "type": FIELD_TEXT},
-        {"field_name": names.traffic_net_orders, "type": FIELD_TEXT},
-        {"field_name": names.traffic_cost_per_order, "type": FIELD_TEXT},
     ]
+    defs.extend({"field_name": column, "type": FIELD_TEXT} for column in metric_columns)
+    return defs
 
 
 def resolve_pdd_marketing_log_table_id(
@@ -98,6 +104,8 @@ def resolve_pdd_marketing_log_table_id(
 def ensure_pdd_marketing_log_table_ready(
     config: FeishuConfig | None = None,
     client: FeishuClient | None = None,
+    *,
+    extra_columns: list[str] | None = None,
 ) -> dict[str, Any]:
     """启动或同步前确保 PDD营销日志表存在且字段齐全。"""
     cfg = config or load_feishu_config()
@@ -118,7 +126,7 @@ def ensure_pdd_marketing_log_table_ready(
             "message": f"未找到飞书表「{marketing_cfg.table_name}」",
         }
 
-    ensure_fields(api, app_token, table_id, _field_defs_for_pdd_marketing_log(cfg))
+    ensure_fields(api, app_token, table_id, _field_defs_for_pdd_marketing_log(cfg, extra_columns=extra_columns))
     logger.info(
         "pdd marketing log fields ensured table=%s method=%s",
         table_id,
@@ -152,21 +160,15 @@ def _build_traffic_metric_fields(
         names.traffic_result: _FEISHU_TRAFFIC_SUCCESS,
         names.traffic_error_reason: "",
     }
-    mapping = {
-        "spend": names.traffic_spend,
-        "amount": names.traffic_amount,
-        "roi": names.traffic_roi,
-        "total_cost": names.traffic_total_cost,
-        "net_amount": names.traffic_net_amount,
-        "net_roi": names.traffic_net_roi,
-        "net_orders": names.traffic_net_orders,
-        "cost_per_order": names.traffic_cost_per_order,
-    }
-    for key, field_name in mapping.items():
-        value = str(metrics.get(key) or "").strip()
-        if value != "":
-            fields[field_name] = value
+    for column, value in normalize_traffic_metrics(metrics).items():
+        fields[column] = value
     return fields
+
+
+def _expected_metric_column_count(config: FeishuConfig) -> int:
+    return len(
+        collect_metric_columns(configured=config.pdd_marketing_log.traffic_metric_columns)
+    )
 
 
 def _record_date_ms(fields: dict[str, Any], date_field_name: str) -> int | None:
@@ -217,6 +219,23 @@ def _find_record_by_date_and_product_id(
     return None
 
 
+def _collect_scraped_headers(rows: list[dict[str, Any]]) -> list[str]:
+    headers: list[str] = []
+    seen: set[str] = set()
+    for item in rows:
+        if not isinstance(item, dict):
+            continue
+        metrics = item.get("metrics") if isinstance(item.get("metrics"), dict) else {}
+        header_values = item.get("header_values") if isinstance(item.get("header_values"), dict) else {}
+        for key in (*metrics.keys(), *header_values.keys()):
+            column = str(key or "").strip()
+            if not column or column in seen:
+                continue
+            seen.add(column)
+            headers.append(column)
+    return headers
+
+
 def sync_traffic_report_to_feishu(
     *,
     account_id: str = "",
@@ -245,7 +264,8 @@ def sync_traffic_report_to_feishu(
         parsed_date = report_date
 
     api = client or FeishuClient(cfg)
-    ready = ensure_pdd_marketing_log_table_ready(cfg, api)
+    scraped_headers = _collect_scraped_headers(rows)
+    ready = ensure_pdd_marketing_log_table_ready(cfg, api, extra_columns=scraped_headers)
     if ready.get("failed") or ready.get("skipped"):
         return ready
 
@@ -264,6 +284,8 @@ def sync_traffic_report_to_feishu(
     date_field = str(marketing_cfg.field_names.date or "日期").strip()
     updates: list[dict[str, Any]] = []
     creates: list[dict[str, Any]] = []
+    expected_cols = _expected_metric_column_count(cfg)
+    metric_counts: list[int] = []
 
     if error and not rows:
         return {
@@ -279,7 +301,10 @@ def sync_traffic_report_to_feishu(
         product_id = str(item.get("product_id") or "").strip()
         if not product_id:
             continue
-        metrics = item.get("metrics") if isinstance(item.get("metrics"), dict) else {}
+        metrics_raw = item.get("metrics") if isinstance(item.get("metrics"), dict) else {}
+        header_values = item.get("header_values") if isinstance(item.get("header_values"), dict) else {}
+        metrics = normalize_traffic_metrics({**metrics_raw, **header_values})
+        metric_counts.append(len(metrics))
         row = _find_record_by_date_and_product_id(
             api,
             app_token=app_token,
@@ -334,9 +359,11 @@ def sync_traffic_report_to_feishu(
                 "table_id": table_id,
             }
 
+    sample_metrics = metric_counts[0] if metric_counts else 0
     context = (
         f"account={account_id or '-'} report_date={parsed_date.isoformat()} "
-        f"created={len(created_ids)} updated={len(updated_ids)} table={table_id}({resolve_method})"
+        f"created={len(created_ids)} updated={len(updated_ids)} "
+        f"metrics={sample_metrics}/{expected_cols} table={table_id}({resolve_method})"
     )
     logger.info("feishu traffic report sync %s", context)
     print(f"[{account_id or '-'}] 飞书投流数据回写（PDD营销日志表）：{context}", flush=True)

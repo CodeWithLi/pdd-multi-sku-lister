@@ -304,6 +304,63 @@ def search_records_by_field(
     return list(data.get("data", {}).get("items") or [])
 
 
+def search_records_by_field_values(
+    client: FeishuClient,
+    app_token: str,
+    table_id: str,
+    *,
+    field_name: str,
+    values: list[str],
+    page_size: int = 500,
+    chunk_size: int = 50,
+) -> list[dict[str, Any]]:
+    """按字段多值 OR 精确匹配批量查记录（用于按商品编码拉取）。"""
+    normalized = list(dict.fromkeys(str(value or "").strip() for value in values if str(value or "").strip()))
+    if not normalized:
+        return []
+
+    resolved_name = resolve_table_field_name(client, app_token, table_id, field_name)
+    items: list[dict[str, Any]] = []
+    size = max(1, min(int(page_size), 500))
+    step = max(1, min(int(chunk_size), 50))
+
+    for start in range(0, len(normalized), step):
+        chunk = normalized[start : start + step]
+        conditions = [
+            {
+                "field_name": resolved_name,
+                "operator": "is",
+                "value": [value],
+            }
+            for value in chunk
+        ]
+        page_token = ""
+        while True:
+            body: dict[str, Any] = {
+                "filter": {
+                    "conjunction": "or",
+                    "conditions": conditions,
+                },
+                "page_size": size,
+            }
+            if page_token:
+                body["page_token"] = page_token
+            data = client.request(
+                "POST",
+                f"/bitable/v1/apps/{app_token}/tables/{table_id}/records/search",
+                json=body,
+            )
+            payload = data.get("data") or {}
+            batch = list(payload.get("items") or [])
+            items.extend(batch)
+            if not payload.get("has_more"):
+                break
+            page_token = str(payload.get("page_token") or "").strip()
+            if not page_token:
+                break
+    return items
+
+
 def map_fields_to_table_names(
     client: FeishuClient,
     app_token: str,

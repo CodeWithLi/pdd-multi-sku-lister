@@ -47,6 +47,8 @@ const continueAfterActivityFailure = ref(false)
 const demoMode = ref(true)
 const activityDelayHours = ref(24)
 const slotAlignmentTest = ref(true)
+const excelFallbackEnabled = ref(false)
+const excelFallbackSaving = ref(false)
 const pipelineBatchEnabled = ref(false)
 const batchAccountIds = ref<string[]>([])
 const startDelayMin = ref(30)
@@ -380,6 +382,25 @@ async function loadBaseData() {
   await loadListingTargets(accountId.value)
 }
 
+async function loadExcelFallbackSetting() {
+  const data = await api.getPipelineExcelFallback()
+  excelFallbackEnabled.value = !!data.enabled
+}
+
+async function onExcelFallbackChange(enabled: boolean) {
+  excelFallbackSaving.value = true
+  try {
+    const data = await api.updatePipelineExcelFallback(enabled)
+    excelFallbackEnabled.value = !!data.enabled
+    ElMessage.success(enabled ? '已开启本地 Excel 回退' : '已关闭本地 Excel 回退')
+  } catch (e) {
+    excelFallbackEnabled.value = !enabled
+    ElMessage.error(e instanceof Error ? e.message : String(e))
+  } finally {
+    excelFallbackSaving.value = false
+  }
+}
+
 async function refreshPipelines() {
   const page = pipelinePage.value
   const pageSize = pipelinePageSize.value
@@ -534,6 +555,7 @@ onMounted(async () => {
   try {
     await loadMinioHealth()
     await loadBaseData()
+    await loadExcelFallbackSetting()
     await refreshPipelines()
     startPolling()
     startMaterialPolling()
@@ -849,6 +871,14 @@ onUnmounted(() => {
                     <span class="switch-label">演示模式</span>
                     <el-switch v-model="demoMode" />
                   </div>
+                  <div class="switch-row">
+                    <span class="switch-label">本地 Excel 回退</span>
+                    <el-switch
+                      v-model="excelFallbackEnabled"
+                      :loading="excelFallbackSaving"
+                      @change="onExcelFallbackChange"
+                    />
+                  </div>
                 </div>
                 <div v-if="continueAfterLimitedTimeFailure" class="form-tip">
                   限时限量购失败时仍继续活动报名；若同时开启自动推广，活动全部处理完后仍会创建推广。
@@ -867,6 +897,12 @@ onUnmounted(() => {
                 </div>
                 <div v-if="demoMode" class="form-tip">
                   演示模式：限时限量购上架后立即执行，活动约 2 分钟后执行，便于测试整条链路。
+                </div>
+                <div v-if="excelFallbackEnabled" class="form-tip">
+                  已开启：飞书商品表/定价表读不到数据时，会回退读取本地 Excel（拼多多所有商品、pdd.xls、拼多多定价、拼多多控价）。
+                </div>
+                <div v-else class="form-tip">
+                  默认关闭：一律只读飞书，不回退本地 Excel；飞书缺数据将直接报错。
                 </div>
               </el-form-item>
             </div>

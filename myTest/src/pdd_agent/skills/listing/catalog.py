@@ -107,8 +107,17 @@ def is_image_set_dir(name: str) -> bool:
 
 
 def _load_product_catalog(settings: YamlSettings | None = None) -> dict[str, PddProductEntry]:
-    """上架商品数据源：优先飞书「拼多多所有商品」，否则本地 Excel。"""
+    """上架商品数据源：优先飞书「拼多多比价定价」按编码快照，否则本地 Excel。"""
+    from pdd_agent.integrations.feishu.listing_feishu_snapshot import get_listing_feishu_snapshot
+    from pdd_agent.integrations.feishu.config import load_feishu_config
     from pdd_agent.integrations.feishu.pdd_product_catalog_sync import load_unified_pdd_product_catalog
+
+    snapshot = get_listing_feishu_snapshot()
+    if snapshot is not None:
+        cfg = load_feishu_config()
+        catalog = snapshot.product_catalog(cfg)
+        if catalog:
+            return catalog
 
     catalog = load_unified_pdd_product_catalog(settings=settings)
     if catalog:
@@ -323,6 +332,61 @@ def _list_sibling_code_dirs(set_dir: Path) -> list[Path]:
         if path.is_dir() and _code_dir_has_numbered_images(path)
     ]
     return sorted(dirs, key=lambda p: p.name.upper())[:26]
+
+
+def collect_feishu_catalog_codes_for_targets(
+    targets: list[str],
+    assets_root: Path,
+) -> list[str]:
+    """从上架 selector + 素材目录预扫商品编码（款式/型号），供飞书按编码拉取。"""
+    from pdd_agent.skills.listing.pdd_product_catalog import _norm_code
+
+    codes: list[str] = []
+    for target in targets or []:
+        product_selector = _parse_listing_target_product_selector(target)
+        if product_selector:
+            family_code, image_set, product_code = product_selector
+            codes.append(product_code)
+            set_dir = assets_root / family_code / image_set
+            for sibling_dir in _list_sibling_code_dirs(set_dir):
+                codes.append(sibling_dir.name)
+                previews = _filter_preview_images_for_code_dir(
+                    sibling_dir,
+                    sorted(
+                        _collect_flat_preview_images(sibling_dir),
+                        key=lambda p: _preview_sort_key(p, sibling_dir.name),
+                    ),
+                )
+                for preview in previews:
+                    parsed = _parse_combo_code(preview.stem, sibling_dir.name)
+                    if parsed:
+                        style_code, model_code = parsed
+                        codes.extend([style_code, model_code])
+            continue
+
+        selector = _parse_listing_target_selector(target)
+        if selector:
+            family_code, image_set = selector
+            set_dir = assets_root / family_code / image_set
+            for sibling_dir in _list_sibling_code_dirs(set_dir):
+                codes.append(sibling_dir.name)
+                previews = _filter_preview_images_for_code_dir(
+                    sibling_dir,
+                    sorted(
+                        _collect_flat_preview_images(sibling_dir),
+                        key=lambda p: _preview_sort_key(p, sibling_dir.name),
+                    ),
+                )
+                for preview in previews:
+                    parsed = _parse_combo_code(preview.stem, sibling_dir.name)
+                    if parsed:
+                        style_code, model_code = parsed
+                        codes.extend([style_code, model_code])
+            continue
+
+        codes.append(str(target or "").strip())
+
+    return list(dict.fromkeys(_norm_code(code) for code in codes if _norm_code(code)))
 
 
 def _append_skus_from_previews(
