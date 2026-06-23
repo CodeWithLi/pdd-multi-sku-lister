@@ -18,7 +18,7 @@ def _object(name: str):
 
 
 def test_extract_product_code_from_folder_name():
-    assert extract_product_code("BD021A卡皮巴拉笔袋") == "BD021A"
+    assert extract_product_code("BD021A卡皮巴拉笔袋") == "BD021A卡皮巴拉笔袋"
     assert extract_product_code("BD029A") == "BD029A"
     assert extract_product_code("AXBD001B") == "AXBD001B"
 
@@ -46,10 +46,11 @@ def test_list_minio_listing_targets_groups_by_family_and_image_set():
 
     with patch("pdd_agent.integrations.minio.catalog.get_minio_client", return_value=client):
         with patch("pdd_agent.integrations.minio.catalog.minio_configured", return_value=True):
-            targets = list_minio_listing_targets(cfg)
+            with patch("pdd_agent.integrations.minio.catalog.is_minio_index_fresh", return_value=False):
+                targets = list_minio_listing_targets(cfg, force_refresh=True)
 
     selectors = {item.selector: set(item.product_codes) for item in targets}
-    assert selectors["BD021/第一套图"] == {"BD021A", "BD021B"}
+    assert selectors["BD021/第一套图"] == {"BD021A卡皮巴拉笔袋", "BD021B毛绒小猫笔袋"}
     assert selectors["BD029/第一套图"] == {"BD029A", "BD029B"}
     assert "GJ01/GJ01A灰太狼成品" not in selectors
 

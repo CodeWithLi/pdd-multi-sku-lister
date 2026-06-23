@@ -69,10 +69,14 @@ def _sets_for_product_inputs(
             for record in find_sets_for_product_code(code, config):
                 sets.add((record.family_code, record.image_set))
         if not sets:
+            from pdd_agent.skills.campaign.price_rules import normalize_price_code
+
             for target in list_minio_listing_targets(config):
-                target_codes = {str(item or "").strip().upper() for item in target.product_codes}
-                if lookup_codes.intersection(target_codes):
-                    sets.add((target.family_code, target.image_set))
+                for pc in target.product_codes:
+                    pc_upper = str(pc or "").strip().upper()
+                    short = normalize_price_code(pc)
+                    if lookup_codes.intersection({pc_upper, short}):
+                        sets.add((target.family_code, target.image_set))
     return sets
 
 

@@ -960,6 +960,8 @@ def pipeline_to_dict(row) -> dict[str, Any]:
         "listing_unit_statuses": build_listing_unit_statuses(row),
         "campaign_results": _campaign_results(row),
         "steps": _step_infos(row),
+        "feishu_inspect_at": str((row.meta or {}).get("feishu_price_inspect_at") or ""),
+        "has_feishu_inspect": bool((row.meta or {}).get("feishu_price_inspect")),
         "created_at": row.created_at,
         "updated_at": row.updated_at,
     }
@@ -1055,6 +1057,14 @@ def start_integrated_pipeline(
         listing_run_id=listing_run_id,
         meta=meta,
     )
+    try:
+        from pdd_agent.integrations.feishu.listing_feishu_inspect_store import (
+            schedule_pipeline_feishu_inspect_capture,
+        )
+
+        schedule_pipeline_feishu_inspect_capture(pipeline_id, codes)
+    except Exception:
+        logger.exception("schedule pipeline feishu inspect failed pipeline_id=%s", pipeline_id)
 
     if skip_listing:
         skip_reason = f"商品已上架，跳过上架步骤（复用 {len(codes)} 个商品的在售记录）"

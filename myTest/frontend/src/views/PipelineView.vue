@@ -16,6 +16,7 @@ import {
 } from '@/utils/labels'
 import type {
   Account,
+  FeishuInspectListingPricesResult,
   IntegratedPipeline,
   ListingTargetOption,
   MarketingActivityOption,
@@ -123,6 +124,103 @@ const preflightReadyLabels = computed(() => {
 })
 
 const activeListingUnitStatuses = computed(() => activePipeline.value?.listing_unit_statuses || [])
+
+const feishuInspectVisible = ref(false)
+const feishuInspectLoading = ref(false)
+const feishuInspectRefreshing = ref(false)
+const feishuInspectData = ref<FeishuInspectListingPricesResult | null>(null)
+const feishuInspectPipelineId = ref('')
+
+function merchantCodeFromPipelineSelector(raw: string): string {
+  const text = String(raw || '').trim()
+  if (!text) return ''
+  const parts = text.split('/').filter(Boolean)
+  if (parts.length >= 3) return parts[parts.length - 1]
+  return parts[0] || text
+}
+
+function feishuCodesFromPipeline(pipeline: IntegratedPipeline | null | undefined): string[] {
+  if (!pipeline) return []
+  const codes = new Set<string>()
+  for (const row of pipeline.listing_unit_statuses || []) {
+    const label = String(row.listing_label || '').trim()
+    if (label) codes.add(label.split('/')[0])
+  }
+  for (const sel of pipeline.product_codes || []) {
+    const code = merchantCodeFromPipelineSelector(sel)
+    if (code) codes.add(code)
+  }
+  return [...codes]
+}
+
+async function loadFeishuInspectForPipeline(
+  pipeline: IntegratedPipeline,
+  options: { preferStored?: boolean; refresh?: boolean } = {},
+) {
+  const { preferStored = true, refresh = false } = options
+  feishuInspectPipelineId.value = pipeline.pipeline_id
+  feishuInspectVisible.value = true
+  feishuInspectLoading.value = true
+  feishuInspectData.value = null
+
+  try {
+    if (refresh) {
+      feishuInspectData.value = await api.getPipelineFeishuInspect(pipeline.pipeline_id, true)
+      return
+    }
+
+    if (preferStored) {
+      try {
+        feishuInspectData.value = await api.getPipelineFeishuInspect(pipeline.pipeline_id, false)
+        return
+      } catch (e: unknown) {
+        const err = e as { response?: { status?: number } }
+        if (err?.response?.status !== 404) throw e
+      }
+    }
+
+    const codes = feishuCodesFromPipeline(pipeline)
+    if (!codes.length) {
+      ElMessage.warning('该链路没有可查询的商品编码')
+      feishuInspectVisible.value = false
+      return
+    }
+    feishuInspectData.value = await api.feishuInspectListingPrices(
+      codes,
+      true,
+      pipeline.pipeline_id,
+    )
+  } catch (e: unknown) {
+    const err = e as { response?: { data?: { detail?: string } }; message?: string }
+    ElMessage.error(err?.response?.data?.detail || err?.message || '读取飞书数据失败')
+  } finally {
+    feishuInspectLoading.value = false
+  }
+}
+
+async function openFeishuInspectDialog(pipeline?: IntegratedPipeline | null) {
+  const target = pipeline || activePipeline.value
+  if (!target) {
+    ElMessage.warning('请先选择一条整合链路')
+    return
+  }
+  await loadFeishuInspectForPipeline(target, { preferStored: true })
+}
+
+async function refreshFeishuInspectDialog() {
+  const pipelineId = feishuInspectPipelineId.value
+  if (!pipelineId) return
+  feishuInspectRefreshing.value = true
+  try {
+    feishuInspectData.value = await api.getPipelineFeishuInspect(pipelineId, true)
+    ElMessage.success('已重新读取飞书数据')
+  } catch (e: unknown) {
+    const err = e as { response?: { data?: { detail?: string } }; message?: string }
+    ElMessage.error(err?.response?.data?.detail || err?.message || '重新读取失败')
+  } finally {
+    feishuInspectRefreshing.value = false
+  }
+}
 
 const listingUnitStatusSummary = computed(() => {
   const rows = activeListingUnitStatuses.value
@@ -1103,6 +1201,15 @@ onUnmounted(() => {
               <span>当前链路</span>
               <div class="card-head-actions">
                 <el-button
+                  link
+                  type="primary"
+                  size="small"
+                  :loading="feishuInspectLoading"
+                  @click="openFeishuInspectDialog(activePipeline)"
+                >
+                  飞书定价数据
+                </el-button>
+                <el-button
                   v-if="canCancelPipeline(activePipeline)"
                   link
                   type="danger"
@@ -1254,9 +1361,17 @@ onUnmounted(() => {
                 <el-tag size="small" :type="pipelineTagType(row.status)">{{ row.status }}</el-tag>
               </template>
             </el-table-column>
-            <el-table-column label="操作" width="96" fixed="right" align="center">
+            <el-table-column label="操作" width="148" fixed="right" align="center">
               <template #default="{ row }">
                 <el-button link type="primary" size="small" @click="activePipeline = row">查看</el-button>
+                <el-button
+                  link
+                  type="primary"
+                  size="small"
+                  @click.stop="openFeishuInspectDialog(row)"
+                >
+                  飞书
+                </el-button>
                 <el-button
                   v-if="canCancelPipeline(row)"
                   link
@@ -1286,6 +1401,107 @@ onUnmounted(() => {
         </el-card>
       </el-col>
     </el-row>
+
+    <el-dialog
+      v-model="feishuInspectVisible"
+      title="飞书定价读取结果"
+      width="92%"
+      top="4vh"
+      destroy-on-close
+      class="feishu-inspect-dialog"
+    >
+      <div v-loading="feishuInspectLoading" class="feishu-inspect-body">
+        <template v-if="feishuInspectData">
+          <p class="feishu-inspect-meta">
+            表：{{ feishuInspectData.table_name || '拼多多比价定价' }}
+            · 快照来源：{{ feishuInspectData.snapshot_source || '—' }}
+            · 全表区间来源：{{ feishuInspectData.range_catalog_source || '—' }}
+            · 查询编码 {{ feishuInspectData.codes.length }} 个
+            <template v-if="feishuInspectData.saved_at">
+              · 记录时间 {{ feishuInspectData.saved_at }}
+            </template>
+            <el-tag v-if="feishuInspectData.from_cache" size="small" type="info" class="feishu-inspect-tag">
+              已保存
+            </el-tag>
+          </p>
+          <el-table :data="feishuInspectData.items" stripe size="small" max-height="62vh">
+            <el-table-column type="expand">
+              <template #default="{ row }">
+                <div class="feishu-inspect-expand">
+                  <p><strong>飞书匹配行数：</strong>{{ row.feishu_row_count }}</p>
+                  <p v-if="row.snapshot_matched_key">
+                    <strong>快照命中 key：</strong>{{ row.snapshot_matched_key }}
+                  </p>
+                  <p v-if="row.diagnose_messages?.length">
+                    <strong>系统诊断：</strong>{{ row.diagnose_messages.join('；') }}
+                  </p>
+                  <p v-if="row.feishu_rows?.length > 1" class="warn-text">
+                    飞书存在多行匹配，可能导致读错行
+                  </p>
+                  <el-table
+                    v-if="row.feishu_rows?.length"
+                    :data="row.feishu_rows"
+                    size="small"
+                    border
+                    class="feishu-inspect-subtable"
+                  >
+                    <el-table-column prop="商品编码" label="商品编码" min-width="140" />
+                    <el-table-column prop="颜色规格" label="颜色规格" width="100" />
+                    <el-table-column prop="拼多多定价" label="拼多多定价" width="96" />
+                    <el-table-column prop="拼多多控价" label="拼多多控价" width="96" />
+                    <el-table-column prop="PDD控价下限价格" label="下限" width="88" />
+                    <el-table-column prop="PDD控价上限价格" label="上限" width="88" />
+                  </el-table>
+                </div>
+              </template>
+            </el-table-column>
+            <el-table-column prop="query_code" label="查询编码" min-width="148" show-overflow-tooltip />
+            <el-table-column label="拼多多定价" width="96">
+              <template #default="{ row }">{{ row.parsed?.拼多多定价 || '—' }}</template>
+            </el-table-column>
+            <el-table-column label="拼多多控价" width="96">
+              <template #default="{ row }">{{ row.parsed?.拼多多控价 || '—' }}</template>
+            </el-table-column>
+            <el-table-column label="下限" width="80">
+              <template #default="{ row }">{{ row.parsed?.PDD控价下限价格 || '—' }}</template>
+            </el-table-column>
+            <el-table-column label="上限" width="80">
+              <template #default="{ row }">
+                <span :class="{ 'feishu-cell-empty': !row.parsed?.PDD控价上限价格 }">
+                  {{ row.parsed?.PDD控价上限价格 || '空' }}
+                </span>
+              </template>
+            </el-table-column>
+            <el-table-column label="全表上限" width="88">
+              <template #default="{ row }">{{ row.catalog_range_max || '—' }}</template>
+            </el-table-column>
+            <el-table-column label="快照上限" width="88">
+              <template #default="{ row }">{{ row.snapshot_range_max || '—' }}</template>
+            </el-table-column>
+            <el-table-column label="区间诊断" min-width="120" show-overflow-tooltip>
+              <template #default="{ row }">
+                {{ row.range_aspect || row.snapshot_range_aspect || '正常' }}
+              </template>
+            </el-table-column>
+            <el-table-column label="飞书行数" width="72" align="center">
+              <template #default="{ row }">{{ row.feishu_row_count }}</template>
+            </el-table-column>
+          </el-table>
+        </template>
+        <el-empty v-else-if="!feishuInspectLoading" description="暂无数据" />
+      </div>
+      <template #footer>
+        <el-button @click="feishuInspectVisible = false">关闭</el-button>
+        <el-button
+          type="primary"
+          :loading="feishuInspectRefreshing"
+          :disabled="!feishuInspectPipelineId"
+          @click="refreshFeishuInspectDialog"
+        >
+          重新读取飞书
+        </el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
@@ -1310,6 +1526,26 @@ onUnmounted(() => {
 
 .side-card:last-child {
   margin-bottom: 0;
+}
+
+.feishu-inspect-meta {
+  margin: 0 0 12px;
+  font-size: 13px;
+  color: var(--el-text-color-secondary);
+}
+
+.feishu-inspect-expand {
+  padding: 8px 12px 4px;
+  font-size: 13px;
+}
+
+.feishu-inspect-subtable {
+  margin-top: 8px;
+}
+
+.feishu-cell-empty {
+  color: var(--el-color-danger);
+  font-weight: 600;
 }
 
 .pipeline-layout {

@@ -7,6 +7,7 @@ import type { ConfigSummary, RuntimeConfig } from '@/types'
 
 const loading = ref(false)
 const saving = ref(false)
+const clearingFeishuCache = ref(false)
 const summary = ref<ConfigSummary | null>(null)
 
 const form = reactive<RuntimeConfig>({
@@ -94,6 +95,24 @@ async function save() {
     ElMessage.error(e instanceof Error ? e.message : '保存失败')
   } finally {
     saving.value = false
+  }
+}
+
+async function clearFeishuCache() {
+  clearingFeishuCache.value = true
+  try {
+    const result = await api.feishuClearCache()
+    if (result.success) {
+      ElMessage.success(
+        `${result.message}（${result.cleared.length} 项：${result.cleared.join('、')}）`,
+      )
+    } else {
+      ElMessage.warning(result.message || '部分缓存清理失败')
+    }
+  } catch (e) {
+    ElMessage.error(e instanceof Error ? e.message : '清理飞书缓存失败')
+  } finally {
+    clearingFeishuCache.value = false
   }
 }
 
@@ -193,6 +212,19 @@ onMounted(load)
               </el-select>
             </el-form-item>
           </el-form>
+        </el-card>
+
+        <el-card shadow="never" class="stat-card settings-card">
+          <template #header>飞书数据缓存</template>
+          <p class="form-tip" style="margin-top: 0">
+            修改飞书「拼多多比价定价」表后，若上架仍读到旧数据，可在此清空当前后端进程的内存缓存（商品表、比价定价、上架快照等，默认约 5 分钟自动过期）。
+          </p>
+          <p class="form-tip">
+            若后端为多 worker 部署，每个进程各有一份缓存；点一次只清当前处理请求的 worker，仍异常时可重启后端。
+          </p>
+          <el-button type="warning" plain :loading="clearingFeishuCache" @click="clearFeishuCache">
+            清空飞书数据缓存
+          </el-button>
         </el-card>
 
         <el-card shadow="never" class="stat-card settings-card">

@@ -191,6 +191,7 @@ def resolve_combo_pricing(
     defaults: dict[str, str],
     *,
     listing_scope: str = "",
+    bundle_components: list[str] | None = None,
 ) -> tuple[str, str, str]:
     """组合 SKU 库存/拼单价/单买价（定价来自商品表，上架时加同 scope 同定价共享浮动）。"""
     from pdd_agent.skills.listing.listing_price_float import get_listing_price_float_registry
@@ -217,6 +218,20 @@ def resolve_combo_pricing(
             return fallback_inv, fallback_gp, fallback_sp
         group_price = _component_price(style)
         return str(style.inventory or fallback_inv), _format_price(group_price), _format_price(group_price + 100)
+
+    if model_norm == BUNDLE_MODEL_CODE and bundle_components:
+        component_codes = list(
+            dict.fromkeys(_norm_code(code) for code in bundle_components if _norm_code(code))
+        )
+        entries = [catalog.get(code) for code in component_codes]
+        if not component_codes or any(entry is None for entry in entries):
+            return fallback_inv, fallback_gp, fallback_sp
+        inventories = [int(entry.inventory or 0) for entry in entries if entry]
+        inventory = min(inventories) if inventories else fallback_inv
+        group_price = sum(_component_price(entry) for entry in entries if entry)
+        if group_price <= 0:
+            return fallback_inv, fallback_gp, fallback_sp
+        return str(inventory), _format_price(group_price), _format_price(group_price + 100)
 
     model = catalog.get(model_norm)
     if not style or not model:

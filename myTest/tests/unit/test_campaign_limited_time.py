@@ -3,9 +3,11 @@ from types import SimpleNamespace
 from pdd_agent.skills.campaign.limited_time import (
     ACTIVITY_CREATE_URL_PARTS,
     _campaign_price_candidates,
+    _click_product_modal_header_select_all,
     _ensure_page_binding,
     _is_sync_marketing_checkbox_label,
     _price_filter_failure_message,
+    _scroll_product_modal_row_into_view,
 )
 from pdd_agent.skills.campaign.price_rules import price_rule_candidates, normalize_price_code
 
@@ -128,3 +130,8 @@ def test_price_filter_failure_message_when_mapping_missing():
     message = _price_filter_failure_message({"status": "skipped", "reason": "no_published_mapping_ids"})
     assert "控价区间" in message
     assert "映射" in message
+
+
+def test_product_modal_select_all_helpers_are_importable():
+    assert callable(_click_product_modal_header_select_all)
+    assert callable(_scroll_product_modal_row_into_view)

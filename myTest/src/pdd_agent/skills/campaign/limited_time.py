@@ -893,6 +893,164 @@ def _wait_modal_table_after_search(page: DpPage, product_ids: list[str], timeout
     return {"ready": False, "reason": "search_result_timeout", "found_ids": [], "row_count": 0}
 
 
+def _click_product_modal_header_select_all(page: DpPage, account_id: str) -> dict[str, Any]:
+    """点击「选择商品」弹窗表头全选复选框。"""
+    try:
+        result = page.run_js(
+            """
+                function isVisible(el) {
+                    if (!el || !el.getBoundingClientRect) return false;
+                    const r = el.getBoundingClientRect();
+                    const s = window.getComputedStyle(el);
+                    return r.width > 2 && r.height > 2
+                        && s.display !== 'none'
+                        && s.visibility !== 'hidden'
+                        && parseFloat(s.opacity || '1') > 0.05;
+                }
+                function clickLikeUser(el) {
+                    el.scrollIntoView({ block: 'center', inline: 'nearest' });
+                    const r = el.getBoundingClientRect();
+                    const x = r.left + r.width / 2;
+                    const y = r.top + r.height / 2;
+                    const target = document.elementFromPoint(x, y) || el;
+                    for (const ev of ['pointerdown', 'mousedown', 'pointerup', 'mouseup', 'click']) {
+                        target.dispatchEvent(new MouseEvent(ev, {
+                            bubbles: true,
+                            cancelable: true,
+                            view: window,
+                            clientX: x,
+                            clientY: y,
+                        }));
+                    }
+                    if (target !== el) el.click();
+                }
+                function checkedState(box) {
+                    if (!box) return null;
+                    if ((box.tagName || '').toLowerCase() === 'input') return Boolean(box.checked);
+                    const input = box.querySelector?.('input[type="checkbox"]');
+                    if (input) return Boolean(input.checked);
+                    const aria = box.getAttribute?.('aria-checked');
+                    if (aria === 'true') return true;
+                    if (aria === 'false') return false;
+                    const cls = String(box.className || '').toLowerCase();
+                    if (cls.includes('checked') || cls.includes('is-checked') || cls.includes('selected')) return true;
+                    return false;
+                }
+                function findSmallestCheckboxControl(rootNode) {
+                    const controls = Array.from(rootNode.querySelectorAll(
+                        'input[type="checkbox"],[role="checkbox"],label,[aria-checked],'
+                        + '[data-testid*="checkbox"],[class*="checkbox"],[class*="Checkbox"],'
+                        + '[class*="checkBox"],[class*="check"],[class*="Check"]'
+                    ))
+                        .filter((el) => isVisible(el))
+                        .map((el) => {
+                            const label = el.closest?.('label');
+                            const target = label && isVisible(label) ? label : el;
+                            const r = target.getBoundingClientRect();
+                            return { target, rect: r };
+                        })
+                        .sort((a, b) => (a.rect.width * a.rect.height) - (b.rect.width * b.rect.height));
+                    return controls[0]?.target || null;
+                }
+                function findHeaderSelectAllControl(rootNode) {
+                    const table = Array.from(rootNode.querySelectorAll(
+                        '[data-testid="beast-core-table"], table, [class*="TB_outerWrapper"], [class*="TB_table"]'
+                    ))
+                        .filter((el) => isVisible(el))[0] || rootNode;
+                    const headerCell = Array.from(table.querySelectorAll(
+                        'thead th,[data-testid="beast-core-table-th"],th'
+                    ))
+                        .filter((el) => isVisible(el))
+                        .sort((a, b) => {
+                            const ar = a.getBoundingClientRect();
+                            const br = b.getBoundingClientRect();
+                            return ar.left - br.left;
+                        })[0];
+                    if (!headerCell) return null;
+                    return findSmallestCheckboxControl(headerCell) || headerCell;
+                }
+                const roots = Array.from(document.querySelectorAll('[data-testid="beast-core-modal"], [class*="MDL_modal"]'))
+                    .filter((el) => isVisible(el))
+                    .filter((el) => (
+            """
+            + _modal_match_condition_js("el")
+            + """
+                    ));
+                const root = roots[roots.length - 1];
+                if (!root) return { clicked: false, reason: 'modal_not_found' };
+                const control = findHeaderSelectAllControl(root);
+                if (!control) return { clicked: false, reason: 'header_select_all_not_found' };
+                const before = checkedState(control);
+                if (before !== true) {
+                    clickLikeUser(control);
+                    control.dispatchEvent?.(new MouseEvent('click', { bubbles: true, cancelable: true, view: window }));
+                }
+                const after = checkedState(control);
+                return {
+                    clicked: true,
+                    before,
+                    after,
+                    header_checked: after === true,
+                };
+            """
+        )
+    except Exception as exc:
+        result = {"clicked": False, "reason": _safe_exc(exc)}
+
+    if isinstance(result, dict):
+        print(f"[{account_id}] 商品弹窗表头全选：{result}", flush=True)
+        return result
+    return {"clicked": False, "reason": str(result)}
+
+
+def _scroll_product_modal_row_into_view(page: DpPage, product_id: str) -> bool:
+    try:
+        result = page.run_js(
+            """
+                const id = String(arguments[0] || '');
+                function isVisible(el) {
+                    if (!el || !el.getBoundingClientRect) return false;
+                    const r = el.getBoundingClientRect();
+                    const s = window.getComputedStyle(el);
+                    return r.width > 2 && r.height > 2
+                        && s.display !== 'none'
+                        && s.visibility !== 'hidden'
+                        && parseFloat(s.opacity || '1') > 0.05;
+                }
+                const roots = Array.from(document.querySelectorAll('[data-testid="beast-core-modal"], [class*="MDL_modal"]'))
+                    .filter((el) => isVisible(el))
+                    .filter((el) => (
+            """
+            + _modal_match_condition_js("el")
+            + """
+                    ));
+                const root = roots[roots.length - 1];
+                if (!root) return false;
+                const rows = Array.from(root.querySelectorAll('tbody tr,[data-testid="beast-core-table-body"] tr'));
+                const row = rows.find((candidate) => {
+                    const text = (candidate.innerText || candidate.textContent || '').trim();
+                    return text.includes(`ID: ${id}`) || text.includes(id);
+                });
+                if (!row) return false;
+                row.scrollIntoView({ block: 'center', inline: 'nearest' });
+                const scrollBody = row.closest('[class*="scroll"], [class*="Scroll"], [style*="overflow"]')
+                    || root.querySelector('[class*="TB_body"], [class*="table-body"], [data-testid*="table-body"]');
+                if (scrollBody && scrollBody.scrollTop !== undefined) {
+                    const rowRect = row.getBoundingClientRect();
+                    const bodyRect = scrollBody.getBoundingClientRect();
+                    if (rowRect.top < bodyRect.top || rowRect.bottom > bodyRect.bottom) {
+                        scrollBody.scrollTop += rowRect.top - bodyRect.top - bodyRect.height / 3;
+                    }
+                }
+                return true;
+            """,
+            product_id,
+        )
+        return bool(result)
+    except Exception:
+        return False
+
+
 def _select_product_rows_in_modal(page: DpPage, account_id: str, product_ids: list[str]) -> dict[str, Any]:
     def inspect_state() -> dict[str, Any]:
         return page.run_js(
@@ -1016,8 +1174,8 @@ def _select_product_rows_in_modal(page: DpPage, account_id: str, product_ids: li
                     ));
                 const root = roots[roots.length - 1];
                 if (!root) return { selected_ids: [], missing_ids: ids, row_count: 0, reason: 'modal_not_found' };
-                const rows = Array.from(root.querySelectorAll('tbody tr,[data-testid="beast-core-table-body"] tr'))
-                    .filter((el) => isVisible(el));
+                const rows = Array.from(root.querySelectorAll('tbody tr,[data-testid="beast-core-table-body"] tr'));
+                const visible_rows = rows.filter((el) => isVisible(el));
                 const counter = parseSelectedCounter(root);
                 const rowDetails = [];
                 for (const id of ids) {
@@ -1049,6 +1207,7 @@ def _select_product_rows_in_modal(page: DpPage, account_id: str, product_ids: li
                     missing_ids: rowDetails.filter((item) => !item.found || !item.selected).map((item) => item.id),
                     found_ids: rowDetails.filter((item) => item.found).map((item) => item.id),
                     row_count: rows.length,
+                    visible_row_count: visible_rows.length,
                     row_details: rowDetails,
                     selected_counter: counter,
                     selected_counter_text: counter.text,
@@ -1106,26 +1265,73 @@ def _select_product_rows_in_modal(page: DpPage, account_id: str, product_ids: li
             for detail in initial.get("row_details") or []
             if detail.get("found") and not detail.get("selected")
         ]
-        clicked_ids = [str(detail.get("id")) for detail in pending if detail.get("id")]
+        found_ids = [str(item) for item in initial.get("found_ids") or []]
         click_results: list[dict[str, Any]] = []
 
-        for detail in pending:
-            points = detail.get("click_points") or []
-            if not points:
-                continue
-            click_results.append(click_point(raw_page, points[0], str(detail.get("id")), "primary"))
-            time.sleep(0.35)
+        if pending and found_ids:
+            select_all_result = _click_product_modal_header_select_all(page, account_id)
+            time.sleep(0.6)
+            after_select_all = inspect_state()
+            if isinstance(after_select_all, dict):
+                after_select_all = infer_from_counter(after_select_all, initial_count, found_ids)
+                after_select_all["select_all"] = select_all_result
+                final_count = counter_value(after_select_all)
+                base_count = initial_count if initial_count is not None else 0
+                expected_selected = base_count + len(found_ids)
+                counter_ok = final_count is not None and final_count >= expected_selected
+                if not after_select_all.get("missing_ids") and counter_ok:
+                    after_select_all["selection_method"] = "header_select_all"
+                    after_select_all["initial_state"] = initial
+                    after_select_all["click_results"] = click_results
+                    print(
+                        f"[{account_id}] 商品弹窗表头全选成功：{after_select_all.get('selected_counter_text')}",
+                        flush=True,
+                    )
+                    return after_select_all
+                if not after_select_all.get("missing_ids"):
+                    after_select_all["selection_method"] = "header_select_all"
+                    after_select_all["initial_state"] = initial
+                    after_select_all["click_results"] = click_results
+                    print(
+                        f"[{account_id}] 商品弹窗表头全选后行级已全部勾选："
+                        f"{after_select_all.get('selected_counter_text')}",
+                        flush=True,
+                    )
+                    return after_select_all
+                initial = after_select_all
+                initial_count = counter_value(initial)
+                pending = [
+                    detail
+                    for detail in initial.get("row_details") or []
+                    if detail.get("found") and not detail.get("selected")
+                ]
 
-        result = inspect_state()
-        if not isinstance(result, dict):
-            return {"selected_ids": [], "missing_ids": product_ids, "reason": str(result), "row_count": 0}
-        result = infer_from_counter(result, initial_count, clicked_ids)
+        clicked_ids = [str(detail.get("id")) for detail in pending if detail.get("id")]
+        result = initial
+        if pending:
+            for detail in pending:
+                product_id = str(detail.get("id") or "")
+                if product_id:
+                    _scroll_product_modal_row_into_view(page, product_id)
+                    time.sleep(0.15)
+                points = detail.get("click_points") or []
+                if not points:
+                    continue
+                click_results.append(click_point(raw_page, points[0], str(detail.get("id")), "primary"))
+                time.sleep(0.35)
+
+            result = inspect_state()
+            if not isinstance(result, dict):
+                return {"selected_ids": [], "missing_ids": product_ids, "reason": str(result), "row_count": 0}
+            result = infer_from_counter(result, initial_count, clicked_ids)
 
         if result.get("missing_ids") and not result.get("selection_inferred_from_counter"):
             for detail in result.get("row_details") or []:
                 product_id = str(detail.get("id") or "")
                 if product_id not in result.get("missing_ids", []) or not detail.get("found"):
                     continue
+                _scroll_product_modal_row_into_view(page, product_id)
+                time.sleep(0.15)
                 for point in (detail.get("click_points") or [])[1:]:
                     before_count = counter_value(result)
                     click_results.append(click_point(raw_page, point, product_id, "retry"))
@@ -1142,6 +1348,8 @@ def _select_product_rows_in_modal(page: DpPage, account_id: str, product_ids: li
 
         result["initial_state"] = initial
         result["click_results"] = click_results
+        if not result.get("selection_method"):
+            result["selection_method"] = "row_by_row" if click_results else "already_selected"
     except Exception as exc:
         return {"selected_ids": [], "missing_ids": product_ids, "reason": _safe_exc(exc), "row_count": 0}
 

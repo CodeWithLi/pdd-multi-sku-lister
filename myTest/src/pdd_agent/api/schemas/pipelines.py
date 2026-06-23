@@ -147,6 +147,8 @@ class IntegratedPipelineResponse(BaseModel):
     listing_unit_statuses: list[IntegratedPipelineListingUnitStatus] = Field(default_factory=list)
     campaign_results: list[IntegratedPipelineCampaignResult] = Field(default_factory=list)
     steps: list[IntegratedPipelineStepInfo] = []
+    feishu_inspect_at: str = ""
+    has_feishu_inspect: bool = False
     created_at: datetime | None = None
     updated_at: datetime | None = None
 

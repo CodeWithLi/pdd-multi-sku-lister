@@ -30,12 +30,11 @@ IGNORED_DIR_NAMES = frozenset({".alist", ".__jianying_export_temp_folder__"})
 
 
 def extract_product_code(folder_name: str) -> str:
-    """从 MinIO 商品文件夹名提取编码，如 BD021A卡皮巴拉笔袋 → BD021A。"""
+    """返回套图下商品文件夹名（与 MinIO/本地目录名一致，保留中文后缀）。"""
     name = str(folder_name or "").strip()
     if not name or name.startswith("."):
         return ""
-    match = PRODUCT_CODE_PATTERN.match(name)
-    return match.group(1) if match else name
+    return name
 
 
 def _numbered_image_index(filename: str) -> int | None:
@@ -227,7 +226,7 @@ def list_minio_objects_for_product(
             if not _is_image_object_name(key):
                 continue
             folder_name = key.split("/")[-2]
-            if extract_product_code(folder_name) != product_code:
+            if folder_name.strip() != product_code.strip():
                 continue
             matched.append(key)
     return sorted(set(matched))

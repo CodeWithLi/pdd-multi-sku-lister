@@ -9,19 +9,27 @@ from typing import Any
 from pdd_agent.core.logging import get_logger
 from pdd_agent.integrations.feishu.bitable import (
     resolve_table_field_name,
+    search_records_by_field_contains,
     search_records_by_field_values,
 )
 from pdd_agent.integrations.feishu.client import FeishuClient
 from pdd_agent.integrations.feishu.config import FeishuConfig, load_feishu_config
+from pdd_agent.integrations.feishu.pdd_product_catalog_sync import _entry_from_feishu_fields
+from pdd_agent.integrations.feishu.listing_feishu_catalog import (
+    feishu_snapshot_alias_allowed,
+    normalize_listing_code,
+)
 from pdd_agent.integrations.feishu.pdd_price_compare_sync import (
     CodePriceCatalog,
     PriceRangeCatalog,
     _build_catalog_from_feishu_records,
     _build_code_price_catalog_from_feishu_records,
     _field_text,
+    _resolve_price_range_field_names,
+    _row_price_fields_score,
     resolve_pdd_price_compare_table_id,
 )
-from pdd_agent.integrations.feishu.pdd_product_catalog_sync import _entry_from_feishu_fields
+from pdd_agent.skills.campaign.price_rules import price_rule_candidates
 from pdd_agent.skills.listing.pdd_product_catalog import PddProductEntry, _norm_code
 
 logger = get_logger(__name__)
@@ -46,14 +54,14 @@ class ListingFeishuSnapshot:
     def pending_codes(self, codes: list[str]) -> list[str]:
         pending: list[str] = []
         for raw in codes:
-            code = _norm_code(raw)
+            code = normalize_listing_code(raw)
             if code and code not in self.queried_codes:
                 pending.append(code)
         return list(dict.fromkeys(pending))
 
     def mark_queried(self, codes: list[str]) -> None:
         for raw in codes:
-            code = _norm_code(raw)
+            code = normalize_listing_code(raw)
             if code:
                 self.queried_codes.add(code)
 
@@ -131,7 +139,7 @@ def warm_listing_feishu_snapshot(
     ):
         return get_listing_feishu_snapshot()
 
-    pending = list(dict.fromkeys(_norm_code(c) for c in codes if _norm_code(c)))
+    pending = list(dict.fromkeys(normalize_listing_code(c) for c in codes if normalize_listing_code(c)))
     if not pending:
         return get_listing_feishu_snapshot()
 
@@ -159,7 +167,9 @@ def warm_listing_feishu_snapshot(
 
     names = cfg.pdd_product_catalog.field_names
     compare_names = cfg.pdd_price_compare.field_names
-    code_field = resolve_table_field_name(api, app_token, table_id, names.product_code)
+    code_field, min_field, max_field = _resolve_price_range_field_names(
+        api, app_token, table_id, compare_names
+    )
     snapshot._code_field = code_field
     snapshot._pricing_field = resolve_table_field_name(
         api, app_token, table_id, compare_names.pdd_pricing
@@ -167,8 +177,8 @@ def warm_listing_feishu_snapshot(
     snapshot._control_field = resolve_table_field_name(
         api, app_token, table_id, compare_names.pdd_control_price
     )
-    snapshot._min_field = resolve_table_field_name(api, app_token, table_id, compare_names.min_price)
-    snapshot._max_field = resolve_table_field_name(api, app_token, table_id, compare_names.max_price)
+    snapshot._min_field = min_field
+    snapshot._max_field = max_field
 
     try:
         records = search_records_by_field_values(
@@ -183,15 +193,80 @@ def warm_listing_feishu_snapshot(
         snapshot.mark_queried(to_fetch)
         return snapshot
 
-    found: set[str] = set()
-    for item in records:
+    def _store_record(item: dict[str, Any], *, aliases: list[str] | None = None) -> str | None:
         fields = item.get("fields") if isinstance(item.get("fields"), dict) else {}
         raw_code = _field_text(fields, code_field)
-        norm = _norm_code(raw_code)
+        norm = normalize_listing_code(raw_code)
         if not norm:
-            continue
-        snapshot.records_by_code[norm] = dict(fields)
-        found.add(norm)
+            return None
+        row = dict(fields)
+        new_score = _row_price_fields_score(
+            row,
+            min_field=min_field,
+            max_field=max_field,
+            pricing_field=snapshot._pricing_field,
+            control_field=snapshot._control_field,
+        )
+        keys_to_store: list[str] = [norm]
+        keys_to_store.extend(normalize_listing_code(key) for key in price_rule_candidates(raw_code) if key)
+        for alias in aliases or []:
+            alias_key = normalize_listing_code(alias)
+            if alias_key:
+                keys_to_store.append(alias_key)
+        keys_to_store = list(dict.fromkeys(key for key in keys_to_store if key))
+
+        existing_scores = [
+            _row_price_fields_score(
+                snapshot.records_by_code[key],
+                min_field=min_field,
+                max_field=max_field,
+                pricing_field=snapshot._pricing_field,
+                control_field=snapshot._control_field,
+            )
+            for key in keys_to_store
+            if key in snapshot.records_by_code
+        ]
+        if existing_scores and new_score < max(existing_scores):
+            return norm
+
+        for key in keys_to_store:
+            snapshot.records_by_code[key] = row
+        return norm
+
+    found: set[str] = set()
+    for item in records:
+        norm = _store_record(item)
+        if norm:
+            found.add(norm)
+
+    still_missing = [code for code in to_fetch if code not in found]
+    if still_missing:
+        try:
+            fuzzy_records = search_records_by_field_contains(
+                api,
+                app_token,
+                table_id,
+                field_name=code_field,
+                values=still_missing,
+            )
+        except Exception:
+            logger.exception("fuzzy search feishu price compare rows failed codes=%s", still_missing)
+            fuzzy_records = []
+        missing_set = set(still_missing)
+        for item in fuzzy_records:
+            fields = item.get("fields") if isinstance(item.get("fields"), dict) else {}
+            raw_code = _field_text(fields, code_field)
+            matched_keys = [key for key in price_rule_candidates(raw_code) if key in missing_set]
+            if not matched_keys:
+                for pending in still_missing:
+                    if feishu_snapshot_alias_allowed(pending, raw_code):
+                        matched_keys.append(pending)
+            if not matched_keys:
+                continue
+            norm = _store_record(item, aliases=matched_keys)
+            if norm:
+                found.add(norm)
+                found.update(matched_keys)
 
     snapshot.mark_queried(to_fetch)
     snapshot.source = "feishu" if snapshot.records_by_code else "feishu_empty"

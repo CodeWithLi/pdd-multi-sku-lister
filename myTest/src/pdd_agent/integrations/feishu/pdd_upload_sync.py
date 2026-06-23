@@ -267,10 +267,13 @@ def parse_listing_label_from_text(text: str) -> tuple[str, str]:
             return label
         if len(parts) >= 3:
             return parts[-1]
+        if len(parts) == 2:
+            # 商品编码/套图，如 BD022A音乐小猫笔袋/第一套图
+            return parts[0]
         first = parts[0]
         if re.match(r"^[A-Z0-9]{3,}[A-Z]?$", first, flags=re.IGNORECASE):
             return first
-        return parts[-1]
+        return parts[0]
 
     bracket = re.match(r"^\[([^\]]+)\]", raw)
     if bracket:

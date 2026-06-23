@@ -28,6 +28,7 @@ class ListingErrorCode:
     FEISHU_CONTROL_MISSING = "feishu_control_missing"
     FEISHU_PRICE_RANGE_MISSING = "feishu_price_range_missing"
     FEISHU_COLOR_SPEC_MISSING = "feishu_color_spec_missing"
+    FEISHU_ROW_NOT_FOUND = "feishu_row_not_found"
     FEISHU_PRODUCT_ROW_MISSING = "feishu_product_row_missing"
     FEISHU_SUBCODE_MISSING = "feishu_subcode_missing"
     FEISHU_SUBCODE_PRICING_MISSING = "feishu_subcode_pricing_missing"
@@ -109,8 +110,9 @@ class ListingErrors:
         ListingErrorCode.FEISHU_CONTROL_MISSING: "控价数据缺失",
         ListingErrorCode.FEISHU_PRICE_RANGE_MISSING: "控价区间数据缺失",
         ListingErrorCode.FEISHU_COLOR_SPEC_MISSING: "颜色规格没数据",
-        ListingErrorCode.FEISHU_PRODUCT_ROW_MISSING: "商品表没数据",
-        ListingErrorCode.FEISHU_SUBCODE_MISSING: "子编码没数据",
+        ListingErrorCode.FEISHU_ROW_NOT_FOUND: "飞书无此行",
+        ListingErrorCode.FEISHU_PRODUCT_ROW_MISSING: "飞书无此行",
+        ListingErrorCode.FEISHU_SUBCODE_MISSING: "飞书无子编码",
         ListingErrorCode.FEISHU_SUBCODE_PRICING_MISSING: "子编码定价数据缺失",
         ListingErrorCode.FEISHU_SUBCODE_CONTROL_MISSING: "子编码控价数据缺失",
         ListingErrorCode.FEISHU_SUBCODE_RANGE_MISSING: "子编码控价区间数据缺失",
@@ -122,25 +124,35 @@ class ListingErrors:
 
     # 飞书失败表一行说明（极短，带商品编码，给运营直接找文件）
     FEISHU_BRIEF_ASPECT: dict[str, str] = {
-        "pricing_missing": "定价为空",
-        "control_missing": "控价为空",
-        "range_missing": "控价区间为空",
+        "pricing_missing": "拼多多定价为空",
+        "control_missing": "拼多多控价为空",
+        "range_missing": "PDD控价下限或上限为空",
+        "range_min_missing": "PDD控价下限为空",
+        "range_max_missing": "PDD控价上限为空",
         "color_spec_missing": "颜色规格为空",
-        "product_row_missing": "商品表为空",
-        "subcode_missing": "商品表为空",
+        "feishu_row_not_found": "飞书无此行",
+        "product_row_missing": "飞书无此行",
+        "subcode_missing": "飞书无此行",
     }
 
     FEISHU_BRIEF_ASPECT_TEXT: dict[str, str] = {
-        "定价数据缺失": "定价为空",
-        "定价没数据": "定价为空",
-        "控价数据缺失": "控价为空",
-        "控价没数据": "控价为空",
-        "控价区间数据缺失": "控价区间为空",
-        "控价区间没数据": "控价区间为空",
+        "定价数据缺失": "拼多多定价为空",
+        "定价没数据": "拼多多定价为空",
+        "控价数据缺失": "拼多多控价为空",
+        "控价没数据": "拼多多控价为空",
+        "控价区间数据缺失": "PDD控价下限或上限为空",
+        "控价区间没数据": "PDD控价下限或上限为空",
+        "PDD控价下限数据缺失": "PDD控价下限为空",
+        "PDD控价下限没数据": "PDD控价下限为空",
+        "PDD控价上限数据缺失": "PDD控价上限为空",
+        "PDD控价上限没数据": "PDD控价上限为空",
         "颜色规格没数据": "颜色规格为空",
-        "商品表没数据": "商品表为空",
-        "没数据": "商品表为空",
-        "飞书数据缺失": "数据缺失",
+        "飞书无此行": "飞书无此行",
+        "商品表没数据": "飞书无此行",
+        "商品表为空": "飞书无此行",
+        "商品表数据缺失": "飞书无此行",
+        "没数据": "飞书无此行",
+        "飞书数据缺失": "飞书无此行",
     }
 
     # 飞书「淘宝+拼多多发布日志表（失败）」通用短句（无编码前缀时）
@@ -182,8 +194,9 @@ class ListingErrors:
         ListingErrorCode.FEISHU_CONTROL_MISSING: "控价数据缺失",
         ListingErrorCode.FEISHU_PRICE_RANGE_MISSING: "控价区间数据缺失",
         ListingErrorCode.FEISHU_COLOR_SPEC_MISSING: "颜色规格没数据",
-        ListingErrorCode.FEISHU_PRODUCT_ROW_MISSING: "商品表没数据",
-        ListingErrorCode.FEISHU_SUBCODE_MISSING: "子编码没数据",
+        ListingErrorCode.FEISHU_ROW_NOT_FOUND: "飞书无此行",
+        ListingErrorCode.FEISHU_PRODUCT_ROW_MISSING: "飞书无此行",
+        ListingErrorCode.FEISHU_SUBCODE_MISSING: "飞书无子编码",
         ListingErrorCode.FEISHU_SUBCODE_PRICING_MISSING: "子编码定价数据缺失",
         ListingErrorCode.FEISHU_SUBCODE_CONTROL_MISSING: "子编码控价数据缺失",
         ListingErrorCode.FEISHU_SUBCODE_RANGE_MISSING: "子编码控价区间数据缺失",
@@ -200,31 +213,40 @@ class ListingErrors:
 
     # 飞书商品表缺项：aspect → (reason_code, 缺项说明)
     FEISHU_CATALOG_ASPECT: dict[str, tuple[str, str]] = {
-        "pricing_missing": (ListingErrorCode.FEISHU_PRICING_MISSING, "定价数据缺失"),
-        "control_missing": (ListingErrorCode.FEISHU_CONTROL_MISSING, "控价数据缺失"),
-        "range_missing": (ListingErrorCode.FEISHU_PRICE_RANGE_MISSING, "控价区间数据缺失"),
+        "pricing_missing": (ListingErrorCode.FEISHU_PRICING_MISSING, "拼多多定价没数据"),
+        "control_missing": (ListingErrorCode.FEISHU_CONTROL_MISSING, "拼多多控价没数据"),
+        "range_missing": (ListingErrorCode.FEISHU_PRICE_RANGE_MISSING, "PDD控价下限或上限没数据"),
+        "range_min_missing": (ListingErrorCode.FEISHU_PRICE_RANGE_MISSING, "PDD控价下限没数据"),
+        "range_max_missing": (ListingErrorCode.FEISHU_PRICE_RANGE_MISSING, "PDD控价上限没数据"),
         "color_spec_missing": (ListingErrorCode.FEISHU_COLOR_SPEC_MISSING, "颜色规格没数据"),
-        "product_row_missing": (ListingErrorCode.FEISHU_PRODUCT_ROW_MISSING, "商品表没数据"),
-        "subcode_missing": (ListingErrorCode.FEISHU_SUBCODE_MISSING, "没数据"),
+        "feishu_row_not_found": (ListingErrorCode.FEISHU_ROW_NOT_FOUND, "飞书无此行"),
+        "product_row_missing": (ListingErrorCode.FEISHU_ROW_NOT_FOUND, "飞书无此行"),
+        "subcode_missing": (ListingErrorCode.FEISHU_SUBCODE_MISSING, "飞书无子编码"),
     }
 
     FEISHU_CATALOG_SUB_ASPECT: dict[str, str] = {
         "pricing_missing": ListingErrorCode.FEISHU_SUBCODE_PRICING_MISSING,
         "control_missing": ListingErrorCode.FEISHU_SUBCODE_CONTROL_MISSING,
         "range_missing": ListingErrorCode.FEISHU_SUBCODE_RANGE_MISSING,
+        "range_min_missing": ListingErrorCode.FEISHU_SUBCODE_RANGE_MISSING,
+        "range_max_missing": ListingErrorCode.FEISHU_SUBCODE_RANGE_MISSING,
         "color_spec_missing": ListingErrorCode.FEISHU_SUBCODE_COLOR_SPEC_MISSING,
+        "feishu_row_not_found": ListingErrorCode.FEISHU_SUBCODE_MISSING,
         "product_row_missing": ListingErrorCode.FEISHU_SUBCODE_MISSING,
         "subcode_missing": ListingErrorCode.FEISHU_SUBCODE_MISSING,
     }
 
     # 诊断摘要用短标签（code_details 展示）
     FEISHU_CATALOG_ASPECT_SHORT: dict[str, str] = {
-        "pricing_missing": "定价没数据",
-        "control_missing": "控价没数据",
-        "range_missing": "控价区间没数据",
+        "pricing_missing": "拼多多定价没数据",
+        "control_missing": "拼多多控价没数据",
+        "range_missing": "PDD控价下限或上限没数据",
+        "range_min_missing": "PDD控价下限没数据",
+        "range_max_missing": "PDD控价上限没数据",
         "color_spec_missing": "颜色规格没数据",
-        "product_row_missing": "商品表没数据",
-        "subcode_missing": "商品表没数据",
+        "feishu_row_not_found": "飞书无此行",
+        "product_row_missing": "飞书无此行",
+        "subcode_missing": "飞书无子编码",
     }
 
     # 提交页拦截检测：页面文案片段 → reason_code
@@ -386,10 +408,32 @@ class ListingErrors:
         return cls.FEISHU_BRIEF_ASPECT_TEXT.get(text, text.replace("数据缺失", "为空").replace("没数据", "为空"))
 
     @classmethod
-    def feishu_catalog_line(cls, code: str, aspect: str) -> str:
-        norm = str(code or "").strip().upper()
+    def feishu_catalog_line(
+        cls,
+        code: str,
+        aspect: str,
+        *,
+        merchant_code: str = "",
+        is_sub: bool = False,
+    ) -> str:
+        """飞书失败表一行：编码+具体问题（定价/控价/飞书无此行等）。"""
+        code_text = str(code or "").strip().upper()
+        merchant = str(merchant_code or "").strip().upper()
+
+        if is_sub:
+            if aspect in ("feishu_row_not_found", "product_row_missing", "subcode_missing"):
+                if merchant and code_text:
+                    return f"{merchant}缺{code_text}"
+                if code_text:
+                    return f"{code_text}飞书无此行"
+                return "飞书无此行"
+            suffix = cls.FEISHU_BRIEF_ASPECT.get(aspect, "数据缺失")
+            return f"{code_text}{suffix}" if code_text else suffix
+
+        if aspect in ("feishu_row_not_found", "product_row_missing", "subcode_missing"):
+            return f"{code_text}飞书无此行" if code_text else "飞书无此行"
         suffix = cls.FEISHU_BRIEF_ASPECT.get(aspect, "数据缺失")
-        return cls.Msg.FEISHU_CATALOG_LINE.format(code=norm, aspect=suffix)
+        return f"{code_text}{suffix}" if code_text else suffix
 
     @classmethod
     def format_numbered(cls, lines: list[str]) -> str:
@@ -434,12 +478,21 @@ class ListingErrors:
                     "pricing_missing": "pricing_missing",
                     "control_missing": "control_missing",
                     "range_missing": "range_missing",
+                    "range_min_missing": "range_min_missing",
+                    "range_max_missing": "range_max_missing",
                     "color_spec_missing": "color_spec_missing",
-                    "product_row_missing": "product_row_missing",
+                    "feishu_row_not_found": "feishu_row_not_found",
+                    "product_row_missing": "feishu_row_not_found",
                     "subcode_missing": "subcode_missing",
-                    "product_catalog_missing": "product_row_missing",
+                    "product_catalog_missing": "feishu_row_not_found",
                 }
-                return cls.feishu_catalog_line(code, mapping.get(aspect, "product_row_missing"))
+                is_sub = rc.startswith("feishu_subcode_")
+                return cls.feishu_catalog_line(
+                    code,
+                    mapping.get(aspect, "feishu_row_not_found"),
+                    merchant_code=merchant_code,
+                    is_sub=is_sub,
+                )
             return cls.feishu_label(rc) if rc else ""
 
         text = re.sub(r"^(失败|跳过)\s*[:：]\s*", "", text)
@@ -472,8 +525,38 @@ class ListingErrors:
             if code and not re.match(r"^[A-Z0-9]+$", aspect[:6] if aspect else ""):
                 return f"{code}{cls._aspect_text_to_brief(aspect)}"
 
-        code_match = re.match(r"^([A-Z0-9]{3,}[A-Z]?)(定价|控价|控价区间|颜色规格|商品表)", text, flags=re.I)
+        code_match = re.match(
+            r"^(.+?)(拼多多定价|拼多多控价|PDD控价下限|PDD控价上限|定价|控价|控价区间|颜色规格|飞书无此行)(?:为空|没数据|数据缺失)?$",
+            text,
+            flags=re.I,
+        )
         if code_match:
+            code_part = str(code_match.group(1) or "").strip()
+            aspect_word = str(code_match.group(2) or "").strip()
+            aspect_map = {
+                "拼多多定价": "pricing_missing",
+                "定价": "pricing_missing",
+                "拼多多控价": "control_missing",
+                "控价": "control_missing",
+                "PDD控价下限": "range_min_missing",
+                "PDD控价上限": "range_max_missing",
+                "控价区间": "range_missing",
+                "颜色规格": "color_spec_missing",
+                "飞书无此行": "feishu_row_not_found",
+            }
+            aspect_key = aspect_map.get(aspect_word, "")
+            if aspect_key and code_part:
+                return cls.feishu_catalog_line(code_part, aspect_key)
+
+        vague_product = re.match(r"^(.+?)商品表(?:没数据|为空|数据缺失)$", text)
+        if vague_product:
+            code_part = str(vague_product.group(1) or "").strip()
+            if code_part:
+                return f"{code_part}飞书无此行"
+            return "飞书无此行"
+
+        legacy_code_match = re.match(r"^([A-Z0-9]{3,}[A-Z]?)(定价|控价|控价区间|颜色规格|商品表)", text, flags=re.I)
+        if legacy_code_match:
             return text
 
         if "未找到 1-5 主图" in text or text == cls.Msg.CAROUSEL_EMPTY:
@@ -514,16 +597,26 @@ class ListingErrors:
         code: str,
         aspect: str,
         is_sub: bool,
+        merchant_code: str = "",
     ) -> tuple[str, str]:
         """生成飞书商品表缺项 (reason_code, message)。"""
         norm_code = str(code or "").strip().upper()
+        parent_code = (
+            str(merchant_code or "").strip().upper()
+            or str(listing_label or "").split("/")[0].strip().upper()
+        )
         reason_code, _ = cls.FEISHU_CATALOG_ASPECT.get(
             aspect,
             (ListingErrorCode.FEISHU_PRODUCT_CATALOG_MISSING, "飞书数据缺失"),
         )
         if is_sub:
             reason_code = cls.FEISHU_CATALOG_SUB_ASPECT.get(aspect, reason_code)
-        message = cls.feishu_catalog_line(norm_code, aspect)
+        message = cls.feishu_catalog_line(
+            norm_code,
+            aspect,
+            merchant_code=parent_code,
+            is_sub=is_sub,
+        )
         return reason_code, message
 
     @classmethod

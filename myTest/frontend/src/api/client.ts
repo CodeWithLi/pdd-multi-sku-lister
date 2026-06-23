@@ -51,6 +51,8 @@ import type {
   RunInterpretResponse,
   RuntimeConfig,
   FeishuBitableHealth,
+  FeishuClearCacheResult,
+  FeishuInspectListingPricesResult,
   FeishuOAuthAuthorizeResult,
   FeishuOAuthExchangeResult,
   FeishuOAuthStatus,
@@ -450,6 +452,25 @@ export const api = {
 
   pipelineIssueSummary: (pipelineId: string) =>
     http.get<PipelineIssueSummaryResponse>(`/pipeline-issues/summary/${pipelineId}`).then((r) => r.data),
+
+  feishuClearCache: () =>
+    http.post<FeishuClearCacheResult>('/feishu/clear-cache').then((r) => r.data),
+
+  feishuInspectListingPrices: (codes: string[], forceRefresh = true, pipelineId = '') =>
+    http
+      .post<FeishuInspectListingPricesResult>('/feishu/inspect-listing-prices', {
+        codes,
+        force_refresh: forceRefresh,
+        pipeline_id: pipelineId || undefined,
+      })
+      .then((r) => r.data),
+
+  getPipelineFeishuInspect: (pipelineId: string, refresh = false) =>
+    http
+      .get<FeishuInspectListingPricesResult>(`/pipelines/integrated/${pipelineId}/feishu-inspect`, {
+        params: { refresh },
+      })
+      .then((r) => r.data),
 
   feishuBitableHealth: () =>
     http.get<FeishuBitableHealth>('/feishu-bitable/health').then((r) => r.data),

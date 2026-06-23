@@ -20,6 +20,7 @@ from pdd_agent.db.repositories import get_account_config
 from pdd_agent.skills.listing.preflight import run_preflight
 
 from pdd_agent.domain.models import PreflightIssue
+from pdd_agent.domain.listing_errors import ListingErrorCode
 from pdd_agent.skills.listing.upload import run_listing_uploads
 
 logger = get_logger(__name__)
@@ -70,6 +71,9 @@ async def preflight_node(state: ListingState) -> dict:
                 product_codes=codes,
                 config=feishu_cfg,
             )
+            from pdd_agent.domain.listing_errors import ListingErrors
+            from pdd_agent.integrations.feishu.pdd_upload_sync import _format_brief_listing_failure_reason
+
             for catalog_issue in catalog_issues:
                 detail_rows = list(catalog_issue.details)
                 if not detail_rows:
@@ -82,15 +86,31 @@ async def preflight_node(state: ListingState) -> dict:
                         )
                     )
                     continue
+                lines: list[str] = []
+                seen_lines: set[str] = set()
                 for detail in detail_rows:
-                    report.issues.append(
-                        PreflightIssue(
-                            level="error",
-                            message=detail.message,
-                            listing_label=catalog_issue.listing_label,
-                            reason_code=detail.reason_code,
-                        )
+                    brief = _format_brief_listing_failure_reason(
+                        listing_label=catalog_issue.listing_label,
+                        reason_code=detail.reason_code,
+                        message=detail.message,
+                        merchant_code=detail.code or catalog_issue.merchant_code,
                     )
+                    if brief and brief not in seen_lines:
+                        seen_lines.add(brief)
+                        lines.append(brief)
+                combined = ListingErrors.format_numbered(lines)
+                report.issues.append(
+                    PreflightIssue(
+                        level="error",
+                        message=combined or detail_rows[0].message,
+                        listing_label=catalog_issue.listing_label,
+                        reason_code=(
+                            detail_rows[0].reason_code
+                            if len(detail_rows) == 1
+                            else ListingErrorCode.FEISHU_PRODUCT_CATALOG_MISSING
+                        ),
+                    )
+                )
         except Exception:
             logger.exception("check feishu product catalog missing failed")
     if run_id:

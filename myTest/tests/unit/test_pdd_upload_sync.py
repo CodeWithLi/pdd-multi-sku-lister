@@ -752,6 +752,10 @@ def test_parse_listing_label_from_text():
     assert label == "BD030A/第一套图"
     assert code == "BD030A"
 
+    label, code = parse_listing_label_from_text("BD022A音乐小猫笔袋/第一套图：控价区间为空")
+    assert label == "BD022A音乐小猫笔袋/第一套图"
+    assert code == "BD022A音乐小猫笔袋"
+
 
 def test_push_pdd_upload_failure_log_without_merchant_code(monkeypatch):
     from pdd_agent.integrations.feishu import pdd_upload_sync

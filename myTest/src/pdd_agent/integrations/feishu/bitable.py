@@ -272,6 +272,34 @@ def resolve_table_field_name(
     return name
 
 
+def resolve_table_field_name_from_candidates(
+    client: FeishuClient,
+    app_token: str,
+    table_id: str,
+    candidates: tuple[str, ...] | list[str],
+    configured_name: str = "",
+) -> str:
+    """按候选列名依次匹配飞书表真实列名（大小写不敏感）。"""
+    names: list[str] = []
+    configured = str(configured_name or "").strip()
+    if configured:
+        names.append(configured)
+    for item in candidates:
+        text = str(item or "").strip()
+        if text and text not in names:
+            names.append(text)
+    if not names:
+        return ""
+    lookup = _table_field_lookup(client, app_token, table_id)
+    for name in names:
+        if name in lookup:
+            return name
+        for real_name in lookup:
+            if real_name.lower() == name.lower():
+                return real_name
+    return names[0]
+
+
 def search_records_by_field(
     client: FeishuClient,
     app_token: str,
@@ -330,6 +358,63 @@ def search_records_by_field_values(
             {
                 "field_name": resolved_name,
                 "operator": "is",
+                "value": [value],
+            }
+            for value in chunk
+        ]
+        page_token = ""
+        while True:
+            body: dict[str, Any] = {
+                "filter": {
+                    "conjunction": "or",
+                    "conditions": conditions,
+                },
+                "page_size": size,
+            }
+            if page_token:
+                body["page_token"] = page_token
+            data = client.request(
+                "POST",
+                f"/bitable/v1/apps/{app_token}/tables/{table_id}/records/search",
+                json=body,
+            )
+            payload = data.get("data") or {}
+            batch = list(payload.get("items") or [])
+            items.extend(batch)
+            if not payload.get("has_more"):
+                break
+            page_token = str(payload.get("page_token") or "").strip()
+            if not page_token:
+                break
+    return items
+
+
+def search_records_by_field_contains(
+    client: FeishuClient,
+    app_token: str,
+    table_id: str,
+    *,
+    field_name: str,
+    values: list[str],
+    page_size: int = 500,
+    chunk_size: int = 20,
+) -> list[dict[str, Any]]:
+    """按字段「包含」子串批量查记录（商品编码带中文后缀时用编码前缀匹配）。"""
+    normalized = list(dict.fromkeys(str(value or "").strip() for value in values if str(value or "").strip()))
+    if not normalized:
+        return []
+
+    resolved_name = resolve_table_field_name(client, app_token, table_id, field_name)
+    items: list[dict[str, Any]] = []
+    size = max(1, min(int(page_size), 500))
+    step = max(1, min(int(chunk_size), 20))
+
+    for start in range(0, len(normalized), step):
+        chunk = normalized[start : start + step]
+        conditions = [
+            {
+                "field_name": resolved_name,
+                "operator": "contains",
                 "value": [value],
             }
             for value in chunk

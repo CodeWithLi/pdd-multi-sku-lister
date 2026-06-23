@@ -23,7 +23,13 @@ from pdd_agent.api.services.pipeline_service import (
 )
 from pdd_agent.core.config import load_yaml_settings
 from pdd_agent.db.session import is_database_available
+from pdd_agent.api.schemas.feishu_inspect import FeishuInspectListingPricesOut
 from pdd_agent.integrations.feishu.config import excel_fallback_enabled, save_pipeline_excel_fallback_to_config
+from pdd_agent.integrations.feishu.listing_feishu_inspect_store import (
+    capture_and_save_pipeline_feishu_inspect,
+    load_pipeline_feishu_inspect,
+    merchant_codes_for_pipeline,
+)
 
 router = APIRouter(prefix="/pipelines", tags=["pipelines"])
 
@@ -47,16 +53,9 @@ def _normalize_batch_items(body: IntegratedPipelineBatchStartRequest) -> list[di
 
 
 def _clear_excel_data_caches() -> None:
-    try:
-        from pdd_agent.integrations.feishu.pdd_price_compare_sync import clear_price_compare_caches
-        from pdd_agent.integrations.feishu.pdd_product_catalog_sync import clear_pdd_product_catalog_cache
-        from pdd_agent.skills.listing.pdd_product_catalog import get_pdd_product_catalog
+    from pdd_agent.integrations.feishu.cache import clear_feishu_data_caches
 
-        clear_pdd_product_catalog_cache()
-        clear_price_compare_caches()
-        get_pdd_product_catalog.cache_clear()
-    except Exception:
-        pass
+    clear_feishu_data_caches()
 
 
 @router.get("/integrated/excel-fallback", response_model=PipelineExcelFallbackOut)
@@ -166,6 +165,28 @@ def list_integrated(
         page=int(data.get("page") or 1),
         page_size=int(data.get("page_size") or page_size),
     )
+
+
+@router.get("/integrated/{pipeline_id}/feishu-inspect", response_model=FeishuInspectListingPricesOut)
+def get_integrated_feishu_inspect(pipeline_id: str, refresh: bool = False):
+    """读取整合链路已保存的飞书定价数据；refresh=true 时重新拉取并覆盖。"""
+    if not is_database_available():
+        raise HTTPException(status_code=503, detail="数据库不可用")
+    data = get_pipeline(pipeline_id)
+    if not data:
+        raise HTTPException(status_code=404, detail="pipeline not found")
+
+    if refresh:
+        codes = merchant_codes_for_pipeline(data) or list(data.get("product_codes") or [])
+        if not codes:
+            raise HTTPException(status_code=422, detail="该链路没有可查询的商品编码")
+        result = capture_and_save_pipeline_feishu_inspect(pipeline_id, codes, force_refresh=True)
+        return FeishuInspectListingPricesOut(**result, from_cache=False)
+
+    cached = load_pipeline_feishu_inspect(pipeline_id)
+    if not cached:
+        raise HTTPException(status_code=404, detail="该链路尚未记录飞书定价数据")
+    return FeishuInspectListingPricesOut(**cached, from_cache=True)
 
 
 @router.get("/integrated/{pipeline_id}", response_model=IntegratedPipelineResponse)

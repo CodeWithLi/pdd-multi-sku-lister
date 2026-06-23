@@ -9,7 +9,7 @@ from pdd_agent.skills.listing.catalog import (
     parse_all_listings,
     parse_listing_target,
 )
-from pdd_agent.skills.listing.pdd_product_catalog import BUNDLE_MODEL_CODE, get_pdd_product_catalog
+from pdd_agent.skills.listing.pdd_product_catalog import BUNDLE_MODEL_CODE, PddProductEntry, get_pdd_product_catalog
 
 
 def test_image_set_pattern():
@@ -156,6 +156,42 @@ def test_parse_combo_code_multi_part_is_bundle():
         "BD719B",
         BUNDLE_MODEL_CODE,
     )
+
+
+def test_parse_combo_component_codes_for_bundle():
+    from pdd_agent.skills.listing.catalog import _parse_combo_component_codes
+
+    assert _parse_combo_component_codes("BD032D+YKL020A+YKL004L+YKL007P", "BD032D") == [
+        "BD032D",
+        "YKL020A",
+        "YKL004L",
+        "YKL007P",
+    ]
+    assert _parse_combo_component_codes("BD719A+GJ361A", "BD719A") == ["BD719A", "GJ361A"]
+
+
+def test_resolve_combo_pricing_bundle_sums_all_components():
+    from pdd_agent.skills.listing.listing_price_float import reset_listing_price_float_registry
+    from pdd_agent.skills.listing.pdd_product_catalog import resolve_combo_pricing
+
+    reset_listing_price_float_registry(enabled=False)
+    catalog = {
+        "BD032D": PddProductEntry("BD032D", "棕色笔袋", "笔袋", 2855, 14.0),
+        "YKL020A": PddProductEntry("YKL020A", "磁吸夹", "亚克力", 100, 4.09),
+        "YKL004L": PddProductEntry("YKL004L", "套尺", "亚克力", 100, 5.09),
+        "YKL007P": PddProductEntry("YKL007P", "挂件", "亚克力", 100, 3.96),
+    }
+    components = ["BD032D", "YKL020A", "YKL004L", "YKL007P"]
+    inv, gp, sp = resolve_combo_pricing(
+        "BD032D",
+        BUNDLE_MODEL_CODE,
+        catalog,
+        {},
+        bundle_components=components,
+    )
+    assert inv == "100"
+    assert gp == "27.14"
+    assert sp == "127.14"
 
 
 def test_bundle_preview_parsed_as_sku(tmp_path, monkeypatch):

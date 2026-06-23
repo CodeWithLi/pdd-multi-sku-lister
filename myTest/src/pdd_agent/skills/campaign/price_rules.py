@@ -42,12 +42,22 @@ def normalize_price_code(value: str) -> str:
     if not text:
         return ""
     match = re.match(r"^[A-Z0-9+-]+", text)
-    return match.group(0) if match else text
+    code = match.group(0) if match else text
+    return code.rstrip("-")
+
+
+def _compact_code_hyphen(value: str) -> str:
+    """BD021A-卡皮巴拉 → BD021A卡皮巴拉（飞书与文件夹编码常见差异）。"""
+    text = str(value or "").strip().upper()
+    return re.sub(r"^([A-Z0-9]+)-(?=[\u4e00-\u9fff])", r"\1", text)
 
 
 def price_rule_candidates(value: str) -> list[str]:
     text = str(value or "").strip().upper()
-    candidates = [text, normalize_price_code(text)]
+    candidates = [text, normalize_price_code(text), _compact_code_hyphen(text)]
+    compact_norm = normalize_price_code(_compact_code_hyphen(text))
+    if compact_norm:
+        candidates.append(compact_norm)
     if "+" in text:
         left, right = text.split("+", 1)
         candidates.extend([left.strip(), right.strip(), normalize_price_code(right)])
@@ -99,10 +109,19 @@ def find_pdd_price_range(
     ranges: dict[str, CampaignPriceRange],
     candidates: list[str],
 ) -> CampaignPriceRange | None:
+    from pdd_agent.integrations.feishu.listing_feishu_catalog import codes_match
+
+    wanted: list[str] = []
     for value in candidates:
-        for key in price_rule_candidates(value):
-            rule = ranges.get(key)
-            if rule:
+        wanted.extend(price_rule_candidates(value))
+    wanted = list(dict.fromkeys(item for item in wanted if item))
+    for key in wanted:
+        rule = ranges.get(key)
+        if rule:
+            return rule
+    for stored_key, rule in ranges.items():
+        for key in wanted:
+            if codes_match(key, stored_key):
                 return rule
     return None
 

@@ -251,6 +251,25 @@ def _parse_combo_code(name: str, default_style_code: str = "") -> tuple[str, str
     return code, code
 
 
+def _parse_combo_component_codes(name: str, default_style_code: str = "") -> list[str]:
+    """规格图文件名 → 参与定价的商品编码列表（套装为多段编码之和）。"""
+    stem = Path(name).stem.strip()
+    if not stem:
+        return []
+    default_style = _extract_product_code_prefix(default_style_code) or default_style_code
+    if "+" in stem:
+        parts = [part.strip() for part in stem.split("+") if part.strip()]
+        codes = [_extract_product_code_prefix(part) or part for part in parts]
+        return list(dict.fromkeys(code for code in codes if code))
+    if default_style:
+        model = _extract_product_code_prefix(stem) or stem
+        if model.upper() == default_style.upper():
+            return [default_style]
+        return [default_style, model]
+    code = _extract_product_code_prefix(stem) or stem
+    return [code] if code else []
+
+
 def _new_layout_units(product_code: str, assets_root: Path) -> list[tuple[str, Path]]:
     """返回新结构中某个实际商品编码的 [(套图名, 编码目录)]。"""
     if not assets_root.is_dir():
@@ -513,6 +532,9 @@ def _append_skus_from_previews(
                 image_set=unit.image_set,
                 listing_label=unit.listing_label,
             ),
+            bundle_components=_parse_combo_component_codes(preview.stem, default_style_code)
+            if is_bundle
+            else None,
         )
         unit.skus.append(
             SkuCombo(
@@ -677,16 +699,19 @@ def parse_legacy_listing_unit(
                 unit.model_codes.append(model_code)
 
             inv, gp, sp = resolve_combo_pricing(
-            style_code,
-            model_code,
-            catalog,
-            defaults,
-            listing_scope=resolve_listing_price_scope(
-                family_code=unit.family_code,
-                image_set=unit.image_set,
-                listing_label=unit.listing_label,
-            ),
-        )
+                style_code,
+                model_code,
+                catalog,
+                defaults,
+                listing_scope=resolve_listing_price_scope(
+                    family_code=unit.family_code,
+                    image_set=unit.image_set,
+                    listing_label=unit.listing_label,
+                ),
+                bundle_components=_parse_combo_component_codes(combo_dir.name, style_code)
+                if model_code == BUNDLE_MODEL_CODE
+                else None,
+            )
             unit.skus.append(
                 SkuCombo(
                     style_code=style_code,

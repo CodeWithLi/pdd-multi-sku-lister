@@ -23,6 +23,7 @@ from pdd_agent.integrations.feishu.bitable import (
     list_all_records,
     map_fields_to_table_names,
     resolve_table_field_name,
+    resolve_table_field_name_from_candidates,
 )
 from pdd_agent.integrations.feishu.client import FeishuAPIError, FeishuClient
 from pdd_agent.integrations.feishu.config import (
@@ -45,6 +46,17 @@ logger = get_logger(__name__)
 FEISHU_DATA_MISSING_MESSAGE = "飞书缺少数据"
 FEISHU_PRICE_NOT_FOUND_MESSAGE = "飞书没找到"
 
+MIN_PRICE_FIELD_CANDIDATES = (
+    "PDD控价下限价格",
+    "PDD定价下限价格",
+    "下限价格",
+)
+MAX_PRICE_FIELD_CANDIDATES = (
+    "PDD控价上限价格",
+    "PDD定价上限价格",
+    "上限价格",
+)
+
 _CACHE: dict[str, Any] = {
     "loaded_at": 0.0,
     "range_catalog": None,
@@ -65,6 +77,8 @@ class ExcelPriceRow:
 class PriceRangeCatalog:
     ranges: dict[str, CampaignPriceRange] = field(default_factory=dict)
     source: str = "empty"
+    incomplete_min_codes: frozenset[str] = field(default_factory=frozenset)
+    incomplete_max_codes: frozenset[str] = field(default_factory=frozenset)
     incomplete_codes: frozenset[str] = field(default_factory=frozenset)
     feishu_record_codes: frozenset[str] = field(default_factory=frozenset)
 
@@ -85,6 +99,30 @@ class CodePriceCatalog:
     feishu_record_codes: frozenset[str] = field(default_factory=frozenset)
 
 
+def _resolve_price_range_field_names(
+    api: FeishuClient,
+    app_token: str,
+    table_id: str,
+    names: Any,
+) -> tuple[str, str, str]:
+    code_field = resolve_table_field_name(api, app_token, table_id, names.merchant_code)
+    min_field = resolve_table_field_name_from_candidates(
+        api,
+        app_token,
+        table_id,
+        MIN_PRICE_FIELD_CANDIDATES,
+        names.min_price,
+    )
+    max_field = resolve_table_field_name_from_candidates(
+        api,
+        app_token,
+        table_id,
+        MAX_PRICE_FIELD_CANDIDATES,
+        names.max_price,
+    )
+    return code_field, min_field, max_field
+
+
 def _to_float(value: Any, default: float = 0.0) -> float:
     if value is None or value == "":
         return default
@@ -96,10 +134,27 @@ def _to_float(value: Any, default: float = 0.0) -> float:
         return default
 
 
+def _unwrap_feishu_field_value(value: Any) -> Any:
+    """展开飞书公式/查找引用单元格：{\"type\": 2, \"value\": [9.3]} 或文本数组。"""
+    if not isinstance(value, dict):
+        return value
+    if "type" not in value or "value" not in value:
+        return value
+    inner = value.get("value")
+    if isinstance(inner, list):
+        if not inner:
+            return None
+        first = inner[0]
+        if isinstance(first, dict):
+            return first.get("text") or first.get("value") or first.get("name") or first
+        return first
+    return inner
+
+
 def _field_text(fields: dict[str, Any], field_name: str) -> str:
     if not field_name:
         return ""
-    value = fields.get(field_name)
+    value = _unwrap_feishu_field_value(fields.get(field_name))
     if value is None:
         return ""
     if isinstance(value, list) and value:
@@ -115,11 +170,33 @@ def _field_text(fields: dict[str, Any], field_name: str) -> str:
 def _field_number(fields: dict[str, Any], field_name: str) -> float | None:
     if not field_name:
         return None
-    value = fields.get(field_name)
+    value = _unwrap_feishu_field_value(fields.get(field_name))
     if value is None or value == "":
         return None
     if isinstance(value, (int, float)) and not isinstance(value, bool):
         return float(value)
+    if isinstance(value, list) and value:
+        first = value[0]
+        if isinstance(first, (int, float)) and not isinstance(first, bool):
+            return float(first)
+        if isinstance(first, dict):
+            nested = first.get("value", first.get("text"))
+            if nested is not None and nested != "":
+                try:
+                    return float(nested)
+                except (TypeError, ValueError):
+                    pass
+        try:
+            return float(str(first).strip())
+        except (TypeError, ValueError):
+            return None
+    if isinstance(value, dict):
+        nested = value.get("value", value.get("text"))
+        if nested is not None and nested != "":
+            try:
+                return float(nested)
+            except (TypeError, ValueError):
+                return None
     text = str(value).strip()
     if not text:
         return None
@@ -127,6 +204,27 @@ def _field_number(fields: dict[str, Any], field_name: str) -> float | None:
         return float(text)
     except (TypeError, ValueError):
         return None
+
+
+def _row_price_fields_score(
+    fields: dict[str, Any],
+    *,
+    min_field: str,
+    max_field: str,
+    pricing_field: str = "",
+    control_field: str = "",
+) -> int:
+    score = 0
+    if _field_number(fields, min_field) is not None:
+        score += 1
+    max_val = _field_number(fields, max_field)
+    if max_val is not None and max_val > 0:
+        score += 4
+    if pricing_field and (_field_number(fields, pricing_field) or 0) > 0:
+        score += 1
+    if control_field and (_field_number(fields, control_field) or 0) > 0:
+        score += 1
+    return score
 
 
 def _project_relative_path(config: FeishuConfig, rel: str, override: Path | None = None) -> Path:
@@ -357,22 +455,33 @@ def _build_catalog_from_feishu_records(
     max_field: str,
 ) -> PriceRangeCatalog:
     ranges: dict[str, CampaignPriceRange] = {}
-    incomplete: set[str] = set()
+    incomplete_min: set[str] = set()
+    incomplete_max: set[str] = set()
     record_codes: set[str] = set()
 
     for item in records:
         fields = item.get("fields") if isinstance(item.get("fields"), dict) else {}
         raw_code = _field_text(fields, code_field)
-        norm_code = normalize_price_code(raw_code)
-        if not norm_code:
+        keys = [key for key in price_rule_candidates(raw_code) if key]
+        if not keys:
             continue
-        record_codes.add(norm_code)
+        for key in keys:
+            record_codes.add(key)
+        norm_code = normalize_price_code(raw_code) or keys[0]
         min_price = _field_number(fields, min_field)
         max_price = _field_number(fields, max_field)
+        min_bad = min_price is None
+        max_bad = max_price is None or max_price <= 0
 
-        if min_price is None or max_price is None or max_price <= 0:
+        if min_bad:
             for key in price_rule_candidates(raw_code):
-                incomplete.add(key)
+                if key not in ranges:
+                    incomplete_min.add(key)
+        if max_bad:
+            for key in price_rule_candidates(raw_code):
+                if key not in ranges:
+                    incomplete_max.add(key)
+        if min_bad or max_bad:
             continue
 
         rule = CampaignPriceRange(
@@ -382,10 +491,15 @@ def _build_catalog_from_feishu_records(
         )
         for key in price_rule_candidates(raw_code):
             ranges[key] = rule
+            incomplete_min.discard(key)
+            incomplete_max.discard(key)
 
+    incomplete = incomplete_min | incomplete_max
     return PriceRangeCatalog(
         ranges=ranges,
         source="feishu",
+        incomplete_min_codes=frozenset(incomplete_min),
+        incomplete_max_codes=frozenset(incomplete_max),
         incomplete_codes=frozenset(incomplete),
         feishu_record_codes=frozenset(record_codes),
     )
@@ -405,10 +519,12 @@ def _build_code_price_catalog_from_feishu_records(
     for item in records:
         fields = item.get("fields") if isinstance(item.get("fields"), dict) else {}
         raw_code = _field_text(fields, code_field)
-        norm_code = normalize_price_code(raw_code)
-        if not norm_code:
+        keys = [key for key in price_rule_candidates(raw_code) if key]
+        if not keys:
             continue
-        record_codes.add(norm_code)
+        for key in keys:
+            record_codes.add(key)
+        norm_code = normalize_price_code(raw_code) or keys[0]
         price_val = _field_number(fields, price_field)
         entry = CodePriceEntry(
             raw_code=raw_code,
@@ -488,6 +604,20 @@ def load_control_catalog_from_feishu(
     )
 
 
+def _catalog_keys_match(catalog_keys: frozenset[str] | set[str], candidates: list[str]) -> bool:
+    from pdd_agent.integrations.feishu.listing_feishu_catalog import codes_match
+
+    wanted = [key for key in candidates if key]
+    for key in wanted:
+        if key in catalog_keys:
+            return True
+    for stored_key in catalog_keys:
+        for key in wanted:
+            if codes_match(key, stored_key):
+                return True
+    return False
+
+
 def resolve_code_price_from_catalog(catalog: CodePriceCatalog, code: str) -> tuple[float | None, str]:
     """返回 (价格, 缺失说明)。飞书有行但无价格→缺少数据；飞书无行→没找到。"""
     normalized_candidates: list[str] = []
@@ -501,16 +631,23 @@ def resolve_code_price_from_catalog(catalog: CodePriceCatalog, code: str) -> tup
         if key in catalog.prices:
             return catalog.prices[key], ""
 
+    for stored_key, price in catalog.prices.items():
+        for key in normalized_candidates:
+            if key == stored_key:
+                return price, ""
+            from pdd_agent.integrations.feishu.listing_feishu_catalog import codes_match
+
+            if codes_match(key, stored_key):
+                return price, ""
+
     if catalog.source != "feishu":
         return None, ""
 
-    for key in normalized_candidates:
-        if key in catalog.incomplete_codes:
-            return None, FEISHU_DATA_MISSING_MESSAGE
+    if _catalog_keys_match(catalog.incomplete_codes, normalized_candidates):
+        return None, FEISHU_DATA_MISSING_MESSAGE
 
-    for key in normalized_candidates:
-        if key in catalog.feishu_record_codes:
-            return None, FEISHU_DATA_MISSING_MESSAGE
+    if _catalog_keys_match(catalog.feishu_record_codes, normalized_candidates):
+        return None, FEISHU_DATA_MISSING_MESSAGE
 
     return None, FEISHU_PRICE_NOT_FOUND_MESSAGE
 
@@ -539,9 +676,7 @@ def load_price_ranges_from_feishu(
         return PriceRangeCatalog(source="empty")
 
     names = compare_cfg.field_names
-    code_field = resolve_table_field_name(api, app_token, table_id, names.merchant_code)
-    min_field = resolve_table_field_name(api, app_token, table_id, names.min_price)
-    max_field = resolve_table_field_name(api, app_token, table_id, names.max_price)
+    code_field, min_field, max_field = _resolve_price_range_field_names(api, app_token, table_id, names)
 
     records = list_all_records(api, app_token, table_id)
     return _build_catalog_from_feishu_records(
@@ -714,31 +849,39 @@ def load_control_catalog(
 
 
 def is_feishu_price_data_missing(catalog: PriceRangeCatalog, candidates: list[str]) -> bool:
-    """候选编码在飞书有行但控价字段为空，或飞书源下找不到有效控价区间。"""
+    """候选编码在飞书有行但 PDD 控价上下限不完整；飞书无行则不算缺失。"""
+    return resolve_feishu_range_aspect(catalog, candidates) is not None
+
+
+def resolve_feishu_range_aspect(
+    catalog: PriceRangeCatalog,
+    candidates: list[str],
+) -> str | None:
+    """返回 range_min_missing / range_max_missing；数据齐全或飞书无行则 None。"""
+    from pdd_agent.skills.campaign.price_rules import find_pdd_price_range
+
     if catalog.source != "feishu":
-        return False
+        return None
     normalized_candidates: list[str] = []
     for value in candidates:
         for key in price_rule_candidates(value):
             if key:
                 normalized_candidates.append(key)
+    normalized_candidates = list(dict.fromkeys(normalized_candidates))
     if not normalized_candidates:
-        return False
+        return None
 
-    for key in normalized_candidates:
-        if key in catalog.ranges:
-            return False
-        if key in catalog.incomplete_codes:
-            return True
+    if find_pdd_price_range(catalog.ranges, normalized_candidates):
+        return None
 
-    for key in normalized_candidates:
-        if key in catalog.feishu_record_codes and key not in catalog.ranges:
-            return True
+    if not _catalog_keys_match(catalog.feishu_record_codes, normalized_candidates):
+        return None
 
-    if not catalog.ranges:
-        return True
-
-    return any(key in catalog.feishu_record_codes for key in normalized_candidates)
+    if _catalog_keys_match(catalog.incomplete_min_codes, normalized_candidates):
+        return "range_min_missing"
+    if _catalog_keys_match(catalog.incomplete_max_codes, normalized_candidates):
+        return "range_max_missing"
+    return None
 
 
 def _record_matches_excel_candidates(raw_feishu_code: str, excel_candidates: set[str]) -> bool:
@@ -779,9 +922,7 @@ def migrate_pdd_xls_to_feishu(
         }
 
     names = compare_cfg.field_names
-    code_field = resolve_table_field_name(api, app_token, table_id, names.merchant_code)
-    min_field = resolve_table_field_name(api, app_token, table_id, names.min_price)
-    max_field = resolve_table_field_name(api, app_token, table_id, names.max_price)
+    code_field, min_field, max_field = _resolve_price_range_field_names(api, app_token, table_id, names)
 
     excel_candidate_keys: set[str] = set()
     excel_by_norm: dict[str, ExcelPriceRow] = {}

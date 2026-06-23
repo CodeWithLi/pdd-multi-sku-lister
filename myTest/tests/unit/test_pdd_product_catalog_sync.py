@@ -64,7 +64,7 @@ def test_resolve_combo_pricing_uses_different_float_when_base_price_differs():
 
 
 def test_feishu_product_catalog_missing_message_includes_code():
-    assert feishu_product_catalog_missing_message(product_code="BD716A") == "BD716A商品表没数据"
+    assert feishu_product_catalog_missing_message(product_code="BD716A") == "BD716A飞书无此行"
 
 
 def test_format_feishu_catalog_issue_detail_message():
@@ -75,7 +75,7 @@ def test_format_feishu_catalog_issue_detail_message():
         aspect="pricing_missing",
     )
     assert reason == "feishu_pricing_missing"
-    assert msg == "BD034B定价为空"
+    assert msg == "BD034B拼多多定价为空"
 
     reason, msg = format_feishu_catalog_issue_detail_message(
         listing_label="BD034B/第一套图",
@@ -84,7 +84,7 @@ def test_format_feishu_catalog_issue_detail_message():
         aspect="subcode_missing",
     )
     assert reason == "feishu_subcode_missing"
-    assert msg == "YKL001N商品表为空"
+    assert msg == "BD034B缺YKL001N"
 
     reason, msg = format_feishu_catalog_issue_detail_message(
         listing_label="BD034B/第一套图",
@@ -93,7 +93,7 @@ def test_format_feishu_catalog_issue_detail_message():
         aspect="control_missing",
     )
     assert reason == "feishu_subcode_control_missing"
-    assert msg == "YKL001N控价为空"
+    assert msg == "YKL001N拼多多控价为空"
 
 
 def test_format_feishu_listing_catalog_issue_message():
@@ -180,13 +180,16 @@ def test_schedule_feishu_product_catalog_missing_logs_writes_failure_rows(monkey
         config=cfg,
     )
     assert logged == 1
-    assert captured[0]["message"] == "1、BD716A定价为空，2、YKL001N控价为空"
+    assert captured[0]["message"] == "1、BD716A拼多多定价为空，2、YKL001N拼多多控价为空"
     assert captured[0]["reason_code"] == "feishu_subcode_control_missing"
     assert captured[0]["merchant_code"] == "BD716A"
 
 
 def test_diagnose_feishu_listing_catalog_issues_marks_missing_fields(monkeypatch):
     from pdd_agent.integrations.feishu import pdd_product_catalog_sync
+    from pdd_agent.integrations.feishu.listing_feishu_snapshot import clear_listing_feishu_snapshot
+
+    clear_listing_feishu_snapshot()
 
     cfg = FeishuConfig(
         app_id="x",
@@ -258,17 +261,18 @@ def test_diagnose_feishu_listing_catalog_issues_marks_missing_fields(monkeypatch
     assert issues[0].merchant_code == "BD716A"
     assert issues[0].listing_label == "BD716A/第一套图"
     details = dict(issues[0].code_details)
-    assert "定价没数据" in details["BD716A"]
-    assert "商品表没数据" in details["YKL001N"]
-    assert "控价没数据" in details["YKL001N"]
+    assert "拼多多定价没数据" in details["BD716A"]
+    assert "拼多多控价没数据" in details["YKL001N"]
     messages = [item.message for item in issues[0].details]
-    assert "BD716A定价为空" in messages
-    assert "YKL001N商品表为空" in messages
-    assert "YKL001N控价为空" in messages
+    assert "BD716A拼多多定价为空" in messages
+    assert "YKL001N拼多多控价为空" in messages
 
 
 def test_load_unified_pdd_product_catalog_falls_back_to_excel(monkeypatch, tmp_path):
     from pdd_agent.integrations.feishu import pdd_product_catalog_sync
+    from pdd_agent.integrations.feishu.listing_feishu_snapshot import clear_listing_feishu_snapshot
+
+    clear_listing_feishu_snapshot()
 
     cfg = FeishuConfig(
         app_id="x",

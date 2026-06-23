@@ -566,6 +566,8 @@ export interface IntegratedPipeline {
   listing_unit_statuses?: IntegratedPipelineListingUnitStatus[]
   campaign_results?: IntegratedPipelineCampaignResult[]
   steps: IntegratedPipelineStepInfo[]
+  feishu_inspect_at?: string
+  has_feishu_inspect?: boolean
   created_at: string | null
   updated_at: string | null
 }
@@ -686,6 +688,58 @@ export interface FeishuOAuthStatus {
   message: string
   need_oauth?: boolean
   redirect_uri?: string
+}
+
+export interface FeishuClearCacheResult {
+  success: boolean
+  cleared: string[]
+  errors: string[]
+  message: string
+  worker_scope: string
+}
+
+export interface FeishuInspectRowSummary {
+  商品编码?: string
+  颜色规格?: string
+  拼多多定价?: string
+  拼多多控价?: string
+  PDD控价下限价格?: string
+  PDD控价上限价格?: string
+}
+
+export interface FeishuInspectListingPriceItem {
+  query_code: string
+  snapshot_matched_key: string
+  snapshot_has_row: boolean
+  feishu_row_count: number
+  feishu_rows: FeishuInspectRowSummary[]
+  parsed: FeishuInspectRowSummary
+  catalog_pricing: string
+  catalog_control: string
+  catalog_range_min: string
+  catalog_range_max: string
+  snapshot_range_min: string
+  snapshot_range_max: string
+  pricing_reason: string
+  control_reason: string
+  range_aspect: string
+  snapshot_range_aspect: string
+  diagnose_messages: string[]
+}
+
+export interface FeishuInspectListingPricesResult {
+  codes: string[]
+  items: FeishuInspectListingPriceItem[]
+  field_names: Record<string, string>
+  table_name: string
+  table_id: string
+  snapshot_source: string
+  snapshot_keys: string[]
+  pricing_catalog_source: string
+  range_catalog_source: string
+  pipeline_id?: string
+  saved_at?: string
+  from_cache?: boolean
 }
 
 export interface FeishuOAuthAuthorizeResult {
