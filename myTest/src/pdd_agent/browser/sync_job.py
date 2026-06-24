@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import sys
 from collections.abc import Callable
 from typing import Any, TypeVar
 
@@ -17,7 +18,17 @@ from pdd_agent.core.config import AccountConfig, YamlSettings, get_env_settings
 T = TypeVar("T")
 
 
+def _init_playwright_thread() -> None:
+    """FastAPI 通过 asyncio.to_thread 调用时，Windows 线程默认事件循环不支持 subprocess。"""
+    if sys.platform != "win32":
+        return
+    asyncio.set_event_loop_policy(asyncio.WindowsProactorEventLoopPolicy())
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+
+
 def _launch_persistent(settings: YamlSettings, account_id: str):
+    _init_playwright_thread()
     env = get_env_settings()
     user_data_dir = settings.paths.resolve("profiles_root") / account_id / "user_data"
     user_data_dir.mkdir(parents=True, exist_ok=True)

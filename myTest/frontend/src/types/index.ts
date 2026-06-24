@@ -428,6 +428,119 @@ export interface PddFailureLogListResponse {
   table_name_candidates?: string[]
 }
 
+export interface PddFailureCycleRelistAction {
+  at: string
+  record_id: string
+  merchant_code: string
+  status: string
+  message: string
+  pipeline_id: string
+}
+
+export interface PddFailureCycleRelistWatch {
+  enabled: boolean
+  poll_seconds: number
+  completed_statuses: string[]
+  exclude_failure_reason_contains: string
+  scheduler_running: boolean
+  last_poll_at: string
+  last_error: string
+  candidate_total: number
+  new_count: number
+  recent_actions: PddFailureCycleRelistAction[]
+}
+
+export interface PddFailureCycleRelistWatchUpdate {
+  enabled: boolean
+  poll_seconds: number
+  completed_statuses: string[]
+  exclude_failure_reason_contains: string
+}
+
+export interface PddFailureCycleRelistTriggerResult {
+  ok: boolean
+  skipped?: boolean
+  reason?: string
+  error?: string
+  record_id: string
+  merchant_code?: string
+  account_name?: string
+  account_id?: string
+  pipeline_id?: string
+  product_codes?: string[]
+  claim?: Record<string, unknown>
+}
+
+export interface PddFailureCycleRelistTriggerPayload {
+  record_id: string
+  merchant_code?: string
+  account_name?: string
+  report_platform?: string
+}
+
+export interface PddFailureCycleRelistClaimResult {
+  ok: boolean
+  claimed: boolean
+  record_id: string
+  reason?: string
+  error?: string
+  redis_claimed?: boolean
+  feishu_updated?: boolean
+  placeholder?: string
+  redis_payload?: Record<string, unknown>
+}
+
+export interface PddFailureCycleRelistClaimPayload {
+  record_id: string
+  merchant_code?: string
+  account_name?: string
+}
+
+export interface PddFailureCycleRelistReleasePayload {
+  record_id: string
+  final_value?: string
+  update_feishu?: boolean
+}
+
+export interface PddFailureCycleRelistCandidate {
+  record_id: string
+  merchant_code: string
+  account_name: string
+  report_platform: string
+  record_type: string
+  failure_reason: string
+  process_status: string
+  cycle_relist: string
+  processor: string
+  processed_at: string
+  date: string
+  action_status: string
+  action_message: string
+  action_at: string
+  pipeline_id: string
+}
+
+export interface PddFailureCycleRelistCandidateListResponse {
+  ok: boolean
+  error?: string
+  total: number
+  items: PddFailureCycleRelistCandidate[]
+  new_items: PddFailureCycleRelistCandidate[]
+  table_id?: string
+  table_name?: string
+}
+
+export interface PddFailureCycleRelistPollResponse {
+  ok: boolean
+  skipped?: boolean
+  reason?: string
+  error?: string
+  polled_at?: string
+  total?: number
+  new_count?: number
+  new_items?: PddFailureCycleRelistCandidate[]
+}
+
 export interface PublishedProduct {
   mapping_id: string
   account_id: string

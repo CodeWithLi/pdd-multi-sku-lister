@@ -24,6 +24,14 @@ import type {
   FailureRetryResponse,
   FailureSyncResponse,
   PddFailureLogListResponse,
+  PddFailureCycleRelistWatch,
+  PddFailureCycleRelistWatchUpdate,
+  PddFailureCycleRelistCandidateListResponse,
+  PddFailureCycleRelistPollResponse,
+  PddFailureCycleRelistTriggerResult,
+  PddFailureCycleRelistTriggerPayload,
+  PddFailureCycleRelistClaimPayload,
+  PddFailureCycleRelistReleasePayload,
   ListingFailureDetailListResponse,
   ListingTaskResponse,
   ListingTargetOption,
@@ -810,6 +818,49 @@ export const api = {
   pddFailureLogs: (params?: { limit?: number }) =>
     http
       .get<PddFailureLogListResponse>('/pdd-failure-logs', { params })
+      .then((r) => r.data),
+
+  pddFailureCycleRelistWatch: () =>
+    http
+      .get<PddFailureCycleRelistWatch>('/pdd-failure-logs/cycle-relist/watch')
+      .then((r) => r.data),
+
+  updatePddFailureCycleRelistWatch: (body: PddFailureCycleRelistWatchUpdate) =>
+    http
+      .put<PddFailureCycleRelistWatch>('/pdd-failure-logs/cycle-relist/watch', body)
+      .then((r) => r.data),
+
+  pollPddFailureCycleRelist: () =>
+    http
+      .post<PddFailureCycleRelistPollResponse>('/pdd-failure-logs/cycle-relist/poll')
+      .then((r) => r.data),
+
+  pddFailureCycleRelistCandidates: (params?: { only_new?: boolean }) =>
+    http
+      .get<PddFailureCycleRelistCandidateListResponse>(
+        '/pdd-failure-logs/cycle-relist/candidates',
+        { params },
+      )
+      .then((r) => r.data),
+
+  claimPddFailureCycleRelist: (body: PddFailureCycleRelistClaimPayload) =>
+    http
+      .post<PddFailureCycleRelistClaimResult>('/pdd-failure-logs/cycle-relist/claim', body)
+      .then((r) => r.data),
+
+  releasePddFailureCycleRelist: (body: PddFailureCycleRelistReleasePayload) =>
+    http
+      .post<PddFailureCycleRelistClaimResult>('/pdd-failure-logs/cycle-relist/release', body)
+      .then((r) => r.data),
+
+  getPddFailureCycleRelistClaim: (recordId: string) =>
+    http
+      .get<PddFailureCycleRelistClaimResult>(`/pdd-failure-logs/cycle-relist/claim/${recordId}`)
+      .then((r) => r.data),
+
+  triggerPddFailureCycleRelist: (body: PddFailureCycleRelistTriggerPayload) =>
+    http
+      .post<PddFailureCycleRelistTriggerResult>('/pdd-failure-logs/cycle-relist/trigger', body)
       .then((r) => r.data),
 
   wecomHealth: () => http.get<WecomHealth>('/wecom/health').then((r) => r.data),

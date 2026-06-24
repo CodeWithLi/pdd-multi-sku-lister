@@ -29,12 +29,16 @@ from pdd_agent.api.routes.wecom import router as wecom_router
 from pdd_agent.core.config import load_yaml_settings
 from pdd_agent.core.logging import get_logger, setup_logging
 from pdd_agent.db import database_status, init_database
+from pdd_agent.api.services.failure_cycle_relist_scheduler import (
+    get_failure_cycle_relist_watch_scheduler,
+)
 from pdd_agent.api.services.traffic_report_scheduler import get_traffic_report_scheduler
 from pdd_agent.api.services.task_queue import TaskQueueWorker
 
 logger = get_logger(__name__)
 worker = TaskQueueWorker()
 traffic_report_scheduler = get_traffic_report_scheduler()
+failure_cycle_relist_watch_scheduler = get_failure_cycle_relist_watch_scheduler()
 
 
 @asynccontextmanager
@@ -47,6 +51,7 @@ async def lifespan(app: FastAPI):
         logger.warning("Database unavailable: %s", db["error"])
     worker.start()
     traffic_report_scheduler.start()
+    failure_cycle_relist_watch_scheduler.start()
 
     from pdd_agent.integrations.minio.broadcast import bind_event_loop
     from pdd_agent.integrations.minio.rabbitmq_consumer import get_minio_rabbitmq_consumer
@@ -200,6 +205,7 @@ async def lifespan(app: FastAPI):
     logger.info("PDD Agent API started")
     yield
     minio_consumer.stop()
+    await failure_cycle_relist_watch_scheduler.stop()
     await traffic_report_scheduler.stop()
     await worker.stop()
     logger.info("PDD Agent API stopped")

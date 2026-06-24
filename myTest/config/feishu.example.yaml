@@ -87,9 +87,23 @@ pdd_upload_log:
     process_completed: 是否处理完成
     # 与飞书表列名完全一致；若列名含前缀也会自动按「处理状态镜像」匹配
     process_status_mirror: （不要动）处理状态镜像
-    cycle_relist: 是否循环上架
+    # 单选列；占位/完成文案须与飞书该列选项名完全一致
+    cycle_relist: 是否已循环上架
     processor: 人员
     processed_at: 处理时间
+  failure_cycle_relist_watch:
+    enabled: false
+    poll_seconds: 60
+    completed_statuses:
+    - 已结束
+    - 已处理完成
+    exclude_failure_reason_contains: ""
+    fetch_limit: 200
+    ignore_existing_on_start: true
+    claim_on_discover: false
+    claim_placeholder: 循环上架中
+    claim_completed_value: 是
+    claim_redis_ttl_seconds: 7200
 
 # 整合链路活动步骤
 pdd_activity_log:

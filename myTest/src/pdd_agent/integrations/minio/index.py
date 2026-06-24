@@ -215,6 +215,35 @@ def load_set_index_record(cfg: MinioConfig, selector: str) -> MinioSetIndexRecor
     return _record_from_dict(data if isinstance(data, dict) else {})
 
 
+def list_minio_set_records_for_family(
+    family_code: str,
+    config: MinioConfig | None = None,
+) -> list[MinioSetIndexRecord]:
+    """按母款号列出 MinIO 套图索引记录（按套图名排序）。"""
+    family = str(family_code or "").strip().upper()
+    if not family:
+        return []
+    if not redis_configured():
+        return []
+    client = get_redis_client()
+    if client is None:
+        return []
+
+    records: list[MinioSetIndexRecord] = []
+    raw_sets = client.hgetall(_sets_key(config or load_minio_config()))
+    for blob in raw_sets.values():
+        try:
+            data = json.loads(blob)
+        except (TypeError, ValueError):
+            continue
+        record = _record_from_dict(data if isinstance(data, dict) else {})
+        if record is None or record.family_code.upper() != family:
+            continue
+        records.append(record)
+    records.sort(key=lambda item: _image_set_sort_key(item.image_set))
+    return records
+
+
 def list_indexed_image_sets_for_family(
     cfg: MinioConfig,
     family_code: str,

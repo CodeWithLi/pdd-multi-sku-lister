@@ -5,7 +5,7 @@ from __future__ import annotations
 import random
 import uuid
 from datetime import datetime, timedelta
-from typing import Any
+from typing import Any, Literal
 
 from pdd_agent.api.services.task_runner import create_campaign_run, create_listing_run, create_traffic_run
 from pdd_agent.core.config import load_yaml_settings
@@ -23,6 +23,33 @@ from pdd_agent.domain.enums import AgentKind, RunStatus
 from pdd_agent.storage import TaskRunStore
 
 logger = get_logger(__name__)
+
+ListingInputMode = Literal["selector", "cycle_relist"]
+
+
+def _resolve_pipeline_listing_codes(
+    product_codes: list[str],
+    *,
+    listing_input_mode: ListingInputMode = "selector",
+) -> tuple[list[str], dict[str, Any]]:
+    """整合链路上架入参：页面/RabbitMQ 用 selector；循环上架用 cycle_relist 解析。"""
+    raw_codes = list(dict.fromkeys(str(code).strip() for code in product_codes if str(code).strip()))
+    if not raw_codes:
+        raise ValueError("product_codes is required")
+
+    if listing_input_mode == "selector":
+        return raw_codes, {"listing_input_mode": "selector", "listing_input_codes": raw_codes}
+
+    from pdd_agent.integrations.feishu.pdd_failure_cycle_relist_resolve import (
+        resolve_cycle_relist_listing_selectors,
+    )
+
+    selectors, details = resolve_cycle_relist_listing_selectors(raw_codes)
+    return selectors, {
+        "listing_input_mode": "cycle_relist",
+        "listing_input_codes": raw_codes,
+        "cycle_relist_resolve": details,
+    }
 
 DEMO_ACTIVITY_DELAY_MINUTES = 2
 DEMO_ACTIVITY_JITTER_MAX_SECONDS = 60
@@ -1025,17 +1052,20 @@ def start_integrated_pipeline(
     skip_listing: bool = False,
     listing_skip_selectors: list[str] | None = None,
     material_source: str = "",
+    listing_input_mode: ListingInputMode = "selector",
 ) -> dict[str, Any]:
     account_id = str(account_id or "").strip()
     normalized_activity_ids = _normalize_pipeline_activity_ids(activity_id, activity_ids)
     activity_id = normalized_activity_ids[0]
-    codes = list(dict.fromkeys(str(code).strip() for code in product_codes if str(code).strip()))
     if not account_id:
         raise ValueError("account_id is required")
-    if not codes:
-        raise ValueError("product_codes is required")
     if not normalized_activity_ids:
         raise ValueError("activity_ids is required")
+
+    codes, listing_input_meta = _resolve_pipeline_listing_codes(
+        product_codes,
+        listing_input_mode=listing_input_mode,
+    )
 
     skip_selector_set = set(
         s for s in (listing_skip_selectors or []) if str(s).strip() in set(codes)
@@ -1056,6 +1086,7 @@ def start_integrated_pipeline(
         "activity_ids": normalized_activity_ids,
         "campaign_activity_index": 0,
         "campaign_results": [],
+        **listing_input_meta,
     }
     if batch_id:
         meta["batch_id"] = batch_id

@@ -64,7 +64,7 @@ class PddUploadFailureLogFieldNames(BaseModel):
     duration_seconds: str = "耗时秒"
     process_completed: str = "是否处理完成"
     process_status_mirror: str = "处理状态镜像"
-    cycle_relist: str = "是否循环上架"
+    cycle_relist: str = "是否已循环上架"
     processor: str = "人员"
     processed_at: str = "处理时间"
 
@@ -268,6 +268,74 @@ class PddPromotionLogConfig(BaseModel):
         return out
 
 
+class PddFailureCycleRelistWatchConfig(BaseModel):
+    """失败日志轮询：筛选可循环上架的候选记录。"""
+
+    enabled: bool = False
+    poll_seconds: int = Field(default=60, ge=10, le=3600)
+    completed_statuses: list[str] = Field(
+        default_factory=lambda: ["已结束", "已处理完成"],
+    )
+    exclude_failure_reason_contains: str = ""
+    fetch_limit: int = Field(default=200, ge=1, le=500)
+    ignore_existing_on_start: bool = Field(
+        default=False,
+        description="启用后首次轮询不把已有符合条件的记录算作「新发现」",
+    )
+    claim_on_discover: bool = Field(
+        default=True,
+        description="发现新候选时自动占用（Redis + 飞书占位），尚未触发整合链路",
+    )
+    claim_placeholder: str = Field(
+        default="循环上架中",
+        description="写入飞书「是否已循环上架」单选占位项，写入后该行不再符合候选筛选",
+    )
+    claim_completed_value: str = Field(
+        default="是",
+        description="释放占用时写入飞书的终态文案（整合链路完成后使用）",
+    )
+    claim_redis_ttl_seconds: int = Field(default=7200, ge=60, le=86400)
+    trigger_pipeline_on_discover: bool = Field(
+        default=True,
+        description="新候选占用成功后自动启动整合链路；旧失败日志保持勾选不再修改",
+    )
+    pipeline_report_platforms: list[str] = Field(
+        default_factory=lambda: ["拼多多"],
+        description="仅对这些报错平台触发整合链路，留空表示不过滤",
+    )
+    pipeline_activity_ids: list[str] = Field(
+        default_factory=list,
+        description="整合链路活动 ID；留空则使用 feishu.yaml pdd_activity_log 默认活动",
+    )
+    pipeline_category_keyword: str = "玩偶"
+    pipeline_auto_promotion: bool = True
+    pipeline_continue_after_limited_time_failure: bool = False
+    pipeline_continue_after_activity_failure: bool = False
+    pipeline_activity_delay_hours: float = Field(default=24.0, ge=0)
+    pipeline_demo_mode: bool = False
+    pipeline_slot_alignment_test: bool = True
+    pipeline_material_source: str = ""
+
+    @model_validator(mode="after")
+    def normalize(self) -> "PddFailureCycleRelistWatchConfig":
+        self.completed_statuses = [
+            str(x).strip() for x in self.completed_statuses if str(x).strip()
+        ]
+        self.exclude_failure_reason_contains = str(
+            self.exclude_failure_reason_contains or ""
+        ).strip()
+        self.claim_placeholder = str(self.claim_placeholder or "循环上架中").strip() or "循环上架中"
+        self.claim_completed_value = str(self.claim_completed_value or "是").strip() or "是"
+        self.pipeline_report_platforms = [
+            str(x).strip() for x in self.pipeline_report_platforms if str(x).strip()
+        ]
+        self.pipeline_activity_ids = [
+            str(x).strip() for x in self.pipeline_activity_ids if str(x).strip()
+        ]
+        self.pipeline_material_source = str(self.pipeline_material_source or "").strip()
+        return self
+
+
 class PddUploadLogConfig(BaseModel):
     enabled: bool = Field(
         default=False,
@@ -303,6 +371,9 @@ class PddUploadLogConfig(BaseModel):
     )
     failure_field_names: PddUploadFailureLogFieldNames = Field(
         default_factory=PddUploadFailureLogFieldNames,
+    )
+    failure_cycle_relist_watch: PddFailureCycleRelistWatchConfig = Field(
+        default_factory=PddFailureCycleRelistWatchConfig,
     )
     dedupe_field: str = Field(
         default="商品ID",
@@ -766,6 +837,104 @@ def save_pdd_marketing_log_schedule_to_config(
             str(aid).strip() for aid in traffic_report_account_ids if str(aid).strip()
         ]
     data["pdd_marketing_log"] = marketing_raw
+    cfg_path.parent.mkdir(parents=True, exist_ok=True)
+    with open(cfg_path, "w", encoding="utf-8") as f:
+        yaml.dump(data, f, allow_unicode=True, default_flow_style=False, sort_keys=False)
+
+
+def save_pdd_failure_cycle_relist_watch_to_config(
+    *,
+    enabled: bool | None = None,
+    poll_seconds: int | None = None,
+    completed_statuses: list[str] | None = None,
+    exclude_failure_reason_contains: str | None = None,
+    fetch_limit: int | None = None,
+    ignore_existing_on_start: bool | None = None,
+    claim_on_discover: bool | None = None,
+    claim_placeholder: str | None = None,
+    claim_completed_value: str | None = None,
+    claim_redis_ttl_seconds: int | None = None,
+    trigger_pipeline_on_discover: bool | None = None,
+    pipeline_report_platforms: list[str] | None = None,
+    pipeline_activity_ids: list[str] | None = None,
+    pipeline_category_keyword: str | None = None,
+    pipeline_auto_promotion: bool | None = None,
+    pipeline_continue_after_limited_time_failure: bool | None = None,
+    pipeline_continue_after_activity_failure: bool | None = None,
+    pipeline_activity_delay_hours: float | None = None,
+    pipeline_demo_mode: bool | None = None,
+    pipeline_slot_alignment_test: bool | None = None,
+    pipeline_material_source: str | None = None,
+    path: Path | None = None,
+) -> None:
+    """更新失败日志循环上架轮询配置并写回 feishu.yaml。"""
+    cfg_path = path or Path(os.getenv("FEISHU_CONFIG_PATH", DEFAULT_FEISHU_CONFIG_PATH))
+    data: dict = {}
+    if cfg_path.is_file():
+        with open(cfg_path, encoding="utf-8") as f:
+            data = yaml.safe_load(f) or {}
+    pdd_raw = data.get("pdd_upload_log")
+    if not isinstance(pdd_raw, dict):
+        pdd_raw = {}
+    watch_raw = pdd_raw.get("failure_cycle_relist_watch")
+    if not isinstance(watch_raw, dict):
+        watch_raw = {}
+    if enabled is not None:
+        watch_raw["enabled"] = bool(enabled)
+    if poll_seconds is not None:
+        watch_raw["poll_seconds"] = int(poll_seconds)
+    if completed_statuses is not None:
+        watch_raw["completed_statuses"] = [
+            str(x).strip() for x in completed_statuses if str(x).strip()
+        ]
+    if exclude_failure_reason_contains is not None:
+        watch_raw["exclude_failure_reason_contains"] = str(
+            exclude_failure_reason_contains or ""
+        ).strip()
+    if fetch_limit is not None:
+        watch_raw["fetch_limit"] = int(fetch_limit)
+    if ignore_existing_on_start is not None:
+        watch_raw["ignore_existing_on_start"] = bool(ignore_existing_on_start)
+    if claim_on_discover is not None:
+        watch_raw["claim_on_discover"] = bool(claim_on_discover)
+    if claim_placeholder is not None:
+        watch_raw["claim_placeholder"] = str(claim_placeholder or "循环上架中").strip() or "循环上架中"
+    if claim_completed_value is not None:
+        watch_raw["claim_completed_value"] = str(claim_completed_value or "是").strip() or "是"
+    if claim_redis_ttl_seconds is not None:
+        watch_raw["claim_redis_ttl_seconds"] = int(claim_redis_ttl_seconds)
+    if trigger_pipeline_on_discover is not None:
+        watch_raw["trigger_pipeline_on_discover"] = bool(trigger_pipeline_on_discover)
+    if pipeline_report_platforms is not None:
+        watch_raw["pipeline_report_platforms"] = [
+            str(x).strip() for x in pipeline_report_platforms if str(x).strip()
+        ]
+    if pipeline_activity_ids is not None:
+        watch_raw["pipeline_activity_ids"] = [
+            str(x).strip() for x in pipeline_activity_ids if str(x).strip()
+        ]
+    if pipeline_category_keyword is not None:
+        watch_raw["pipeline_category_keyword"] = str(pipeline_category_keyword or "玩偶").strip() or "玩偶"
+    if pipeline_auto_promotion is not None:
+        watch_raw["pipeline_auto_promotion"] = bool(pipeline_auto_promotion)
+    if pipeline_continue_after_limited_time_failure is not None:
+        watch_raw["pipeline_continue_after_limited_time_failure"] = bool(
+            pipeline_continue_after_limited_time_failure
+        )
+    if pipeline_continue_after_activity_failure is not None:
+        watch_raw["pipeline_continue_after_activity_failure"] = bool(
+            pipeline_continue_after_activity_failure
+        )
+    if pipeline_activity_delay_hours is not None:
+        watch_raw["pipeline_activity_delay_hours"] = float(pipeline_activity_delay_hours)
+    if pipeline_demo_mode is not None:
+        watch_raw["pipeline_demo_mode"] = bool(pipeline_demo_mode)
+    if pipeline_slot_alignment_test is not None:
+        watch_raw["pipeline_slot_alignment_test"] = bool(pipeline_slot_alignment_test)
+    if pipeline_material_source is not None:
+        watch_raw["pipeline_material_source"] = str(pipeline_material_source or "").strip()
+    pdd_raw["failure_cycle_relist_watch"] = watch_raw
+    data["pdd_upload_log"] = pdd_raw
     cfg_path.parent.mkdir(parents=True, exist_ok=True)
     with open(cfg_path, "w", encoding="utf-8") as f:
         yaml.dump(data, f, allow_unicode=True, default_flow_style=False, sort_keys=False)

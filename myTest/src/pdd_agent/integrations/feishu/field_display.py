@@ -5,6 +5,8 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Any
 
+from pdd_agent.integrations.feishu.bitable import FIELD_SINGLE_SELECT
+
 
 def format_user_names(value: Any) -> str:
     if not value:
@@ -98,6 +100,83 @@ def format_plain_text(value: Any) -> str:
     if isinstance(value, dict):
         return str(value.get("text") or value.get("name") or "").strip()
     return str(value).strip()
+
+
+def format_single_select(value: Any) -> str:
+    """单选字段：API 通常返回选项名字符串；勾选框式单选未选时可能为 false。"""
+    if value is None or value == "":
+        return ""
+    if isinstance(value, bool):
+        return "是" if value else ""
+    if isinstance(value, str):
+        text = value.strip()
+        if text.lower() == "false":
+            return ""
+        if text.lower() == "true":
+            return "是"
+        return text
+    if isinstance(value, dict):
+        return str(value.get("name") or value.get("text") or "").strip()
+    if isinstance(value, list) and value:
+        first = value[0]
+        if isinstance(first, dict):
+            return str(first.get("name") or first.get("text") or "").strip()
+        return str(first).strip()
+    return str(value).strip()
+
+
+def is_cycle_relist_unselected(value: Any) -> bool:
+    """是否已循环上架：未勾选 / 未选任何选项。"""
+    if isinstance(value, bool):
+        return not value
+    text = str(value or "").strip()
+    if not text:
+        return True
+    if text.lower() in ("false", "0", "no"):
+        return True
+    return False
+
+
+def _single_select_option_names(field_meta: dict[str, Any]) -> list[str]:
+    prop = field_meta.get("property") if isinstance(field_meta.get("property"), dict) else {}
+    options = prop.get("options") if isinstance(prop.get("options"), list) else []
+    names: list[str] = []
+    for option in options:
+        if isinstance(option, dict):
+            name = str(option.get("name") or "").strip()
+            if name:
+                names.append(name)
+    return names
+
+
+def is_checkbox_like_cycle_relist_field(field_meta: dict[str, Any]) -> bool:
+    """勾选框式单选：未选为 false，选中为 true / 唯一选项名。"""
+    ui_type = str(field_meta.get("ui_type") or "").lower()
+    if "checkbox" in ui_type:
+        return True
+    if int(field_meta.get("type") or 0) != FIELD_SINGLE_SELECT:
+        return False
+    return len(_single_select_option_names(field_meta)) <= 1
+
+
+def encode_cycle_relist_write_value(
+    value: str | None,
+    field_meta: dict[str, Any],
+) -> Any:
+    """把占用/释放文案编码为飞书「是否已循环上架」列可写入的值。"""
+    text = str(value).strip() if value is not None else ""
+    if not text:
+        return False if is_checkbox_like_cycle_relist_field(field_meta) else None
+
+    option_names = _single_select_option_names(field_meta)
+    if text in option_names:
+        return text
+
+    # 勾选框式：任意非空占位（如「循环上架中」）→ 打勾 true
+    if is_checkbox_like_cycle_relist_field(field_meta):
+        return True
+
+    return text
 
 
 def resolve_process_status(*, mirror_text: str = "") -> dict[str, str]:

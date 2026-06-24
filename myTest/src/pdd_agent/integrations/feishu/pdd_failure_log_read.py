@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Any
 
 from pdd_agent.integrations.feishu.bitable import (
+    FIELD_SINGLE_SELECT,
     FIELD_TEXT,
     find_table_id_by_name,
     list_all_records,
@@ -15,6 +16,7 @@ from pdd_agent.integrations.feishu.config import FeishuConfig, load_feishu_confi
 from pdd_agent.integrations.feishu.field_display import (
     format_datetime_ms,
     format_plain_text,
+    format_single_select,
     format_user_names,
     resolve_process_status,
 )
@@ -28,6 +30,14 @@ FAILURE_TABLE_NAME_ALIASES: tuple[str, ...] = (
     "全平台发布日志表（失败）",
     "淘宝+拼多多发布日志表（失败）",
 )
+
+
+def resolve_failure_log_table(
+    cfg: FeishuConfig,
+    client: FeishuClient,
+) -> tuple[str, str, str]:
+    """返回 (table_id, table_name, resolve_method)。"""
+    return _resolve_failure_log_table(cfg, client)
 
 
 def _resolve_failure_log_table(
@@ -82,6 +92,38 @@ def _resolve_mirror_field_name(
     return configured_name or "处理状态镜像"
 
 
+def resolve_cycle_relist_field_name(
+    configured: str,
+    table_fields: list[dict[str, Any]],
+) -> str:
+    """解析「是否循环上架」列名（支持单选/文本，按列名包含「循环上架」匹配）。"""
+    configured_name = str(configured or "").strip()
+    field_names = [str(f.get("field_name") or "") for f in table_fields]
+    if configured_name and configured_name in field_names:
+        return configured_name
+
+    for alias in ("是否已循环上架", "是否循环上架"):
+        if alias in field_names:
+            return alias
+
+    for item in table_fields:
+        name = str(item.get("field_name") or "")
+        field_type = int(item.get("type") or 0)
+        if "循环上架" not in name:
+            continue
+        if field_type in (FIELD_SINGLE_SELECT, FIELD_TEXT):
+            return name
+
+    return configured_name or "是否已循环上架"
+
+
+def _resolve_cycle_relist_field_name(
+    configured: str,
+    table_fields: list[dict[str, Any]],
+) -> str:
+    return resolve_cycle_relist_field_name(configured, table_fields)
+
+
 def list_pdd_failure_logs(
     config: FeishuConfig | None = None,
     client: FeishuClient | None = None,
@@ -108,6 +150,10 @@ def list_pdd_failure_logs(
         str(names.process_status_mirror or ""),
         table_fields,
     )
+    cycle_relist_field_name = _resolve_cycle_relist_field_name(
+        str(names.cycle_relist or ""),
+        table_fields,
+    )
 
     max_items = max(1, min(int(limit), 500))
     raw_records = list_all_records(api, app_token, table_id, page_size=max_items)
@@ -127,9 +173,9 @@ def list_pdd_failure_logs(
                 "record_id": str(record.get("record_id") or record.get("id") or ""),
                 "date": format_datetime_ms(fields.get(names.date)) or str(fields.get(names.date) or ""),
                 "merchant_code": str(fields.get(names.merchant_code) or ""),
-                "report_platform": str(fields.get(names.report_platform) or ""),
+                "report_platform": format_single_select(fields.get(names.report_platform)),
                 "account_name": str(fields.get(names.account_name) or ""),
-                "record_type": str(fields.get(names.record_type) or ""),
+                "record_type": format_single_select(fields.get(names.record_type)),
                 "failure_reason": str(fields.get(names.failure_reason) or ""),
                 "publish_start": format_datetime_ms(fields.get(names.publish_start)),
                 "publish_end": format_datetime_ms(fields.get(names.publish_end)),
@@ -140,7 +186,8 @@ def list_pdd_failure_logs(
                     "source": status["source"],
                     "mirror_text": mirror_text,
                 },
-                "cycle_relist": format_plain_text(fields.get(names.cycle_relist)),
+                "cycle_relist": format_single_select(fields.get(cycle_relist_field_name)),
+                "cycle_relist_field_name": cycle_relist_field_name,
                 "processor": processor_names,
                 "processed_at": processed_at,
                 "fields_raw": fields,
@@ -159,6 +206,7 @@ def list_pdd_failure_logs(
         "table_name": table_name,
         "resolve_method": resolve_method,
         "mirror_field_name": mirror_field_name,
+        "cycle_relist_field_name": cycle_relist_field_name,
         "mirror_api_readable": mirror_readable,
         "total": len(items),
         "items": items,

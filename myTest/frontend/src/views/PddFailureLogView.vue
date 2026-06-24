@@ -1,18 +1,45 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, onUnmounted, reactive, ref } from 'vue'
 import { ElMessage } from 'element-plus'
 import { api } from '@/api/client'
 import PageHeader from '@/components/PageHeader.vue'
-import type { PddFailureLogListResponse, PddFailureLogRecord } from '@/types'
+import type {
+  PddFailureCycleRelistAction,
+  PddFailureCycleRelistCandidate,
+  PddFailureCycleRelistWatch,
+  PddFailureLogListResponse,
+  PddFailureLogRecord,
+} from '@/types'
 
 const loading = ref(false)
+const watchLoading = ref(false)
+const watchSaving = ref(false)
 const error = ref('')
 const data = ref<PddFailureLogListResponse | null>(null)
 const showDebug = ref(false)
 const selected = ref<PddFailureLogRecord | null>(null)
 const limit = ref(100)
 
+const watchConfig = ref<PddFailureCycleRelistWatch | null>(null)
+const candidates = ref<PddFailureCycleRelistCandidate[]>([])
+let watchRefreshTimer: ReturnType<typeof setInterval> | null = null
+
+const watchForm = reactive({
+  enabled: false,
+  poll_seconds: 60,
+  completed_statuses: ['已结束', '已处理完成'] as string[],
+  exclude_failure_reason_contains: '',
+})
+
 const items = computed(() => data.value?.items ?? [])
+const recentActions = computed(() => watchConfig.value?.recent_actions ?? [])
+
+const watchStatusType = computed(() => {
+  if (!watchConfig.value?.enabled) return 'info'
+  if (watchConfig.value.last_error) return 'error'
+  if (watchConfig.value.scheduler_running) return 'success'
+  return 'warning'
+})
 
 function processTagType(label: string, source: string) {
   if (source === 'empty') return 'info'
@@ -34,6 +61,91 @@ function sourceLabel(source: string) {
     empty: '自动化尚未同步',
   }
   return map[source] || source
+}
+
+function actionStatusLabel(status: string) {
+  const map: Record<string, string> = {
+    started: '已跑链路',
+    failed: '失败',
+    skipped: '已跳过',
+    pending: '待处理',
+    waiting: '监控中',
+  }
+  return map[status] || status || '—'
+}
+
+function actionStatusType(status: string) {
+  if (status === 'started') return 'success'
+  if (status === 'failed') return 'danger'
+  if (status === 'skipped') return 'warning'
+  if (status === 'pending') return 'primary'
+  return 'info'
+}
+
+function applyWatch(data: PddFailureCycleRelistWatch) {
+  watchConfig.value = data
+  watchForm.enabled = data.enabled
+  watchForm.poll_seconds = data.poll_seconds
+  watchForm.completed_statuses = [...data.completed_statuses]
+  watchForm.exclude_failure_reason_contains = data.exclude_failure_reason_contains
+}
+
+async function loadWatch() {
+  watchLoading.value = true
+  try {
+    const cfg = await api.pddFailureCycleRelistWatch()
+    applyWatch(cfg)
+  } catch (e) {
+    ElMessage.error(e instanceof Error ? e.message : '加载配置失败')
+  } finally {
+    watchLoading.value = false
+  }
+}
+
+async function loadCandidates() {
+  try {
+    const resp = await api.pddFailureCycleRelistCandidates()
+    if (!resp.ok) {
+      ElMessage.error(resp.error || '读取候选失败')
+      return
+    }
+    candidates.value = resp.items
+  } catch (e) {
+    ElMessage.error(e instanceof Error ? e.message : '读取候选失败')
+  }
+}
+
+async function saveWatch() {
+  watchSaving.value = true
+  try {
+    const cfg = await api.updatePddFailureCycleRelistWatch({
+      enabled: watchForm.enabled,
+      poll_seconds: watchForm.poll_seconds,
+      completed_statuses: [...watchForm.completed_statuses],
+      exclude_failure_reason_contains: watchForm.exclude_failure_reason_contains,
+    })
+    applyWatch(cfg)
+    ElMessage.success(watchForm.enabled ? '已启用自动循环上架' : '已关闭自动循环上架')
+    await loadCandidates()
+    setupWatchRefresh()
+  } catch (e) {
+    ElMessage.error(e instanceof Error ? e.message : '保存失败')
+  } finally {
+    watchSaving.value = false
+  }
+}
+
+function setupWatchRefresh() {
+  if (watchRefreshTimer) {
+    clearInterval(watchRefreshTimer)
+    watchRefreshTimer = null
+  }
+  if (!watchConfig.value?.enabled) return
+  const interval = Math.max(15, watchConfig.value.poll_seconds) * 1000
+  watchRefreshTimer = setInterval(() => {
+    void loadWatch()
+    void loadCandidates()
+  }, interval)
 }
 
 async function load() {
@@ -61,8 +173,13 @@ function openDebug(row: PddFailureLogRecord) {
   showDebug.value = true
 }
 
-onMounted(() => {
-  void load()
+onMounted(async () => {
+  await Promise.all([load(), loadWatch(), loadCandidates()])
+  setupWatchRefresh()
+})
+
+onUnmounted(() => {
+  if (watchRefreshTimer) clearInterval(watchRefreshTimer)
 })
 </script>
 
@@ -82,12 +199,111 @@ onMounted(() => {
       class="mb-16"
     />
 
+    <el-card shadow="never" class="mb-16" v-loading="watchLoading">
+      <template #header>
+        <div class="card-header">
+          <span>自动循环上架</span>
+          <el-button type="primary" :loading="watchSaving" @click="saveWatch">保存</el-button>
+        </div>
+      </template>
+
+      <el-alert
+        v-if="watchConfig"
+        :type="watchStatusType"
+        show-icon
+        :closable="false"
+        class="mb-12"
+      >
+        <template #title>
+          {{
+            watchConfig.enabled
+              ? watchConfig.scheduler_running
+                ? `运行中：每 ${watchConfig.poll_seconds} 秒轮询，新候选自动 Redis 占用并跑整合链路`
+                : '已启用但调度未运行，请点保存或重启服务'
+              : '未启用：仅展示候选，不会自动跑链路'
+          }}
+        </template>
+        <template v-if="watchConfig.last_poll_at || watchConfig.last_error" #default>
+          <span v-if="watchConfig.last_poll_at">
+            上次轮询 {{ watchConfig.last_poll_at }} · 候选 {{ watchConfig.candidate_total }} 条 · 本轮新发现 {{ watchConfig.new_count }} 条
+          </span>
+          <span v-if="watchConfig.last_error" class="error-text"> · {{ watchConfig.last_error }}</span>
+        </template>
+      </el-alert>
+
+      <el-form label-width="140px" class="watch-form">
+        <el-form-item label="启用">
+          <el-switch v-model="watchForm.enabled" />
+        </el-form-item>
+        <el-form-item label="轮询间隔（秒）">
+          <el-input-number v-model="watchForm.poll_seconds" :min="10" :max="3600" :step="10" />
+        </el-form-item>
+        <el-form-item label="已完成处理状态">
+          <el-select
+            v-model="watchForm.completed_statuses"
+            multiple
+            filterable
+            allow-create
+            default-first-option
+            placeholder="已结束、已处理完成"
+            style="width: 100%"
+          />
+        </el-form-item>
+        <el-form-item label="排除失败原因">
+          <el-input
+            v-model="watchForm.exclude_failure_reason_contains"
+            placeholder="失败原因包含该短语则跳过，留空不过滤"
+            clearable
+          />
+        </el-form-item>
+      </el-form>
+
+      <el-divider content-position="left">最近处理记录</el-divider>
+      <el-table
+        :data="recentActions"
+        stripe
+        border
+        size="small"
+        empty-text="暂无处理记录（启用并保存后会自动轮询）"
+        class="mb-16"
+      >
+        <el-table-column prop="at" label="时间" width="170" />
+        <el-table-column prop="merchant_code" label="商品编码" width="130" show-overflow-tooltip />
+        <el-table-column prop="record_id" label="record_id" width="150" show-overflow-tooltip />
+        <el-table-column label="结果" width="100">
+          <template #default="{ row }: { row: PddFailureCycleRelistAction }">
+            <el-tag :type="actionStatusType(row.status)" size="small">
+              {{ actionStatusLabel(row.status) }}
+            </el-tag>
+          </template>
+        </el-table-column>
+        <el-table-column prop="message" label="说明" min-width="240" show-overflow-tooltip />
+        <el-table-column prop="pipeline_id" label="链路 ID" width="140" show-overflow-tooltip />
+      </el-table>
+
+      <el-divider content-position="left">当前候选（{{ candidates.length }}）</el-divider>
+      <el-table :data="candidates" stripe border size="small" empty-text="暂无符合条件的记录">
+        <el-table-column prop="date" label="日期" width="110" />
+        <el-table-column prop="merchant_code" label="商品编码" width="130" show-overflow-tooltip />
+        <el-table-column prop="account_name" label="店铺" width="110" show-overflow-tooltip />
+        <el-table-column prop="failure_reason" label="失败原因" min-width="180" show-overflow-tooltip />
+        <el-table-column prop="process_status" label="处理状态" width="110" />
+        <el-table-column label="自动处理" width="110">
+          <template #default="{ row }">
+            <el-tag :type="actionStatusType(row.action_status)" size="small">
+              {{ actionStatusLabel(row.action_status) }}
+            </el-tag>
+          </template>
+        </el-table-column>
+        <el-table-column prop="action_message" label="原因说明" min-width="220" show-overflow-tooltip />
+        <el-table-column prop="pipeline_id" label="链路 ID" width="130" show-overflow-tooltip />
+      </el-table>
+    </el-card>
+
     <el-card shadow="never" class="mb-16">
       <div class="toolbar">
         <div class="meta" v-if="data?.ok">
           <span>表：{{ data.table_name || '—' }}</span>
-          <span>table_id：{{ data.table_id }}</span>
-          <span v-if="data.mirror_field_name">状态列：{{ data.mirror_field_name }}</span>
           <span>共 {{ data.total }} 条</span>
         </div>
         <div class="actions">
@@ -95,15 +311,10 @@ onMounted(() => {
           <el-button type="primary" :loading="loading" @click="load">刷新</el-button>
         </div>
       </div>
-      <el-alert
-        type="info"
-        :closable="false"
-        show-icon
-        title="处理状态读取「处理状态镜像」列（由飞书自动化从流程字段同步）。若显示「未同步」，请在飞书里改一次流程或等待自动化执行。"
-      />
     </el-card>
 
     <el-table v-loading="loading" :data="items" stripe border style="width: 100%">
+      <el-table-column prop="record_id" label="record_id" width="150" show-overflow-tooltip />
       <el-table-column prop="date" label="日期" width="110" />
       <el-table-column prop="merchant_code" label="商品编码" width="140" show-overflow-tooltip />
       <el-table-column prop="report_platform" label="报错平台" width="90" />
@@ -122,10 +333,9 @@ onMounted(() => {
           <div class="sub">{{ sourceLabel(row.process_completed.source) }}</div>
         </template>
       </el-table-column>
-      <el-table-column prop="cycle_relist" label="是否循环上架" width="120" show-overflow-tooltip />
+      <el-table-column prop="cycle_relist" label="是否已循环上架" width="130" show-overflow-tooltip />
       <el-table-column prop="processor" label="人员" width="100" show-overflow-tooltip />
       <el-table-column prop="processed_at" label="处理时间" width="150" />
-      <el-table-column prop="duration_seconds" label="耗时秒" width="90" />
       <el-table-column label="操作" width="100" fixed="right">
         <template #default="{ row }">
           <el-button link type="primary" @click="openDebug(row)">原始数据</el-button>
@@ -153,12 +363,22 @@ onMounted(() => {
   margin-bottom: 16px;
 }
 
+.mb-12 {
+  margin-bottom: 12px;
+}
+
+.card-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+}
+
 .toolbar {
   display: flex;
   justify-content: space-between;
   gap: 16px;
   flex-wrap: wrap;
-  margin-bottom: 12px;
 }
 
 .meta {
@@ -173,6 +393,14 @@ onMounted(() => {
   display: flex;
   gap: 8px;
   align-items: center;
+}
+
+.watch-form {
+  max-width: 640px;
+}
+
+.error-text {
+  color: var(--el-color-danger);
 }
 
 .sub {
