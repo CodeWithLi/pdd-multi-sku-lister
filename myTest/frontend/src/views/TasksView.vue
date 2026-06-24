@@ -1,10 +1,11 @@
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { api } from '@/api/client'
 import PageHeader from '@/components/PageHeader.vue'
 import ResultSummary from '@/components/ResultSummary.vue'
+import { useMinioMaterialRefresh } from '@/composables/useMinioMaterialRefresh'
 import {
   formatMaterialGroupLabel,
   formatMaterialGroupMeta,
@@ -22,8 +23,7 @@ const activeTab = ref('listing')
 const accounts = ref<Account[]>([])
 const productOptions = ref<ListingTargetOption[]>([])
 const materialSource = ref<'local' | 'minio'>('minio')
-const minioHealth = ref<{ available?: boolean; error?: string; listing_poll_seconds?: number } | null>(null)
-const materialPolling = ref(false)
+const minioHealth = ref<{ available?: boolean; error?: string; listing_poll_seconds?: number; refresh_mode?: 'poll' | 'rabbitmq' } | null>(null)
 const showOnlyUnlistedGroups = ref(false)
 const defaultConcurrentStores = ref(3)
 const defaultStartDelayMin = ref(30)
@@ -57,7 +57,23 @@ const delistStartDelayMin = ref(30)
 const delistStartDelayMax = ref(180)
 const queueStatus = ref<QueueStatus | null>(null)
 
-let materialPollTimer: ReturnType<typeof setInterval> | null = null
+const {
+  materialPolling,
+  sseConnected,
+  switchingMode,
+  refreshMode,
+  restart: restartMaterialRefresh,
+  stop: stopMaterialRefresh,
+  setRefreshMode,
+} = useMinioMaterialRefresh({
+  materialSource,
+  minioHealth,
+  reloadHealth: loadMinioHealth,
+  onRefresh: async () => {
+    const accounts = selectedListingAccounts().filter(Boolean)
+    if (accounts.length) await loadListingTargets(accounts[0])
+  },
+})
 
 const enabledAccounts = computed(() => accounts.value.filter((a) => a.enabled))
 const queuePaused = computed(() =>
@@ -237,31 +253,11 @@ async function loadMinioHealth() {
   }
 }
 
-function stopMaterialPolling() {
-  materialPolling.value = false
-  if (materialPollTimer) {
-    clearInterval(materialPollTimer)
-    materialPollTimer = null
-  }
-}
-
-function startMaterialPolling() {
-  stopMaterialPolling()
-  if (materialSource.value !== 'minio') return
-  const seconds = minioHealth.value?.listing_poll_seconds ?? 30
-  if (!seconds || seconds <= 0) return
-  materialPolling.value = true
-  materialPollTimer = setInterval(() => {
-    const accounts = selectedListingAccounts().filter(Boolean)
-    if (accounts.length) loadListingTargets(accounts[0]).catch(() => undefined)
-  }, seconds * 1000)
-}
-
 async function onMaterialSourceChange(source: 'local' | 'minio') {
   materialSource.value = source
   productCodes.value = []
   checkedProductsBySet.value = {}
-  stopMaterialPolling()
+  stopMaterialRefresh()
   if (source === 'minio') {
     await loadMinioHealth()
     if (!minioHealth.value?.available) {
@@ -270,7 +266,7 @@ async function onMaterialSourceChange(source: 'local' | 'minio') {
   }
   const accounts = selectedListingAccounts().filter(Boolean)
   if (accounts.length) await loadListingTargets(accounts[0])
-  startMaterialPolling()
+  restartMaterialRefresh()
 }
 
 async function loadListingTargets(forAccountId = '') {
@@ -459,10 +455,8 @@ onMounted(async () => {
   if (route.query.tab === 'delist') activeTab.value = 'delist'
   await loadMinioHealth()
   await loadMeta()
-  startMaterialPolling()
+  restartMaterialRefresh()
 })
-
-onUnmounted(stopMaterialPolling)
 </script>
 
 <template>
@@ -564,7 +558,34 @@ onUnmounted(stopMaterialPolling)
               >
                 {{ minioHealth?.available ? 'MinIO 已连接' : (minioHealth?.error || 'MinIO 未连接') }}
               </el-tag>
-              <el-tag v-if="materialSource === 'minio' && materialPolling" size="small" type="info">自动刷新</el-tag>
+              <el-tag v-if="materialSource === 'minio' && refreshMode === 'poll' && materialPolling" size="small" type="info">
+                自动刷新
+              </el-tag>
+              <template v-if="materialSource === 'minio'">
+                <el-radio-group
+                  :model-value="refreshMode"
+                  size="small"
+                  :disabled="switchingMode"
+                  @change="setRefreshMode($event as 'poll' | 'rabbitmq')"
+                >
+                  <el-radio-button label="poll">定时 {{ minioHealth?.listing_poll_seconds ?? 30 }}s</el-radio-button>
+                  <el-radio-button label="rabbitmq">RabbitMQ 推送</el-radio-button>
+                </el-radio-group>
+                <el-tag
+                  v-if="refreshMode === 'rabbitmq' && sseConnected"
+                  size="small"
+                  type="success"
+                >
+                  实时监听
+                </el-tag>
+                <el-tag
+                  v-else-if="refreshMode === 'rabbitmq'"
+                  size="small"
+                  type="warning"
+                >
+                  推送未连接
+                </el-tag>
+              </template>
             </div>
 
             <el-form-item required>

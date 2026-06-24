@@ -15,6 +15,7 @@ from pdd_agent.api.routes.feishu_cache import router as feishu_cache_router
 from pdd_agent.api.routes.feishu_oauth import router as feishu_oauth_router
 from pdd_agent.api.routes.health import router as health_router
 from pdd_agent.api.routes.login import router as login_router
+from pdd_agent.api.routes.pdd_failure_log import router as pdd_failure_log_router
 from pdd_agent.api.routes.published_products import router as published_products_router
 from pdd_agent.api.routes.style_colors import router as style_colors_router
 from pdd_agent.api.routes.listed_folders import router as listed_folders_router
@@ -24,6 +25,7 @@ from pdd_agent.api.routes.queue import router as queue_router
 from pdd_agent.api.routes.runs import router as runs_router
 from pdd_agent.api.routes.tasks import router as tasks_router
 from pdd_agent.api.routes.traffic_report_schedule import router as traffic_report_schedule_router
+from pdd_agent.api.routes.wecom import router as wecom_router
 from pdd_agent.core.config import load_yaml_settings
 from pdd_agent.core.logging import get_logger, setup_logging
 from pdd_agent.db import database_status, init_database
@@ -45,6 +47,46 @@ async def lifespan(app: FastAPI):
         logger.warning("Database unavailable: %s", db["error"])
     worker.start()
     traffic_report_scheduler.start()
+
+    from pdd_agent.integrations.minio.broadcast import bind_event_loop
+    from pdd_agent.integrations.minio.rabbitmq_consumer import get_minio_rabbitmq_consumer
+
+    bind_event_loop(asyncio.get_running_loop())
+    try:
+        from pdd_agent.integrations.minio.config import minio_configured, minio_refresh_mode
+        from pdd_agent.integrations.minio.rabbitmq_admin import (
+            check_rabbitmq_amqp,
+            ensure_rabbitmq_binding,
+            ensure_rabbitmq_queue,
+        )
+
+        if minio_configured():
+            amqp = await asyncio.to_thread(check_rabbitmq_amqp)
+            if amqp.get("available"):
+                queue_info = await asyncio.to_thread(ensure_rabbitmq_queue)
+                logger.info("PDD RabbitMQ queue ready: %s", queue_info.get("queue"))
+                if minio_refresh_mode() == "rabbitmq":
+                    binding_info = await asyncio.to_thread(ensure_rabbitmq_binding)
+                    logger.info(
+                        "PDD RabbitMQ binding ready: %s -> %s (%s)",
+                        binding_info.get("exchange"),
+                        binding_info.get("queue"),
+                        binding_info.get("routing_key"),
+                    )
+    except Exception:
+        logger.exception("ensure PDD rabbitmq queue failed")
+
+    minio_consumer = get_minio_rabbitmq_consumer()
+    minio_consumer.start()
+    try:
+        from pdd_agent.integrations.minio.catalog import list_minio_listing_targets
+        from pdd_agent.integrations.minio.config import minio_configured, minio_refresh_mode
+
+        if minio_configured() and minio_refresh_mode() == "rabbitmq":
+            await asyncio.to_thread(list_minio_listing_targets, force_refresh=True)
+    except Exception:
+        logger.exception("minio initial index warmup failed")
+
     async def _ensure_feishu_table(label: str, fn):
         try:
             return await asyncio.to_thread(fn)
@@ -157,6 +199,7 @@ async def lifespan(app: FastAPI):
         logger.exception("ensure pdd feishu tables on startup failed")
     logger.info("PDD Agent API started")
     yield
+    minio_consumer.stop()
     await traffic_report_scheduler.stop()
     await worker.stop()
     logger.info("PDD Agent API stopped")
@@ -198,6 +241,7 @@ def create_app() -> FastAPI:
     app.include_router(listed_folders_router, prefix="/api")
     app.include_router(queue_router, prefix="/api")
     app.include_router(failures_router, prefix="/api")
+    app.include_router(pdd_failure_log_router, prefix="/api")
     app.include_router(feishu_bitable_router, prefix="/api")
     app.include_router(feishu_cache_router, prefix="/api")
     app.include_router(feishu_oauth_router, prefix="/api")
@@ -206,4 +250,5 @@ def create_app() -> FastAPI:
     app.include_router(style_colors_router, prefix="/api")
     app.include_router(runs_router, prefix="/api")
     app.include_router(agents_router, prefix="/api")
+    app.include_router(wecom_router, prefix="/api")
     return app

@@ -5,6 +5,8 @@ from __future__ import annotations
 from fastapi import APIRouter, HTTPException
 
 from pdd_agent.api.schemas.pipelines import (
+    AutoUploadConfigResponse,
+    AutoUploadConfigUpdateIn,
     IntegratedPipelineBatchResponse,
     IntegratedPipelineBatchStartRequest,
     IntegratedPipelineListResponse,
@@ -29,6 +31,11 @@ from pdd_agent.integrations.feishu.listing_feishu_inspect_store import (
     capture_and_save_pipeline_feishu_inspect,
     load_pipeline_feishu_inspect,
     merchant_codes_for_pipeline,
+)
+from pdd_agent.integrations.minio.auto_pipeline import (
+    AutoPipelineConfig,
+    load_auto_pipeline_config,
+    save_auto_pipeline_config,
 )
 
 router = APIRouter(prefix="/pipelines", tags=["pipelines"])
@@ -70,6 +77,33 @@ def update_integrated_excel_fallback(body: PipelineExcelFallbackUpdateIn):
     save_pipeline_excel_fallback_to_config(body.enabled)
     _clear_excel_data_caches()
     return PipelineExcelFallbackOut(enabled=bool(body.enabled))
+
+
+def _auto_upload_config_response() -> AutoUploadConfigResponse:
+    cfg = load_auto_pipeline_config()
+    return AutoUploadConfigResponse(**cfg.model_dump())
+
+
+@router.get("/auto-upload-config", response_model=AutoUploadConfigResponse)
+def get_auto_upload_config():
+    """读取 RabbitMQ 自动上架配置（写入 minio.yaml auto_pipeline）。"""
+    return _auto_upload_config_response()
+
+
+@router.put("/auto-upload-config", response_model=AutoUploadConfigResponse)
+def update_auto_upload_config(body: AutoUploadConfigUpdateIn):
+    """保存 RabbitMQ 自动上架配置。"""
+    if body.enabled:
+        account_id = str(body.account_id or "").strip()
+        if not account_id:
+            raise HTTPException(status_code=400, detail="开启自动上架时请选择店铺")
+        if not get_account_or_none(account_id):
+            raise HTTPException(status_code=404, detail=f"unknown account: {account_id}")
+    try:
+        saved = save_auto_pipeline_config(AutoPipelineConfig.model_validate(body.model_dump()))
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return AutoUploadConfigResponse(**saved.model_dump())
 
 
 @router.post("/integrated", response_model=IntegratedPipelineResponse)

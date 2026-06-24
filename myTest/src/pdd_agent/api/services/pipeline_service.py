@@ -40,6 +40,21 @@ CAMPAIGN_SKIP_TRAFFIC_OUTCOMES = frozenset(
 )
 
 
+def _try_wecom_pipeline_failed(row, *, error: str, current_step: str) -> None:
+    try:
+        from pdd_agent.integrations.wecom.notify import notify_pipeline_failed
+
+        notify_pipeline_failed(
+            account_id=str(row.account_id or ""),
+            pipeline_id=str(row.pipeline_id or ""),
+            product_codes=list(row.product_codes or []),
+            error=error,
+            current_step=current_step,
+        )
+    except Exception:
+        logger.warning("wecom pipeline notify failed pipeline_id=%s", row.pipeline_id, exc_info=True)
+
+
 def _batch_id() -> str:
     return datetime.now().strftime("%Y%m%d_%H%M%S") + "_" + uuid.uuid4().hex[:8]
 
@@ -1345,23 +1360,27 @@ def _listing_failure_meta(result: dict[str, Any]) -> dict[str, Any]:
 
 def _on_listing_finished(row, *, run_id: str, success: bool, result: dict[str, Any], error: str) -> None:
     if not success:
+        err = error or "上架失败"
         update_integrated_pipeline(
             row.pipeline_id,
             status="failed",
             current_step="listing_failed",
-            error=error or "上架失败",
+            error=err,
         )
+        _try_wecom_pipeline_failed(row, error=err, current_step="listing_failed")
         return
 
     pdd_ids, mapping_ids = _extract_listing_products(result)
     pdd_ids, mapping_ids, missing = _merge_skipped_listing_products(row, pdd_ids=pdd_ids, mapping_ids=mapping_ids)
     if missing:
+        err = f"跳过上架的商品未找到在售记录：{', '.join(missing)}"
         update_integrated_pipeline(
             row.pipeline_id,
             status="failed",
             current_step="listing_failed",
-            error=f"跳过上架的商品未找到在售记录：{', '.join(missing)}",
+            error=err,
         )
+        _try_wecom_pipeline_failed(row, error=err, current_step="listing_failed")
         try:
             from pdd_agent.api.services.pipeline_issue_report_service import ingest_orchestration_issue
 
@@ -1790,12 +1809,14 @@ def _ensure_pipeline_failed_after_task(
         AgentKind.TRAFFIC.value: ("traffic_failed", "推广创建失败"),
     }
     failed_step, default_error = step_map.get(agent, ("failed", "链路失败"))
+    err = str(error or "").strip() or default_error
     update_integrated_pipeline(
         pipeline_id,
         status="failed",
         current_step=failed_step,
-        error=str(error or "").strip() or default_error,
+        error=err,
     )
+    _try_wecom_pipeline_failed(row, error=err, current_step=failed_step)
 
 
 def _summarize_run_message(run_id: str) -> str:

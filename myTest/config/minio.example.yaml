@@ -9,14 +9,28 @@ access_key: ""
 secret_key: ""
 bucket: beilemei-images
 
+# 素材发现方式（二选一，不可同时启用）
+# poll      = 前端每 listing_poll_seconds 秒轮询 MinIO 索引
+# rabbitmq  = 监听上传队列，SSE 实时推送到前端
+refresh_mode: poll
+
 # 运营 Alist 上传入口（图片经 Alist -> MinIO -> RabbitMQ 通知）
 alist_url: http://192.168.1.129
+alist:
+  enabled: true
+  url: https://192.168.1.129
+  username: admin
+  password: "123456"
+  root_path: /公司电商主图库
+  verify_ssl: false
 # MinIO 控制台 http://192.168.1.129:9001  admin / 12345678
 console_url: http://192.168.1.129:9001
 
 # 只扫描这些一级目录（与 bucket 内 Alist 目录结构一致）
 categories:
   - 笔袋
+  - 公仔
+  - 视频
 
 prefix: ""
 cache_root: data/minio_cache/商品上架规格文件
@@ -27,7 +41,29 @@ rabbitmq:
   enabled: false
   host: 192.168.1.129
   port: 5672
-  username: guest
-  password: guest
-  queue: minio-upload-events
-  settle_seconds: 100
+  management_port: 15672
+  username: admin
+  password: "123456"
+  queue: beilemei.pdd.image.ingest
+  exchange: minio.events
+  routing_key: beilemei.images
+  settle_seconds: 5
+
+# RabbitMQ 上传后自动触发整合链路（上架 → 限时限量购 → 活动 → 推流）
+auto_pipeline:
+  enabled: false
+  # new_product_folder | append_to_product | all
+  trigger_mode: new_product_folder
+  account_id: ""
+  activity_ids:
+    - "20981"
+  category_keyword: 玩偶
+  auto_promotion: true
+  auto_limited_time_setup: true
+  continue_after_limited_time_failure: false
+  continue_after_activity_failure: false
+  demo_mode: true
+  activity_delay_hours: 24
+  slot_alignment_test: true
+  material_source: minio
+  auto_sync_minio: true

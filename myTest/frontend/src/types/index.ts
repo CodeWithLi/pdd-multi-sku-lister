@@ -381,6 +381,53 @@ export interface FailureSyncResponse {
   upserted_items: number
 }
 
+export interface PddFailureLogWorkflow {
+  field_name: string
+  label: string
+  source: string
+  mirror_text?: string
+}
+
+export interface PddFailureLogRecord {
+  record_id: string
+  date: string
+  merchant_code: string
+  report_platform: string
+  account_name: string
+  record_type: string
+  failure_reason: string
+  publish_start: string
+  publish_end: string
+  duration_seconds: string
+  process_completed: PddFailureLogWorkflow
+  cycle_relist: string
+  processor: string
+  processed_at: string
+  fields_raw: Record<string, unknown>
+}
+
+export interface PddFailureLogFieldMeta {
+  field_id: string
+  field_name: string
+  type: number
+  ui_type: string
+}
+
+export interface PddFailureLogListResponse {
+  ok: boolean
+  error?: string
+  app_token?: string
+  table_id?: string
+  table_name?: string
+  resolve_method?: string
+  mirror_field_name?: string
+  mirror_api_readable?: boolean
+  total: number
+  items: PddFailureLogRecord[]
+  field_meta?: PddFailureLogFieldMeta[]
+  table_name_candidates?: string[]
+}
+
 export interface PublishedProduct {
   mapping_id: string
   account_id: string
@@ -579,6 +626,25 @@ export interface IntegratedPipelineListResponse {
   page_size?: number
 }
 
+export type AutoUploadTriggerMode = 'new_product_folder' | 'append_to_product' | 'all'
+
+export interface AutoUploadConfig {
+  enabled: boolean
+  trigger_mode: AutoUploadTriggerMode
+  account_id: string
+  activity_ids: string[]
+  category_keyword: string
+  auto_promotion: boolean
+  auto_limited_time_setup: boolean
+  continue_after_limited_time_failure: boolean
+  continue_after_activity_failure: boolean
+  demo_mode: boolean
+  activity_delay_hours: number
+  slot_alignment_test: boolean
+  material_source: 'local' | 'minio'
+  auto_sync_minio: boolean
+}
+
 export interface IntegratedPipelineStartPayload {
   account_id: string
   product_codes: string[]
@@ -755,6 +821,48 @@ export interface FeishuOAuthExchangeResult {
   access_token_length?: number
   expires_in?: number
   refresh_token_present?: boolean
+}
+
+export type WecomMsgType = 'text' | 'markdown' | 'markdown_v2' | 'raw'
+
+export interface WecomConfig {
+  enabled: boolean
+  webhook_url: string
+  webhook_url_masked: string
+  webhook_configured: boolean
+  notify_on_listing_failed: boolean
+  notify_on_pipeline_failed: boolean
+  config_path: string
+}
+
+export interface WecomConfigUpdatePayload {
+  enabled: boolean
+  webhook_url: string
+  notify_on_listing_failed: boolean
+  notify_on_pipeline_failed: boolean
+}
+
+export interface WecomTestSendPayload {
+  msgtype: WecomMsgType
+  content: string
+  raw_payload?: Record<string, unknown>
+  use_saved_webhook?: boolean
+  webhook_url?: string
+}
+
+export interface WecomTestSendResult {
+  ok: boolean
+  errcode: number
+  errmsg: string
+  payload_sent: Record<string, unknown>
+  response: Record<string, unknown>
+}
+
+export interface WecomHealth {
+  configured: boolean
+  enabled: boolean
+  webhook_configured: boolean
+  config_path: string
 }
 
 export interface TrafficReportSchedule {

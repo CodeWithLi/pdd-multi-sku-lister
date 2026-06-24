@@ -713,6 +713,7 @@ def test_build_pdd_upload_failure_log_fields():
         publish_end=end,
     )
     assert fields["商品编码"] == "BD736A"
+    assert fields["报错平台"] == "拼多多"
     assert fields["记录类型"] == "跳过"
     assert "图片文件" in fields["失败原因"]
     assert fields["耗时秒"] == 66.0
@@ -791,4 +792,5 @@ def test_push_pdd_upload_failure_log_without_merchant_code(monkeypatch):
     )
     assert result.get("created") is True
     assert result["fields"]["商品编码"] == "BD722B"
+    assert result["fields"]["报错平台"] == "拼多多"
     assert result["fields"]["失败原因"] == "BD722B缺YKL001"

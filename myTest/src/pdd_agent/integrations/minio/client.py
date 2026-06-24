@@ -9,6 +9,8 @@ from pdd_agent.integrations.minio.config import (
     MinioConfig,
     load_minio_config,
     minio_configured,
+    minio_poll_interval_seconds,
+    minio_refresh_mode,
     minio_scan_prefixes,
 )
 
@@ -58,6 +60,8 @@ def check_minio_health(config: MinioConfig | None = None) -> dict:
             "bucket": cfg.bucket,
             "categories": list(cfg.categories),
             "prefix": cfg.prefix,
+            "refresh_mode": minio_refresh_mode(cfg),
+            "listing_poll_seconds": minio_poll_interval_seconds(cfg),
             "object_sample_found": object_sample_found,
         }
     except S3Error as exc:

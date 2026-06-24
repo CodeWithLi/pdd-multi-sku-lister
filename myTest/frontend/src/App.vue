@@ -20,6 +20,8 @@ import {
   Brush,
   Grid,
   Timer,
+  Tickets,
+  ChatDotRound,
 } from '@element-plus/icons-vue'
 import type { Component } from 'vue'
 
@@ -77,6 +79,8 @@ const navGroups: NavGroup[] = [
     label: '监控排错',
     items: [
       { path: '/failures', label: '失败项工作台', icon: Warning },
+      { path: '/pdd-failure-logs', label: '发布失败日志', icon: Tickets },
+      { path: '/wecom-notify', label: '企业微信通知', icon: ChatDotRound },
       { path: '/pipeline-issues', label: '链路报错', icon: CircleClose },
       { path: '/runs', label: '操作记录', icon: Document },
     ],

@@ -127,6 +127,127 @@ def save_minio_index(
     return True
 
 
+def upsert_minio_set_record(
+    cfg: MinioConfig,
+    *,
+    family_code: str,
+    image_set: str,
+    product_code: str,
+    object_prefix: str,
+) -> MinioSetIndexRecord:
+    """增量更新单个套图索引（RabbitMQ 上传事件用）。"""
+    selector = f"{family_code}/{image_set}"
+    code = str(product_code or "").strip()
+    prefix = str(object_prefix or f"{family_code}/{image_set}/").strip()
+    existing_codes: set[str] = set()
+
+    if redis_configured():
+        client = get_redis_client()
+        if client is not None:
+            raw = client.hget(_sets_key(cfg), selector)
+            if raw:
+                try:
+                    data = json.loads(raw)
+                except (TypeError, ValueError):
+                    data = {}
+                record = _record_from_dict(data if isinstance(data, dict) else {})
+                if record is not None:
+                    existing_codes.update(record.product_codes)
+            if code:
+                existing_codes.add(code)
+            record = MinioSetIndexRecord(
+                selector=selector,
+                family_code=family_code,
+                image_set=image_set,
+                object_prefix=prefix,
+                product_codes=tuple(sorted(existing_codes)),
+            )
+            pipe = client.pipeline()
+            pipe.hset(_sets_key(cfg), selector, json.dumps(_record_to_dict(record), ensure_ascii=False))
+            for pc in record.product_codes:
+                key = pc.upper()
+                selectors_raw = client.hget(_codes_key(cfg), key)
+                selectors: set[str] = set()
+                if selectors_raw:
+                    try:
+                        parsed = json.loads(selectors_raw)
+                        if isinstance(parsed, list):
+                            selectors.update(str(item) for item in parsed)
+                    except (TypeError, ValueError):
+                        pass
+                selectors.add(selector)
+                pipe.hset(_codes_key(cfg), key, json.dumps(sorted(selectors), ensure_ascii=False))
+            meta = load_minio_index_meta(cfg) or {}
+            meta.update(
+                {
+                    "updated_at": time.time(),
+                    "bucket": cfg.bucket,
+                    "set_count": client.hlen(_sets_key(cfg)),
+                }
+            )
+            pipe.set(_meta_key(cfg), json.dumps(meta, ensure_ascii=False))
+            pipe.execute()
+            return record
+
+    return MinioSetIndexRecord(
+        selector=selector,
+        family_code=family_code,
+        image_set=image_set,
+        object_prefix=prefix,
+        product_codes=tuple(sorted(existing_codes | ({code} if code else set()))),
+    )
+
+
+def load_set_index_record(cfg: MinioConfig, selector: str) -> MinioSetIndexRecord | None:
+    """读取单个套图索引（上传批次分类用）。"""
+    if not redis_configured():
+        return None
+    client = get_redis_client()
+    if client is None:
+        return None
+    raw = client.hget(_sets_key(cfg), str(selector or "").strip())
+    if not raw:
+        return None
+    try:
+        data = json.loads(raw)
+    except (TypeError, ValueError):
+        return None
+    return _record_from_dict(data if isinstance(data, dict) else {})
+
+
+def list_indexed_image_sets_for_family(
+    cfg: MinioConfig,
+    family_code: str,
+    *,
+    exclude_image_set: str = "",
+) -> set[str]:
+    """从 Redis 索引列出某款号下的套图名（可选排除当前待删套图）。"""
+    family = str(family_code or "").strip()
+    if not family:
+        return set()
+    if not redis_configured():
+        return set()
+    client = get_redis_client()
+    if client is None:
+        return set()
+
+    exclude = str(exclude_image_set or "").strip()
+    image_sets: set[str] = set()
+    raw_sets = client.hgetall(_sets_key(cfg))
+    for blob in raw_sets.values():
+        try:
+            data = json.loads(blob)
+        except (TypeError, ValueError):
+            continue
+        record = _record_from_dict(data if isinstance(data, dict) else {})
+        if record is None or record.family_code != family:
+            continue
+        if exclude and record.image_set == exclude:
+            continue
+        image_sets.add(record.image_set)
+    return image_sets
+
+
 def load_minio_index_meta(cfg: MinioConfig) -> dict[str, Any] | None:
     if not redis_configured():
         return None
@@ -252,6 +373,148 @@ def find_sets_for_product_code(
         if record is not None:
             records.append(record)
     return records
+
+
+def remove_minio_set_record(
+    cfg: MinioConfig,
+    selector: str,
+    *,
+    product_codes: tuple[str, ...] | None = None,
+) -> bool:
+    """从 Redis 索引移除单个套图记录。"""
+    selector_text = str(selector or "").strip()
+    if not selector_text:
+        return False
+    if not redis_configured():
+        return False
+    client = get_redis_client()
+    if client is None:
+        return False
+
+    codes: set[str] = set(product_codes or ())
+    if not codes:
+        raw = client.hget(_sets_key(cfg), selector_text)
+        if raw:
+            try:
+                data = json.loads(raw)
+            except (TypeError, ValueError):
+                data = {}
+            record = _record_from_dict(data if isinstance(data, dict) else {})
+            if record is not None:
+                codes.update(record.product_codes)
+
+    pipe = client.pipeline()
+    pipe.hdel(_sets_key(cfg), selector_text)
+    for code in codes:
+        key = str(code or "").strip().upper()
+        if not key:
+            continue
+        selectors_raw = client.hget(_codes_key(cfg), key)
+        if not selectors_raw:
+            continue
+        try:
+            selectors = {str(item) for item in json.loads(selectors_raw)}
+        except (TypeError, ValueError):
+            selectors = set()
+        selectors.discard(selector_text)
+        if selectors:
+            pipe.hset(_codes_key(cfg), key, json.dumps(sorted(selectors), ensure_ascii=False))
+        else:
+            pipe.hdel(_codes_key(cfg), key)
+
+    meta = load_minio_index_meta(cfg) or {}
+    pipe.execute()
+    meta.update(
+        {
+            "updated_at": time.time(),
+            "bucket": cfg.bucket,
+            "set_count": client.hlen(_sets_key(cfg)),
+        }
+    )
+    client.set(_meta_key(cfg), json.dumps(meta, ensure_ascii=False))
+    return True
+
+
+def list_indexed_products_for_set(
+    cfg: MinioConfig,
+    selector: str,
+    *,
+    exclude_product: str = "",
+) -> set[str]:
+    """从 Redis 索引读取套图下仍存在的商品文件夹名。"""
+    record = load_set_index_record(cfg, selector)
+    if record is None:
+        return set()
+    excluded = str(exclude_product or "").strip()
+    products = set(record.product_codes)
+    if excluded:
+        products.discard(excluded)
+    return products
+
+
+def remove_product_from_minio_set_record(
+    cfg: MinioConfig,
+    selector: str,
+    product_code: str,
+) -> bool:
+    """从 Redis 索引移除套图下的单个商品；若套图已空则移除整条套图记录。"""
+    selector_text = str(selector or "").strip()
+    product = str(product_code or "").strip()
+    if not selector_text or not product:
+        return False
+    if not redis_configured():
+        return False
+    client = get_redis_client()
+    if client is None:
+        return False
+
+    raw = client.hget(_sets_key(cfg), selector_text)
+    if not raw:
+        return False
+    try:
+        data = json.loads(raw)
+    except (TypeError, ValueError):
+        return False
+    record = _record_from_dict(data if isinstance(data, dict) else {})
+    if record is None or product not in record.product_codes:
+        return False
+
+    remaining = [code for code in record.product_codes if code != product]
+    if not remaining:
+        return remove_minio_set_record(cfg, selector_text, product_codes=(product,))
+
+    updated = MinioSetIndexRecord(
+        selector=record.selector,
+        family_code=record.family_code,
+        image_set=record.image_set,
+        object_prefix=record.object_prefix,
+        product_codes=tuple(remaining),
+    )
+    pipe = client.pipeline()
+    pipe.hset(_sets_key(cfg), selector_text, json.dumps(_record_to_dict(updated), ensure_ascii=False))
+    key = product.upper()
+    selectors_raw = client.hget(_codes_key(cfg), key)
+    if selectors_raw:
+        try:
+            selectors = {str(item) for item in json.loads(selectors_raw)}
+        except (TypeError, ValueError):
+            selectors = set()
+        selectors.discard(selector_text)
+        if selectors:
+            pipe.hset(_codes_key(cfg), key, json.dumps(sorted(selectors), ensure_ascii=False))
+        else:
+            pipe.hdel(_codes_key(cfg), key)
+    meta = load_minio_index_meta(cfg) or {}
+    pipe.execute()
+    meta.update(
+        {
+            "updated_at": time.time(),
+            "bucket": cfg.bucket,
+            "set_count": client.hlen(_sets_key(cfg)),
+        }
+    )
+    client.set(_meta_key(cfg), json.dumps(meta, ensure_ascii=False))
+    return True
 
 
 def clear_minio_redis_index(cfg: MinioConfig | None = None) -> None:

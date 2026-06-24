@@ -5,17 +5,21 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import { api } from '@/api/client'
 import PageHeader from '@/components/PageHeader.vue'
 import { useMinioSync } from '@/composables/useMinioSync'
+import { useMinioMaterialRefresh } from '@/composables/useMinioMaterialRefresh'
 import {
   formatMaterialGroupLabel,
   formatMaterialGroupMeta,
   groupListingTargetsByFamily,
 } from '@/utils/listingTargets'
+import { formatAutoPipelineFeedback } from '@/utils/autoPipeline'
 import {
   failureReasonLabel,
   listingUnitStatusType,
 } from '@/utils/labels'
 import type {
   Account,
+  AutoUploadConfig,
+  AutoUploadTriggerMode,
   FeishuInspectListingPricesResult,
   IntegratedPipeline,
   ListingTargetOption,
@@ -33,8 +37,7 @@ const success = ref('')
 const accounts = ref<Account[]>([])
 const productOptions = ref<ListingTargetOption[]>([])
 const materialSource = ref<'local' | 'minio'>('minio')
-const minioHealth = ref<{ available?: boolean; error?: string; listing_poll_seconds?: number } | null>(null)
-const materialPolling = ref(false)
+const minioHealth = ref<{ available?: boolean; error?: string; listing_poll_seconds?: number; refresh_mode?: 'poll' | 'rabbitmq' } | null>(null)
 const showOnlyUnlistedGroups = ref(false)
 const activities = ref<MarketingActivityOption[]>([])
 const pipelines = ref<IntegratedPipeline[]>([])
@@ -62,10 +65,61 @@ const startDelayMin = ref(30)
 const startDelayMax = ref(180)
 const preflightChecking = ref(false)
 const preflightResult = ref<PreflightResponse | null>(null)
+const autoUploadSaving = ref(false)
+const autoUploadConfigVisible = ref(false)
+const autoUploadEnabled = ref(false)
+const autoUploadTriggerMode = ref<AutoUploadTriggerMode>('new_product_folder')
+const deletingImageSets = ref(false)
+const autoUploadConfig = ref<AutoUploadConfig>({
+  enabled: false,
+  trigger_mode: 'new_product_folder',
+  account_id: '',
+  activity_ids: ['20981'],
+  category_keyword: '玩偶',
+  auto_promotion: true,
+  auto_limited_time_setup: true,
+  continue_after_limited_time_failure: false,
+  continue_after_activity_failure: false,
+  demo_mode: true,
+  activity_delay_hours: 24,
+  slot_alignment_test: true,
+  material_source: 'minio',
+  auto_sync_minio: true,
+})
 const { minioSyncJob, syncing, startSync, resumeActiveSync } = useMinioSync()
 
+const {
+  materialPolling,
+  sseConnected,
+  switchingMode,
+  refreshMode,
+  restart: restartMaterialRefresh,
+  stop: stopMaterialRefresh,
+  setRefreshMode,
+} = useMinioMaterialRefresh({
+  materialSource,
+  minioHealth,
+  reloadHealth: loadMinioHealth,
+  onRefresh: async () => {
+    if (accountId.value) await loadListingTargets(accountId.value)
+  },
+  onUploadBatch: async (data) => {
+    const autoHint = formatAutoPipelineFeedback(data.auto_pipeline)
+    if (autoHint && data.auto_pipeline?.reason !== 'disabled') {
+      if (data.auto_pipeline?.triggered) {
+        ElMessage.success(autoHint || 'RabbitMQ 已自动启动整合链路')
+        pipelinePage.value = 1
+        await refreshPipelines()
+        startPolling()
+      } else if (data.auto_pipeline?.reason !== 'append_only_batch') {
+        ElMessage.warning(autoHint)
+      }
+      return
+    }
+  },
+})
+
 let pollTimer: ReturnType<typeof setInterval> | null = null
-let materialPollTimer: ReturnType<typeof setInterval> | null = null
 
 const enabledAccounts = computed(() => accounts.value.filter((a) => a.enabled))
 
@@ -362,6 +416,65 @@ function clearAllMaterialGroups() {
   checkedProductsBySet.value = {}
 }
 
+async function deleteSelectedProducts() {
+  if (materialSource.value !== 'minio') {
+    ElMessage.warning('仅 MinIO 素材模式支持删除商品素材')
+    return
+  }
+  const selectors = [...resolvedListingSelectors.value]
+  if (!selectors.length) {
+    ElMessage.warning('请先在下方「上架商品」中勾选要删除的商品（如 BD713B）')
+    return
+  }
+  const labels = selectors.join('、')
+  try {
+    await ElMessageBox.confirm(
+      `将永久删除以下商品文件夹（MinIO + Alist），同级其他商品会保留；仅当套图/款号已空时才删除上级目录：\n\n${labels}`,
+      '删除商品素材',
+      {
+        type: 'warning',
+        confirmButtonText: '确认删除',
+        cancelButtonText: '取消',
+        confirmButtonClass: 'el-button--danger',
+      },
+    )
+  } catch {
+    return
+  }
+
+  deletingImageSets.value = true
+  const deleted: string[] = []
+  try {
+    for (const selector of selectors) {
+      const result = await api.deleteMinioProductFolder({
+        selector,
+        sync_alist: true,
+        clear_local_cache: true,
+      })
+      deleted.push(result.summary || selector)
+      const parts = selector.split('/')
+      const setSelector = parts.length >= 2 ? `${parts[0]}/${parts[1]}` : selector
+      const checked = checkedProductsBySet.value[setSelector] || []
+      updateCheckedProducts(
+        setSelector,
+        checked.filter((code) => `${setSelector}/${code}` !== selector),
+      )
+      if (result.image_set_removed) {
+        productCodes.value = productCodes.value.filter((sel) => sel !== setSelector)
+      }
+    }
+    if (accountId.value) await loadListingTargets(accountId.value)
+    ElMessage.success(`已删除 ${selectors.length} 个商品文件夹（MinIO + Alist 已同步）`)
+  } catch (e) {
+    ElMessage.error(e instanceof Error ? e.message : String(e))
+    if (deleted.length && accountId.value) {
+      await loadListingTargets(accountId.value).catch(() => undefined)
+    }
+  } finally {
+    deletingImageSets.value = false
+  }
+}
+
 function stepTagType(status: string) {
   if (['success', 'completed', 'skipped'].includes(status)) return 'success'
   if (['running', 'scheduled', 'pending'].includes(status)) return 'warning'
@@ -496,25 +609,6 @@ async function loadListingTargets(forAccountId = '') {
   productOptions.value = await api.listingTargets(forAccountId || undefined, materialSource.value)
 }
 
-function stopMaterialPolling() {
-  materialPolling.value = false
-  if (materialPollTimer) {
-    clearInterval(materialPollTimer)
-    materialPollTimer = null
-  }
-}
-
-function startMaterialPolling() {
-  stopMaterialPolling()
-  if (materialSource.value !== 'minio') return
-  const seconds = minioHealth.value?.listing_poll_seconds ?? 30
-  if (!seconds || seconds <= 0) return
-  materialPolling.value = true
-  materialPollTimer = setInterval(() => {
-    if (accountId.value) loadListingTargets(accountId.value).catch(() => undefined)
-  }, seconds * 1000)
-}
-
 async function onMaterialSourceChange(source: 'local' | 'minio') {
   materialSource.value = source
   productCodes.value = []
@@ -525,9 +619,9 @@ async function onMaterialSourceChange(source: 'local' | 'minio') {
       ElMessage.warning(minioHealth.value?.error || 'MinIO 未就绪，请检查 config/minio.yaml')
     }
   }
-  stopMaterialPolling()
+  stopMaterialRefresh()
   if (accountId.value) await loadListingTargets(accountId.value)
-  startMaterialPolling()
+  restartMaterialRefresh()
 }
 
 async function loadBaseData() {
@@ -556,6 +650,104 @@ async function loadExcelFallbackSetting() {
   const data = await api.getPipelineExcelFallback()
   excelFallbackEnabled.value = !!data.enabled
 }
+
+function applyAutoUploadConfig(cfg: AutoUploadConfig) {
+  autoUploadConfig.value = { ...cfg }
+  autoUploadEnabled.value = !!cfg.enabled
+  autoUploadTriggerMode.value = cfg.trigger_mode || 'new_product_folder'
+}
+
+async function loadAutoUploadConfig() {
+  const data = await api.getAutoUploadConfig()
+  applyAutoUploadConfig(data)
+}
+
+function buildAutoUploadPayload(overrides: Partial<AutoUploadConfig> = {}): AutoUploadConfig {
+  return {
+    ...autoUploadConfig.value,
+    enabled: autoUploadEnabled.value,
+    trigger_mode: autoUploadTriggerMode.value,
+    account_id: autoUploadConfig.value.account_id || accountId.value,
+    ...overrides,
+  }
+}
+
+async function saveAutoUploadConfig(overrides: Partial<AutoUploadConfig> = {}) {
+  autoUploadSaving.value = true
+  try {
+    const payload = buildAutoUploadPayload(overrides)
+    if (payload.enabled && !payload.account_id) {
+      throw new Error('开启自动上架时请选择店铺')
+    }
+    if (payload.enabled && !payload.activity_ids.length) {
+      throw new Error('开启自动上架时请至少选择一个活动')
+    }
+    const saved = await api.updateAutoUploadConfig(payload)
+    applyAutoUploadConfig(saved)
+    return saved
+  } finally {
+    autoUploadSaving.value = false
+  }
+}
+
+async function onAutoUploadToggle(enabled: boolean) {
+  try {
+    await saveAutoUploadConfig({ enabled })
+    ElMessage.success(enabled ? '已开启 RabbitMQ 自动上架' : '已关闭 RabbitMQ 自动上架')
+  } catch (e) {
+    autoUploadEnabled.value = !enabled
+    ElMessage.error(e instanceof Error ? e.message : String(e))
+  }
+}
+
+async function onAutoUploadTriggerModeChange(mode: AutoUploadTriggerMode) {
+  autoUploadTriggerMode.value = mode
+  try {
+    await saveAutoUploadConfig({ trigger_mode: mode })
+  } catch (e) {
+    ElMessage.error(e instanceof Error ? e.message : String(e))
+  }
+}
+
+async function openAutoUploadConfigDialog() {
+  autoUploadConfig.value.trigger_mode = autoUploadTriggerMode.value
+  if (!autoUploadConfig.value.account_id && accountId.value) {
+    autoUploadConfig.value.account_id = accountId.value
+  }
+  if (!autoUploadConfig.value.activity_ids.length && activityIds.value.length) {
+    autoUploadConfig.value.activity_ids = [...activityIds.value]
+  }
+  autoUploadConfigVisible.value = true
+}
+
+async function confirmAutoUploadConfig() {
+  try {
+    await saveAutoUploadConfig({
+      account_id: autoUploadConfig.value.account_id,
+      trigger_mode: autoUploadConfig.value.trigger_mode,
+      activity_ids: autoUploadConfig.value.activity_ids,
+      category_keyword: autoUploadConfig.value.category_keyword,
+      auto_promotion: autoUploadConfig.value.auto_promotion,
+      continue_after_limited_time_failure: autoUploadConfig.value.continue_after_limited_time_failure,
+      continue_after_activity_failure: autoUploadConfig.value.continue_after_activity_failure,
+      demo_mode: autoUploadConfig.value.demo_mode,
+      activity_delay_hours: autoUploadConfig.value.activity_delay_hours,
+      slot_alignment_test: autoUploadConfig.value.slot_alignment_test,
+      material_source: autoUploadConfig.value.material_source,
+      auto_sync_minio: autoUploadConfig.value.auto_sync_minio,
+    })
+    autoUploadConfigVisible.value = false
+    ElMessage.success('自动上架配置已保存')
+  } catch (e) {
+    ElMessage.error(e instanceof Error ? e.message : String(e))
+  }
+}
+
+const autoUploadTriggerModeLabel = computed(() => {
+  if (autoUploadTriggerMode.value === 'append_to_product') return '仅追加图片'
+  if (autoUploadTriggerMode.value === 'all') return '都可以'
+  return '新增文件夹'
+})
 
 async function onExcelFallbackChange(enabled: boolean) {
   excelFallbackSaving.value = true
@@ -729,6 +921,7 @@ onMounted(async () => {
     await loadMinioHealth()
     await loadBaseData()
     await loadExcelFallbackSetting()
+    await loadAutoUploadConfig()
     await refreshPipelines()
     if (materialSource.value === 'minio') {
       await resumeActiveSync((msg) => {
@@ -736,7 +929,7 @@ onMounted(async () => {
       })
     }
     startPolling()
-    startMaterialPolling()
+    restartMaterialRefresh()
   } catch (e) {
     error.value = e instanceof Error ? e.message : String(e)
   }
@@ -744,7 +937,6 @@ onMounted(async () => {
 
 onUnmounted(() => {
   stopPolling()
-  stopMaterialPolling()
 })
 </script>
 
@@ -858,9 +1050,22 @@ onUnmounted(() => {
                       >
                         {{ minioHealth?.available ? 'MinIO 已连接' : (minioHealth?.error || 'MinIO 未连接') }}
                       </el-tag>
-                      <el-tag v-if="materialSource === 'minio' && materialPolling" size="small" type="info">
+                      <el-tag v-if="materialSource === 'minio' && refreshMode === 'poll' && materialPolling" size="small" type="info">
                         自动刷新
                       </el-tag>
+                      <template v-if="materialSource === 'minio'">
+                        <el-radio-group
+                          :model-value="refreshMode"
+                          size="small"
+                          :disabled="switchingMode"
+                          @change="setRefreshMode($event as 'poll' | 'rabbitmq')"
+                        >
+                          <el-radio-button label="poll">定时 {{ minioHealth?.listing_poll_seconds ?? 30 }}s</el-radio-button>
+                          <el-radio-button label="rabbitmq">RabbitMQ 推送</el-radio-button>
+                        </el-radio-group>
+                        <el-tag v-if="refreshMode === 'rabbitmq' && sseConnected" size="small" type="success">实时监听</el-tag>
+                        <el-tag v-else-if="refreshMode === 'rabbitmq'" size="small" type="warning">推送未连接</el-tag>
+                      </template>
                     </div>
                     <el-radio-group v-model="showOnlyUnlistedGroups" size="small" class="filter-segment">
                       <el-radio-button :label="true">
@@ -872,6 +1077,17 @@ onUnmounted(() => {
                       <el-button size="small" type="primary" plain @click="selectAllMaterialGroups">全选</el-button>
                       <el-button size="small" @click="clearAllMaterialGroups">清空</el-button>
                       <el-button
+                        v-if="materialSource === 'minio'"
+                        size="small"
+                        type="danger"
+                        plain
+                        :disabled="!resolvedListingSelectors.length"
+                        :loading="deletingImageSets"
+                        @click="deleteSelectedProducts"
+                      >
+                        删除商品
+                      </el-button>
+                      <el-button
                         size="small"
                         link
                         type="primary"
@@ -880,6 +1096,35 @@ onUnmounted(() => {
                       >
                         刷新
                       </el-button>
+                    </div>
+                    <div v-if="materialSource === 'minio'" class="auto-upload-row">
+                      <el-switch
+                        v-model="autoUploadEnabled"
+                        inline-prompt
+                        active-text="自动上架"
+                        inactive-text="手动"
+                        :loading="autoUploadSaving"
+                        :disabled="refreshMode !== 'rabbitmq'"
+                        @change="onAutoUploadToggle"
+                      />
+                      <el-select
+                        v-model="autoUploadTriggerMode"
+                        size="small"
+                        class="auto-upload-mode-select"
+                        :disabled="!autoUploadEnabled || autoUploadSaving"
+                        @change="onAutoUploadTriggerModeChange($event as AutoUploadTriggerMode)"
+                      >
+                        <el-option label="新增文件夹（不含追加图片）" value="new_product_folder" />
+                        <el-option label="仅追加图片" value="append_to_product" />
+                        <el-option label="都可以" value="all" />
+                      </el-select>
+                      <el-button size="small" plain @click="openAutoUploadConfigDialog">自动化配置</el-button>
+                      <el-tag v-if="autoUploadEnabled" size="small" type="success">
+                        监听中 · {{ autoUploadTriggerModeLabel }}
+                      </el-tag>
+                      <el-tag v-else-if="refreshMode !== 'rabbitmq'" size="small" type="info">
+                        需切换 RabbitMQ 推送
+                      </el-tag>
                     </div>
                   </div>
                   <el-select
@@ -1502,6 +1747,98 @@ onUnmounted(() => {
         </el-button>
       </template>
     </el-dialog>
+
+    <el-dialog
+      v-model="autoUploadConfigVisible"
+      title="RabbitMQ 自动化上架配置"
+      width="560px"
+      destroy-on-close
+    >
+      <p class="form-tip">
+        开启后，RabbitMQ 收到新上传批次时会按触发范围自动启动整合链路：上架 → 限时限量购 → 活动报名 → 推流。
+      </p>
+      <el-form label-width="110px" class="auto-upload-config-form">
+        <el-form-item label="店铺" required>
+          <el-select v-model="autoUploadConfig.account_id" placeholder="选择店铺" style="width: 100%">
+            <el-option
+              v-for="acc in enabledAccounts"
+              :key="acc.account_id"
+              :label="acc.account_id"
+              :value="acc.account_id"
+            />
+          </el-select>
+        </el-form-item>
+        <el-form-item label="触发范围">
+          <el-select v-model="autoUploadConfig.trigger_mode" style="width: 100%">
+            <el-option label="新增文件夹（不含追加图片）" value="new_product_folder" />
+            <el-option label="仅追加图片" value="append_to_product" />
+            <el-option label="都可以" value="all" />
+          </el-select>
+          <div class="form-tip">
+            「新增文件夹」含首次上传整套（如 BD713719/第一套图/商品）和在已有套图下新增商品子文件夹；不含往已有商品里补图。
+          </div>
+        </el-form-item>
+        <el-form-item label="营销活动" required>
+          <el-select
+            v-model="autoUploadConfig.activity_ids"
+            multiple
+            filterable
+            collapse-tags
+            placeholder="选择一个或多个活动"
+            style="width: 100%"
+          >
+            <el-option
+              v-for="act in activities"
+              :key="act.activity_id"
+              :label="formatActivityShortLabel(act)"
+              :value="act.activity_id"
+            />
+          </el-select>
+        </el-form-item>
+        <el-form-item label="类目关键词">
+          <el-input v-model="autoUploadConfig.category_keyword" placeholder="上架类目，默认玩偶" />
+        </el-form-item>
+        <el-form-item label="活动延迟" v-if="!autoUploadConfig.demo_mode">
+          <el-input-number v-model="autoUploadConfig.activity_delay_hours" :min="1" :max="168" style="width: 100%" />
+        </el-form-item>
+        <el-form-item label="链路选项">
+          <div class="option-row">
+            <div class="switch-row">
+              <span class="switch-label">限时限量购</span>
+              <el-tag size="small" type="warning" effect="plain">必选</el-tag>
+            </div>
+            <div class="switch-row">
+              <span class="switch-label">自动推广（推流）</span>
+              <el-switch v-model="autoUploadConfig.auto_promotion" />
+            </div>
+            <div class="switch-row">
+              <span class="switch-label">限时失败仍继续</span>
+              <el-switch v-model="autoUploadConfig.continue_after_limited_time_failure" />
+            </div>
+            <div class="switch-row">
+              <span class="switch-label">活动失败仍继续</span>
+              <el-switch v-model="autoUploadConfig.continue_after_activity_failure" />
+            </div>
+            <div class="switch-row">
+              <span class="switch-label">演示模式</span>
+              <el-switch v-model="autoUploadConfig.demo_mode" />
+            </div>
+            <div class="switch-row">
+              <span class="switch-label">槽位对齐（试验）</span>
+              <el-switch v-model="autoUploadConfig.slot_alignment_test" />
+            </div>
+            <div class="switch-row">
+              <span class="switch-label">上架前同步 MinIO</span>
+              <el-switch v-model="autoUploadConfig.auto_sync_minio" />
+            </div>
+          </div>
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="autoUploadConfigVisible = false">取消</el-button>
+        <el-button type="primary" :loading="autoUploadSaving" @click="confirmAutoUploadConfig">保存</el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
@@ -1694,6 +2031,25 @@ onUnmounted(() => {
   display: inline-flex;
   align-items: center;
   gap: 8px;
+}
+
+.auto-upload-row {
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  padding-top: 8px;
+  margin-top: 2px;
+  border-top: 1px dashed var(--border-color);
+}
+
+.auto-upload-mode-select {
+  width: 140px;
+}
+
+.auto-upload-config-form {
+  margin-top: 8px;
 }
 
 .selection-summary {

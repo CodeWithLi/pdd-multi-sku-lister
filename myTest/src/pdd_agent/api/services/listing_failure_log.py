@@ -109,6 +109,17 @@ def record_listing_failure_detail(
                 error=msg,
                 severity=severity,
             )
+        if severity != "warning":
+            try:
+                from pdd_agent.integrations.wecom.notify import notify_listing_failed
+
+                notify_listing_failed(
+                    account_id=account_id,
+                    listing_label=listing_label,
+                    reason=msg,
+                )
+            except Exception:
+                logger.warning("wecom listing notify failed", exc_info=True)
         return detail_id
     except Exception as exc:
         logger.warning("listing failure insert failed: %s", exc)

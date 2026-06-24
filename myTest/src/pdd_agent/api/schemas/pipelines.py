@@ -183,3 +183,49 @@ class PipelineExcelFallbackOut(BaseModel):
 
 class PipelineExcelFallbackUpdateIn(BaseModel):
     enabled: bool
+
+
+class AutoUploadConfigResponse(BaseModel):
+    enabled: bool = False
+    trigger_mode: str = "new_product_folder"
+    account_id: str = ""
+    activity_ids: list[str] = Field(default_factory=lambda: ["20981"])
+    category_keyword: str = "玩偶"
+    auto_promotion: bool = True
+    auto_limited_time_setup: bool = True
+    continue_after_limited_time_failure: bool = False
+    continue_after_activity_failure: bool = False
+    demo_mode: bool = True
+    activity_delay_hours: float = 24.0
+    slot_alignment_test: bool = True
+    material_source: str = "minio"
+    auto_sync_minio: bool = True
+
+
+class AutoUploadConfigUpdateIn(BaseModel):
+    enabled: bool = False
+    trigger_mode: str = "new_product_folder"
+    account_id: str = ""
+    activity_ids: list[str] = Field(default_factory=lambda: ["20981"])
+    category_keyword: str = "玩偶"
+    auto_promotion: bool = True
+    auto_limited_time_setup: bool = True
+    continue_after_limited_time_failure: bool = False
+    continue_after_activity_failure: bool = False
+    demo_mode: bool = True
+    activity_delay_hours: float = Field(default=24.0, ge=0)
+    slot_alignment_test: bool = True
+    material_source: str = "minio"
+    auto_sync_minio: bool = True
+
+    @model_validator(mode="after")
+    def validate_trigger_mode(self) -> "AutoUploadConfigUpdateIn":
+        mode = str(self.trigger_mode or "new_product_folder").strip()
+        if mode not in {"new_product_folder", "append_to_product", "all"}:
+            raise ValueError("trigger_mode 只能是 new_product_folder、append_to_product 或 all")
+        self.trigger_mode = mode
+        ids = [str(x).strip() for x in self.activity_ids if str(x).strip()]
+        if self.enabled and not ids:
+            raise ValueError("开启自动上架时请至少选择一个活动")
+        self.activity_ids = list(dict.fromkeys(ids))
+        return self

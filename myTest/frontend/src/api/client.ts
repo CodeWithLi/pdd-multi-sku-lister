@@ -4,6 +4,7 @@ import type {
   AccountCreatePayload,
   AccountDetail,
   AccountUpdatePayload,
+  AutoUploadConfig,
   BatchTaskResponse,
   CampaignTaskResponse,
   TrafficTaskResponse,
@@ -22,6 +23,7 @@ import type {
   FailureListResponse,
   FailureRetryResponse,
   FailureSyncResponse,
+  PddFailureLogListResponse,
   ListingFailureDetailListResponse,
   ListingTaskResponse,
   ListingTargetOption,
@@ -59,6 +61,11 @@ import type {
   TrafficReportSchedule,
   TrafficReportScheduleUpdate,
   TrafficReportScheduleTriggerResult,
+  WecomConfig,
+  WecomConfigUpdatePayload,
+  WecomHealth,
+  WecomTestSendPayload,
+  WecomTestSendResult,
 } from '@/types'
 
 const DEFAULT_TIMEOUT_MS = 120_000
@@ -131,13 +138,241 @@ export const api = {
         bucket?: string
         categories?: string[]
         prefix?: string
+        refresh_mode?: 'poll' | 'rabbitmq'
         listing_poll_seconds?: number
         object_sample_found?: boolean
         alist_url?: string
         console_url?: string
+        upload_categories?: string[]
+        alist?: {
+          configured?: boolean
+          available?: boolean
+          error?: string
+        }
         cache_root?: string
         error?: string
+        rabbitmq?: {
+          enabled?: boolean
+          running?: boolean
+          refresh_mode?: string
+          queue?: string
+          host?: string
+          last_error?: string
+        }
       }>('/catalog/minio/health')
+      .then((r) => r.data),
+
+  updateMinioRefreshMode: (refresh_mode: 'poll' | 'rabbitmq') =>
+    http
+      .put<{
+        refresh_mode: 'poll' | 'rabbitmq'
+        listing_poll_seconds: number
+        rabbitmq: Record<string, unknown>
+      }>('/catalog/minio/refresh-mode', { refresh_mode })
+      .then((r) => r.data),
+
+  minioRabbitmqQueues: () =>
+    http
+      .get<{
+        available: boolean
+        method: string
+        configured_queue?: string
+        suggested_queue?: string
+        management_error?: string
+        amqp?: { available?: boolean; error?: string }
+        queues: Array<{
+          name: string
+          messages?: number
+          messages_ready?: number
+          consumers?: number
+        }>
+      }>('/catalog/minio/rabbitmq/queues')
+      .then((r) => r.data),
+
+  saveMinioRabbitmqQueue: (queue: string) =>
+    http
+      .put<{ queue: string; rabbitmq: Record<string, unknown> }>('/catalog/minio/rabbitmq/queue', {
+        queue,
+      })
+      .then((r) => r.data),
+
+  minioRabbitmqRecent: (limit = 20) =>
+    http
+      .get<{
+        batches?: Array<Record<string, unknown>>
+        events?: Array<Record<string, unknown>>
+        consumer?: Record<string, unknown>
+      }>('/catalog/minio/rabbitmq/recent', { params: { limit } })
+      .then((r) => r.data),
+
+  peekMinioRabbitmq: (queue = '') =>
+    http
+      .post<{ queue: string; found: boolean; body_preview?: string; requeued?: boolean }>(
+        '/catalog/minio/rabbitmq/peek',
+        null,
+        { params: queue ? { queue } : {} },
+      )
+      .then((r) => r.data),
+
+  minioRabbitmqBindings: (queue = '') =>
+    http
+      .get<{
+        queue: string
+        available: boolean
+        minio_events_bound?: boolean
+        expected_exchange?: string
+        expected_routing_key?: string
+        bindings?: Array<{ exchange: string; routing_key: string; destination: string }>
+        error?: string
+      }>('/catalog/minio/rabbitmq/bindings', { params: queue ? { queue } : {} })
+      .then((r) => r.data),
+
+  ensureMinioRabbitmqBinding: (params?: { queue?: string; exchange?: string; routing_key?: string }) =>
+    http
+      .post<{
+        queue: string
+        exchange: string
+        routing_key: string
+        bound: boolean
+        bindings?: {
+          minio_events_bound?: boolean
+          bindings?: Array<{ exchange: string; routing_key: string }>
+        }
+        rabbitmq?: Record<string, unknown>
+      }>('/catalog/minio/rabbitmq/ensure-binding', null, { params: params || {} })
+      .then((r) => r.data),
+
+  minioRabbitmqBindings: (queue = '') =>
+    http
+      .get<{
+        queue: string
+        available?: boolean
+        minio_events_bound?: boolean
+        expected_exchange?: string
+        expected_routing_key?: string
+        bindings?: Array<{ exchange: string; routing_key: string; destination?: string }>
+        error?: string
+      }>('/catalog/minio/rabbitmq/bindings', { params: queue ? { queue } : {} })
+      .then((r) => r.data),
+
+  ensureMinioRabbitmqBinding: (queue = '') =>
+    http
+      .post<{
+        queue: string
+        exchange: string
+        routing_key: string
+        bound: boolean
+        bindings?: {
+          minio_events_bound?: boolean
+          bindings?: Array<{ exchange: string; routing_key: string }>
+        }
+        rabbitmq?: Record<string, unknown>
+      }>('/catalog/minio/rabbitmq/ensure-binding', null, {
+        params: queue ? { queue } : {},
+      })
+      .then((r) => r.data),
+
+  uploadMinioFolder: (formData: FormData) =>
+    http
+      .post<{
+        category: string
+        folder_name: string
+        bucket: string
+        upload_count: number
+        object_keys: string[]
+        skipped: string[]
+        upload_method: string
+        flow?: string
+        recent_events?: Array<Record<string, unknown>>
+        consumer?: Record<string, unknown>
+        local_process?: {
+          indexed?: number
+          auto_pipeline?: {
+            triggered?: boolean
+            reason?: string
+            reason_label?: string
+            product_codes?: string[]
+            group_change_types?: string[]
+          }
+        }
+      }>('/catalog/minio/upload-folder', formData, {
+        headers: { 'Content-Type': 'multipart/form-data' },
+        timeout: 600_000,
+      })
+      .then((r) => r.data),
+
+  uploadMinioTestSet: (body: {
+    family_code?: string
+    image_set?: string
+    product_code?: string
+    category?: string
+    image_numbers?: number[]
+    upload_method?: 'alist' | 'minio'
+    publish_rabbitmq?: boolean
+    process_local?: boolean
+  }) =>
+    http
+      .post<{
+        bucket: string
+        object_keys: string[]
+        upload_count: number
+        upload_method: 'alist' | 'minio'
+        alist_paths?: string[]
+        flow?: string
+        rabbitmq_published: number
+        rabbitmq_queue: string
+        selector?: string
+        recent_events?: Array<Record<string, unknown>>
+        consumer?: Record<string, unknown>
+      }>('/catalog/minio/test-upload', body)
+      .then((r) => r.data),
+
+  deleteMinioImageSet: (body: {
+    selector?: string
+    family_code?: string
+    image_set?: string
+    sync_alist?: boolean
+    clear_local_cache?: boolean
+  }) =>
+    http
+      .delete<{
+        selector: string
+        family_code: string
+        image_set: string
+        object_prefix: string
+        deleted_object_count: number
+        alist_deleted: boolean
+        alist_virtual_path: string
+        local_cache_cleared: boolean
+        index_removed: boolean
+        summary: string
+      }>('/catalog/minio/image-set', { data: body })
+      .then((r) => r.data),
+
+  deleteMinioProductFolder: (body: {
+    selector?: string
+    family_code?: string
+    image_set?: string
+    product_code?: string
+    sync_alist?: boolean
+    clear_local_cache?: boolean
+  }) =>
+    http
+      .delete<{
+        selector: string
+        family_code: string
+        image_set: string
+        product_code: string
+        object_prefix: string
+        deleted_object_count: number
+        alist_deleted: boolean
+        alist_virtual_path: string
+        local_cache_cleared: boolean
+        index_updated: boolean
+        image_set_removed: boolean
+        family_folder_removed: boolean
+        summary: string
+      }>('/catalog/minio/product-folder', { data: body })
       .then((r) => r.data),
 
   listedFolders: (params?: {
@@ -436,6 +671,12 @@ export const api = {
       .put<{ enabled: boolean }>('/pipelines/integrated/excel-fallback', { enabled })
       .then((r) => r.data),
 
+  getAutoUploadConfig: () =>
+    http.get<AutoUploadConfig>('/pipelines/auto-upload-config').then((r) => r.data),
+
+  updateAutoUploadConfig: (body: AutoUploadConfig) =>
+    http.put<AutoUploadConfig>('/pipelines/auto-upload-config', body).then((r) => r.data),
+
   pipelineIssues: (params: {
     page?: number
     page_size?: number
@@ -557,6 +798,21 @@ export const api = {
     http
       .post<TrafficReportScheduleTriggerResult>('/traffic-report-schedule/trigger')
       .then((r) => r.data),
+
+  pddFailureLogs: (params?: { limit?: number }) =>
+    http
+      .get<PddFailureLogListResponse>('/pdd-failure-logs', { params })
+      .then((r) => r.data),
+
+  wecomHealth: () => http.get<WecomHealth>('/wecom/health').then((r) => r.data),
+
+  wecomConfig: () => http.get<WecomConfig>('/wecom/config').then((r) => r.data),
+
+  updateWecomConfig: (body: WecomConfigUpdatePayload) =>
+    http.put<WecomConfig>('/wecom/config', body).then((r) => r.data),
+
+  wecomTestSend: (body: WecomTestSendPayload) =>
+    http.post<WecomTestSendResult>('/wecom/test', body).then((r) => r.data),
 }
 
 export default http

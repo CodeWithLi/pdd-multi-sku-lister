@@ -56,6 +56,10 @@ pdd_upload_log:
   failure_record_type_options:
     - 失败
     - 跳过
+  failure_report_platform_options:
+    - 拼多多
+    - 淘宝
+  failure_default_report_platform: 拼多多
   field_names:
     date: 日期
     merchant_code: 商品编码
@@ -66,8 +70,24 @@ pdd_upload_log:
     publish_start: 发布开始时间
     publish_end: 发布结束时间
     duration_seconds: 耗时秒
+  failure_field_names:
+    date: 日期
+    merchant_code: 商品编码
+    report_platform: 报错平台
+    account_name: 店铺名称
+    record_type: 记录类型
+    failure_reason: 失败原因
+    publish_start: 发布开始时间
+    publish_end: 发布结束时间
+    duration_seconds: 耗时秒
+    process_completed: 是否处理完成
+    # 与飞书表列名完全一致；若列名含前缀也会自动按「处理状态镜像」匹配
+    process_status_mirror: （不要动）处理状态镜像
+    cycle_relist: 是否循环上架
+    processor: 人员
+    processed_at: 处理时间
 
-# 整合链路活动步骤：限时限量购 + 618 + 七折（一行一商品；上架结果见 PDD发布日志表）
+# 整合链路活动步骤
 pdd_activity_log:
   enabled: true
   table_id: ""

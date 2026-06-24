@@ -327,6 +327,11 @@ def _field_defs_for_pdd_upload_failure_log(config: FeishuConfig) -> list[dict[st
     return [
         {"field_name": names.date, "type": FIELD_DATETIME, "property": {"date_formatter": "yyyy/MM/dd", "auto_fill": False}},
         {"field_name": names.merchant_code, "type": FIELD_TEXT},
+        {
+            "field_name": names.report_platform,
+            "type": FIELD_SINGLE_SELECT,
+            "property": {"options": [{"name": x} for x in pdd_cfg.failure_report_platform_options]},
+        },
         {"field_name": names.account_name, "type": FIELD_TEXT},
         {
             "field_name": names.record_type,
@@ -513,20 +518,25 @@ def build_pdd_upload_failure_log_fields(
     account_name: str,
     record_type: str,
     failure_reason: str,
+    report_platform: str = "",
     publish_start: datetime | None = None,
     publish_end: datetime | None = None,
     duration_seconds: float | None = None,
 ) -> dict[str, Any]:
     names = config.pdd_upload_log.failure_field_names
+    pdd_cfg = config.pdd_upload_log
     end_at = publish_end or datetime.now()
     start_at = publish_start or end_at
     duration = duration_seconds
     if duration is None:
         duration = max(0.0, (end_at - start_at).total_seconds())
 
+    platform = str(report_platform or pdd_cfg.failure_default_report_platform or "拼多多").strip() or "拼多多"
+
     fields: dict[str, Any] = {
         names.date: _date_to_ms(end_at.date()),
         names.merchant_code: str(merchant_code or "").strip(),
+        names.report_platform: platform,
         names.account_name: str(account_name or "").strip(),
         names.record_type: str(record_type or _FEISHU_FAILURE_RECORD_FAIL).strip(),
         names.failure_reason: str(failure_reason or "").strip()[:500],
@@ -551,6 +561,7 @@ def push_pdd_upload_failure_log(
     publish_start: datetime | None = None,
     publish_end: datetime | None = None,
     duration_seconds: float | None = None,
+    report_platform: str = "",
     fallback_product_code: str = "",
     config: FeishuConfig | None = None,
     client: FeishuClient | None = None,
@@ -598,6 +609,7 @@ def push_pdd_upload_failure_log(
         account_name=store_name,
         record_type=record_type_value,
         failure_reason=brief,
+        report_platform=report_platform,
         publish_start=publish_start,
         publish_end=publish_end,
         duration_seconds=duration_seconds,

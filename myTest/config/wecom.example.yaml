@@ -1,0 +1,9 @@
+# 企业微信消息推送（群 Webhook）
+# 复制：cp config/wecom.example.yaml config/wecom.yaml
+
+enabled: false
+webhook_url: ""
+
+# 业务自动通知（需 enabled=true 且 webhook_url 已配置）
+notify_on_listing_failed: false
+notify_on_pipeline_failed: false

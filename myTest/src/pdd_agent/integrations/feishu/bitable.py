@@ -13,6 +13,7 @@ FIELD_SINGLE_SELECT = 3
 FIELD_MULTI_SELECT = 4
 FIELD_DATETIME = 5
 FIELD_URL = 15
+FIELD_WORKFLOW = 24
 
 
 def list_tables(client: FeishuClient, app_token: str) -> list[dict[str, Any]]:

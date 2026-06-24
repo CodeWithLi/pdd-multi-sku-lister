@@ -55,12 +55,18 @@ class PddUploadFailureLogFieldNames(BaseModel):
 
     date: str = "日期"
     merchant_code: str = "商品编码"
+    report_platform: str = "报错平台"
     account_name: str = "店铺名称"
     record_type: str = "记录类型"
     failure_reason: str = "失败原因"
     publish_start: str = "发布开始时间"
     publish_end: str = "发布结束时间"
     duration_seconds: str = "耗时秒"
+    process_completed: str = "是否处理完成"
+    process_status_mirror: str = "处理状态镜像"
+    cycle_relist: str = "是否循环上架"
+    processor: str = "人员"
+    processed_at: str = "处理时间"
 
 
 class PddUploadLogFieldNames(BaseModel):
@@ -282,6 +288,14 @@ class PddUploadLogConfig(BaseModel):
     failure_record_type_options: list[str] = Field(
         default_factory=lambda: ["失败", "跳过"],
         description="失败表「记录类型」单选选项",
+    )
+    failure_report_platform_options: list[str] = Field(
+        default_factory=lambda: ["拼多多", "淘宝"],
+        description="失败表「报错平台」单选选项",
+    )
+    failure_default_report_platform: str = Field(
+        default="拼多多",
+        description="失败表「报错平台」默认值（PDD 上架失败写入时使用）",
     )
     failure_field_names: PddUploadFailureLogFieldNames = Field(
         default_factory=PddUploadFailureLogFieldNames,

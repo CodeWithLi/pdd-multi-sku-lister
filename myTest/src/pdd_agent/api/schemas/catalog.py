@@ -80,6 +80,30 @@ class PreflightResponse(BaseModel):
     issues: list[PreflightIssueOut] = Field(default_factory=list)
 
 
+class MinioRabbitMQQueueUpdate(BaseModel):
+    queue: str = Field(..., min_length=1)
+
+
+class MinioTestUploadRequest(BaseModel):
+    family_code: str = Field(default="BD999", min_length=1)
+    image_set: str = Field(default="第一套图", min_length=1)
+    product_code: str = Field(default="BD999A测试笔袋", min_length=1)
+    category: str = Field(default="", description="留空则用 minio.yaml categories 第一项")
+    image_numbers: list[int] = Field(default_factory=lambda: [1, 2, 3, 4, 5])
+    upload_method: str = Field(
+        default="alist",
+        description="alist=经 Alist 上传（生产路径）；minio=API 直传（仅调试）",
+    )
+    publish_rabbitmq: bool = Field(
+        default=False,
+        description="仅 upload_method=minio 时有效：手动模拟 MQ 通知",
+    )
+    process_local: bool = Field(
+        default=False,
+        description="仅 upload_method=minio 且 publish_rabbitmq=true 时：本进程立即处理",
+    )
+
+
 class MinioSyncStartRequest(BaseModel):
     product_codes: list[str] = Field(..., min_length=1)
 
@@ -97,3 +121,59 @@ class MinioSyncJobOut(BaseModel):
     progress_percent: float = 0.0
     started_at: float = 0.0
     finished_at: float = 0.0
+
+
+class MinioRefreshModeUpdate(BaseModel):
+    refresh_mode: str = Field(..., description="poll | rabbitmq")
+
+
+class MinioImageSetDeleteRequest(BaseModel):
+    selector: str = Field(default="", description="套图选择器，如 BD021/第一套图")
+    family_code: str = Field(default="")
+    image_set: str = Field(default="")
+    sync_alist: bool = Field(default=True, description="同时删除 Alist 对应目录")
+    clear_local_cache: bool = Field(default=True, description="同时清理本地 MinIO 缓存")
+
+
+class MinioImageSetDeleteResponse(BaseModel):
+    selector: str
+    family_code: str
+    image_set: str
+    object_prefix: str
+    deleted_object_count: int
+    alist_deleted: bool
+    alist_virtual_path: str
+    local_cache_cleared: bool
+    index_removed: bool
+    cleaned_family_objects: int = 0
+    family_folder_removed: bool = False
+    remaining_object_count: int = 0
+    summary: str
+
+
+class MinioProductDeleteRequest(BaseModel):
+    selector: str = Field(default="", description="商品选择器，如 BD713/第一套图/BD713B")
+    family_code: str = Field(default="")
+    image_set: str = Field(default="")
+    product_code: str = Field(default="")
+    sync_alist: bool = Field(default=True, description="同时删除 Alist 对应目录")
+    clear_local_cache: bool = Field(default=True, description="同时清理本地 MinIO 缓存")
+
+
+class MinioProductDeleteResponse(BaseModel):
+    selector: str
+    family_code: str
+    image_set: str
+    product_code: str
+    object_prefix: str
+    deleted_object_count: int
+    alist_deleted: bool
+    alist_virtual_path: str
+    local_cache_cleared: bool
+    index_updated: bool
+    image_set_removed: bool = False
+    family_folder_removed: bool = False
+    cleaned_set_objects: int = 0
+    cleaned_family_objects: int = 0
+    remaining_object_count: int = 0
+    summary: str

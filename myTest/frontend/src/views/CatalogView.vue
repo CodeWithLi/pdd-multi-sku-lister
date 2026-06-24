@@ -1,12 +1,15 @@
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { api } from '@/api/client'
 import PageHeader from '@/components/PageHeader.vue'
 import { useMinioSync } from '@/composables/useMinioSync'
+import { useMinioMaterialRefresh } from '@/composables/useMinioMaterialRefresh'
 import { issueLevelLabel } from '@/utils/labels'
-import type { ListingUnit, PreflightResponse, ProductSummary, SkuCombo } from '@/types'
+import { formatAutoPipelineFeedback } from '@/utils/autoPipeline'
+import { groupListingTargetsByFamily } from '@/utils/listingTargets'
+import type { ListingUnit, PreflightResponse, ProductSummary, SkuCombo, ListingTargetOption } from '@/types'
 
 interface PreviewImage {
   label: string
@@ -21,11 +24,18 @@ const materialSource = ref<'local' | 'minio'>('minio')
 const minioHealth = ref<{
   available?: boolean
   error?: string
+  refresh_mode?: 'poll' | 'rabbitmq'
   listing_poll_seconds?: number
   alist_url?: string
   console_url?: string
+  alist?: {
+    configured?: boolean
+    available?: boolean
+    error?: string
+    root_path?: string
+  }
+  upload_categories?: string[]
 } | null>(null)
-const materialPolling = ref(false)
 const selectedCodes = ref<string[]>([])
 const preflight = ref<PreflightResponse | null>(null)
 const error = ref('')
@@ -38,7 +48,148 @@ const skuDrawerVisible = ref(false)
 const activeUnit = ref<ListingUnit | null>(null)
 const activeSku = ref<SkuCombo | null>(null)
 
-let materialPollTimer: ReturnType<typeof setInterval> | null = null
+const rabbitmqLoading = ref(false)
+const uploading = ref(false)
+const rabbitmqQueues = ref<Array<{ name: string; messages?: number; consumers?: number }>>([])
+const rabbitmqSuggested = ref('')
+const rabbitmqSelectedQueue = ref('')
+const rabbitmqAmqpError = ref('')
+const rabbitmqRecent = ref<Array<Record<string, unknown>>>([])
+const rabbitmqPeek = ref('')
+const rabbitmqBindingStatus = ref('')
+const rabbitmqDebugOpen = ref<string[]>([])
+const uploadCategory = ref('笔袋')
+type UploadMode = 'family' | 'image_set' | 'product'
+const uploadMode = ref<UploadMode>('family')
+const uploadTargetFamily = ref('')
+const uploadTargetImageSet = ref('')
+const uploadListingTargets = ref<ListingTargetOption[]>([])
+const uploadFolderName = ref('')
+const uploadFolderEntries = ref<Array<{ file: File; relativePath: string }>>([])
+const uploadFolderInputRef = ref<HTMLInputElement | null>(null)
+
+const uploadImageCount = computed(() =>
+  uploadFolderEntries.value.filter((item) => /\.(jpe?g|png|webp|gif)$/i.test(item.relativePath)).length,
+)
+
+const uploadCategoryOptions = computed(() => {
+  const fromHealth = minioHealth.value?.upload_categories?.filter(Boolean)
+  return fromHealth?.length ? fromHealth : ['笔袋', '公仔', '视频']
+})
+
+const uploadFamilyGroups = computed(() => groupListingTargetsByFamily(uploadListingTargets.value))
+
+const uploadFamilyOptions = computed(() =>
+  uploadFamilyGroups.value.map((group) => group.family_code).sort(),
+)
+
+const uploadImageSetOptions = computed(() => {
+  const family = uploadTargetFamily.value.trim()
+  if (!family) return []
+  const group = uploadFamilyGroups.value.find((item) => item.family_code === family)
+  return (group?.options ?? []).map((item) => item.image_set)
+})
+
+const uploadFolderPreview = computed(() => {
+  if (!uploadFolderEntries.value.length) return ''
+  const sample = uploadFolderEntries.value
+    .slice(0, 5)
+    .map((item) => item.relativePath)
+    .join('\n')
+  const more =
+    uploadFolderEntries.value.length > 5
+      ? `\n... 共 ${uploadFolderEntries.value.length} 个文件`
+      : ''
+
+  const category = uploadCategory.value
+  const folder = uploadFolderName.value || '未命名文件夹'
+  let targetPrefix = `${category}/${folder}`
+  if (uploadMode.value === 'image_set') {
+    const family = uploadTargetFamily.value || '款号'
+    targetPrefix = `${category}/${family}/${folder}`
+  } else if (uploadMode.value === 'product') {
+    const family = uploadTargetFamily.value || '款号'
+    const imageSet = uploadTargetImageSet.value || '套图'
+    targetPrefix = `${category}/${family}/${imageSet}/${folder}`
+  }
+
+  return `目标路径：${targetPrefix}/\n${sample}${more}`
+})
+
+const uploadModeHint = computed(() => {
+  if (uploadMode.value === 'image_set') {
+    return '在已有款号下追加套图：选目标款号（如 BD713）→ 选本地套图文件夹（如 第二套图，内含各商品子目录）'
+  }
+  if (uploadMode.value === 'product') {
+    return '在已有套图下追加商品：选目标款号与套图 → 选本地商品文件夹（如 BD713Z，内含 1.jpg 等）'
+  }
+  return '上传整款款号：选本地款号文件夹（如 BD713，内含 第一套图/商品编码/图片）'
+})
+
+const uploadFolderPlaceholder = computed(() => {
+  if (uploadMode.value === 'image_set') return '选择套图文件夹，如 第二套图'
+  if (uploadMode.value === 'product') return '选择商品文件夹，如 BD713Z'
+  return '选择款号文件夹，如 BD713'
+})
+
+async function loadRabbitmqRecent() {
+  try {
+    const result = await api.minioRabbitmqRecent(10)
+    rabbitmqRecent.value = result.batches || result.events || []
+  } catch {
+    rabbitmqRecent.value = []
+  }
+}
+
+const {
+  materialPolling,
+  sseConnected,
+  switchingMode,
+  refreshMode,
+  restart: restartMaterialRefresh,
+  stop: stopMaterialRefresh,
+  setRefreshMode,
+} = useMinioMaterialRefresh({
+  materialSource,
+  minioHealth,
+  reloadHealth: loadMinioHealth,
+  onRefresh: loadProducts,
+  onUploadBatch: () => loadRabbitmqRecent(),
+})
+
+watch(refreshMode, (mode) => {
+  if (mode === 'rabbitmq' && materialSource.value === 'minio') {
+    void loadRabbitmqRecent()
+  }
+})
+
+watch(uploadMode, () => {
+  uploadFolderName.value = ''
+  uploadFolderEntries.value = []
+})
+
+watch(uploadTargetFamily, (family) => {
+  if (!family) {
+    uploadTargetImageSet.value = ''
+    return
+  }
+  const sets = uploadImageSetOptions.value
+  if (uploadTargetImageSet.value && !sets.includes(uploadTargetImageSet.value)) {
+    uploadTargetImageSet.value = sets[0] || ''
+  }
+})
+
+async function loadUploadListingTargets() {
+  if (materialSource.value !== 'minio') {
+    uploadListingTargets.value = []
+    return
+  }
+  try {
+    uploadListingTargets.value = await api.listingTargets(undefined, 'minio')
+  } catch {
+    uploadListingTargets.value = []
+  }
+}
 
 const productKeyword = ref('')
 const currentPage = ref(1)
@@ -74,28 +225,270 @@ function fileName(path: string) {
 async function loadMinioHealth() {
   try {
     minioHealth.value = await api.minioHealth()
+    const amqp = (minioHealth.value as { rabbitmq?: { amqp?: { error?: string } } })?.rabbitmq?.amqp
+    rabbitmqAmqpError.value = amqp?.error || ''
   } catch (e) {
     minioHealth.value = { available: false, error: e instanceof Error ? e.message : 'MinIO 不可用' }
   }
 }
 
-function stopMaterialPolling() {
-  materialPolling.value = false
-  if (materialPollTimer) {
-    clearInterval(materialPollTimer)
-    materialPollTimer = null
+async function loadRabbitmqQueues(manageLoading = true) {
+  if (materialSource.value !== 'minio') return
+  if (manageLoading) rabbitmqLoading.value = true
+  try {
+    const result = await api.minioRabbitmqQueues()
+    rabbitmqQueues.value = result.queues || []
+    rabbitmqSuggested.value = result.suggested_queue || ''
+    rabbitmqSelectedQueue.value = result.configured_queue || result.suggested_queue || ''
+    rabbitmqAmqpError.value = result.amqp?.error || result.management_error || ''
+    if (manageLoading && !result.available && rabbitmqAmqpError.value) {
+      ElMessage.warning(`RabbitMQ 连接失败：${rabbitmqAmqpError.value}`)
+    }
+    await loadRabbitmqBindingStatus()
+  } catch (e) {
+    if (manageLoading) {
+      ElMessage.error(e instanceof Error ? e.message : '获取队列失败')
+    }
+  } finally {
+    if (manageLoading) rabbitmqLoading.value = false
   }
 }
 
-function startMaterialPolling() {
-  stopMaterialPolling()
+async function saveRabbitmqQueue() {
+  if (!rabbitmqSelectedQueue.value) {
+    ElMessage.warning('请先选择队列')
+    return
+  }
+  rabbitmqLoading.value = true
+  try {
+    await api.saveMinioRabbitmqQueue(rabbitmqSelectedQueue.value)
+    ElMessage.success(`已保存队列：${rabbitmqSelectedQueue.value}`)
+    await loadMinioHealth()
+  } catch (e) {
+    ElMessage.error(e instanceof Error ? e.message : '保存队列失败')
+  } finally {
+    rabbitmqLoading.value = false
+  }
+}
+
+async function loadRabbitmqBindingStatus() {
+  if (materialSource.value !== 'minio') {
+    rabbitmqBindingStatus.value = ''
+    return
+  }
+  try {
+    const result = await api.minioRabbitmqBindings(rabbitmqSelectedQueue.value)
+    if (!result.available) {
+      rabbitmqBindingStatus.value = result.error || '无法读取 bindings'
+      return
+    }
+    if (result.minio_events_bound) {
+      rabbitmqBindingStatus.value = `已绑定 ${result.expected_exchange} · ${result.expected_routing_key}`
+      return
+    }
+    rabbitmqBindingStatus.value = `未绑定 MinIO 事件（需 ${result.expected_exchange} / ${result.expected_routing_key}）`
+  } catch {
+    rabbitmqBindingStatus.value = ''
+  }
+}
+
+async function ensureRabbitmqBinding() {
+  rabbitmqLoading.value = true
+  try {
+    const result = await api.ensureMinioRabbitmqBinding(
+      rabbitmqSelectedQueue.value ? { queue: rabbitmqSelectedQueue.value } : undefined,
+    )
+    await loadRabbitmqBindingStatus()
+    await loadRabbitmqQueues(false)
+    restartMaterialRefresh()
+    ElMessage.success(
+      `已恢复 binding：${result.exchange} / ${result.routing_key} -> ${result.queue}`,
+    )
+  } catch (e) {
+    ElMessage.error(e instanceof Error ? e.message : '恢复 binding 失败')
+  } finally {
+    rabbitmqLoading.value = false
+  }
+}
+
+async function peekRabbitmqMessage() {
+  rabbitmqLoading.value = true
+  rabbitmqPeek.value = ''
+  try {
+    const result = await api.peekMinioRabbitmq(rabbitmqSelectedQueue.value)
+    if (!result.found) {
+      rabbitmqPeek.value = '队列为空，暂无消息'
+    } else {
+      rabbitmqPeek.value = result.body_preview || ''
+    }
+  } catch (e) {
+    ElMessage.error(e instanceof Error ? e.message : '窥探消息失败')
+  } finally {
+    rabbitmqLoading.value = false
+  }
+}
+
+function batchTagType(item: Record<string, unknown>) {
+  const groups = item.groups as Array<{ change_type?: string }> | undefined
+  const type = groups?.[0]?.change_type
+  if (type === 'new_product_folder' || type === 'new_image_set') return 'success'
+  if (type === 'append_to_product') return 'warning'
+  return 'info'
+}
+
+/** 进入 MinIO 模式：按当前配置启动轮询或 RabbitMQ，不强制改模式 */
+async function setupMinioWorkspace() {
   if (materialSource.value !== 'minio') return
-  const seconds = minioHealth.value?.listing_poll_seconds ?? 30
-  if (!seconds || seconds <= 0) return
-  materialPolling.value = true
-  materialPollTimer = setInterval(() => {
-    loadProducts().catch(() => undefined)
-  }, seconds * 1000)
+  rabbitmqLoading.value = true
+  try {
+    await loadMinioHealth()
+    await loadRabbitmqQueues(false)
+    await loadUploadListingTargets()
+    restartMaterialRefresh()
+    if (minioHealth.value?.refresh_mode === 'rabbitmq') {
+      await loadRabbitmqRecent()
+    }
+  } catch (e) {
+    ElMessage.warning(e instanceof Error ? e.message : 'MinIO 监听启动失败')
+  } finally {
+    rabbitmqLoading.value = false
+  }
+}
+
+async function pickUploadFolder() {
+  try {
+    if ('showDirectoryPicker' in window) {
+      const handle = await (window as unknown as { showDirectoryPicker: () => Promise<FileSystemDirectoryHandle> })
+        .showDirectoryPicker()
+      uploadFolderName.value = handle.name
+      const entries: Array<{ file: File; relativePath: string }> = []
+
+      async function walkDir(dir: FileSystemDirectoryHandle, prefix: string) {
+        for await (const [name, child] of dir.entries()) {
+          if (child.kind === 'file') {
+            const file = await child.getFile()
+            entries.push({ file, relativePath: `${prefix}${name}` })
+          } else if (child.kind === 'directory') {
+            await walkDir(child, `${prefix}${name}/`)
+          }
+        }
+      }
+
+      await walkDir(handle, '')
+      uploadFolderEntries.value = entries
+      if (!entries.length) {
+        ElMessage.warning('文件夹里没有文件')
+      }
+      return
+    }
+    uploadFolderInputRef.value?.click()
+  } catch (e) {
+    if (e instanceof DOMException && e.name === 'AbortError') return
+    ElMessage.error(e instanceof Error ? e.message : '选择文件夹失败')
+  }
+}
+
+function onUploadFolderInputChange(event: Event) {
+  const input = event.target as HTMLInputElement
+  const fileList = input.files
+  if (!fileList?.length) return
+
+  const entries: Array<{ file: File; relativePath: string }> = []
+  for (const file of Array.from(fileList)) {
+    const rel = (file as File & { webkitRelativePath?: string }).webkitRelativePath || file.name
+    entries.push({ file, relativePath: rel })
+  }
+
+  const rootName = entries[0]?.relativePath.split('/')[0] || ''
+  uploadFolderName.value = rootName
+  uploadFolderEntries.value = entries.map((item) => ({
+    file: item.file,
+    relativePath: item.relativePath.includes('/')
+      ? item.relativePath.split('/').slice(1).join('/')
+      : item.relativePath,
+  }))
+  input.value = ''
+}
+
+async function uploadFolderToMinio() {
+  if (!uploadFolderEntries.value.length) {
+    ElMessage.warning('请先选择本地文件夹')
+    return
+  }
+  if (!uploadFolderName.value.trim()) {
+    ElMessage.warning('无法识别文件夹名，请重新选择')
+    return
+  }
+  if (uploadMode.value === 'image_set' && !uploadTargetFamily.value.trim()) {
+    ElMessage.warning('追加套图请先选择目标款号')
+    return
+  }
+  if (uploadMode.value === 'product') {
+    if (!uploadTargetFamily.value.trim()) {
+      ElMessage.warning('追加商品请先选择目标款号')
+      return
+    }
+    if (!uploadTargetImageSet.value.trim()) {
+      ElMessage.warning('追加商品请先选择目标套图')
+      return
+    }
+  }
+
+  const imageEntries = uploadFolderEntries.value.filter((item) =>
+    /\.(jpe?g|png|webp|gif)$/i.test(item.relativePath),
+  )
+  if (!imageEntries.length) {
+    ElMessage.warning('文件夹里没有可上传的图片')
+    return
+  }
+
+  uploading.value = true
+  try {
+    const formData = new FormData()
+    formData.append('category', uploadCategory.value)
+    formData.append('folder_name', uploadFolderName.value.trim())
+    formData.append('upload_mode', uploadMode.value)
+    if (uploadMode.value !== 'family') {
+      formData.append('target_family', uploadTargetFamily.value.trim())
+    }
+    if (uploadMode.value === 'product') {
+      formData.append('target_image_set', uploadTargetImageSet.value.trim())
+    }
+    for (const item of imageEntries) {
+      formData.append('files', item.file, item.file.name)
+      formData.append('paths', item.relativePath.replace(/\\/g, '/'))
+    }
+
+    const result = await api.uploadMinioFolder(formData)
+    rabbitmqRecent.value = result.recent_events || result.batches || []
+    const targetPath =
+      uploadMode.value === 'family'
+        ? `${result.category}/${result.folder_name}`
+        : uploadMode.value === 'image_set'
+          ? `${result.category}/${uploadTargetFamily.value}/${result.folder_name}`
+          : `${result.category}/${uploadTargetFamily.value}/${uploadTargetImageSet.value}/${result.folder_name}`
+    ElMessage.success(
+      `上传成功：${result.upload_count} 张已存入 MinIO（${targetPath}），商品列表将自动更新`,
+    )
+    const autoHint = formatAutoPipelineFeedback(result.local_process?.auto_pipeline)
+    if (autoHint) {
+      if (result.local_process?.auto_pipeline?.triggered) {
+        ElMessage.success(autoHint)
+      } else if (
+        result.local_process?.auto_pipeline?.reason &&
+        !['disabled', 'append_only_batch'].includes(result.local_process.auto_pipeline.reason)
+      ) {
+        ElMessage.warning(autoHint)
+      }
+    }
+    await loadRabbitmqRecent()
+    await loadProducts()
+    await loadUploadListingTargets()
+  } catch (e) {
+    ElMessage.error(e instanceof Error ? e.message : '文件夹上传失败')
+  } finally {
+    uploading.value = false
+  }
 }
 
 async function onMaterialSourceChange(source: 'local' | 'minio') {
@@ -106,15 +499,16 @@ async function onMaterialSourceChange(source: 'local' | 'minio') {
   preflight.value = null
   imagePanelTitle.value = ''
   previewImages.value = []
-  stopMaterialPolling()
+  stopMaterialRefresh()
   if (source === 'minio') {
-    await loadMinioHealth()
+    await setupMinioWorkspace()
     if (!minioHealth.value?.available) {
       ElMessage.warning(minioHealth.value?.error || 'MinIO 未就绪，请检查 config/minio.yaml')
     }
+  } else {
+    stopMaterialRefresh()
   }
   await loadProducts()
-  startMaterialPolling()
 }
 
 async function loadProducts() {
@@ -271,16 +665,13 @@ onMounted(async () => {
   await loadMinioHealth()
   await loadProducts()
   if (materialSource.value === 'minio') {
+    await setupMinioWorkspace()
     await resumeActiveSync((msg) => {
       error.value = msg
     })
   }
-  startMaterialPolling()
 })
 
-onUnmounted(() => {
-  stopMaterialPolling()
-})
 </script>
 
 <template>
@@ -324,28 +715,204 @@ onUnmounted(() => {
               <el-radio-button label="local">本地文件夹</el-radio-button>
               <el-radio-button label="minio">MinIO</el-radio-button>
             </el-radio-group>
-            <el-tag
-              v-if="materialSource === 'minio'"
-              size="small"
-              :type="minioHealth?.available ? 'success' : 'danger'"
-            >
-              {{ minioHealth?.available ? 'MinIO 已连接' : (minioHealth?.error || 'MinIO 未连接') }}
-            </el-tag>
-            <el-tag v-if="materialSource === 'minio' && materialPolling" size="small" type="info">
-              自动刷新
-            </el-tag>
-            <el-button
-              v-if="materialSource === 'minio'"
-              link
-              type="primary"
-              size="small"
-              @click="loadProducts"
-            >
-              刷新
-            </el-button>
+            <template v-if="materialSource === 'minio'">
+              <el-tag size="small" :type="minioHealth?.available ? 'success' : 'danger'">
+                {{ minioHealth?.available ? 'MinIO 已连接' : (minioHealth?.error || 'MinIO 未连接') }}
+              </el-tag>
+              <el-radio-group
+                :model-value="refreshMode"
+                size="small"
+                :disabled="switchingMode"
+                @change="setRefreshMode($event as 'poll' | 'rabbitmq')"
+              >
+                <el-radio-button label="poll">
+                  定时 {{ minioHealth?.listing_poll_seconds ?? 30 }}s
+                </el-radio-button>
+                <el-radio-button label="rabbitmq">RabbitMQ 推送</el-radio-button>
+              </el-radio-group>
+              <el-tag v-if="refreshMode === 'poll' && materialPolling" size="small" type="info">
+                轮询中
+              </el-tag>
+              <el-tag v-else-if="refreshMode === 'rabbitmq' && sseConnected" size="small" type="success">
+                实时监听
+              </el-tag>
+              <el-tag v-else-if="refreshMode === 'rabbitmq'" size="small" type="warning">
+                推送未连接
+              </el-tag>
+            </template>
           </div>
-          <div v-if="materialSource === 'minio' && minioHealth?.alist_url" class="form-tip source-tip">
-            运营上传入口（Alist）：{{ minioHealth.alist_url }}
+
+          <div v-if="materialSource === 'minio'" class="minio-workspace" v-loading="rabbitmqLoading">
+            <div class="minio-upload-section">
+              <div class="rabbitmq-panel-head">
+                <span>上传素材文件夹</span>
+              </div>
+              <div class="form-tip">{{ uploadModeHint }}</div>
+              <div v-if="minioHealth?.alist?.available === false" class="form-tip" style="color: var(--el-color-warning)">
+                Alist 未就绪：{{ minioHealth?.alist?.error || '请检查 config/minio.yaml' }}
+              </div>
+              <input
+                ref="uploadFolderInputRef"
+                type="file"
+                webkitdirectory
+                directory
+                multiple
+                class="hidden-folder-input"
+                @change="onUploadFolderInputChange"
+              />
+              <el-form label-width="72px" size="small" class="rabbitmq-form compact-upload-form">
+                <el-form-item label="上传方式">
+                  <el-radio-group v-model="uploadMode">
+                    <el-radio-button label="family">新款号</el-radio-button>
+                    <el-radio-button label="image_set">追加套图</el-radio-button>
+                    <el-radio-button label="product">追加商品</el-radio-button>
+                  </el-radio-group>
+                </el-form-item>
+                <el-form-item label="类目">
+                  <el-select v-model="uploadCategory" style="width: 100%">
+                    <el-option
+                      v-for="cat in uploadCategoryOptions"
+                      :key="cat"
+                      :label="cat"
+                      :value="cat"
+                    />
+                  </el-select>
+                </el-form-item>
+                <el-form-item v-if="uploadMode !== 'family'" label="目标款号">
+                  <el-select
+                    v-model="uploadTargetFamily"
+                    filterable
+                    placeholder="选择已有款号，如 BD713"
+                    style="width: 100%"
+                  >
+                    <el-option
+                      v-for="family in uploadFamilyOptions"
+                      :key="family"
+                      :label="family"
+                      :value="family"
+                    />
+                  </el-select>
+                </el-form-item>
+                <el-form-item v-if="uploadMode === 'product'" label="目标套图">
+                  <el-select
+                    v-model="uploadTargetImageSet"
+                    filterable
+                    placeholder="选择已有套图"
+                    style="width: 100%"
+                    :disabled="!uploadTargetFamily"
+                  >
+                    <el-option
+                      v-for="imageSet in uploadImageSetOptions"
+                      :key="imageSet"
+                      :label="imageSet"
+                      :value="imageSet"
+                    />
+                  </el-select>
+                </el-form-item>
+                <el-form-item label="文件夹">
+                  <div class="folder-pick-row">
+                    <el-input
+                      v-model="uploadFolderName"
+                      readonly
+                      :placeholder="uploadFolderPlaceholder"
+                    />
+                    <el-button @click="pickUploadFolder">选择</el-button>
+                    <el-button
+                      type="primary"
+                      :loading="uploading"
+                      :disabled="!uploadFolderEntries.length"
+                      @click="uploadFolderToMinio"
+                    >
+                      上传{{ uploadImageCount ? ` ${uploadImageCount} 张` : '' }}
+                    </el-button>
+                  </div>
+                </el-form-item>
+              </el-form>
+              <pre v-if="uploadFolderPreview" class="rabbitmq-peek folder-preview">{{ uploadFolderPreview }}</pre>
+            </div>
+
+            <div v-if="refreshMode === 'rabbitmq' && rabbitmqRecent.length" class="rabbitmq-recent">
+              <div class="form-tip">最近上传（已合并 MQ 消息）</div>
+              <div v-for="(item, idx) in rabbitmqRecent" :key="idx" class="upload-batch-card">
+                <div class="upload-batch-head">
+                  <el-tag :type="item.status === 'success' ? 'success' : batchTagType(item)" size="small">
+                    {{
+                      item.status === 'success'
+                        ? '上传成功'
+                        : (item.groups as Array<{ change_label?: string }> | undefined)?.[0]?.change_label || '上传'
+                    }}
+                  </el-tag>
+                  <span class="upload-batch-meta">
+                    {{ item.raw_message_count ?? '?' }} 条消息 · {{ item.matched_file_count ?? '?' }} 张图
+                  </span>
+                </div>
+                <div class="upload-batch-summary">{{ item.summary }}</div>
+                <details v-if="(item.groups as unknown[] | undefined)?.length" class="upload-batch-details">
+                  <summary>文件列表</summary>
+                  <div
+                    v-for="group in item.groups as Array<{
+                      change_label: string
+                      path: string
+                      file_count: number
+                      files: string[]
+                    }>"
+                    :key="group.path"
+                    class="upload-batch-group"
+                  >
+                    <div class="upload-batch-group-title">
+                      {{ group.change_label }} · {{ group.path }}（{{ group.file_count }} 张）
+                    </div>
+                    <div class="upload-batch-files">{{ group.files.join('、') }}</div>
+                  </div>
+                </details>
+              </div>
+            </div>
+            <div v-else-if="refreshMode === 'rabbitmq' && sseConnected" class="form-tip minio-idle-tip">
+              RabbitMQ 监听中。上传文件夹或同事经 Alist 上传后，会在这里显示摘要。
+            </div>
+            <div v-else-if="refreshMode === 'poll'" class="form-tip minio-idle-tip">
+              当前为定时 {{ minioHealth?.listing_poll_seconds ?? 30 }}s 刷新，不会实时显示上传通知。要即时感知新素材请切到「RabbitMQ 推送」。
+            </div>
+
+            <el-collapse v-model="rabbitmqDebugOpen" class="minio-debug-collapse">
+              <el-collapse-item title="运维调试（一般不用点）" name="debug">
+                <div v-if="rabbitmqAmqpError" class="form-tip rabbitmq-error">
+                  AMQP：{{ rabbitmqAmqpError }}
+                </div>
+                <el-form label-width="72px" size="small" class="rabbitmq-form">
+                  <el-form-item label="队列">
+                    <el-select
+                      v-model="rabbitmqSelectedQueue"
+                      filterable
+                      allow-create
+                      style="width: 100%"
+                    >
+                      <el-option
+                        v-for="q in rabbitmqQueues"
+                        :key="q.name"
+                        :label="`${q.name}（${q.messages ?? 0}）`"
+                        :value="q.name"
+                      />
+                    </el-select>
+                  </el-form-item>
+                  <el-form-item v-if="rabbitmqSuggested && rabbitmqSuggested !== rabbitmqSelectedQueue" label="推荐">
+                    <el-button link type="primary" @click="rabbitmqSelectedQueue = rabbitmqSuggested">
+                      {{ rabbitmqSuggested }}
+                    </el-button>
+                  </el-form-item>
+                </el-form>
+                <div class="rabbitmq-actions">
+                  <el-button size="small" @click="loadRabbitmqQueues">刷新队列</el-button>
+                  <el-button size="small" plain @click="saveRabbitmqQueue">保存队列</el-button>
+                  <el-button size="small" type="primary" plain @click="ensureRabbitmqBinding">
+                    恢复 MinIO 绑定
+                  </el-button>
+                  <el-button size="small" @click="peekRabbitmqMessage">窥探消息</el-button>
+                </div>
+                <div v-if="rabbitmqBindingStatus" class="form-tip">{{ rabbitmqBindingStatus }}</div>
+                <pre v-if="rabbitmqPeek" class="rabbitmq-peek">{{ rabbitmqPeek }}</pre>
+              </el-collapse-item>
+            </el-collapse>
           </div>
 
           <el-input
@@ -873,6 +1440,158 @@ onUnmounted(() => {
 
 .sku-detail {
   margin-top: 4px;
+}
+
+.rabbitmq-panel,
+.minio-workspace {
+  margin: 12px 0 16px;
+  padding: 12px;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  background: #f8fafc;
+}
+
+.minio-upload-section {
+  margin-bottom: 12px;
+}
+
+.minio-idle-tip {
+  margin: 8px 0 4px;
+  color: #64748b;
+}
+
+.minio-debug-collapse {
+  margin-top: 10px;
+  border: none;
+}
+
+.minio-debug-collapse :deep(.el-collapse-item__header) {
+  font-size: 12px;
+  color: #64748b;
+  height: 36px;
+  border-bottom: none;
+}
+
+.minio-debug-collapse :deep(.el-collapse-item__wrap) {
+  border-bottom: none;
+}
+
+.compact-upload-form :deep(.el-form-item) {
+  margin-bottom: 10px;
+}
+
+.rabbitmq-panel {
+  margin: 12px 0 16px;
+  padding: 12px;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  background: #f8fafc;
+}
+
+.rabbitmq-panel-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 8px;
+  font-weight: 600;
+  color: #334155;
+}
+
+.rabbitmq-error {
+  color: #b45309;
+  margin-bottom: 8px;
+}
+
+.rabbitmq-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 4px;
+}
+
+.rabbitmq-peek {
+  margin-top: 8px;
+  padding: 8px;
+  background: #0f172a;
+  color: #e2e8f0;
+  border-radius: 6px;
+  font-size: 12px;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  word-break: break-all;
+  max-height: 220px;
+  overflow: auto;
+}
+
+.rabbitmq-test-upload {
+  display: none;
+}
+
+.hidden-folder-input {
+  display: none;
+}
+
+.folder-pick-row {
+  display: flex;
+  gap: 8px;
+  width: 100%;
+}
+
+.folder-pick-row .el-input {
+  flex: 1;
+}
+
+.folder-preview {
+  max-height: 120px;
+}
+
+.upload-batch-card {
+  margin-top: 10px;
+  padding: 10px 12px;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  background: #f8fafc;
+}
+
+.upload-batch-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.upload-batch-meta {
+  font-size: 12px;
+  color: #64748b;
+}
+
+.upload-batch-summary {
+  margin-top: 6px;
+  font-size: 13px;
+  color: #0f172a;
+  line-height: 1.5;
+}
+
+.upload-batch-details {
+  margin-top: 8px;
+  font-size: 12px;
+  color: #475569;
+}
+
+.upload-batch-group {
+  margin-top: 6px;
+}
+
+.upload-batch-group-title {
+  font-weight: 600;
+  color: #334155;
+}
+
+.upload-batch-files {
+  margin-top: 2px;
+  color: #64748b;
+  word-break: break-all;
 }
 
 @media (max-width: 900px) {

@@ -8,7 +8,13 @@ from collections import defaultdict
 from pathlib import Path
 
 from pdd_agent.integrations.minio.client import MinioAPIError, get_minio_client
-from pdd_agent.integrations.minio.config import MinioConfig, load_minio_config, minio_configured, minio_scan_prefixes
+from pdd_agent.integrations.minio.config import (
+    MinioConfig,
+    load_minio_config,
+    minio_configured,
+    minio_refresh_mode,
+    minio_scan_prefixes,
+)
 from pdd_agent.integrations.minio.index import (
     MinioSetIndexRecord,
     is_minio_index_fresh,
@@ -59,14 +65,17 @@ def _scan_prefixes(config: MinioConfig) -> list[str]:
     return minio_scan_prefixes(config)
 
 
+def resolve_listing_path_parts(parts: list[str]) -> tuple[str, str, str] | None:
+    """解析 object key 路径中的 family / image_set / product_folder。"""
+    return _resolve_listing_path_parts(parts)
+
+
 def _resolve_listing_path_parts(parts: list[str]) -> tuple[str, str, str] | None:
     """解析 object key 路径中的 family / image_set / product_folder。"""
     if len(parts) < 4:
         return None
     filename = parts[-1]
     if not _is_image_object_name(filename):
-        return None
-    if _numbered_image_index(filename) is None:
         return None
 
     for index in range(1, len(parts) - 2):
@@ -160,7 +169,17 @@ def list_minio_listing_targets(
         return []
 
     cache_seconds = max(0, int(cfg.listing_poll_seconds or 0))
+    if minio_refresh_mode(cfg) == "rabbitmq":
+        cache_seconds = 0
     cache_key = _listing_targets_cache_key(cfg)
+
+    if not force_refresh and minio_refresh_mode(cfg) == "rabbitmq":
+        redis_targets = load_listing_targets_from_redis(cfg)
+        if redis_targets is not None:
+            _LISTING_TARGETS_CACHE["loaded_at"] = time.time()
+            _LISTING_TARGETS_CACHE["targets"] = redis_targets
+            _LISTING_TARGETS_CACHE["config_key"] = cache_key
+            return list(redis_targets)
 
     if not force_refresh and cache_seconds > 0:
         cached_targets = _LISTING_TARGETS_CACHE.get("targets")
