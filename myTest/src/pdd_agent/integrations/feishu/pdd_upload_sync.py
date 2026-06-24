@@ -252,7 +252,7 @@ def _format_brief_listing_failure_reason(
         error=error,
         merchant_code=code,
     )
-    return body[:500]
+    return ListingErrors.sanitize_feishu_failure_reason(body[:500])
 
 
 def parse_listing_label_from_text(text: str) -> tuple[str, str]:
@@ -539,7 +539,9 @@ def build_pdd_upload_failure_log_fields(
         names.report_platform: platform,
         names.account_name: str(account_name or "").strip(),
         names.record_type: str(record_type or _FEISHU_FAILURE_RECORD_FAIL).strip(),
-        names.failure_reason: str(failure_reason or "").strip()[:500],
+        names.failure_reason: ListingErrors.sanitize_feishu_failure_reason(
+            str(failure_reason or "").strip()
+        )[:500],
         names.publish_start: _ms_timestamp(start_at),
         names.publish_end: _ms_timestamp(end_at),
         names.duration_seconds: round(float(duration), 2),

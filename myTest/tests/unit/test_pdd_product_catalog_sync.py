@@ -75,7 +75,7 @@ def test_format_feishu_catalog_issue_detail_message():
         aspect="pricing_missing",
     )
     assert reason == "feishu_pricing_missing"
-    assert msg == "BD034B拼多多定价为空"
+    assert msg == "BD034B定价为空"
 
     reason, msg = format_feishu_catalog_issue_detail_message(
         listing_label="BD034B/第一套图",
@@ -93,7 +93,7 @@ def test_format_feishu_catalog_issue_detail_message():
         aspect="control_missing",
     )
     assert reason == "feishu_subcode_control_missing"
-    assert msg == "YKL001N拼多多控价为空"
+    assert msg == "YKL001N控价为空"
 
 
 def test_format_feishu_listing_catalog_issue_message():
@@ -180,7 +180,7 @@ def test_schedule_feishu_product_catalog_missing_logs_writes_failure_rows(monkey
         config=cfg,
     )
     assert logged == 1
-    assert captured[0]["message"] == "1、BD716A拼多多定价为空，2、YKL001N拼多多控价为空"
+    assert captured[0]["message"] == "1、BD716A定价为空，2、YKL001N控价为空"
     assert captured[0]["reason_code"] == "feishu_subcode_control_missing"
     assert captured[0]["merchant_code"] == "BD716A"
 
@@ -264,8 +264,8 @@ def test_diagnose_feishu_listing_catalog_issues_marks_missing_fields(monkeypatch
     assert "拼多多定价没数据" in details["BD716A"]
     assert "拼多多控价没数据" in details["YKL001N"]
     messages = [item.message for item in issues[0].details]
-    assert "BD716A拼多多定价为空" in messages
-    assert "YKL001N拼多多控价为空" in messages
+    assert "BD716A定价为空" in messages
+    assert "YKL001N控价为空" in messages
 
 
 def test_load_unified_pdd_product_catalog_falls_back_to_excel(monkeypatch, tmp_path):

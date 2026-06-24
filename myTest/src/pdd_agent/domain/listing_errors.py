@@ -122,13 +122,13 @@ class ListingErrors:
         ListingErrorCode.BROWSER_MANUALLY_CLOSED: "浏览器被手动关闭，任务中断",
     }
 
-    # 飞书失败表一行说明（极短，带商品编码，给运营直接找文件）
+    # 飞书失败表一行说明（极短，带商品编码，给运营直接找文件；不含平台名）
     FEISHU_BRIEF_ASPECT: dict[str, str] = {
-        "pricing_missing": "拼多多定价为空",
-        "control_missing": "拼多多控价为空",
-        "range_missing": "PDD控价下限或上限为空",
-        "range_min_missing": "PDD控价下限为空",
-        "range_max_missing": "PDD控价上限为空",
+        "pricing_missing": "定价为空",
+        "control_missing": "控价为空",
+        "range_missing": "控价下限或上限为空",
+        "range_min_missing": "控价下限为空",
+        "range_max_missing": "控价上限为空",
         "color_spec_missing": "颜色规格为空",
         "feishu_row_not_found": "飞书无此行",
         "product_row_missing": "飞书无此行",
@@ -136,16 +136,16 @@ class ListingErrors:
     }
 
     FEISHU_BRIEF_ASPECT_TEXT: dict[str, str] = {
-        "定价数据缺失": "拼多多定价为空",
-        "定价没数据": "拼多多定价为空",
-        "控价数据缺失": "拼多多控价为空",
-        "控价没数据": "拼多多控价为空",
-        "控价区间数据缺失": "PDD控价下限或上限为空",
-        "控价区间没数据": "PDD控价下限或上限为空",
-        "PDD控价下限数据缺失": "PDD控价下限为空",
-        "PDD控价下限没数据": "PDD控价下限为空",
-        "PDD控价上限数据缺失": "PDD控价上限为空",
-        "PDD控价上限没数据": "PDD控价上限为空",
+        "定价数据缺失": "定价为空",
+        "定价没数据": "定价为空",
+        "控价数据缺失": "控价为空",
+        "控价没数据": "控价为空",
+        "控价区间数据缺失": "控价下限或上限为空",
+        "控价区间没数据": "控价下限或上限为空",
+        "PDD控价下限数据缺失": "控价下限为空",
+        "PDD控价下限没数据": "控价下限为空",
+        "PDD控价上限数据缺失": "控价上限为空",
+        "PDD控价上限没数据": "控价上限为空",
         "颜色规格没数据": "颜色规格为空",
         "飞书无此行": "飞书无此行",
         "商品表没数据": "飞书无此行",
@@ -403,6 +403,16 @@ class ListingErrors:
         return cls.FEISHU_LABELS.get(code, fallback or code or cls.DEFAULT_LABEL)
 
     @classmethod
+    def sanitize_feishu_failure_reason(cls, text: str) -> str:
+        """飞书失败原因：去掉平台字样（拼多多/PDD/pdd），所属平台列已单独记录。"""
+        s = str(text or "").strip()
+        if not s:
+            return s
+        s = s.replace("拼多多", "")
+        s = re.sub(r"(?i)pdd", "", s)
+        return s
+
+    @classmethod
     def _aspect_text_to_brief(cls, aspect_text: str) -> str:
         text = str(aspect_text or "").strip()
         return cls.FEISHU_BRIEF_ASPECT_TEXT.get(text, text.replace("数据缺失", "为空").replace("没数据", "为空"))
@@ -423,17 +433,20 @@ class ListingErrors:
         if is_sub:
             if aspect in ("feishu_row_not_found", "product_row_missing", "subcode_missing"):
                 if merchant and code_text:
-                    return f"{merchant}缺{code_text}"
+                    return cls.sanitize_feishu_failure_reason(f"{merchant}缺{code_text}")
                 if code_text:
-                    return f"{code_text}飞书无此行"
+                    return cls.sanitize_feishu_failure_reason(f"{code_text}飞书无此行")
                 return "飞书无此行"
             suffix = cls.FEISHU_BRIEF_ASPECT.get(aspect, "数据缺失")
-            return f"{code_text}{suffix}" if code_text else suffix
+            line = f"{code_text}{suffix}" if code_text else suffix
+            return cls.sanitize_feishu_failure_reason(line)
 
         if aspect in ("feishu_row_not_found", "product_row_missing", "subcode_missing"):
-            return f"{code_text}飞书无此行" if code_text else "飞书无此行"
+            line = f"{code_text}飞书无此行" if code_text else "飞书无此行"
+            return cls.sanitize_feishu_failure_reason(line)
         suffix = cls.FEISHU_BRIEF_ASPECT.get(aspect, "数据缺失")
-        return f"{code_text}{suffix}" if code_text else suffix
+        line = f"{code_text}{suffix}" if code_text else suffix
+        return cls.sanitize_feishu_failure_reason(line)
 
     @classmethod
     def format_numbered(cls, lines: list[str]) -> str:
@@ -587,7 +600,7 @@ class ListingErrors:
                 return brief
 
         text = re.sub(r"^\[[^\]]+\]\s*", "", text)
-        return text[:120]
+        return cls.sanitize_feishu_failure_reason(text[:120])
 
     @classmethod
     def format_feishu_catalog_issue(
