@@ -38,6 +38,7 @@ def test_warm_listing_feishu_snapshot_fetches_each_code_once(monkeypatch):
                     "拼多多控价": 18.0,
                     "PDD控价下限价格": 15.0,
                     "PDD控价上限价格": 25.0,
+                    "综合零售成本": 10.0,
                 }
             }
             for code in values
@@ -53,7 +54,7 @@ def test_warm_listing_feishu_snapshot_fetches_each_code_once(monkeypatch):
     )
     monkeypatch.setattr(
         "pdd_agent.integrations.feishu.listing_feishu_snapshot._resolve_price_range_field_names",
-        lambda api, app_token, table_id, names: ("商品编码", "PDD控价下限价格", "PDD控价上限价格"),
+        lambda api, app_token, table_id, names: ("商品编码", "PDD控价下限价格", "PDD控价上限价格", "综合零售成本"),
     )
     monkeypatch.setattr(
         "pdd_agent.integrations.feishu.listing_feishu_snapshot.resolve_table_field_name",
@@ -115,6 +116,7 @@ def test_warm_listing_feishu_snapshot_fuzzy_matches_code_prefix(monkeypatch):
                     "拼多多控价": 9.0,
                     "PDD控价下限价格": 9.7,
                     "PDD控价上限价格": 11.0,
+                    "综合零售成本": 2.0,
                 }
             }
         ]
@@ -133,7 +135,7 @@ def test_warm_listing_feishu_snapshot_fuzzy_matches_code_prefix(monkeypatch):
     )
     monkeypatch.setattr(
         "pdd_agent.integrations.feishu.listing_feishu_snapshot._resolve_price_range_field_names",
-        lambda api, app_token, table_id, names: ("商品编码", "PDD控价下限价格", "PDD控价上限价格"),
+        lambda api, app_token, table_id, names: ("商品编码", "PDD控价下限价格", "PDD控价上限价格", "综合零售成本"),
     )
     monkeypatch.setattr(
         "pdd_agent.integrations.feishu.listing_feishu_snapshot.resolve_table_field_name",
@@ -173,6 +175,7 @@ def test_warm_snapshot_short_incomplete_row_does_not_poison_long_code(monkeypatc
                     "商品编码": "BD025A",
                     "PDD控价下限价格": 7.45,
                     "PDD控价上限价格": None,
+                    "综合零售成本": None,
                 }
             },
             {
@@ -183,6 +186,7 @@ def test_warm_snapshot_short_incomplete_row_does_not_poison_long_code(monkeypatc
                     "拼多多控价": 7.45,
                     "PDD控价下限价格": 7.45,
                     "PDD控价上限价格": 9.3,
+                    "综合零售成本": 2.0,
                 }
             },
         ]
@@ -201,7 +205,7 @@ def test_warm_snapshot_short_incomplete_row_does_not_poison_long_code(monkeypatc
     )
     monkeypatch.setattr(
         "pdd_agent.integrations.feishu.listing_feishu_snapshot._resolve_price_range_field_names",
-        lambda api, app_token, table_id, names: ("商品编码", "PDD控价下限价格", "PDD控价上限价格"),
+        lambda api, app_token, table_id, names: ("商品编码", "PDD控价下限价格", "PDD控价上限价格", "综合零售成本"),
     )
     monkeypatch.setattr(
         "pdd_agent.integrations.feishu.listing_feishu_snapshot.resolve_table_field_name",

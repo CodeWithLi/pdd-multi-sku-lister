@@ -79,6 +79,7 @@ class PriceRangeCatalog:
     source: str = "empty"
     incomplete_min_codes: frozenset[str] = field(default_factory=frozenset)
     incomplete_max_codes: frozenset[str] = field(default_factory=frozenset)
+    incomplete_retail_cost_codes: frozenset[str] = field(default_factory=frozenset)
     incomplete_codes: frozenset[str] = field(default_factory=frozenset)
     feishu_record_codes: frozenset[str] = field(default_factory=frozenset)
 
@@ -104,7 +105,7 @@ def _resolve_price_range_field_names(
     app_token: str,
     table_id: str,
     names: Any,
-) -> tuple[str, str, str]:
+) -> tuple[str, str, str, str]:
     code_field = resolve_table_field_name(api, app_token, table_id, names.merchant_code)
     min_field = resolve_table_field_name_from_candidates(
         api,
@@ -120,7 +121,8 @@ def _resolve_price_range_field_names(
         MAX_PRICE_FIELD_CANDIDATES,
         names.max_price,
     )
-    return code_field, min_field, max_field
+    retail_cost_field = resolve_table_field_name(api, app_token, table_id, names.retail_cost)
+    return code_field, min_field, max_field, retail_cost_field
 
 
 def _to_float(value: Any, default: float = 0.0) -> float:
@@ -372,6 +374,7 @@ def _field_defs_for_price_compare(config: FeishuConfig) -> list[dict[str, Any]]:
         {"field_name": names.merchant_code, "type": FIELD_TEXT},
         {"field_name": names.min_price, "type": FIELD_NUMBER},
         {"field_name": names.max_price, "type": FIELD_NUMBER},
+        {"field_name": names.retail_cost, "type": FIELD_NUMBER},
         {"field_name": names.pdd_pricing, "type": FIELD_NUMBER},
         {"field_name": names.pdd_control_price, "type": FIELD_NUMBER},
     ]
@@ -453,11 +456,14 @@ def _build_catalog_from_feishu_records(
     code_field: str,
     min_field: str,
     max_field: str,
+    retail_cost_field: str = "",
 ) -> PriceRangeCatalog:
     ranges: dict[str, CampaignPriceRange] = {}
     incomplete_min: set[str] = set()
     incomplete_max: set[str] = set()
+    incomplete_retail: set[str] = set()
     record_codes: set[str] = set()
+    require_retail_cost = bool(str(retail_cost_field or "").strip())
 
     for item in records:
         fields = item.get("fields") if isinstance(item.get("fields"), dict) else {}
@@ -470,8 +476,10 @@ def _build_catalog_from_feishu_records(
         norm_code = normalize_price_code(raw_code) or keys[0]
         min_price = _field_number(fields, min_field)
         max_price = _field_number(fields, max_field)
+        retail_cost = _field_number(fields, retail_cost_field) if require_retail_cost else None
         min_bad = min_price is None
         max_bad = max_price is None or max_price <= 0
+        retail_bad = require_retail_cost and retail_cost is None
 
         if min_bad:
             for key in price_rule_candidates(raw_code):
@@ -481,25 +489,32 @@ def _build_catalog_from_feishu_records(
             for key in price_rule_candidates(raw_code):
                 if key not in ranges:
                     incomplete_max.add(key)
-        if min_bad or max_bad:
+        if retail_bad:
+            for key in price_rule_candidates(raw_code):
+                if key not in ranges:
+                    incomplete_retail.add(key)
+        if min_bad or retail_bad:
             continue
 
         rule = CampaignPriceRange(
             code=norm_code,
             min_price=float(min_price),
-            max_price=float(max_price),
+            max_price=float(max_price) if not max_bad else 0.0,
+            retail_cost=float(retail_cost) if retail_cost is not None else None,
         )
         for key in price_rule_candidates(raw_code):
             ranges[key] = rule
             incomplete_min.discard(key)
             incomplete_max.discard(key)
+            incomplete_retail.discard(key)
 
-    incomplete = incomplete_min | incomplete_max
+    incomplete = incomplete_min | incomplete_max | incomplete_retail
     return PriceRangeCatalog(
         ranges=ranges,
         source="feishu",
         incomplete_min_codes=frozenset(incomplete_min),
         incomplete_max_codes=frozenset(incomplete_max),
+        incomplete_retail_cost_codes=frozenset(incomplete_retail),
         incomplete_codes=frozenset(incomplete),
         feishu_record_codes=frozenset(record_codes),
     )
@@ -676,7 +691,9 @@ def load_price_ranges_from_feishu(
         return PriceRangeCatalog(source="empty")
 
     names = compare_cfg.field_names
-    code_field, min_field, max_field = _resolve_price_range_field_names(api, app_token, table_id, names)
+    code_field, min_field, max_field, retail_cost_field = _resolve_price_range_field_names(
+        api, app_token, table_id, names
+    )
 
     records = list_all_records(api, app_token, table_id)
     return _build_catalog_from_feishu_records(
@@ -684,6 +701,7 @@ def load_price_ranges_from_feishu(
         code_field=code_field,
         min_field=min_field,
         max_field=max_field,
+        retail_cost_field=retail_cost_field,
     )
 
 
@@ -879,6 +897,8 @@ def resolve_feishu_range_aspect(
 
     if _catalog_keys_match(catalog.incomplete_min_codes, normalized_candidates):
         return "range_min_missing"
+    if _catalog_keys_match(catalog.incomplete_retail_cost_codes, normalized_candidates):
+        return "range_retail_cost_missing"
     if _catalog_keys_match(catalog.incomplete_max_codes, normalized_candidates):
         return "range_max_missing"
     return None
@@ -922,7 +942,9 @@ def migrate_pdd_xls_to_feishu(
         }
 
     names = compare_cfg.field_names
-    code_field, min_field, max_field = _resolve_price_range_field_names(api, app_token, table_id, names)
+    code_field, min_field, max_field, _retail_cost_field = _resolve_price_range_field_names(
+        api, app_token, table_id, names
+    )
 
     excel_candidate_keys: set[str] = set()
     excel_by_norm: dict[str, ExcelPriceRow] = {}

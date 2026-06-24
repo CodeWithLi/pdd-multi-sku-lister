@@ -19,7 +19,7 @@ logger = get_logger(__name__)
 
 
 async def limited_time_setup_node(state: CampaignState) -> dict:
-    """打开限时限量购创建页，并取消同步设置惊喜优惠。"""
+    """打开限时限量购创建页，完成设置并提交创建。"""
     settings = load_yaml_settings()
     account_id = state["account_id"]
     pdd_product_ids = state.get("pdd_product_ids") or []

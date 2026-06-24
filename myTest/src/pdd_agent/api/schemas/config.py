@@ -1,10 +1,6 @@
 """配置相关 API 模型。"""
 
-import re
-
 from pydantic import BaseModel, Field, field_validator, model_validator
-
-_ACCOUNT_ID_PATTERN = re.compile(r"^[a-zA-Z][a-zA-Z0-9_]*$")
 
 
 class AccountOut(BaseModel):
@@ -35,8 +31,8 @@ class AccountCreateIn(BaseModel):
     @classmethod
     def validate_account_id(cls, v: str) -> str:
         v = v.strip()
-        if not _ACCOUNT_ID_PATTERN.match(v):
-            raise ValueError("店铺 ID 须以字母开头，仅含字母、数字、下划线")
+        if not v:
+            raise ValueError("店铺名称不能为空")
         return v
 
 

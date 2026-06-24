@@ -662,9 +662,12 @@ def _field_defs_for_pdd_upload_log(config: FeishuConfig) -> list[dict[str, Any]]
     return [
         {"field_name": names.date, "type": FIELD_DATETIME, "property": {"date_formatter": "yyyy/MM/dd", "auto_fill": False}},
         {"field_name": names.merchant_code, "type": FIELD_TEXT},
+        {"field_name": names.combo_barcode, "type": FIELD_TEXT},
         {"field_name": names.title, "type": FIELD_TEXT},
         {"field_name": names.account_name, "type": FIELD_TEXT},
         {"field_name": names.product_id, "type": FIELD_TEXT},
+        {"field_name": names.group_price, "type": FIELD_NUMBER},
+        {"field_name": names.single_price, "type": FIELD_NUMBER},
         {"field_name": names.link, "type": 15},
         {"field_name": names.publish_start, "type": FIELD_DATETIME, "property": datetime_prop},
         {"field_name": names.publish_end, "type": FIELD_DATETIME, "property": datetime_prop},
@@ -1261,6 +1264,9 @@ def build_pdd_upload_log_fields(
     product_id: str,
     product_link: str,
     account_name: str = "",
+    combo_barcode: str = "",
+    group_price: str | float = "",
+    single_price: str | float = "",
     publish_start: datetime | None = None,
     publish_end: datetime | None = None,
     verified_at: datetime,
@@ -1284,6 +1290,21 @@ def build_pdd_upload_log_fields(
         names.publish_end: _ms_timestamp(end_at),
         names.duration_seconds: round(duration, 2),
     }
+    combo = str(combo_barcode or "").strip()
+    if combo and names.combo_barcode:
+        fields[names.combo_barcode] = combo
+    group = str(group_price or "").strip()
+    single = str(single_price or "").strip()
+    if group and names.group_price:
+        try:
+            fields[names.group_price] = float(group)
+        except (TypeError, ValueError):
+            fields[names.group_price] = group
+    if single and names.single_price:
+        try:
+            fields[names.single_price] = float(single)
+        except (TypeError, ValueError):
+            fields[names.single_price] = single
     if link:
         fields[names.link] = {"link": link, "text": "查看商品"}
     return fields
@@ -1308,6 +1329,125 @@ def resolve_pdd_upload_table_id(
     )
 
 
+def _field_text_from_record(fields: dict[str, Any], field_name: str) -> str:
+    if not field_name:
+        return ""
+    value = fields.get(field_name)
+    if value is None:
+        return ""
+    if isinstance(value, list) and value:
+        first = value[0]
+        if isinstance(first, dict):
+            return str(first.get("text") or first.get("name") or "").strip()
+        return str(first).strip()
+    if isinstance(value, dict):
+        return str(value.get("text") or value.get("name") or "").strip()
+    return str(value).strip()
+
+
+def _find_upload_log_record_for_row(
+    existing_rows: list[dict[str, Any]],
+    *,
+    combo_field: str,
+    combo_barcode: str,
+) -> dict[str, Any] | None:
+    target_combo = str(combo_barcode or "").strip().upper()
+    for item in existing_rows:
+        fields = item.get("fields") if isinstance(item.get("fields"), dict) else {}
+        current = _field_text_from_record(fields, combo_field).upper()
+        if target_combo:
+            if current == target_combo:
+                return item
+        elif not current:
+            return item
+    return None
+
+
+def _upsert_pdd_upload_log_rows(
+    *,
+    cfg: FeishuConfig,
+    api: FeishuClient,
+    app_token: str,
+    table_id: str,
+    resolve_method: str,
+    account_id: str,
+    listing_label: str,
+    product_id: str,
+    row_field_list: list[dict[str, Any]],
+    product_link_method: str = "",
+    used_link_fallback: bool = False,
+    effective_link: str = "",
+) -> dict[str, Any]:
+    names = cfg.pdd_upload_log.field_names
+    combo_field = str(names.combo_barcode or "组合商品条码").strip()
+    dedupe_field = str(cfg.pdd_upload_log.dedupe_field or names.product_id or "商品ID").strip()
+
+    try:
+        existing_rows = search_records_by_field(
+            api,
+            app_token,
+            table_id,
+            field_name=dedupe_field,
+            value=product_id,
+        )
+    except FeishuAPIError as exc:
+        if exc.code in _INVALID_FILTER_CODES:
+            existing_rows = []
+        else:
+            raise
+
+    created_ids: list[str] = []
+    updated_ids: list[str] = []
+    stored_fields: list[dict[str, Any]] = []
+    to_create: list[dict[str, Any]] = []
+    to_update: list[dict[str, Any]] = []
+
+    for raw_fields in row_field_list:
+        mapped = map_fields_to_table_names(api, app_token, table_id, raw_fields)
+        combo = _field_text_from_record(mapped, combo_field)
+        match = _find_upload_log_record_for_row(
+            existing_rows,
+            combo_field=combo_field,
+            combo_barcode=combo,
+        )
+        if match and match.get("record_id"):
+            to_update.append({"record_id": str(match["record_id"]), "fields": mapped})
+        else:
+            to_create.append(mapped)
+        stored_fields.append(mapped)
+
+    if to_update:
+        batch_update_records(api, app_token, table_id, to_update)
+        updated_ids.extend(str(item["record_id"]) for item in to_update)
+    if to_create:
+        created_ids.extend(batch_create_records(api, app_token, table_id, to_create))
+
+    logger.info(
+        "[%s] feishu pdd upload log upsert product_id=%s created=%s updated=%s table=%s(%s)",
+        account_id or "-",
+        product_id,
+        len(created_ids),
+        len(updated_ids),
+        table_id,
+        resolve_method,
+    )
+    return {
+        "created": bool(created_ids),
+        "updated": bool(updated_ids),
+        "product_id": product_id,
+        "table_id": table_id,
+        "resolve_method": resolve_method,
+        "record_ids": created_ids + updated_ids,
+        "fields": stored_fields[0] if len(stored_fields) == 1 else stored_fields,
+        "row_count": len(stored_fields),
+        "link_source": _link_source_label(
+            effective_link,
+            product_link_method,
+            used_fallback=used_link_fallback,
+        ),
+    }
+
+
 def push_pdd_upload_log(
     *,
     account_id: str = "",
@@ -1326,6 +1466,7 @@ def push_pdd_upload_log(
     listing_result: str = "",
     listing_error_reason: str = "",
     chain_phase: str = "listing",
+    sku_rows: list[dict[str, Any]] | None = None,
     config: FeishuConfig | None = None,
     client: FeishuClient | None = None,
     **_ignored: Any,
@@ -1372,6 +1513,82 @@ def push_pdd_upload_log(
     )
     logger.info("feishu pdd upload log push start %s", context)
     print(f"[{account_id or '-'}] [{listing_label or merchant_code}] 飞书写入准备：{context}", flush=True)
+
+    from pdd_agent.integrations.feishu.pdd_upload_spec_log import (
+        build_pdd_upload_spec_log_rows,
+        log_spec_sku_rows_enabled,
+    )
+
+    spec_rows_payload: list[dict[str, Any]] | None = None
+    if log_spec_sku_rows_enabled(cfg) and sku_rows:
+        spec_rows_payload = build_pdd_upload_spec_log_rows(
+            merchant_code=merchant_code,
+            listing_title=title,
+            sku_rows=sku_rows,
+        )
+
+    if spec_rows_payload:
+        row_fields_list = [
+            build_pdd_upload_log_fields(
+                config=cfg,
+                title=str(row.get("title") or title),
+                merchant_code=str(row.get("merchant_code") or merchant_code),
+                product_id=product_id,
+                product_link=effective_link,
+                account_name=effective_account_name,
+                combo_barcode=str(row.get("combo_barcode") or ""),
+                group_price=str(row.get("group_price") or ""),
+                single_price=str(row.get("single_price") or ""),
+                publish_start=effective_publish_start,
+                publish_end=effective_publish_end,
+                verified_at=verified,
+                created_at_raw=created_at_raw,
+            )
+            for row in spec_rows_payload
+        ]
+        api = client or FeishuClient(cfg)
+        table_id, resolve_method = resolve_pdd_upload_table_id(cfg, api)
+        if not table_id:
+            msg = f"未找到飞书表「{pdd_cfg.table_name}」，请检查 bitable_app_token 与表名"
+            logger.error("feishu pdd upload log failed: %s", msg)
+            return {"failed": True, "reason": "table_not_found", "message": msg}
+        _ensure_pdd_upload_table_fields(api, cfg, app_token, table_id)
+        try:
+            return _upsert_pdd_upload_log_rows(
+                cfg=cfg,
+                api=api,
+                app_token=app_token,
+                table_id=table_id,
+                resolve_method=resolve_method,
+                account_id=account_id,
+                listing_label=listing_label,
+                product_id=product_id,
+                row_field_list=row_fields_list,
+                product_link_method=product_link_method,
+                used_link_fallback=used_link_fallback,
+                effective_link=effective_link,
+            )
+        except FeishuAPIError as exc:
+            if exc.code not in _WRONG_TABLE_ID_CODES:
+                raise
+            table_id, resolve_method = resolve_pdd_upload_table_id(cfg, api, save_table_id=True)
+            if not table_id:
+                raise
+            _ensure_pdd_upload_table_fields(api, cfg, app_token, table_id)
+            return _upsert_pdd_upload_log_rows(
+                cfg=cfg,
+                api=api,
+                app_token=app_token,
+                table_id=table_id,
+                resolve_method=resolve_method,
+                account_id=account_id,
+                listing_label=listing_label,
+                product_id=product_id,
+                row_field_list=row_fields_list,
+                product_link_method=product_link_method,
+                used_link_fallback=used_link_fallback,
+                effective_link=effective_link,
+            )
 
     fields = build_pdd_upload_log_fields(
         config=cfg,

@@ -1090,6 +1090,7 @@ def _schedule_feishu_pdd_upload_log(
             publish_start=submitted_at,
             publish_end=verified_at,
             verified_at=verified_at,
+            sku_rows=[listing_unit_sku_metadata(sku) for sku in unit.skus],
         )
         from pdd_agent.integrations.feishu.pdd_activity_log_sync import schedule_pdd_activity_log_seed
 

@@ -651,6 +651,14 @@ def _normalize_listing_failure_codes(
     return label, code
 
 
+def _sku_rows_from_listing_item(item: dict[str, Any]) -> list[dict[str, Any]]:
+    from pdd_agent.integrations.feishu.pdd_upload_spec_log import sku_rows_from_spec_metadata
+
+    if not isinstance(item, dict):
+        return []
+    return sku_rows_from_spec_metadata(item.get("spec_metadata"))
+
+
 def _schedule_feishu_listing_result_log(
     *,
     account_id: str,
@@ -750,6 +758,7 @@ def _schedule_feishu_listing_result_log(
                 publish_start=item_publish_start or publish_start,
                 publish_end=publish_end or datetime.now(),
                 verified_at=publish_end or datetime.now(),
+                sku_rows=_sku_rows_from_listing_item(item),
             )
             from pdd_agent.integrations.feishu.pdd_activity_log_sync import schedule_pdd_activity_log_seed
 

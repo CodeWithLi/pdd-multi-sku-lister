@@ -59,6 +59,8 @@ const activityDelayHours = ref(24)
 const slotAlignmentTest = ref(true)
 const excelFallbackEnabled = ref(false)
 const excelFallbackSaving = ref(false)
+const logSpecSkuRowsEnabled = ref(false)
+const logSpecSkuRowsSaving = ref(false)
 const pipelineBatchEnabled = ref(false)
 const batchAccountIds = ref<string[]>([])
 const startDelayMin = ref(30)
@@ -651,6 +653,11 @@ async function loadExcelFallbackSetting() {
   excelFallbackEnabled.value = !!data.enabled
 }
 
+async function loadLogSpecSkuRowsSetting() {
+  const data = await api.getPipelineLogSpecSkuRows()
+  logSpecSkuRowsEnabled.value = !!data.enabled
+}
+
 function applyAutoUploadConfig(cfg: AutoUploadConfig) {
   autoUploadConfig.value = { ...cfg }
   autoUploadEnabled.value = !!cfg.enabled
@@ -760,6 +767,22 @@ async function onExcelFallbackChange(enabled: boolean) {
     ElMessage.error(e instanceof Error ? e.message : String(e))
   } finally {
     excelFallbackSaving.value = false
+  }
+}
+
+async function onLogSpecSkuRowsChange(enabled: boolean) {
+  logSpecSkuRowsSaving.value = true
+  try {
+    const data = await api.updatePipelineLogSpecSkuRows(enabled)
+    logSpecSkuRowsEnabled.value = !!data.enabled
+    ElMessage.success(
+      enabled ? '已开启按规格编码展开写发布日志' : '已关闭按规格编码展开（仅写商品摘要行）',
+    )
+  } catch (e) {
+    logSpecSkuRowsEnabled.value = !enabled
+    ElMessage.error(e instanceof Error ? e.message : String(e))
+  } finally {
+    logSpecSkuRowsSaving.value = false
   }
 }
 
@@ -921,6 +944,7 @@ onMounted(async () => {
     await loadMinioHealth()
     await loadBaseData()
     await loadExcelFallbackSetting()
+    await loadLogSpecSkuRowsSetting()
     await loadAutoUploadConfig()
     await refreshPipelines()
     if (materialSource.value === 'minio') {
@@ -1302,6 +1326,14 @@ onUnmounted(() => {
                       @change="onExcelFallbackChange"
                     />
                   </div>
+                  <div class="switch-row">
+                    <span class="switch-label">规格编码展开日志</span>
+                    <el-switch
+                      v-model="logSpecSkuRowsEnabled"
+                      :loading="logSpecSkuRowsSaving"
+                      @change="onLogSpecSkuRowsChange"
+                    />
+                  </div>
                 </div>
                 <div v-if="continueAfterLimitedTimeFailure" class="form-tip">
                   限时限量购失败时仍继续活动报名；若同时开启自动推广，活动全部处理完后仍会创建推广。
@@ -1326,6 +1358,12 @@ onUnmounted(() => {
                 </div>
                 <div v-else class="form-tip">
                   默认关闭：一律只读飞书，不回退本地 Excel；飞书缺数据将直接报错。
+                </div>
+                <div v-if="logSpecSkuRowsEnabled" class="form-tip">
+                  已开启：上架成功后在 PDD 发布日志表写入 1 条商品摘要 + 每条规格编码 1 行（组合商品条码、标题含飞书颜色规格）。
+                </div>
+                <div v-else class="form-tip">
+                  默认关闭：上架成功仅写 1 条商品摘要行到 PDD 发布日志表。
                 </div>
               </el-form-item>
             </div>
@@ -1692,6 +1730,7 @@ onUnmounted(() => {
                   >
                     <el-table-column prop="商品编码" label="商品编码" min-width="140" />
                     <el-table-column prop="颜色规格" label="颜色规格" width="100" />
+                    <el-table-column prop="综合零售成本" label="综合零售成本" width="108" />
                     <el-table-column prop="拼多多定价" label="拼多多定价" width="96" />
                     <el-table-column prop="拼多多控价" label="拼多多控价" width="96" />
                     <el-table-column prop="PDD控价下限价格" label="下限" width="88" />
@@ -1701,6 +1740,13 @@ onUnmounted(() => {
               </template>
             </el-table-column>
             <el-table-column prop="query_code" label="查询编码" min-width="148" show-overflow-tooltip />
+            <el-table-column label="综合零售成本" width="108">
+              <template #default="{ row }">
+                <span :class="{ 'feishu-cell-empty': !row.parsed?.['综合零售成本'] && !row.catalog_retail_cost }">
+                  {{ row.parsed?.['综合零售成本'] || row.catalog_retail_cost || '—' }}
+                </span>
+              </template>
+            </el-table-column>
             <el-table-column label="拼多多定价" width="96">
               <template #default="{ row }">{{ row.parsed?.拼多多定价 || '—' }}</template>
             </el-table-column>

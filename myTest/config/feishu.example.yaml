@@ -53,6 +53,7 @@ pdd_upload_log:
   failure_table_id: ""
   failure_table_name: 淘宝+拼多多发布日志表（失败）
   dedupe_field: 商品ID
+  log_spec_sku_rows_enabled: false
   failure_record_type_options:
     - 失败
     - 跳过
@@ -63,9 +64,12 @@ pdd_upload_log:
   field_names:
     date: 日期
     merchant_code: 商品编码
+    combo_barcode: 组合商品条码
     title: 标题
     account_name: 店铺名称
     product_id: 商品ID
+    group_price: 拼单价
+    single_price: 单独买价
     link: 商品链接
     publish_start: 发布开始时间
     publish_end: 发布结束时间
@@ -159,6 +163,7 @@ pdd_price_compare:
     merchant_code: 商品编码
     min_price: PDD控价下限价格
     max_price: PDD控价上限价格
+    retail_cost: 综合零售成本
     pdd_pricing: 拼多多定价
     pdd_control_price: 拼多多控价
 pipeline:

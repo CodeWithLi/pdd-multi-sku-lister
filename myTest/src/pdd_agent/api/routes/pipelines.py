@@ -14,6 +14,8 @@ from pdd_agent.api.schemas.pipelines import (
     IntegratedPipelineStartRequest,
     PipelineExcelFallbackOut,
     PipelineExcelFallbackUpdateIn,
+    PipelineLogSpecSkuRowsOut,
+    PipelineLogSpecSkuRowsUpdateIn,
 )
 from pdd_agent.api.services.config_service import get_account_or_none
 from pdd_agent.api.services.pipeline_service import (
@@ -26,7 +28,12 @@ from pdd_agent.api.services.pipeline_service import (
 from pdd_agent.core.config import load_yaml_settings
 from pdd_agent.db.session import is_database_available
 from pdd_agent.api.schemas.feishu_inspect import FeishuInspectListingPricesOut
-from pdd_agent.integrations.feishu.config import excel_fallback_enabled, save_pipeline_excel_fallback_to_config
+from pdd_agent.integrations.feishu.config import (
+    excel_fallback_enabled,
+    save_pipeline_excel_fallback_to_config,
+    save_pdd_upload_log_spec_rows_to_config,
+)
+from pdd_agent.integrations.feishu.pdd_upload_spec_log import log_spec_sku_rows_enabled
 from pdd_agent.integrations.feishu.listing_feishu_inspect_store import (
     capture_and_save_pipeline_feishu_inspect,
     load_pipeline_feishu_inspect,
@@ -77,6 +84,19 @@ def update_integrated_excel_fallback(body: PipelineExcelFallbackUpdateIn):
     save_pipeline_excel_fallback_to_config(body.enabled)
     _clear_excel_data_caches()
     return PipelineExcelFallbackOut(enabled=bool(body.enabled))
+
+
+@router.get("/integrated/log-spec-sku-rows", response_model=PipelineLogSpecSkuRowsOut)
+def get_integrated_log_spec_sku_rows():
+    """读取「上架成功按规格编码展开写发布日志」开关。"""
+    return PipelineLogSpecSkuRowsOut(enabled=log_spec_sku_rows_enabled())
+
+
+@router.put("/integrated/log-spec-sku-rows", response_model=PipelineLogSpecSkuRowsOut)
+def update_integrated_log_spec_sku_rows(body: PipelineLogSpecSkuRowsUpdateIn):
+    """保存按规格展开写发布日志开关（写入 feishu.yaml pdd_upload_log）。"""
+    save_pdd_upload_log_spec_rows_to_config(body.enabled)
+    return PipelineLogSpecSkuRowsOut(enabled=bool(body.enabled))
 
 
 def _auto_upload_config_response() -> AutoUploadConfigResponse:

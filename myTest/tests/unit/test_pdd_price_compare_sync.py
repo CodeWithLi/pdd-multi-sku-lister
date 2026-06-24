@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -24,6 +25,18 @@ from pdd_agent.integrations.feishu.pdd_price_compare_sync import (
 )
 from pdd_agent.skills.campaign.limited_time import _price_filter_failure_message
 from pdd_agent.skills.campaign.price_rules import find_pdd_price_range
+
+RETAIL_FIELD = "综合零售成本"
+
+
+def _catalog_from_records(records: list[dict]) -> Any:
+    return _build_catalog_from_feishu_records(
+        records,
+        code_field="商品编码",
+        min_field="PDD控价下限价格",
+        max_field="PDD控价上限价格",
+        retail_cost_field=RETAIL_FIELD,
+    )
 
 
 @pytest.fixture
@@ -63,6 +76,7 @@ def test_build_catalog_from_feishu_records_marks_incomplete():
                 "商品编码": "BD735A",
                 "PDD控价下限价格": 28.0,
                 "PDD控价上限价格": 35.0,
+                "综合零售成本": 20.0,
             },
         },
         {
@@ -71,15 +85,11 @@ def test_build_catalog_from_feishu_records_marks_incomplete():
                 "商品编码": "BD074A",
                 "PDD控价下限价格": None,
                 "PDD控价上限价格": None,
+                "综合零售成本": None,
             },
         },
     ]
-    catalog = _build_catalog_from_feishu_records(
-        records,
-        code_field="商品编码",
-        min_field="PDD控价下限价格",
-        max_field="PDD控价上限价格",
-    )
+    catalog = _catalog_from_records(records)
     assert catalog.source == "feishu"
     assert find_pdd_price_range(catalog.ranges, ["BD735A"]) is not None
     assert "BD074A" in catalog.incomplete_codes
@@ -89,12 +99,7 @@ def test_build_catalog_from_feishu_records_marks_incomplete():
 
 
 def test_is_feishu_price_data_missing_empty_catalog_not_blanket():
-    catalog = _build_catalog_from_feishu_records(
-        [],
-        code_field="商品编码",
-        min_field="PDD控价下限价格",
-        max_field="PDD控价上限价格",
-    )
+    catalog = _catalog_from_records([])
     assert catalog.source == "feishu"
     assert not catalog.ranges
     assert not is_feishu_price_data_missing(catalog, ["BD032A"])
@@ -108,84 +113,86 @@ def test_build_catalog_from_feishu_records_uses_pricing_upper_field():
                 "商品编码": "BD032A樱桃蛋糕笔袋",
                 "PDD控价下限价格": 9.7,
                 "PDD控价上限价格": 11.0,
+                "综合零售成本": 2.0,
             },
         },
     ]
-    catalog = _build_catalog_from_feishu_records(
-        records,
-        code_field="商品编码",
-        min_field="PDD控价下限价格",
-        max_field="PDD控价上限价格",
-    )
+    catalog = _catalog_from_records(records)
     assert find_pdd_price_range(catalog.ranges, ["BD032A"]) is not None
     assert not is_feishu_price_data_missing(catalog, ["BD032A"])
 
 
 def test_resolve_feishu_range_aspect_splits_min_and_max():
-    full = _build_catalog_from_feishu_records(
+    full = _catalog_from_records(
         [
             {
                 "fields": {
                     "商品编码": "BD022A音乐小猫笔袋",
                     "PDD控价下限价格": 8.6,
                     "PDD控价上限价格": 11.0,
+                    "综合零售成本": 2.0,
                 }
             }
-        ],
-        code_field="商品编码",
-        min_field="PDD控价下限价格",
-        max_field="PDD控价上限价格",
+        ]
     )
     assert resolve_feishu_range_aspect(full, ["BD022A音乐小猫笔袋"]) is None
 
-    max_only = _build_catalog_from_feishu_records(
+    max_only = _catalog_from_records(
         [
             {
                 "fields": {
                     "商品编码": "BD022A音乐小猫笔袋",
                     "PDD控价下限价格": 8.6,
                     "PDD控价上限价格": None,
+                    "综合零售成本": 2.0,
                 }
             }
-        ],
-        code_field="商品编码",
-        min_field="PDD控价下限价格",
-        max_field="PDD控价上限价格",
+        ]
     )
-    assert resolve_feishu_range_aspect(max_only, ["BD022A"]) == "range_max_missing"
+    assert resolve_feishu_range_aspect(max_only, ["BD022A"]) is None
 
-    min_only = _build_catalog_from_feishu_records(
+    min_only = _catalog_from_records(
         [
             {
                 "fields": {
                     "商品编码": "BD022A音乐小猫笔袋",
                     "PDD控价下限价格": None,
                     "PDD控价上限价格": 11.0,
+                    "综合零售成本": 2.0,
                 }
             }
-        ],
-        code_field="商品编码",
-        min_field="PDD控价下限价格",
-        max_field="PDD控价上限价格",
+        ]
     )
     assert resolve_feishu_range_aspect(min_only, ["BD022A音乐小猫笔袋"]) == "range_min_missing"
 
-
-def test_bd022a_control_present_pricing_missing_only():
-    """拼多多控价有值、上下限齐全时，不应报控价或上下限缺失。"""
-    range_catalog = _build_catalog_from_feishu_records(
+    retail_only = _catalog_from_records(
         [
             {
                 "fields": {
                     "商品编码": "BD022A音乐小猫笔袋",
                     "PDD控价下限价格": 8.6,
                     "PDD控价上限价格": 11.0,
+                    "综合零售成本": None,
                 }
             }
-        ],
-        code_field="商品编码",
-        min_field="PDD控价下限价格",
-        max_field="PDD控价上限价格",
+        ]
+    )
+    assert resolve_feishu_range_aspect(retail_only, ["BD022A"]) == "range_retail_cost_missing"
+
+
+def test_bd022a_control_present_pricing_missing_only():
+    """拼多多控价有值、上下限齐全时，不应报控价或上下限缺失。"""
+    range_catalog = _catalog_from_records(
+        [
+            {
+                "fields": {
+                    "商品编码": "BD022A音乐小猫笔袋",
+                    "PDD控价下限价格": 8.6,
+                    "PDD控价上限价格": 11.0,
+                    "综合零售成本": 2.0,
+                }
+            }
+        ]
     )
     pricing_catalog = _build_code_price_catalog_from_feishu_records(
         [{"fields": {"商品编码": "BD022A音乐小猫笔袋", "拼多多定价": None, "拼多多控价": 8.6}}],
@@ -205,30 +212,34 @@ def test_bd022a_control_present_pricing_missing_only():
 
 
 def test_bd021a_upper_limit_one_not_reported_empty():
-    catalog = _build_catalog_from_feishu_records(
+    catalog = _catalog_from_records(
         [
             {
                 "fields": {
                     "商品编码": "BD021A卡皮巴拉笔袋",
                     "PDD控价下限价格": 8.6,
                     "PDD控价上限价格": 1.0,
+                    "综合零售成本": 2.0,
                 }
             }
-        ],
-        code_field="商品编码",
-        min_field="PDD控价下限价格",
-        max_field="PDD控价上限价格",
+        ]
     )
     assert resolve_feishu_range_aspect(catalog, ["BD021A卡皮巴拉笔袋"]) is None
     assert resolve_feishu_range_aspect(catalog, ["BD021A-卡皮巴拉笔袋"]) is None
 
 
 def test_resolve_feishu_range_aspect_no_false_positive_when_range_exists():
-    catalog = _build_catalog_from_feishu_records(
-        [{"fields": {"商品编码": "BD021A卡皮巴拉笔袋", "PDD控价下限价格": 8.6, "PDD控价上限价格": 11.0}}],
-        code_field="商品编码",
-        min_field="PDD控价下限价格",
-        max_field="PDD控价上限价格",
+    catalog = _catalog_from_records(
+        [
+            {
+                "fields": {
+                    "商品编码": "BD021A卡皮巴拉笔袋",
+                    "PDD控价下限价格": 8.6,
+                    "PDD控价上限价格": 11.0,
+                    "综合零售成本": 2.0,
+                }
+            }
+        ]
     )
     assert "BD021A" in catalog.feishu_record_codes
     assert find_pdd_price_range(catalog.ranges, ["BD021A-卡皮巴拉笔袋"]) is not None
@@ -236,13 +247,14 @@ def test_resolve_feishu_range_aspect_no_false_positive_when_range_exists():
 
 
 def test_build_catalog_duplicate_rows_good_row_clears_incomplete():
-    catalog = _build_catalog_from_feishu_records(
+    catalog = _catalog_from_records(
         [
             {
                 "fields": {
                     "商品编码": "BD025A",
                     "PDD控价下限价格": 7.45,
                     "PDD控价上限价格": None,
+                    "综合零售成本": None,
                 }
             },
             {
@@ -250,12 +262,10 @@ def test_build_catalog_duplicate_rows_good_row_clears_incomplete():
                     "商品编码": "BD025A面包小狗笔袋",
                     "PDD控价下限价格": 7.45,
                     "PDD控价上限价格": 9.3,
+                    "综合零售成本": 2.0,
                 }
             },
-        ],
-        code_field="商品编码",
-        min_field="PDD控价下限价格",
-        max_field="PDD控价上限价格",
+        ]
     )
     assert resolve_feishu_range_aspect(catalog, ["BD025A面包小狗笔袋"]) is None
     assert "BD025A" not in catalog.incomplete_max_codes
@@ -330,6 +340,7 @@ def test_migrate_pdd_xls_to_feishu_dry_run(pdd_xls_path: Path, monkeypatch):
             names.merchant_code,
             names.min_price,
             names.max_price,
+            names.retail_cost,
         ),
     )
     monkeypatch.setattr(

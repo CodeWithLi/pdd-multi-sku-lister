@@ -189,7 +189,7 @@ onMounted(load)
     >
       <el-form label-position="top">
         <el-form-item v-if="!isEdit" label="店铺名称" required>
-          <el-input v-model="form.account_id" placeholder="例如：store_A（方便自己识别即可）" />
+          <el-input v-model="form.account_id" placeholder="例如：多多李子2601（方便自己识别即可）" />
         </el-form-item>
 
         <el-form-item label="是否启用">

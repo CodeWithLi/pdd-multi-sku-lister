@@ -767,6 +767,7 @@ export interface FeishuClearCacheResult {
 export interface FeishuInspectRowSummary {
   商品编码?: string
   颜色规格?: string
+  综合零售成本?: string
   拼多多定价?: string
   拼多多控价?: string
   PDD控价下限价格?: string
@@ -784,8 +785,10 @@ export interface FeishuInspectListingPriceItem {
   catalog_control: string
   catalog_range_min: string
   catalog_range_max: string
+  catalog_retail_cost: string
   snapshot_range_min: string
   snapshot_range_max: string
+  snapshot_retail_cost: string
   pricing_reason: string
   control_reason: string
   range_aspect: string

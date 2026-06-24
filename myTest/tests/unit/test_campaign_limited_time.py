@@ -2,6 +2,7 @@ from types import SimpleNamespace
 
 from pdd_agent.skills.campaign.limited_time import (
     ACTIVITY_CREATE_URL_PARTS,
+    _activity_create_button_label_ok,
     _campaign_price_candidates,
     _click_product_modal_header_select_all,
     _ensure_page_binding,
@@ -9,7 +10,11 @@ from pdd_agent.skills.campaign.limited_time import (
     _price_filter_failure_message,
     _scroll_product_modal_row_into_view,
 )
-from pdd_agent.skills.campaign.price_rules import price_rule_candidates, normalize_price_code
+from pdd_agent.skills.campaign.price_rules import (
+    evaluate_campaign_activity_price,
+    price_rule_candidates,
+    normalize_price_code,
+)
 
 
 class FakeContext:
@@ -107,6 +112,51 @@ def test_is_sync_marketing_checkbox_label_supports_new_and_old_text():
     assert _is_sync_marketing_checkbox_label("同步设置惊喜优惠")
     assert _is_sync_marketing_checkbox_label("不改变到手价，创建并更新「全站营销」总优惠金额享更多权益")
     assert not _is_sync_marketing_checkbox_label("我已阅读并同意《外场活动说明》")
+
+
+def test_activity_create_button_label_ok():
+    assert _activity_create_button_label_ok("创建")
+    assert _activity_create_button_label_ok(" 创 建 ")
+    assert not _activity_create_button_label_ok("立即创建")
+    assert not _activity_create_button_label_ok("确认创建")
+
+
+def test_evaluate_campaign_activity_price_uses_min_only_and_retail_cost():
+    ok, reason = evaluate_campaign_activity_price(
+        check_price=30.0,
+        min_price=28.0,
+        retail_cost=20.0,
+        require_retail_cost=True,
+    )
+    assert ok is True
+    assert reason == "price_in_range"
+
+    ok_high, reason_high = evaluate_campaign_activity_price(
+        check_price=40.0,
+        min_price=28.0,
+        retail_cost=20.0,
+        require_retail_cost=True,
+    )
+    assert ok_high is True
+    assert reason_high == "price_in_range"
+
+    ok_low, reason_low = evaluate_campaign_activity_price(
+        check_price=27.0,
+        min_price=28.0,
+        retail_cost=20.0,
+        require_retail_cost=True,
+    )
+    assert ok_low is False
+    assert reason_low == "price_below_min"
+
+    ok_cost, reason_cost = evaluate_campaign_activity_price(
+        check_price=30.0,
+        min_price=20.0,
+        retail_cost=20.0,
+        require_retail_cost=True,
+    )
+    assert ok_cost is False
+    assert reason_cost == "min_price_not_above_retail_cost"
 
 
 def test_price_filter_failure_message_includes_price_detail():

@@ -609,7 +609,7 @@ onBeforeUnmount(() => {
               </el-collapse-item>
               <el-collapse-item title="限时限量购说明" name="limited">
                 <p class="tip-text">
-                  进入营销工具 → 限时限量购 → 立即创建。到设置页后只处理「同步设置惊喜优惠」复选框，不会点击最终创建。
+                  进入营销工具 → 限时限量购 → 立即创建 → 选品 → 规格级 → 立减 5 元 → 价格筛选 → 取消同步营销优惠 → 点击底部「创建」提交。
                 </p>
               </el-collapse-item>
             </el-collapse>

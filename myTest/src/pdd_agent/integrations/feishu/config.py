@@ -74,9 +74,12 @@ class PddUploadLogFieldNames(BaseModel):
 
     date: str = "日期"
     merchant_code: str = "商品编码"
+    combo_barcode: str = "组合商品条码"
     title: str = "标题"
     account_name: str = "店铺名称"
     product_id: str = "商品ID"
+    group_price: str = "拼单价"
+    single_price: str = "单独买价"
     link: str = "商品链接"
     publish_start: str = "发布开始时间"
     publish_end: str = "发布结束时间"
@@ -113,6 +116,7 @@ class PddPriceCompareFieldNames(BaseModel):
     merchant_code: str = "商品编码"
     min_price: str = "PDD控价下限价格"
     max_price: str = "PDD控价上限价格"
+    retail_cost: str = "综合零售成本"
     pdd_pricing: str = "拼多多定价"
     pdd_control_price: str = "拼多多控价"
 
@@ -303,6 +307,10 @@ class PddUploadLogConfig(BaseModel):
     dedupe_field: str = Field(
         default="商品ID",
         description="幂等去重字段名",
+    )
+    log_spec_sku_rows_enabled: bool = Field(
+        default=False,
+        description="上架成功时是否按规格编码展开写入发布日志（1 商品摘要 + 每条规格 1 行）",
     )
     status_options: list[str] = Field(
         default_factory=lambda: ["已上架", "报错上架失败"],
@@ -692,6 +700,23 @@ def save_pipeline_excel_fallback_to_config(enabled: bool, path: Path | None = No
         pipeline_raw = {}
     pipeline_raw["excel_fallback_enabled"] = bool(enabled)
     data["pipeline"] = pipeline_raw
+    cfg_path.parent.mkdir(parents=True, exist_ok=True)
+    with open(cfg_path, "w", encoding="utf-8") as f:
+        yaml.dump(data, f, allow_unicode=True, default_flow_style=False, sort_keys=False)
+
+
+def save_pdd_upload_log_spec_rows_to_config(enabled: bool, path: Path | None = None) -> None:
+    """上架成功日志：写入「按规格编码展开」开关到 feishu.yaml。"""
+    cfg_path = path or Path(os.getenv("FEISHU_CONFIG_PATH", DEFAULT_FEISHU_CONFIG_PATH))
+    data: dict = {}
+    if cfg_path.is_file():
+        with open(cfg_path, encoding="utf-8") as f:
+            data = yaml.safe_load(f) or {}
+    upload_raw = data.get("pdd_upload_log")
+    if not isinstance(upload_raw, dict):
+        upload_raw = {}
+    upload_raw["log_spec_sku_rows_enabled"] = bool(enabled)
+    data["pdd_upload_log"] = upload_raw
     cfg_path.parent.mkdir(parents=True, exist_ok=True)
     with open(cfg_path, "w", encoding="utf-8") as f:
         yaml.dump(data, f, allow_unicode=True, default_flow_style=False, sort_keys=False)

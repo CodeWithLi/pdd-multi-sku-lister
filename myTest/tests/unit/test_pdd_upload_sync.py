@@ -244,6 +244,70 @@ def test_push_pdd_upload_log_updates_existing_row_by_product_id(monkeypatch):
     assert captured_updates[0][0]["record_id"] == "rec_exist"
 
 
+def test_push_pdd_upload_log_writes_spec_rows_when_enabled(monkeypatch):
+    from pdd_agent.integrations.feishu import pdd_upload_sync
+
+    class FakeClient:
+        def __init__(self, config):
+            self.config = config
+
+    captured_creates: list[list[dict[str, Any]]] = []
+
+    def fake_batch_create(_client, _app_token, _table_id, rows):
+        captured_creates.append(list(rows))
+        return [f"rec_{idx}" for idx in range(len(rows))]
+
+    monkeypatch.setattr(pdd_upload_sync, "FeishuClient", FakeClient)
+    monkeypatch.setattr(pdd_upload_sync, "search_records_by_field", lambda *args, **kwargs: [])
+    monkeypatch.setattr(pdd_upload_sync, "batch_create_records", fake_batch_create)
+    monkeypatch.setattr(pdd_upload_sync, "batch_update_records", lambda *args, **kwargs: [])
+    monkeypatch.setattr(
+        pdd_upload_sync,
+        "resolve_pdd_upload_table_id",
+        lambda cfg, client, save_table_id=True: ("tbldwkpLiuvBWwe9", "test"),
+    )
+    monkeypatch.setattr(
+        pdd_upload_sync,
+        "map_fields_to_table_names",
+        lambda client, app_token, table_id, fields: fields,
+    )
+
+    cfg = FeishuConfig(
+        app_id="x",
+        app_secret="y",
+        bitable_app_token="z",
+        pdd_upload_log=PddUploadLogConfig(
+            enabled=True,
+            table_id="tbldwkpLiuvBWwe9",
+            log_spec_sku_rows_enabled=True,
+        ),
+    )
+    sku_rows = [
+        {"combo_folder": "BD034B", "group_price": "10", "single_price": "15"},
+        {"combo_folder": "BD034B+YKL001I", "group_price": "11.98", "single_price": "111.98"},
+    ]
+
+    result = pdd_upload_sync.push_pdd_upload_log(
+        account_id="store_A",
+        listing_label="BD034B/第一套图",
+        title="BD034B 粉棕樱桃奶油蛋糕毛绒公仔",
+        merchant_code="BD034B",
+        product_id="966965874378",
+        product_link="https://mobile.yangkeduo.com/goods.html?goods_id=966965874378",
+        verified_at=datetime(2026, 6, 23, 9, 44, 0),
+        publish_start=datetime(2026, 6, 23, 9, 1, 0),
+        sku_rows=sku_rows,
+        config=cfg,
+    )
+
+    assert result.get("created") is True
+    assert captured_creates
+    rows = captured_creates[0]
+    assert len(rows) == 2
+    assert rows[0].get("组合商品条码", "") == ""
+    assert rows[1].get("组合商品条码") == "BD034B+YKL001I"
+
+
 def test_format_pdd_upload_log_context_includes_link_source():
     text = format_pdd_upload_log_context(
         account_id="store_A",

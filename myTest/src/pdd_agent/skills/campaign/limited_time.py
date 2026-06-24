@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 import time
 from typing import Any
 
@@ -14,6 +15,7 @@ from pdd_agent.db.repositories import (
     get_published_products_by_pdd_product_ids,
 )
 from pdd_agent.skills.campaign.price_rules import (
+    evaluate_campaign_activity_price,
     find_pdd_price_range,
     price_rule_candidates,
 )
@@ -544,6 +546,340 @@ def _click_create(page: DpPage, account_id: str) -> bool:
         time.sleep(1)
 
     return False
+
+
+def _activity_create_button_label_ok(text: str) -> bool:
+    """活动设置页底部提交按钮文案（精确「创建」，排除「立即创建」）。"""
+    normalized = re.sub(r"\s+", "", str(text or "").strip())
+    return normalized == "创建"
+
+
+def _scroll_page_to_bottom(page: DpPage) -> None:
+    raw_page = getattr(page, "_page", None)
+    try:
+        if raw_page is not None:
+            raw_page.evaluate(
+                """
+                () => {
+                    window.scrollTo(0, document.body.scrollHeight);
+                    const nodes = Array.from(document.querySelectorAll('div, main, section'))
+                        .filter((el) => el.scrollHeight > el.clientHeight + 40);
+                    nodes.forEach((el) => { el.scrollTop = el.scrollHeight; });
+                }
+                """
+            )
+        else:
+            page.run_js("window.scrollTo(0, document.body.scrollHeight);")
+    except Exception:
+        pass
+    time.sleep(0.8)
+
+
+def _click_activity_settings_create_button(page: DpPage, account_id: str) -> dict[str, Any]:
+    """活动设置页底部点击「创建」（非列表页「立即创建」）。"""
+    _dismiss_message_popup(page)
+    _scroll_page_to_bottom(page)
+    raw_page = getattr(page, "_page", None)
+
+    selectors = (
+        'button[data-tracking-viewid="create_but_on_show"]:has-text("创建")',
+        '[class*="BottomBar"] button[data-testid="beast-core-button"]:has-text("创建")',
+        'button[data-testid="beast-core-button"]:has-text("创建")',
+    )
+    if raw_page is not None:
+        for selector in selectors:
+            try:
+                buttons = raw_page.locator(selector)
+                count = buttons.count()
+                for index in range(count - 1, -1, -1):
+                    btn = buttons.nth(index)
+                    if not btn.is_visible():
+                        continue
+                    text = str(btn.inner_text(timeout=1_000) or "").strip()
+                    if not _activity_create_button_label_ok(text):
+                        continue
+                    btn.scroll_into_view_if_needed(timeout=3_000)
+                    btn.click(timeout=8_000)
+                    print(
+                        f"[{account_id}] 已点击活动设置页创建按钮 selector={selector} index={index}",
+                        flush=True,
+                    )
+                    return {
+                        "clicked": True,
+                        "method": selector,
+                        "index": index,
+                        "text": text,
+                    }
+            except Exception:
+                continue
+
+    js_result = page.run_js(
+        """
+        function norm(text) {
+            return String(text || '').replace(/\\s+/g, '').trim();
+        }
+        function labelOf(el) {
+            return norm(el.innerText || el.textContent || '');
+        }
+        function isVisible(el) {
+            if (!el || !el.getBoundingClientRect) return false;
+            const r = el.getBoundingClientRect();
+            const s = window.getComputedStyle(el);
+            return r.width > 20 && r.height > 16
+                && s.display !== 'none'
+                && s.visibility !== 'hidden'
+                && parseFloat(s.opacity || '1') > 0.05;
+        }
+        function isDisabled(el) {
+            return Boolean(el.disabled)
+                || el.getAttribute?.('aria-disabled') === 'true'
+                || String(el.className || '').toLowerCase().includes('disabled');
+        }
+        const candidates = Array.from(document.querySelectorAll(
+            'button[data-testid="beast-core-button"], button[data-tracking-viewid="create_but_on_show"], button'
+        ))
+            .filter(isVisible)
+            .filter((el) => labelOf(el) === '创建')
+            .filter((el) => !isDisabled(el))
+            .map((el) => {
+                const rect = el.getBoundingClientRect();
+                const inBottomBar = Boolean(el.closest('[class*="BottomBar"]'));
+                const tracking = String(el.getAttribute('data-tracking-viewid') || '');
+                return {
+                    el,
+                    rect,
+                    inBottomBar,
+                    tracking,
+                    score: (tracking === 'create_but_on_show' ? 100 : 0)
+                        + (inBottomBar ? 50 : 0)
+                        + rect.top,
+                };
+            })
+            .sort((a, b) => b.score - a.score || b.rect.top - a.rect.top);
+        const targetItem = candidates[0];
+        if (!targetItem) {
+            return { clicked: false, reason: 'activity_create_button_not_found' };
+        }
+        const target = targetItem.el;
+        target.scrollIntoView({ block: 'center', inline: 'nearest' });
+        const rect = target.getBoundingClientRect();
+        target.click();
+        return {
+            clicked: true,
+            method: 'js_activity_create_button',
+            text: labelOf(target),
+            tracking_viewid: target.getAttribute('data-tracking-viewid') || '',
+            rect: {
+                left: rect.left,
+                top: rect.top,
+                width: rect.width,
+                height: rect.height,
+                cx: rect.left + rect.width / 2,
+                cy: rect.top + rect.height / 2,
+            },
+        };
+        """
+    ) or {"clicked": False, "reason": "activity_create_js_failed"}
+
+    if js_result.get("clicked"):
+        print(f"[{account_id}] 已点击活动设置页创建按钮（JS）：{js_result}", flush=True)
+        return js_result
+
+    rect = js_result.get("rect") if isinstance(js_result, dict) else None
+    if raw_page is not None and isinstance(rect, dict):
+        x = float(rect.get("cx") or 0)
+        y = float(rect.get("cy") or 0)
+        if x > 0 and y > 0:
+            try:
+                raw_page.mouse.move(x, y)
+                time.sleep(0.2)
+                raw_page.mouse.down()
+                time.sleep(0.1)
+                raw_page.mouse.up()
+                print(f"[{account_id}] 已用坐标兜底点击活动设置页创建按钮", flush=True)
+                return {"clicked": True, "method": "coordinate_fallback", "rect": rect}
+            except Exception as exc:
+                js_result["coordinate_error"] = _safe_exc(exc)
+
+    return js_result if isinstance(js_result, dict) else {"clicked": False, "reason": "activity_create_click_failed"}
+
+
+def _confirm_activity_create_dialog(page: DpPage, account_id: str) -> dict[str, Any]:
+    """创建后若弹出确认框，点击确认/确定。"""
+    time.sleep(1.0)
+    _dismiss_message_popup(page)
+    raw_page = getattr(page, "_page", None)
+    confirm_labels = ("确认创建", "确认", "确定")
+    if raw_page is not None:
+        for label in confirm_labels:
+            try:
+                buttons = raw_page.locator(f'button[data-testid="beast-core-button"]:has-text("{label}")')
+                count = buttons.count()
+                for index in range(count - 1, -1, -1):
+                    btn = buttons.nth(index)
+                    if not btn.is_visible():
+                        continue
+                    text = str(btn.inner_text(timeout=1_000) or "").strip()
+                    if text not in confirm_labels:
+                        continue
+                    btn.click(timeout=5_000)
+                    print(f"[{account_id}] 已点击创建确认弹窗：{text}", flush=True)
+                    return {"clicked": True, "text": text, "method": "playwright", "index": index}
+            except Exception:
+                continue
+
+    js_result = page.run_js(
+        """
+        function norm(text) {
+            return String(text || '').replace(/\\s+/g, '').trim();
+        }
+        function isVisible(el) {
+            if (!el || !el.getBoundingClientRect) return false;
+            const r = el.getBoundingClientRect();
+            const s = window.getComputedStyle(el);
+            return r.width > 20 && r.height > 16
+                && s.display !== 'none'
+                && s.visibility !== 'hidden'
+                && parseFloat(s.opacity || '1') > 0.05;
+        }
+        const labels = ['确认创建', '确认', '确定'];
+        const modalRoots = Array.from(document.querySelectorAll(
+            '[data-testid="beast-core-modal"], [class*="MDL_modal"]'
+        )).filter(isVisible);
+        const scope = modalRoots.length ? modalRoots[modalRoots.length - 1] : document.body;
+        const buttons = Array.from(scope.querySelectorAll('button'))
+            .filter(isVisible)
+            .filter((el) => labels.includes(norm(el.innerText || el.textContent || '')));
+        if (!buttons.length) {
+            return { clicked: false, reason: 'confirm_dialog_not_found' };
+        }
+        const target = buttons[buttons.length - 1];
+        target.click();
+        return {
+            clicked: true,
+            text: norm(target.innerText || target.textContent || ''),
+            method: 'js_confirm_dialog',
+        };
+        """
+    ) or {"clicked": False, "reason": "confirm_dialog_js_failed"}
+    if js_result.get("clicked"):
+        print(f"[{account_id}] 已点击创建确认弹窗（JS）：{js_result.get('text')}", flush=True)
+    return js_result
+
+
+def _verify_activity_create_submitted(page: DpPage, account_id: str, *, timeout: int = 20) -> dict[str, Any]:
+    """校验限时限量购活动是否已提交创建。"""
+    deadline = time.monotonic() + max(timeout, 1)
+    last_url = str(page.url or "")
+    last_text = ""
+    create_button_visible: bool | None = None
+
+    while time.monotonic() < deadline:
+        _dismiss_message_popup(page)
+        last_url = str(page.url or "")
+        last_text = _body_text(page)
+
+        success_markers = (
+            "创建成功",
+            "活动创建成功",
+            "提交成功",
+            "已创建",
+            "创建活动成功",
+        )
+        if any(marker in last_text for marker in success_markers):
+            print(f"[{account_id}] 限时限量购创建校验通过：页面出现成功提示", flush=True)
+            return {"success": True, "method": "success_toast", "url": last_url}
+
+        failure_markers = ("创建失败", "提交失败", "无法创建", "创建活动失败")
+        if any(marker in last_text for marker in failure_markers):
+            return {
+                "success": False,
+                "reason": "create_failed_message",
+                "url": last_url,
+                "text_sample": last_text[:400],
+            }
+
+        still_on_create = any(part in last_url for part in ACTIVITY_CREATE_URL_PARTS)
+        create_button_visible = page.run_js(
+            """
+            function norm(text) {
+                return String(text || '').replace(/\\s+/g, '').trim();
+            }
+            function isVisible(el) {
+                if (!el || !el.getBoundingClientRect) return false;
+                const r = el.getBoundingClientRect();
+                const s = window.getComputedStyle(el);
+                return r.width > 20 && r.height > 16
+                    && s.display !== 'none'
+                    && s.visibility !== 'hidden'
+                    && parseFloat(s.opacity || '1') > 0.05;
+            }
+            return Array.from(document.querySelectorAll('button'))
+                .filter(isVisible)
+                .some((el) => norm(el.innerText || el.textContent || '') === '创建');
+            """
+        )
+        if not still_on_create:
+            print(f"[{account_id}] 限时限量购创建校验通过：已离开活动设置页 url={last_url}", flush=True)
+            return {"success": True, "method": "left_create_page", "url": last_url}
+
+        if still_on_create and not create_button_visible and "活动设置" not in last_text:
+            print(f"[{account_id}] 限时限量购创建校验通过：设置页提交控件已消失 url={last_url}", flush=True)
+            return {"success": True, "method": "create_controls_gone", "url": last_url}
+
+        time.sleep(1)
+
+    return {
+        "success": False,
+        "reason": "create_submit_not_confirmed",
+        "url": last_url,
+        "text_sample": last_text[:400],
+        "create_button_visible": create_button_visible,
+    }
+
+
+def _submit_activity_settings_create(page: DpPage, account_id: str) -> dict[str, Any]:
+    """点击活动设置页底部「创建」并确认提交成功。"""
+    last_click: dict[str, Any] = {"clicked": False, "reason": "not_attempted"}
+    last_confirm: dict[str, Any] = {"clicked": False, "reason": "not_attempted"}
+
+    for attempt in range(1, 4):
+        last_click = _click_activity_settings_create_button(page, account_id)
+        if not last_click.get("clicked"):
+            print(
+                f"[{account_id}] 未找到活动设置页创建按钮 (第{attempt}次)：{last_click.get('reason')}",
+                flush=True,
+            )
+            time.sleep(1)
+            continue
+
+        last_confirm = _confirm_activity_create_dialog(page, account_id)
+        verify = _verify_activity_create_submitted(page, account_id, timeout=18)
+        if verify.get("success"):
+            return {
+                "status": "success",
+                "step": "activity_created",
+                "click": last_click,
+                "confirm_dialog": last_confirm,
+                "verify": verify,
+                "attempt": attempt,
+            }
+
+        print(
+            f"[{account_id}] 点击创建后尚未确认成功 (第{attempt}次)："
+            f"{verify.get('reason')} url={verify.get('url')}",
+            flush=True,
+        )
+        time.sleep(1.5)
+
+    return {
+        "status": "failed",
+        "step": "submit_activity_create",
+        "error": "未能点击创建或拼多多未确认活动已创建",
+        "click": last_click,
+        "confirm_dialog": last_confirm,
+        "verify": verify if "verify" in locals() else {},
+    }
 
 
 def _wait_activity_settings(page: DpPage, account_id: str, timeout: int = 30) -> bool:
@@ -3142,6 +3478,7 @@ def _load_campaign_price_targets(
         }
     catalog = load_price_range_catalog()
     price_ranges = catalog.ranges
+    require_retail_cost = catalog.source == "feishu"
     targets: list[dict[str, Any]] = []
     feishu_missing_targets: list[str] = []
     for row in rows:
@@ -3153,6 +3490,7 @@ def _load_campaign_price_targets(
                 "code": rule.code,
                 "min_price": rule.min_price,
                 "max_price": rule.max_price,
+                "retail_cost": rule.retail_cost,
             }
         else:
             target["price_rule"] = None
@@ -3169,6 +3507,7 @@ def _load_campaign_price_targets(
         "missing_mapping_ids": missing_ids,
         "price_rule_count": len(price_ranges),
         "price_range_source": catalog.source,
+        "require_retail_cost": require_retail_cost,
         "feishu_missing_product_ids": feishu_missing_targets,
     }
 
@@ -3466,6 +3805,7 @@ def _filter_activity_products_by_price(
     time.sleep(2)
     row_state = _collect_activity_discount_price_rows(page)
     rows = row_state.get("rows") or []
+    require_retail_cost = bool(target_state.get("require_retail_cost"))
     decisions: list[dict[str, Any]] = []
     kept: list[str] = []
     deleted: list[str] = []
@@ -3482,15 +3822,20 @@ def _filter_activity_products_by_price(
         )
         rule = target.get("price_rule")
         check_price = row.get("check_price") if isinstance(row, dict) else None
-        ok = (
-            isinstance(rule, dict)
-            and isinstance(check_price, (int, float))
-            and float(rule["min_price"]) <= float(check_price) <= float(rule["max_price"])
-        )
         missing_reason = str(target.get("price_rule_missing_reason") or "").strip()
-        fail_reason = "price_in_range" if ok else (
-            "feishu_data_missing" if missing_reason == "feishu_data_missing" else "price_out_of_range_or_missing_rule"
-        )
+        if missing_reason == "feishu_data_missing":
+            ok = False
+            fail_reason = "feishu_data_missing"
+        elif isinstance(rule, dict):
+            ok, fail_reason = evaluate_campaign_activity_price(
+                check_price=check_price,
+                min_price=rule.get("min_price"),
+                retail_cost=rule.get("retail_cost"),
+                require_retail_cost=require_retail_cost,
+            )
+        else:
+            ok = False
+            fail_reason = "price_out_of_range_or_missing_rule"
         decision: dict[str, Any] = {
             "product_id": product_id,
             "mapping_id": target.get("mapping_id"),
@@ -3847,7 +4192,7 @@ def setup_limited_time_campaign(
     published_mapping_ids: list[str] | None = None,
     account: AccountConfig | None = None,
 ) -> dict[str, Any]:
-    """进入限时限量购创建页，并取消「同步设置惊喜优惠」。"""
+    """进入限时限量购创建页，完成设置并点击底部「创建」提交活动。"""
     selected_pdd_product_ids = list(dict.fromkeys(pdd_product_ids or []))
     selected_mapping_ids = list(dict.fromkeys(published_mapping_ids or []))
     try:
@@ -3994,10 +4339,28 @@ def setup_limited_time_campaign(
                 "published_mapping_ids": selected_mapping_ids,
             }
 
+        submit_create = _submit_activity_settings_create(page, account_id)
+        if submit_create.get("status") != "success":
+            return {
+                "status": "failed",
+                "step": submit_create.get("step") or "submit_activity_create",
+                "error": submit_create.get("error") or "未能点击创建或拼多多未确认活动已创建",
+                "submit_create": submit_create,
+                "checkbox": checkbox,
+                "price_filter": price_filter,
+                "batch_reduction": batch_reduction,
+                "promotion_dimension": promotion_dimension,
+                "product_selection": product_selection,
+                "current_url": page.url,
+                "selected_pdd_product_ids": selected_pdd_product_ids,
+                "published_mapping_ids": selected_mapping_ids,
+            }
+
         return {
             "status": "success",
-            "step": "ready_for_next",
-            "message": "已进入限时限量购活动设置页，选择活动商品，促销维度切换为规格级，并取消勾选同步营销优惠",
+            "step": "activity_created",
+            "message": "限时限量购活动已提交创建",
+            "submit_create": submit_create,
             "checkbox": checkbox,
             "price_filter": price_filter,
             "batch_reduction": batch_reduction,

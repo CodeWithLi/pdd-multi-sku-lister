@@ -185,6 +185,14 @@ class PipelineExcelFallbackUpdateIn(BaseModel):
     enabled: bool
 
 
+class PipelineLogSpecSkuRowsOut(BaseModel):
+    enabled: bool
+
+
+class PipelineLogSpecSkuRowsUpdateIn(BaseModel):
+    enabled: bool
+
+
 class AutoUploadConfigResponse(BaseModel):
     enabled: bool = False
     trigger_mode: str = "new_product_folder"

@@ -47,6 +47,7 @@ class ListingFeishuSnapshot:
     _control_field: str = ""
     _min_field: str = ""
     _max_field: str = ""
+    _retail_cost_field: str = ""
 
     def record_items(self) -> list[dict[str, Any]]:
         return [{"fields": fields} for fields in self.records_by_code.values()]
@@ -103,6 +104,7 @@ class ListingFeishuSnapshot:
             code_field=self._code_field,
             min_field=self._min_field or names.min_price,
             max_field=self._max_field or names.max_price,
+            retail_cost_field=self._retail_cost_field or names.retail_cost,
         )
 
 
@@ -167,7 +169,7 @@ def warm_listing_feishu_snapshot(
 
     names = cfg.pdd_product_catalog.field_names
     compare_names = cfg.pdd_price_compare.field_names
-    code_field, min_field, max_field = _resolve_price_range_field_names(
+    code_field, min_field, max_field, retail_cost_field = _resolve_price_range_field_names(
         api, app_token, table_id, compare_names
     )
     snapshot._code_field = code_field
@@ -179,6 +181,7 @@ def warm_listing_feishu_snapshot(
     )
     snapshot._min_field = min_field
     snapshot._max_field = max_field
+    snapshot._retail_cost_field = retail_cost_field
 
     try:
         records = search_records_by_field_values(

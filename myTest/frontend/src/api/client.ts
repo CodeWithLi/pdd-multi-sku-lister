@@ -671,6 +671,14 @@ export const api = {
       .put<{ enabled: boolean }>('/pipelines/integrated/excel-fallback', { enabled })
       .then((r) => r.data),
 
+  getPipelineLogSpecSkuRows: () =>
+    http.get<{ enabled: boolean }>('/pipelines/integrated/log-spec-sku-rows').then((r) => r.data),
+
+  updatePipelineLogSpecSkuRows: (enabled: boolean) =>
+    http
+      .put<{ enabled: boolean }>('/pipelines/integrated/log-spec-sku-rows', { enabled })
+      .then((r) => r.data),
+
   getAutoUploadConfig: () =>
     http.get<AutoUploadConfig>('/pipelines/auto-upload-config').then((r) => r.data),
 
