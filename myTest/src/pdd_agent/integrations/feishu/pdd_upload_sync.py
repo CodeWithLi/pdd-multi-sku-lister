@@ -255,6 +255,22 @@ def _format_brief_listing_failure_reason(
     return ListingErrors.sanitize_feishu_failure_reason(body[:500])
 
 
+def _format_system_failure_reason(
+    *,
+    reason_code: str = "",
+    error: str = "",
+    message: str = "",
+) -> str:
+    """失败表系统原因：保留系统侧细节，便于定位问题来源。"""
+    code = str(reason_code or "").strip()
+    label = ListingErrors.label(code, fallback=code or "unknown")
+    raw = str(message or "").strip() or str(error or "").strip()
+    if raw:
+        raw = _strip_bracket_label_from_message(raw)
+        return f"{label}｜{raw}"[:500]
+    return label[:500]
+
+
 def parse_listing_label_from_text(text: str) -> tuple[str, str]:
     """从报错文本解析 (listing_label, merchant_code)。"""
     raw = str(text or "").strip()
@@ -339,6 +355,7 @@ def _field_defs_for_pdd_upload_failure_log(config: FeishuConfig) -> list[dict[st
             "property": {"options": [{"name": x} for x in pdd_cfg.failure_record_type_options]},
         },
         {"field_name": names.failure_reason, "type": FIELD_TEXT},
+        {"field_name": names.system_reason, "type": FIELD_TEXT},
         {
             "field_name": names.publish_start,
             "type": FIELD_DATETIME,
@@ -518,6 +535,7 @@ def build_pdd_upload_failure_log_fields(
     account_name: str,
     record_type: str,
     failure_reason: str,
+    system_reason: str = "",
     report_platform: str = "",
     publish_start: datetime | None = None,
     publish_end: datetime | None = None,
@@ -542,6 +560,9 @@ def build_pdd_upload_failure_log_fields(
         names.failure_reason: ListingErrors.sanitize_feishu_failure_reason(
             str(failure_reason or "").strip()
         )[:500],
+        names.system_reason: ListingErrors.sanitize_feishu_failure_reason(
+            str(system_reason or "").strip()
+        )[:500],
         names.publish_start: _ms_timestamp(start_at),
         names.publish_end: _ms_timestamp(end_at),
         names.duration_seconds: round(float(duration), 2),
@@ -558,6 +579,7 @@ def push_pdd_upload_failure_log(
     record_type: str = "",
     reason_code: str = "",
     failure_reason: str = "",
+    system_reason: str = "",
     error: str = "",
     message: str = "",
     publish_start: datetime | None = None,
@@ -604,6 +626,11 @@ def push_pdd_upload_failure_log(
         record_type=record_type_value,
         merchant_code=code,
     )
+    system_reason_text = str(system_reason or "").strip() or _format_system_failure_reason(
+        reason_code=reason_code,
+        error=error,
+        message=message,
+    )
 
     fields = build_pdd_upload_failure_log_fields(
         config=cfg,
@@ -611,6 +638,7 @@ def push_pdd_upload_failure_log(
         account_name=store_name,
         record_type=record_type_value,
         failure_reason=brief,
+        system_reason=system_reason_text,
         report_platform=report_platform,
         publish_start=publish_start,
         publish_end=publish_end,

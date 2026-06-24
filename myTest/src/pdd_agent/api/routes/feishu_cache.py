@@ -17,6 +17,10 @@ from pdd_agent.integrations.feishu.listing_feishu_inspect_store import (
     merchant_codes_for_pipeline,
     save_pipeline_feishu_inspect,
 )
+from pdd_agent.integrations.feishu.bitable import find_view_id_by_name, resolve_table_field_name
+from pdd_agent.integrations.feishu.client import FeishuClient
+from pdd_agent.integrations.feishu.config import load_feishu_config
+from pdd_agent.integrations.feishu.pdd_price_compare_sync import _field_text, resolve_pdd_price_compare_table_id
 
 router = APIRouter(prefix="/feishu", tags=["feishu-cache"])
 
@@ -51,3 +55,60 @@ def inspect_feishu_listing_prices(body: FeishuInspectListingPricesIn):
     if pipeline_id:
         result = save_pipeline_feishu_inspect(pipeline_id, result)
     return FeishuInspectListingPricesOut(**result, from_cache=False)
+
+
+@router.get("/inspect-price-compare-bag-view")
+def inspect_price_compare_bag_view(limit: int = 30):
+    """读取拼多多比价定价表「笔袋」视图，用于校验视图连通性。"""
+    cfg = load_feishu_config()
+    app_token = str(cfg.bitable_app_token or "").strip()
+    if not app_token:
+        raise HTTPException(status_code=422, detail="未配置 bitable_app_token")
+
+    api = FeishuClient(cfg)
+    table_id, _ = resolve_pdd_price_compare_table_id(cfg, api, save_table_id=False)
+    if not table_id:
+        raise HTTPException(status_code=422, detail="未找到飞书表「拼多多比价定价」")
+
+    view_name = str(cfg.pdd_price_compare.listing_required_view_name or "").strip() or "笔袋"
+    view_id = str(cfg.pdd_price_compare.listing_required_view_id or "").strip()
+    if not view_id:
+        view_id = find_view_id_by_name(api, app_token, table_id, view_name)
+    if not view_id:
+        raise HTTPException(status_code=422, detail=f"未找到视图：{view_name}")
+
+    code_field = resolve_table_field_name(
+        api,
+        app_token,
+        table_id,
+        cfg.pdd_product_catalog.field_names.product_code,
+    )
+    resp = api.request(
+        "GET",
+        f"/bitable/v1/apps/{app_token}/tables/{table_id}/records",
+        params={
+            "view_id": view_id,
+            "page_size": max(1, min(int(limit), 200)),
+        },
+        prefer_user_token=True,
+    )
+    items = list((resp.get("data") or {}).get("items") or [])
+    rows: list[dict[str, str]] = []
+    for item in items:
+        fields = item.get("fields") if isinstance(item.get("fields"), dict) else {}
+        rows.append(
+            {
+                "record_id": str(item.get("record_id") or ""),
+                "merchant_code": _field_text(fields, code_field),
+                "raw_code": str(fields.get(code_field) or ""),
+            }
+        )
+    return {
+        "ok": True,
+        "table_name": cfg.pdd_price_compare.table_name,
+        "table_id": table_id,
+        "view_name": view_name,
+        "view_id": view_id,
+        "count": len(rows),
+        "rows": rows,
+    }

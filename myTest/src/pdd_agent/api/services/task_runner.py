@@ -685,6 +685,45 @@ def _schedule_feishu_listing_result_log(
             fallback_code = text
             break
 
+    def _compact_system_reason(text: str) -> str:
+        raw = str(text or "").strip()
+        if not raw:
+            return ""
+        if raw.startswith("[") and "]" in raw:
+            raw = raw.split("]", 1)[-1].strip(" :：")
+        return raw
+
+    def _preflight_no_skus_system_reason(preflight_obj: Any, listing_label: str, fallback_message: str) -> str:
+        label = str(listing_label or "").strip()
+        fallback = _compact_system_reason(fallback_message)
+        if not label:
+            return fallback
+        units: list[Any] = []
+        if isinstance(preflight_obj, dict):
+            units = list(preflight_obj.get("units") or [])
+        elif preflight_obj is not None:
+            units = list(getattr(preflight_obj, "units", None) or [])
+
+        details: list[str] = []
+        for unit in units:
+            unit_label = str(
+                getattr(unit, "listing_label", None)
+                or (unit.get("listing_label") if isinstance(unit, dict) else "")
+                or ""
+            ).strip()
+            if unit_label != label:
+                continue
+            warnings = getattr(unit, "warnings", None) or (unit.get("warnings") if isinstance(unit, dict) else []) or []
+            for warning in warnings:
+                text = _compact_system_reason(warning)
+                if text and text not in details:
+                    details.append(text)
+            break
+
+        if details:
+            return "；".join(details)[:500]
+        return fallback
+
     failures: dict[str, dict[str, Any]] = {}
 
     def _queue_failure(
@@ -698,6 +737,7 @@ def _schedule_feishu_listing_result_log(
         retryable: bool = False,
         legacy_status: str = "",
         priority: int = 0,
+        system_reason: str = "",
     ) -> None:
         label, code = _normalize_listing_failure_codes(
             listing_label=listing_label,
@@ -719,6 +759,7 @@ def _schedule_feishu_listing_result_log(
             "reason_code": reason_code,
             "error": error,
             "message": msg,
+            "system_reason": str(system_reason or "").strip(),
             "status": status,
             "retryable": retryable,
             "legacy_status": legacy_status,
@@ -840,6 +881,11 @@ def _schedule_feishu_listing_result_log(
             message=message or listing_label,
             retryable="兄弟款规格不齐" in message or "槽位对齐" in message,
             priority=3,
+            system_reason=(
+                _preflight_no_skus_system_reason(preflight, listing_label, message)
+                if reason_code == "preflight_no_skus"
+                else message
+            ),
         )
 
     for err in result.get("errors") or []:
@@ -906,6 +952,7 @@ def _schedule_feishu_listing_result_log(
             error=str(primary.get("error") or ""),
             message=combined or str(primary.get("message") or row_label),
             failure_reason=combined,
+            system_reason=str(primary.get("system_reason") or ""),
             publish_start=publish_start,
             publish_end=publish_end,
             duration_seconds=duration_seconds,
@@ -1123,6 +1170,10 @@ async def execute_listing(
     material_source: str | None = None,
 ) -> dict[str, Any]:
     """执行 listing 子图，更新 RunRecord。"""
+    from pdd_agent.integrations.feishu.listing_feishu_platform_guard import (
+        PLATFORM_SKIP_REASON,
+        ensure_codes_in_required_view,
+    )
     from pdd_agent.integrations.minio.material import prepare_listing_assets
 
     store = TaskRunStore()
@@ -1140,12 +1191,17 @@ async def execute_listing(
     codes = product_codes or account.product_codes
     store.update_status(run_id, RunStatus.RUNNING)
     store.update_phase(run_id, TaskPhase.PREFLIGHT)
+    publish_start, publish_end = _listing_run_timing(run_id)
+    duration_seconds: float | None = None
+    if publish_start and publish_end:
+        duration_seconds = max(0.0, (publish_end - publish_start).total_seconds())
 
+    from pdd_agent.integrations.feishu.config import load_feishu_config
+
+    feishu_cfg = load_feishu_config()
     try:
-        from pdd_agent.integrations.feishu.config import load_feishu_config
         from pdd_agent.skills.listing.listing_price_float import reset_listing_price_float_registry
 
-        feishu_cfg = load_feishu_config()
         cat_cfg = feishu_cfg.pdd_product_catalog
         reset_listing_price_float_registry(
             float_min=cat_cfg.price_float_min,
@@ -1154,6 +1210,153 @@ async def execute_listing(
         )
     except Exception:
         logger.exception("reset listing price float registry failed run_id=%s", run_id)
+
+    guard_codes: list[str] = []
+    for raw in codes:
+        text = str(raw or "").strip()
+        if not text:
+            continue
+        guard_codes.append(text.rsplit("/", 1)[-1].strip() if "/" in text else text)
+    view_guard: dict[str, Any] = {}
+    try:
+        view_guard = ensure_codes_in_required_view(guard_codes)
+    except Exception as exc:
+        logger.exception("listing platform view guard failed run_id=%s", run_id)
+        store.finish(run_id, RunStatus.FAILED, str(exc), result={"error": str(exc)})
+        _schedule_feishu_listing_result_log(
+            account_id=account_id,
+            run_id=run_id,
+            result={"errors": [str(exc)], "results": [{"status": "failed", "reason": "unexpected_error", "error": str(exc)}]},
+            product_codes=codes,
+        )
+        return {"error": str(exc)}
+
+    if not view_guard.get("ok"):
+        from pdd_agent.integrations.feishu.pdd_upload_sync import schedule_pdd_upload_failure_log
+
+        err = str(view_guard.get("error") or "飞书视图校验失败")
+        now = datetime.now()
+        for raw_code in guard_codes or ["未知"]:
+            schedule_pdd_upload_failure_log(
+                account_id=account_id,
+                account_name=_account_display_name(account_id),
+                listing_label=next(
+                    (str(item).strip() for item in codes if str(item).strip().endswith(raw_code)),
+                    raw_code,
+                ),
+                merchant_code=raw_code,
+                record_type="跳过",
+                failure_reason=PLATFORM_SKIP_REASON,
+                system_reason=err,
+                report_platform="拼多多",
+                publish_start=publish_start,
+                publish_end=publish_end or now,
+                duration_seconds=duration_seconds,
+            )
+        result = {
+            "results": [
+                {
+                    "status": "retryable",
+                    "reason": "platform_not_applicable",
+                    "listing_label": next(
+                        (str(item).strip() for item in codes if str(item).strip().endswith(raw_code)),
+                        raw_code,
+                    ),
+                    "platform_listing_code": raw_code,
+                    "error": PLATFORM_SKIP_REASON,
+                }
+                for raw_code in (guard_codes or ["未知"])
+            ],
+            "errors": [],
+            "platform_guard": {
+                "input_codes": guard_codes,
+                "ok": False,
+                "reason": str(view_guard.get("reason") or "required_view_missing"),
+                "error": err,
+                "missing_codes": list(guard_codes or []),
+                "matched_codes": [],
+                "view_name": str(view_guard.get("view_name") or ""),
+                "view_id": str(view_guard.get("view_id") or ""),
+                "table_id": str(view_guard.get("table_id") or ""),
+            },
+        }
+        store.finish(
+            run_id,
+            RunStatus.FAILED,
+            PLATFORM_SKIP_REASON,
+            result=_compact_run_result_for_storage(result),
+            listing_labels=[str(item.get("listing_label") or "") for item in result["results"]],
+        )
+        # 平台守卫已同步写入失败表，标记该 run 已完成飞书终态回写，避免兜底逻辑二次覆盖原因。
+        mark_feishu_terminal_logged(run_id)
+        return result
+
+    missing_codes = list(view_guard.get("missing_codes") or [])
+    if missing_codes:
+        from pdd_agent.integrations.feishu.pdd_upload_sync import schedule_pdd_upload_failure_log
+
+        now = datetime.now()
+        for missing_code in missing_codes:
+            schedule_pdd_upload_failure_log(
+                account_id=account_id,
+                account_name=_account_display_name(account_id),
+                listing_label=next(
+                    (str(item).strip() for item in codes if str(item).strip().endswith(missing_code)),
+                    missing_code,
+                ),
+                merchant_code=missing_code,
+                record_type="跳过",
+                failure_reason=PLATFORM_SKIP_REASON,
+                system_reason=(
+                    f"飞书「{feishu_cfg.pdd_price_compare.table_name}」的"
+                    f"「{view_guard.get('view_name') or ''}」未找到商品编码：{missing_code}"
+                ),
+                report_platform="拼多多",
+                publish_start=publish_start,
+                publish_end=publish_end or now,
+                duration_seconds=duration_seconds,
+            )
+        result = {
+            "results": [
+                {
+                    "status": "retryable",
+                    "reason": "platform_not_applicable",
+                    "listing_label": next(
+                        (str(item).strip() for item in codes if str(item).strip().endswith(missing_code)),
+                        missing_code,
+                    ),
+                    "platform_listing_code": missing_code,
+                    "error": PLATFORM_SKIP_REASON,
+                }
+                for missing_code in missing_codes
+            ],
+            "errors": [],
+            "platform_guard": {
+                "input_codes": guard_codes,
+                "ok": True,
+                "reason": "missing_codes",
+                "error": "",
+                "missing_codes": list(missing_codes),
+                "matched_codes": [
+                    str(code).strip()
+                    for code in guard_codes
+                    if str(code).strip() and str(code).strip() not in set(missing_codes)
+                ],
+                "view_name": str(view_guard.get("view_name") or ""),
+                "view_id": str(view_guard.get("view_id") or ""),
+                "table_id": str(view_guard.get("table_id") or ""),
+            },
+        }
+        store.finish(
+            run_id,
+            RunStatus.FAILED,
+            PLATFORM_SKIP_REASON,
+            result=_compact_run_result_for_storage(result),
+            listing_labels=[str(item.get("listing_label") or "") for item in result["results"]],
+        )
+        # 平台守卫已同步写入失败表，标记该 run 已完成飞书终态回写，避免兜底逻辑二次覆盖原因。
+        mark_feishu_terminal_logged(run_id)
+        return result
 
     resolved_source = "local"
     assets_root_path: Path | None = None
@@ -1191,6 +1394,21 @@ async def execute_listing(
             }
         )
         result = _json_safe(raw)
+        result["platform_guard"] = {
+            "input_codes": guard_codes,
+            "ok": bool(view_guard.get("ok")),
+            "reason": str(view_guard.get("reason") or ""),
+            "error": str(view_guard.get("error") or ""),
+            "missing_codes": list(view_guard.get("missing_codes") or []),
+            "matched_codes": [
+                str(item.get("merchant_code") or "").strip()
+                for item in list(view_guard.get("items") or [])
+                if isinstance(item, dict) and bool(item.get("matched"))
+            ],
+            "view_name": str(view_guard.get("view_name") or ""),
+            "view_id": str(view_guard.get("view_id") or ""),
+            "table_id": str(view_guard.get("table_id") or ""),
+        }
         # 批次内已成功的商品先落库，避免取消/中断时丢失
         _persist_published_products(run_id, account_id, result)
         record = store.load(run_id)

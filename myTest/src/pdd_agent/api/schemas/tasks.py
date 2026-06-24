@@ -159,6 +159,20 @@ class RunInterpretResponse(BaseModel):
     llm_model: str = ""
 
 
+class RunPlatformGuardOut(BaseModel):
+    run_id: str
+    has_guard_data: bool = False
+    input_codes: list[str] = Field(default_factory=list)
+    matched_codes: list[str] = Field(default_factory=list)
+    missing_codes: list[str] = Field(default_factory=list)
+    ok: bool | None = None
+    reason: str = ""
+    error: str = ""
+    view_name: str = ""
+    view_id: str = ""
+    table_id: str = ""
+
+
 class RunRecordOut(BaseModel):
     run_id: str
     agent: AgentKind

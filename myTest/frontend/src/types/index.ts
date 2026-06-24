@@ -277,6 +277,20 @@ export interface RunInterpretResponse {
   llm_model: string
 }
 
+export interface RunPlatformGuardResult {
+  run_id: string
+  has_guard_data: boolean
+  input_codes: string[]
+  matched_codes: string[]
+  missing_codes: string[]
+  ok?: boolean
+  reason: string
+  error: string
+  view_name: string
+  view_id: string
+  table_id: string
+}
+
 export interface QueueTask {
   task_id: string
   run_id: string
@@ -922,6 +936,22 @@ export interface FeishuInspectListingPricesResult {
   pipeline_id?: string
   saved_at?: string
   from_cache?: boolean
+}
+
+export interface FeishuBagViewRow {
+  record_id: string
+  merchant_code: string
+  raw_code?: string
+}
+
+export interface FeishuBagViewInspectResult {
+  ok: boolean
+  table_name: string
+  table_id: string
+  view_name: string
+  view_id: string
+  count: number
+  rows: FeishuBagViewRow[]
 }
 
 export interface FeishuOAuthAuthorizeResult {

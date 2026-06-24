@@ -8,6 +8,16 @@ import type { ConfigSummary, RuntimeConfig } from '@/types'
 const loading = ref(false)
 const saving = ref(false)
 const clearingFeishuCache = ref(false)
+const inspectingBagView = ref(false)
+const bagViewDialogVisible = ref(false)
+const bagViewResult = ref<{
+  table_name: string
+  table_id: string
+  view_name: string
+  view_id: string
+  count: number
+  rows: Array<{ record_id: string; merchant_code: string; raw_code?: string }>
+} | null>(null)
 const summary = ref<ConfigSummary | null>(null)
 
 const form = reactive<RuntimeConfig>({
@@ -113,6 +123,20 @@ async function clearFeishuCache() {
     ElMessage.error(e instanceof Error ? e.message : '清理飞书缓存失败')
   } finally {
     clearingFeishuCache.value = false
+  }
+}
+
+async function openBagViewInspectDialog() {
+  inspectingBagView.value = true
+  bagViewDialogVisible.value = true
+  try {
+    bagViewResult.value = await api.feishuInspectPriceCompareBagView(30)
+    ElMessage.success(`读取成功，共 ${bagViewResult.value.count} 条`)
+  } catch (e) {
+    bagViewResult.value = null
+    ElMessage.error(e instanceof Error ? e.message : '读取笔袋视图失败')
+  } finally {
+    inspectingBagView.value = false
   }
 }
 
@@ -225,6 +249,18 @@ onMounted(load)
           <el-button type="warning" plain :loading="clearingFeishuCache" @click="clearFeishuCache">
             清空飞书数据缓存
           </el-button>
+          <div class="form-tip" style="margin-top: 10px">
+            平台守卫视图：拼多多比价定价 / 笔袋（view_id: vewkg85PUQ）
+          </div>
+          <el-button
+            style="margin-top: 8px"
+            type="primary"
+            plain
+            :loading="inspectingBagView"
+            @click="openBagViewInspectDialog"
+          >
+            弹窗读取笔袋视图
+          </el-button>
         </el-card>
 
         <el-card shadow="never" class="stat-card settings-card">
@@ -315,6 +351,26 @@ onMounted(load)
         </el-card>
       </el-col>
     </el-row>
+
+    <el-dialog v-model="bagViewDialogVisible" width="860px" title="拼多多比价定价 / 笔袋 读取结果">
+      <div v-loading="inspectingBagView">
+        <template v-if="bagViewResult">
+          <el-descriptions :column="2" border>
+            <el-descriptions-item label="表名">{{ bagViewResult.table_name }}</el-descriptions-item>
+            <el-descriptions-item label="表ID">{{ bagViewResult.table_id }}</el-descriptions-item>
+            <el-descriptions-item label="视图名">{{ bagViewResult.view_name }}</el-descriptions-item>
+            <el-descriptions-item label="视图ID">{{ bagViewResult.view_id }}</el-descriptions-item>
+            <el-descriptions-item label="本次读取条数">{{ bagViewResult.count }}</el-descriptions-item>
+          </el-descriptions>
+          <el-table :data="bagViewResult.rows" style="margin-top: 12px" max-height="420">
+            <el-table-column prop="merchant_code" label="商品编码" min-width="220" />
+            <el-table-column prop="record_id" label="record_id" min-width="220" />
+            <el-table-column prop="raw_code" label="原始字段值" min-width="220" />
+          </el-table>
+        </template>
+        <el-empty v-else description="暂无数据" />
+      </div>
+    </el-dialog>
   </div>
 </template>
 

@@ -30,6 +30,7 @@ import type {
   PddFailureCycleRelistPollResponse,
   PddFailureCycleRelistTriggerResult,
   PddFailureCycleRelistTriggerPayload,
+  PddFailureCycleRelistClaimResult,
   PddFailureCycleRelistClaimPayload,
   PddFailureCycleRelistReleasePayload,
   ListingFailureDetailListResponse,
@@ -59,10 +60,12 @@ import type {
   RunRecord,
   RunListResponse,
   RunInterpretResponse,
+  RunPlatformGuardResult,
   RuntimeConfig,
   FeishuBitableHealth,
   FeishuClearCacheResult,
   FeishuInspectListingPricesResult,
+  FeishuBagViewInspectResult,
   FeishuOAuthAuthorizeResult,
   FeishuOAuthExchangeResult,
   FeishuOAuthStatus,
@@ -248,36 +251,6 @@ export const api = {
         }
         rabbitmq?: Record<string, unknown>
       }>('/catalog/minio/rabbitmq/ensure-binding', null, { params: params || {} })
-      .then((r) => r.data),
-
-  minioRabbitmqBindings: (queue = '') =>
-    http
-      .get<{
-        queue: string
-        available?: boolean
-        minio_events_bound?: boolean
-        expected_exchange?: string
-        expected_routing_key?: string
-        bindings?: Array<{ exchange: string; routing_key: string; destination?: string }>
-        error?: string
-      }>('/catalog/minio/rabbitmq/bindings', { params: queue ? { queue } : {} })
-      .then((r) => r.data),
-
-  ensureMinioRabbitmqBinding: (queue = '') =>
-    http
-      .post<{
-        queue: string
-        exchange: string
-        routing_key: string
-        bound: boolean
-        bindings?: {
-          minio_events_bound?: boolean
-          bindings?: Array<{ exchange: string; routing_key: string }>
-        }
-        rabbitmq?: Record<string, unknown>
-      }>('/catalog/minio/rabbitmq/ensure-binding', null, {
-        params: queue ? { queue } : {},
-      })
       .then((r) => r.data),
 
   uploadMinioFolder: (formData: FormData) =>
@@ -529,6 +502,9 @@ export const api = {
   interpretRun: (runId: string) =>
     http.post<RunInterpretResponse>(`/runs/${runId}/interpret`).then((r) => r.data),
 
+  runPlatformGuard: (runId: string) =>
+    http.get<RunPlatformGuardResult>(`/runs/${runId}/platform-guard`).then((r) => r.data),
+
   queueStatus: (params: {
     limit?: number
     status?: string
@@ -720,6 +696,11 @@ export const api = {
         force_refresh: forceRefresh,
         pipeline_id: pipelineId || undefined,
       })
+      .then((r) => r.data),
+
+  feishuInspectPriceCompareBagView: (limit = 30) =>
+    http
+      .get<FeishuBagViewInspectResult>('/feishu/inspect-price-compare-bag-view', { params: { limit } })
       .then((r) => r.data),
 
   getPipelineFeishuInspect: (pipelineId: string, refresh = false) =>

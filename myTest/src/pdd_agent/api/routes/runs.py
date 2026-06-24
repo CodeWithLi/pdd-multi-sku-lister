@@ -4,7 +4,12 @@ from datetime import datetime
 
 from fastapi import APIRouter, HTTPException, Query
 
-from pdd_agent.api.schemas.tasks import RunInterpretResponse, RunListResponse, RunRecordOut
+from pdd_agent.api.schemas.tasks import (
+    RunInterpretResponse,
+    RunListResponse,
+    RunPlatformGuardOut,
+    RunRecordOut,
+)
 from pdd_agent.core.config import get_env_settings
 from pdd_agent.core.logging import get_logger
 from pdd_agent.skills.interpret import interpret_run
@@ -84,4 +89,49 @@ def interpret_run_record(run_id: str):
         run_id=run_id,
         interpretation=text,
         llm_model=env.llm_model,
+    )
+
+
+@router.get("/{run_id}/platform-guard", response_model=RunPlatformGuardOut)
+def get_run_platform_guard(run_id: str):
+    """按 run_id 返回平台守卫检查明细（输入编码、命中、缺失、视图信息）。"""
+    store = TaskRunStore()
+    record = store.load(run_id)
+    if not record:
+        raise HTTPException(status_code=404, detail=f"run not found: {run_id}")
+
+    payload = record.result if isinstance(record.result, dict) else {}
+    guard = payload.get("platform_guard") if isinstance(payload.get("platform_guard"), dict) else {}
+
+    inferred_missing: list[str] = []
+    for row in payload.get("results") or []:
+        if not isinstance(row, dict):
+            continue
+        if str(row.get("reason") or "").strip() != "platform_not_applicable":
+            continue
+        code = str(row.get("platform_listing_code") or row.get("merchant_code") or "").strip()
+        if code:
+            inferred_missing.append(code)
+
+    input_codes = [str(x).strip() for x in list(guard.get("input_codes") or []) if str(x).strip()]
+    matched_codes = [str(x).strip() for x in list(guard.get("matched_codes") or []) if str(x).strip()]
+    missing_codes = [str(x).strip() for x in list(guard.get("missing_codes") or []) if str(x).strip()]
+    if not missing_codes and inferred_missing:
+        missing_codes = list(dict.fromkeys(inferred_missing))
+    if not input_codes and missing_codes:
+        input_codes = list(dict.fromkeys(missing_codes))
+
+    has_guard_data = bool(guard) or bool(inferred_missing)
+    return RunPlatformGuardOut(
+        run_id=run_id,
+        has_guard_data=has_guard_data,
+        input_codes=input_codes,
+        matched_codes=matched_codes,
+        missing_codes=missing_codes,
+        ok=guard.get("ok") if isinstance(guard, dict) else None,
+        reason=str(guard.get("reason") or ""),
+        error=str(guard.get("error") or ""),
+        view_name=str(guard.get("view_name") or ""),
+        view_id=str(guard.get("view_id") or ""),
+        table_id=str(guard.get("table_id") or ""),
     )

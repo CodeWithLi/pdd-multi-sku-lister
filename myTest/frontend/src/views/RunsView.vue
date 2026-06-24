@@ -5,7 +5,7 @@ import { MagicStick } from '@element-plus/icons-vue'
 import { api } from '@/api/client'
 import PageHeader from '@/components/PageHeader.vue'
 import { agentLabel, listingStatusLabel, runStatusLabel, runStatusType } from '@/utils/labels'
-import type { Account, RunRecord } from '@/types'
+import type { Account, RunPlatformGuardResult, RunRecord } from '@/types'
 
 const route = useRoute()
 const loading = ref(false)
@@ -31,6 +31,9 @@ const interpretError = ref('')
 const interpretation = ref('')
 const interpretRunId = ref('')
 const retryingLabel = ref('')
+const guardLoading = ref(false)
+const guardError = ref('')
+const guardData = ref<RunPlatformGuardResult | null>(null)
 
 interface InterpretSection {
   title: string
@@ -102,12 +105,31 @@ async function selectRun(runId: string) {
     interpretation.value = ''
     interpretRunId.value = ''
   }
+  guardError.value = ''
+  guardData.value = null
   try {
     selected.value = await api.run(runId)
+    if (selected.value?.agent === 'listing') {
+      await loadPlatformGuard(runId)
+    }
   } catch (e) {
     error.value = e instanceof Error ? e.message : '加载详情失败'
   } finally {
     loading.value = false
+  }
+}
+
+async function loadPlatformGuard(runId?: string) {
+  const targetRunId = String(runId || selected.value?.run_id || '').trim()
+  if (!targetRunId) return
+  guardLoading.value = true
+  guardError.value = ''
+  try {
+    guardData.value = await api.runPlatformGuard(targetRunId)
+  } catch (e) {
+    guardError.value = e instanceof Error ? e.message : '读取平台守卫明细失败'
+  } finally {
+    guardLoading.value = false
   }
 }
 
@@ -332,6 +354,42 @@ onMounted(() => {
           <div v-if="selected.listing_labels.length" style="margin-top: 14px">
             <div class="section-label">涉及商品</div>
             <el-tag v-for="l in selected.listing_labels" :key="l" size="small" style="margin: 0 4px 4px 0">{{ l }}</el-tag>
+          </div>
+
+          <div v-if="selected.agent === 'listing'" style="margin-top: 14px" v-loading="guardLoading">
+            <div class="section-label" style="display: flex; align-items: center; justify-content: space-between">
+              <span>平台守卫明细（笔袋视图）</span>
+              <el-button size="small" link type="primary" @click="loadPlatformGuard(selected.run_id)">
+                重新读取
+              </el-button>
+            </div>
+            <el-alert
+              v-if="guardError"
+              type="error"
+              :title="guardError"
+              show-icon
+              closable
+              style="margin-bottom: 8px"
+              @close="guardError = ''"
+            />
+            <template v-if="guardData && guardData.has_guard_data">
+              <el-descriptions :column="1" border size="small">
+                <el-descriptions-item label="视图">
+                  {{ guardData.view_name || '-' }} / {{ guardData.view_id || '-' }}
+                </el-descriptions-item>
+                <el-descriptions-item label="表ID">{{ guardData.table_id || '-' }}</el-descriptions-item>
+                <el-descriptions-item label="校验结果">
+                  <el-tag :type="guardData.ok === false || guardData.missing_codes.length ? 'warning' : 'success'" size="small">
+                    {{ guardData.ok === false ? '校验失败' : guardData.missing_codes.length ? '未命中' : '通过' }}
+                  </el-tag>
+                  <span style="margin-left: 8px">{{ guardData.reason || guardData.error || '-' }}</span>
+                </el-descriptions-item>
+                <el-descriptions-item label="输入编码">{{ guardData.input_codes.join('、') || '-' }}</el-descriptions-item>
+                <el-descriptions-item label="命中编码">{{ guardData.matched_codes.join('、') || '-' }}</el-descriptions-item>
+                <el-descriptions-item label="缺失编码">{{ guardData.missing_codes.join('、') || '-' }}</el-descriptions-item>
+              </el-descriptions>
+            </template>
+            <el-empty v-else description="该记录暂无平台守卫数据" />
           </div>
 
           <el-table v-if="resultRows(selected).length" :data="resultRows(selected)" size="small" stripe style="margin-top: 14px">

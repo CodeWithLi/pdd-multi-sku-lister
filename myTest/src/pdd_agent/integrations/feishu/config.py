@@ -59,6 +59,7 @@ class PddUploadFailureLogFieldNames(BaseModel):
     account_name: str = "店铺名称"
     record_type: str = "记录类型"
     failure_reason: str = "失败原因"
+    system_reason: str = "系统原因"
     publish_start: str = "发布开始时间"
     publish_end: str = "发布结束时间"
     duration_seconds: str = "耗时秒"
@@ -143,6 +144,14 @@ class PddPriceCompareConfig(BaseModel):
         description="飞书无数据时是否回退读本地 Excel（由 pipeline.excel_fallback_enabled 统一控制）",
     )
     cache_seconds: int = Field(default=300, ge=0, le=3600, description="飞书定价/控价缓存秒数")
+    listing_required_view_id: str = Field(
+        default="",
+        description="上架前必须命中的飞书视图 ID（优先于视图名）",
+    )
+    listing_required_view_name: str = Field(
+        default="笔袋",
+        description="上架前必须命中的飞书视图名称；查不到则自动跳过",
+    )
     field_names: PddPriceCompareFieldNames = Field(default_factory=PddPriceCompareFieldNames)
 
 

@@ -24,6 +24,7 @@ from pdd_agent.integrations.feishu.pdd_upload_sync import (
     push_pdd_upload_promotion_status,
     resolve_activity_register_field_name,
     _format_brief_listing_failure_reason,
+    _format_system_failure_reason,
     _humanize_listing_failure_message,
     parse_listing_label_from_text,
 )
@@ -646,6 +647,50 @@ def test_schedule_feishu_listing_result_log_writes_one_row_per_failure(monkeypat
     assert captured[1]["reason_code"] == "preflight_no_skus"
 
 
+def test_schedule_feishu_listing_result_log_expands_no_skus_system_reason(monkeypatch):
+    from pdd_agent.api.services import task_runner
+    from pdd_agent.integrations.feishu import pdd_upload_sync
+
+    captured: list[dict] = []
+
+    def fake_schedule_failure(**kwargs):
+        captured.append(kwargs)
+        return {"created": True}
+
+    monkeypatch.setattr(pdd_upload_sync, "schedule_pdd_upload_failure_log", fake_schedule_failure)
+
+    task_runner._schedule_feishu_listing_result_log(
+        account_id="store_A",
+        product_codes=["BD023"],
+        result={
+            "preflight": {
+                "units": [
+                    {
+                        "listing_label": "BD023B毛绒小猫笔袋/第二套图",
+                        "warnings": [
+                            "[BD023B毛绒小猫笔袋/第二套图][BD023B毛绒小猫笔袋] 规格图文件名无法解析组合编码: 预览图1.png",
+                            "[BD023B毛绒小猫笔袋/第二套图][BD023B毛绒小猫笔袋] 商品表无子编码[YKL001]，不上架 YKL001.png",
+                        ],
+                    }
+                ],
+                "issues": [
+                    {
+                        "level": "error",
+                        "listing_label": "BD023B毛绒小猫笔袋/第二套图",
+                        "message": "[BD023B毛绒小猫笔袋/第二套图] 未解析到任何有效 SKU",
+                        "reason_code": "preflight_no_skus",
+                    }
+                ],
+            },
+        },
+    )
+
+    assert len(captured) == 1
+    assert captured[0]["reason_code"] == "preflight_no_skus"
+    assert "规格图文件名无法解析组合编码" in captured[0]["system_reason"]
+    assert "商品表无子编码" in captured[0]["system_reason"]
+
+
 def test_schedule_feishu_listing_result_log_dedupes_one_failure(monkeypatch):
     from pdd_agent.api.services import task_runner
     from pdd_agent.integrations.feishu import pdd_upload_sync
@@ -780,7 +825,17 @@ def test_build_pdd_upload_failure_log_fields():
     assert fields["报错平台"] == "拼多多"
     assert fields["记录类型"] == "跳过"
     assert "图片文件" in fields["失败原因"]
+    assert fields["系统原因"] == ""
     assert fields["耗时秒"] == 66.0
+
+
+def test_format_system_failure_reason():
+    text = _format_system_failure_reason(
+        reason_code="preflight_no_skus",
+        message="[BD023B/第一套图] 未解析到任何有效 SKU",
+    )
+    assert "上架前校验：无有效 SKU" in text
+    assert "未解析到任何有效 SKU" in text
 
 
 def test_push_pdd_upload_log_skips_without_product_id():
@@ -858,3 +913,4 @@ def test_push_pdd_upload_failure_log_without_merchant_code(monkeypatch):
     assert result["fields"]["商品编码"] == "BD722B"
     assert result["fields"]["报错平台"] == "拼多多"
     assert result["fields"]["失败原因"] == "BD722B缺YKL001"
+    assert "兄弟款规格不齐" in result["fields"]["系统原因"]

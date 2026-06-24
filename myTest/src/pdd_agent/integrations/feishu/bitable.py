@@ -53,6 +53,25 @@ def list_fields(client: FeishuClient, app_token: str, table_id: str) -> list[dic
     return list(data.get("data", {}).get("items") or [])
 
 
+def list_views(client: FeishuClient, app_token: str, table_id: str) -> list[dict[str, Any]]:
+    data = client.request(
+        "GET",
+        f"/bitable/v1/apps/{app_token}/tables/{table_id}/views",
+        params={"page_size": 100},
+    )
+    return list(data.get("data", {}).get("items") or [])
+
+
+def find_view_id_by_name(client: FeishuClient, app_token: str, table_id: str, name: str) -> str:
+    target = str(name or "").strip()
+    if not target:
+        return ""
+    for item in list_views(client, app_token, table_id):
+        if str(item.get("view_name") or item.get("name") or "").strip() == target:
+            return str(item.get("view_id") or "")
+    return ""
+
+
 def create_field(
     client: FeishuClient,
     app_token: str,
@@ -340,6 +359,7 @@ def search_records_by_field_values(
     *,
     field_name: str,
     values: list[str],
+    view_id: str = "",
     page_size: int = 500,
     chunk_size: int = 50,
 ) -> list[dict[str, Any]]:
@@ -372,6 +392,8 @@ def search_records_by_field_values(
                 },
                 "page_size": size,
             }
+            if view_id:
+                body["view_id"] = str(view_id)
             if page_token:
                 body["page_token"] = page_token
             data = client.request(
@@ -397,6 +419,7 @@ def search_records_by_field_contains(
     *,
     field_name: str,
     values: list[str],
+    view_id: str = "",
     page_size: int = 500,
     chunk_size: int = 20,
 ) -> list[dict[str, Any]]:
@@ -429,6 +452,8 @@ def search_records_by_field_contains(
                 },
                 "page_size": size,
             }
+            if view_id:
+                body["view_id"] = str(view_id)
             if page_token:
                 body["page_token"] = page_token
             data = client.request(
