@@ -891,6 +891,12 @@ export interface FeishuClearCacheResult {
   worker_scope: string
 }
 
+export interface FeishuFailureLogSettings {
+  failure_log_enabled: boolean
+  failure_table_name: string
+  failure_table_id: string
+}
+
 export interface FeishuInspectRowSummary {
   商品编码?: string
   颜色规格?: string

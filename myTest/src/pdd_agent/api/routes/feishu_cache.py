@@ -4,7 +4,11 @@ from __future__ import annotations
 
 from fastapi import APIRouter, HTTPException
 
-from pdd_agent.api.schemas.feishu_cache import FeishuClearCacheOut
+from pdd_agent.api.schemas.feishu_cache import (
+    FeishuClearCacheOut,
+    FeishuFailureLogSettingsOut,
+    FeishuFailureLogSettingsUpdateIn,
+)
 from pdd_agent.api.schemas.feishu_inspect import (
     FeishuInspectListingPricesIn,
     FeishuInspectListingPricesOut,
@@ -19,7 +23,7 @@ from pdd_agent.integrations.feishu.listing_feishu_inspect_store import (
 )
 from pdd_agent.integrations.feishu.bitable import find_view_id_by_name, resolve_table_field_name
 from pdd_agent.integrations.feishu.client import FeishuClient
-from pdd_agent.integrations.feishu.config import load_feishu_config
+from pdd_agent.integrations.feishu.config import load_feishu_config, save_pdd_failure_log_enabled_to_config
 from pdd_agent.integrations.feishu.pdd_price_compare_sync import _field_text, resolve_pdd_price_compare_table_id
 
 router = APIRouter(prefix="/feishu", tags=["feishu-cache"])
@@ -29,6 +33,25 @@ router = APIRouter(prefix="/feishu", tags=["feishu-cache"])
 def clear_feishu_cache():
     """一键清空当前 worker 的飞书商品表 / 比价定价 / 上架快照等内存缓存。"""
     return FeishuClearCacheOut(**clear_feishu_data_caches())
+
+
+@router.get("/failure-log-settings", response_model=FeishuFailureLogSettingsOut)
+def get_failure_log_settings():
+    """读取「全平台发布日志表（失败）」回写开关。"""
+    cfg = load_feishu_config()
+    pdd_cfg = cfg.pdd_upload_log
+    return FeishuFailureLogSettingsOut(
+        failure_log_enabled=bool(pdd_cfg.failure_log_enabled),
+        failure_table_name=str(pdd_cfg.failure_table_name or ""),
+        failure_table_id=str(pdd_cfg.failure_table_id or ""),
+    )
+
+
+@router.put("/failure-log-settings", response_model=FeishuFailureLogSettingsOut)
+def update_failure_log_settings(body: FeishuFailureLogSettingsUpdateIn):
+    """更新「全平台发布日志表（失败）」回写开关（写入 feishu.yaml）。"""
+    save_pdd_failure_log_enabled_to_config(body.failure_log_enabled)
+    return get_failure_log_settings()
 
 
 @router.post("/inspect-listing-prices", response_model=FeishuInspectListingPricesOut)

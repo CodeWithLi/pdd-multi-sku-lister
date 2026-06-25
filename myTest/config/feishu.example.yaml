@@ -52,6 +52,8 @@ pdd_upload_log:
   table_name: PDD发布日志表
   failure_table_id: ""
   failure_table_name: 淘宝+拼多多发布日志表（失败）
+  # 是否写入「全平台发布日志表（失败）」；false 时上架失败/跳过不再回写该表（不影响 PDD发布日志表 等其它表）
+  failure_log_enabled: true
   dedupe_field: 商品ID
   log_spec_sku_rows_enabled: false
   failure_record_type_options:

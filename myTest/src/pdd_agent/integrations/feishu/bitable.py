@@ -270,6 +270,18 @@ def coerce_field_value_for_table(
             return float(text) if "." in text else int(text)
         except ValueError:
             return value
+    if field_type == FIELD_TEXT:
+        if isinstance(value, dict):
+            link = str(value.get("link") or value.get("text") or "").strip()
+            return link
+        if isinstance(value, (int, float)):
+            if isinstance(value, float) and value.is_integer():
+                return str(int(value))
+            return str(value)
+        if isinstance(value, list):
+            parts = [str(item).strip() for item in value if str(item).strip()]
+            return " ".join(parts)
+        return str(value).strip()
     return value
 
 

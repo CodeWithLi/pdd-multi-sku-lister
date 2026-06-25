@@ -914,3 +914,22 @@ def test_push_pdd_upload_failure_log_without_merchant_code(monkeypatch):
     assert result["fields"]["报错平台"] == "拼多多"
     assert result["fields"]["失败原因"] == "BD722B缺YKL001"
     assert "兄弟款规格不齐" in result["fields"]["系统原因"]
+
+
+def test_push_pdd_upload_failure_log_skipped_when_failure_log_disabled():
+    result = push_pdd_upload_failure_log(
+        account_id="store_A",
+        merchant_code="BD065A",
+        failure_reason="测试",
+        config=FeishuConfig(
+            app_id="x",
+            app_secret="y",
+            bitable_app_token="z",
+            pdd_upload_log=PddUploadLogConfig(
+                enabled=True,
+                failure_log_enabled=False,
+                failure_table_id="tbl_fail",
+            ),
+        ),
+    )
+    assert result == {"skipped": True, "reason": "failure_log_disabled"}

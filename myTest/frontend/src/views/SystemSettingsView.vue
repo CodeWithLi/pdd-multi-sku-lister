@@ -3,12 +3,14 @@ import { onMounted, reactive, ref } from 'vue'
 import { ElMessage } from 'element-plus'
 import { api } from '@/api/client'
 import PageHeader from '@/components/PageHeader.vue'
-import type { ConfigSummary, RuntimeConfig } from '@/types'
+import type { ConfigSummary, FeishuFailureLogSettings, RuntimeConfig } from '@/types'
 
 const loading = ref(false)
 const saving = ref(false)
 const clearingFeishuCache = ref(false)
 const inspectingBagView = ref(false)
+const failureLogSettings = ref<FeishuFailureLogSettings | null>(null)
+const failureLogEnabled = ref(true)
 const bagViewDialogVisible = ref(false)
 const bagViewResult = ref<{
   table_name: string
@@ -84,9 +86,15 @@ function applyConfig(cfg: RuntimeConfig) {
 async function load() {
   loading.value = true
   try {
-    const [cfg, sum] = await Promise.all([api.runtimeConfig(), api.configSummary()])
+    const [cfg, sum, feishuFailure] = await Promise.all([
+      api.runtimeConfig(),
+      api.configSummary(),
+      api.feishuFailureLogSettings(),
+    ])
     applyConfig(cfg)
     summary.value = sum
+    failureLogSettings.value = feishuFailure
+    failureLogEnabled.value = feishuFailure.failure_log_enabled
   } catch (e) {
     ElMessage.error(e instanceof Error ? e.message : '加载配置失败')
   } finally {
@@ -97,8 +105,13 @@ async function load() {
 async function save() {
   saving.value = true
   try {
-    const cfg = await api.updateRuntimeConfig(JSON.parse(JSON.stringify(form)))
+    const [cfg, feishuFailure] = await Promise.all([
+      api.updateRuntimeConfig(JSON.parse(JSON.stringify(form))),
+      api.updateFeishuFailureLogSettings({ failure_log_enabled: failureLogEnabled.value }),
+    ])
     applyConfig(cfg)
+    failureLogSettings.value = feishuFailure
+    failureLogEnabled.value = feishuFailure.failure_log_enabled
     summary.value = await api.configSummary()
     ElMessage.success('系统设置已保存')
   } catch (e) {
@@ -201,6 +214,30 @@ onMounted(load)
             </el-form-item>
             <el-form-item label="商品表路径（拼多多所有商品.xls）">
               <el-input v-model="form.multi_spec.excel" />
+            </el-form-item>
+          </el-form>
+        </el-card>
+
+        <el-card shadow="never" class="stat-card settings-card">
+          <template #header>飞书发布失败日志</template>
+          <el-form label-position="top">
+            <el-form-item label="写入全平台发布日志表（失败）">
+              <el-switch
+                v-model="failureLogEnabled"
+                active-text="开启"
+                inactive-text="关闭"
+              />
+              <div class="form-tip">
+                关闭后，上架失败、平台跳过等记录不再写入飞书失败表；不影响 PDD发布日志表（成功）及其它飞书表。
+              </div>
+            </el-form-item>
+            <el-form-item v-if="failureLogSettings?.failure_table_name" label="当前失败表">
+              <div class="form-tip" style="margin-top: 0">
+                {{ failureLogSettings.failure_table_name }}
+                <template v-if="failureLogSettings.failure_table_id">
+                  （{{ failureLogSettings.failure_table_id }}）
+                </template>
+              </div>
             </el-form-item>
           </el-form>
         </el-card>

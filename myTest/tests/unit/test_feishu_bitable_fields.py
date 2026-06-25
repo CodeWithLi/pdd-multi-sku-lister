@@ -5,6 +5,7 @@ from __future__ import annotations
 from pdd_agent.integrations.feishu.bitable import (
     FIELD_MULTI_SELECT,
     FIELD_SINGLE_SELECT,
+    FIELD_TEXT,
     clear_table_field_caches,
     coerce_field_value_for_table,
     map_fields_to_table_names,
@@ -66,3 +67,16 @@ def test_coerce_field_value_for_single_select_keeps_string():
         field_property={"options": [{"name": "成功"}, {"name": "失败"}]},
     )
     assert value == "成功"
+
+
+def test_coerce_field_value_for_text_stringifies_number():
+    assert coerce_field_value_for_table(12.5, field_type=FIELD_TEXT) == "12.5"
+    assert coerce_field_value_for_table(19.0, field_type=FIELD_TEXT) == "19"
+
+
+def test_coerce_field_value_for_text_extracts_url_dict():
+    value = coerce_field_value_for_table(
+        {"link": "https://example.com/goods", "text": "查看商品"},
+        field_type=FIELD_TEXT,
+    )
+    assert value == "https://example.com/goods"

@@ -483,7 +483,7 @@ def ensure_pdd_upload_log_tables_ready(
     """启动或同步前确保 PDD 发布成功/失败两张表存在且字段齐全。"""
     cfg = config or load_feishu_config()
     pdd_cfg = cfg.pdd_upload_log
-    if not pdd_cfg.enabled:
+    if not pdd_cfg.enabled and not pdd_cfg.failure_log_enabled:
         return {"skipped": True, "reason": "pdd_upload_log_disabled"}
 
     app_token = str(cfg.bitable_app_token or "").strip()
@@ -491,33 +491,39 @@ def ensure_pdd_upload_log_tables_ready(
         return {"skipped": True, "reason": "feishu_not_configured"}
 
     api = client or FeishuClient(cfg)
-    success_id, success_method = _resolve_or_create_pdd_table_id(
-        cfg,
-        api,
-        configured_id=pdd_cfg.table_id,
-        table_name=pdd_cfg.table_name,
-        save_table_id=True,
-        save_fn=save_pdd_upload_table_id_to_config,
-        create_if_missing=True,
-    )
-    if not success_id:
-        return {
-            "failed": True,
-            "reason": "success_table_not_found",
-            "message": f"未找到或无法创建飞书表「{pdd_cfg.table_name}」",
-        }
-    _ensure_pdd_upload_table_fields(api, cfg, app_token, success_id)
+    success_id = ""
+    success_method = ""
+    if pdd_cfg.enabled:
+        success_id, success_method = _resolve_or_create_pdd_table_id(
+            cfg,
+            api,
+            configured_id=pdd_cfg.table_id,
+            table_name=pdd_cfg.table_name,
+            save_table_id=True,
+            save_fn=save_pdd_upload_table_id_to_config,
+            create_if_missing=True,
+        )
+        if not success_id:
+            return {
+                "failed": True,
+                "reason": "success_table_not_found",
+                "message": f"未找到或无法创建飞书表「{pdd_cfg.table_name}」",
+            }
+        _ensure_pdd_upload_table_fields(api, cfg, app_token, success_id)
 
-    failure_id, failure_method = resolve_pdd_upload_failure_table_id(
-        cfg, api, save_table_id=True, create_if_missing=True
-    )
-    if not failure_id:
-        return {
-            "failed": True,
-            "reason": "failure_table_not_found",
-            "message": f"未找到或无法创建飞书表「{pdd_cfg.failure_table_name}」",
-        }
-    _ensure_pdd_upload_failure_table_fields(api, cfg, app_token, failure_id)
+    failure_id = ""
+    failure_method = ""
+    if pdd_cfg.failure_log_enabled:
+        failure_id, failure_method = resolve_pdd_upload_failure_table_id(
+            cfg, api, save_table_id=True, create_if_missing=True
+        )
+        if not failure_id:
+            return {
+                "failed": True,
+                "reason": "failure_table_not_found",
+                "message": f"未找到或无法创建飞书表「{pdd_cfg.failure_table_name}」",
+            }
+        _ensure_pdd_upload_failure_table_fields(api, cfg, app_token, failure_id)
 
     return {
         "ready": True,
@@ -593,8 +599,8 @@ def push_pdd_upload_failure_log(
 ) -> dict[str, Any]:
     cfg = config or load_feishu_config()
     pdd_cfg = cfg.pdd_upload_log
-    if not pdd_cfg.enabled:
-        return {"skipped": True, "reason": "pdd_upload_log_disabled"}
+    if not pdd_cfg.failure_log_enabled:
+        return {"skipped": True, "reason": "failure_log_disabled"}
 
     app_token = str(cfg.bitable_app_token or "").strip()
     if not app_token or not cfg.app_id or not cfg.app_secret:
@@ -1893,7 +1899,7 @@ def schedule_pdd_upload_failure_log(**kwargs: Any) -> None:
     except Exception as exc:
         logger.warning("load feishu config failed: %s", exc)
         return
-    if not cfg.pdd_upload_log.enabled:
+    if not cfg.pdd_upload_log.failure_log_enabled:
         return
 
     _push_pdd_upload_failure_log_safe(**kwargs)

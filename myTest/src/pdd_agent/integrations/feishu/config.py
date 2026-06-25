@@ -364,7 +364,11 @@ class PddUploadLogConfig(BaseModel):
     )
     failure_table_name: str = Field(
         default="淘宝+拼多多发布日志表（失败）",
-        description="上架失败/跳过写入的飞书表名（与淘宝共用）",
+        description="上架失败/跳过写入的飞书表名（与淘宝共用；别名含「全平台发布日志表（失败）」）",
+    )
+    failure_log_enabled: bool = Field(
+        default=True,
+        description="是否写入「全平台发布日志表（失败）」；关闭后上架失败/跳过不再回写该表",
     )
     failure_record_type_options: list[str] = Field(
         default_factory=lambda: ["失败", "跳过"],
@@ -796,6 +800,23 @@ def save_pdd_upload_log_spec_rows_to_config(enabled: bool, path: Path | None = N
     if not isinstance(upload_raw, dict):
         upload_raw = {}
     upload_raw["log_spec_sku_rows_enabled"] = bool(enabled)
+    data["pdd_upload_log"] = upload_raw
+    cfg_path.parent.mkdir(parents=True, exist_ok=True)
+    with open(cfg_path, "w", encoding="utf-8") as f:
+        yaml.dump(data, f, allow_unicode=True, default_flow_style=False, sort_keys=False)
+
+
+def save_pdd_failure_log_enabled_to_config(enabled: bool, path: Path | None = None) -> None:
+    """写入「全平台发布日志表（失败）」回写开关到 feishu.yaml。"""
+    cfg_path = path or Path(os.getenv("FEISHU_CONFIG_PATH", DEFAULT_FEISHU_CONFIG_PATH))
+    data: dict = {}
+    if cfg_path.is_file():
+        with open(cfg_path, encoding="utf-8") as f:
+            data = yaml.safe_load(f) or {}
+    upload_raw = data.get("pdd_upload_log")
+    if not isinstance(upload_raw, dict):
+        upload_raw = {}
+    upload_raw["failure_log_enabled"] = bool(enabled)
     data["pdd_upload_log"] = upload_raw
     cfg_path.parent.mkdir(parents=True, exist_ok=True)
     with open(cfg_path, "w", encoding="utf-8") as f:

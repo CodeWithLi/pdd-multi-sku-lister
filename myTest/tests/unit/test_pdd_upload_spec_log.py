@@ -131,3 +131,13 @@ def test_save_pdd_upload_log_spec_rows_to_config(tmp_path):
     save_pdd_upload_log_spec_rows_to_config(True, path=path)
     text = path.read_text(encoding="utf-8")
     assert "log_spec_sku_rows_enabled: true" in text
+
+
+def test_save_pdd_failure_log_enabled_to_config(tmp_path):
+    from pdd_agent.integrations.feishu.config import save_pdd_failure_log_enabled_to_config
+
+    path = tmp_path / "feishu.yaml"
+    path.write_text("app_id: x\n", encoding="utf-8")
+    save_pdd_failure_log_enabled_to_config(False, path=path)
+    text = path.read_text(encoding="utf-8")
+    assert "failure_log_enabled: false" in text

@@ -64,6 +64,7 @@ import type {
   RuntimeConfig,
   FeishuBitableHealth,
   FeishuClearCacheResult,
+  FeishuFailureLogSettings,
   FeishuInspectListingPricesResult,
   FeishuBagViewInspectResult,
   FeishuOAuthAuthorizeResult,
@@ -688,6 +689,12 @@ export const api = {
 
   feishuClearCache: () =>
     http.post<FeishuClearCacheResult>('/feishu/clear-cache').then((r) => r.data),
+
+  feishuFailureLogSettings: () =>
+    http.get<FeishuFailureLogSettings>('/feishu/failure-log-settings').then((r) => r.data),
+
+  updateFeishuFailureLogSettings: (body: { failure_log_enabled: boolean }) =>
+    http.put<FeishuFailureLogSettings>('/feishu/failure-log-settings', body).then((r) => r.data),
 
   feishuInspectListingPrices: (codes: string[], forceRefresh = true, pipelineId = '') =>
     http

@@ -14,3 +14,13 @@ class FeishuClearCacheOut(BaseModel):
         default="current_process_only",
         description="仅清理当前 API worker 进程；多 worker 需各进程各清一次或重启",
     )
+
+
+class FeishuFailureLogSettingsOut(BaseModel):
+    failure_log_enabled: bool = True
+    failure_table_name: str = ""
+    failure_table_id: str = ""
+
+
+class FeishuFailureLogSettingsUpdateIn(BaseModel):
+    failure_log_enabled: bool
