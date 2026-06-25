@@ -36,11 +36,20 @@ async def preflight_node(state: ListingState) -> dict:
     if raw_root:
         assets_root = Path(raw_root)
     try:
+        from pdd_agent.integrations.feishu.listing_feishu_catalog import collect_merchant_codes_from_selectors
         from pdd_agent.integrations.feishu.listing_feishu_snapshot import warm_listing_feishu_snapshot
         from pdd_agent.skills.listing.catalog import collect_feishu_catalog_codes_for_targets
 
-        if assets_root and codes:
-            warm_listing_feishu_snapshot(collect_feishu_catalog_codes_for_targets(codes, assets_root))
+        warm_codes = list(
+            dict.fromkeys(
+                [
+                    *collect_merchant_codes_from_selectors(codes),
+                    *(collect_feishu_catalog_codes_for_targets(codes, assets_root) if assets_root and codes else []),
+                ]
+            )
+        )
+        if warm_codes:
+            warm_listing_feishu_snapshot(warm_codes)
     except Exception:
         logger.exception("warm listing feishu snapshot before preflight failed")
     report = run_preflight(
@@ -252,6 +261,8 @@ async def report_node(state: ListingState) -> dict:
     result = {"phase": "report", "finished": True, "results": [{"summary": msg}]}
     if errors:
         result["errors"] = errors
+    if preflight is not None:
+        result["preflight"] = preflight
     return result
 
 

@@ -5,6 +5,7 @@ from pathlib import Path
 from pdd_agent.core.config import load_yaml_settings
 from pdd_agent.skills.listing.catalog import parse_listing_target
 from pdd_agent.skills.listing.listing_spec_pipeline import apply_unit_listing_specs
+from pdd_agent.skills.listing.pdd_product_catalog import BUNDLE_MODEL_CODE
 
 
 def test_slot_alignment_bd720_five_sizes_not_six():
@@ -134,3 +135,74 @@ def test_validate_slot_structure_hints_preview_vs_sku(tmp_path, monkeypatch):
     errors = validate_slot_structure(unit)
     assert len(errors) == 1
     assert errors[0] == "兄弟款规格不齐：BD716A缺YKL004（应为5个）"
+
+
+def test_slot_alignment_matches_signature_not_alphabetical_index(tmp_path):
+    """中文主商品 + 短编码文件名：按 combo 签名对齐，避免套餐/挂件槽位对调。"""
+    from pdd_agent.domain.models import ListingUnit, SkuCombo
+    from pdd_agent.skills.listing.slot_alignment import apply_slot_alignment
+
+    folder_a = "BD037A奶油泡芙笔袋"
+    folder_b = "BD037B奶油色长条笔袋"
+    set_dir = tmp_path / "BD037" / "第一套"
+    dir_a = set_dir / folder_a
+    dir_b = set_dir / folder_b
+    dir_a.mkdir(parents=True)
+    dir_b.mkdir(parents=True)
+
+    for name in [
+        f"{folder_a}.png",
+        f"{folder_a}+YKL001N.png",
+        f"{folder_a}+YKL020A+YKL001N+YKL004L.png",
+    ]:
+        (dir_a / name).write_bytes(b"x")
+    for name in [
+        f"{folder_b}.png",
+        "BD037B+YKL001N.png",
+        "BD037B+YKL001N+YKL020D+YKU007P.png",
+    ]:
+        (dir_b / name).write_bytes(b"x")
+
+    def _sku(style, combo_folder, model_code, model_name, preview_name):
+        preview = (dir_a if style == folder_a else dir_b) / preview_name
+        return SkuCombo(
+            style_code=style,
+            style_name=style,
+            model_code=model_code,
+            model_name=model_name,
+            combo_folder=combo_folder,
+            preview_image=preview,
+            inventory="1",
+            group_price="1",
+            single_price="1",
+        )
+
+    unit = ListingUnit(product_code=folder_a, image_set="第一套", root=dir_a)
+    unit.skus = [
+        _sku(folder_a, folder_a, folder_a, "笔袋", f"{folder_a}.png"),
+        _sku(folder_a, f"{folder_a}+YKL001N", "YKL001N", "笔袋+挂件", f"{folder_a}+YKL001N.png"),
+        _sku(
+            folder_a,
+            f"{folder_a}+YKL020A+YKL001N+YKL004L",
+            BUNDLE_MODEL_CODE,
+            "笔袋+套装",
+            f"{folder_a}+YKL020A+YKL001N+YKL004L.png",
+        ),
+        _sku(folder_b, folder_b, folder_b, "笔袋", f"{folder_b}.png"),
+        _sku(folder_b, "BD037B+YKL001N", "YKL001N", "笔袋+套装", "BD037B+YKL001N.png"),
+        _sku(
+            folder_b,
+            "BD037B+YKL001N+YKL020D+YKU007P",
+            BUNDLE_MODEL_CODE,
+            "笔袋+挂件",
+            "BD037B+YKL001N+YKL020D+YKU007P.png",
+        ),
+    ]
+
+    result = apply_slot_alignment(unit)
+    assert result.ok
+
+    b_combo = next(s for s in unit.skus if s.combo_folder == "BD037B+YKL001N")
+    b_bundle = next(s for s in unit.skus if s.combo_folder == "BD037B+YKL001N+YKL020D+YKU007P")
+    assert b_combo.model_name == "笔袋+挂件"
+    assert b_bundle.model_name == "笔袋+套装"

@@ -79,8 +79,10 @@ class PddUploadLogFieldNames(BaseModel):
     title: str = "标题"
     account_name: str = "店铺名称"
     product_id: str = "商品ID"
+    link_product_id: str = "商品链接ID"
     group_price: str = "拼单价"
     single_price: str = "单独买价"
+    single_sell_price: str = "单买价"
     link: str = "商品链接"
     publish_start: str = "发布开始时间"
     publish_end: str = "发布结束时间"
@@ -98,17 +100,21 @@ class PddMarketingLogFieldNames(BaseModel):
 
 
 class PddActivityLogFieldNames(BaseModel):
-    """PDD活动日志表 — 店铺 + 商品ID 定位，仅活动步骤列。"""
+    """PDD营销-活动日志表 — 店铺 + 参加商品链接ID 定位，一行一商品。"""
 
     date: str = "日期"
     account_name: str = "店铺名称"
-    product_id: str = "商品ID"
-    limited_time_status: str = "限时限量购状态"
-    limited_time_failure_reason: str = "限时限量购失败原因"
-    activity_618_status: str = "618状态"
-    activity_618_failure_reason: str = "618失败原因"
+    product_id: str = "参加商品链接ID"
+    marketing_tool_name: str = "营销工具名称"
+    activity_plan: str = "活动方案"
+    limited_time_status: str = "参加状态"
+    limited_time_failure_reason: str = "具体原因"
+    marketing_activity_618: str = "营销活动ID"
+    activity_618_status: str = "618活动状态"
+    activity_618_failure_reason: str = "618活动失败原因"
+    marketing_activity_discount: str = "营销活动ID~"
     activity_discount_status: str = "七折状态"
-    activity_discount_failure_reason: str = "七折失败原因"
+    activity_discount_failure_reason: str = "7折失败原因"
 
 
 class PddPriceCompareFieldNames(BaseModel):
@@ -177,8 +183,10 @@ class PddProductCatalogConfig(BaseModel):
     fallback_excel: bool = Field(default=False, description="飞书无数据时回退本地 Excel（由 pipeline.excel_fallback_enabled 统一控制）")
     cache_seconds: int = Field(default=300, ge=0, le=3600, description="飞书商品表缓存秒数")
     price_float_enabled: bool = Field(default=True, description="上架拼单价是否在定价基础上加随机浮动")
-    price_float_min: float = Field(default=0.0, ge=0, description="定价浮动下限（元）")
-    price_float_max: float = Field(default=5.0, ge=0, description="定价浮动上限（元）")
+    price_float_min: float = Field(default=0.0, ge=0, description="拼单价定价浮动下限（元）")
+    price_float_max: float = Field(default=5.0, ge=0, description="拼单价定价浮动上限（元）")
+    single_price_float_min: float = Field(default=0.0, ge=0, description="单买价在拼单价基础上追加浮动下限（元）")
+    single_price_float_max: float = Field(default=2.0, ge=0, description="单买价在拼单价基础上追加浮动上限（元）")
     field_names: PddProductCatalogFieldNames = Field(default_factory=PddProductCatalogFieldNames)
 
 
@@ -192,12 +200,23 @@ class PipelineIntegrationConfig(BaseModel):
 
 
 class PddActivityLogConfig(BaseModel):
-    enabled: bool = Field(default=True, description="是否启用 PDD 活动日志表")
-    table_id: str = Field(default="", description="PDD活动日志表 table_id")
-    table_name: str = Field(default="PDD活动日志表", description="整合链路活动日志表名")
-    dedupe_field: str = Field(default="商品ID", description="检索字段（与店铺名称组合定位唯一行）")
-    activity_618_id: str = Field(default="20981", description="618 大促活动 ID")
-    activity_discount_id: str = Field(default="21365", description="限量七折活动 ID")
+    enabled: bool = Field(default=True, description="是否启用 PDD 营销-活动日志表")
+    table_id: str = Field(default="", description="PDD营销-活动日志表 table_id")
+    table_name: str = Field(default="PDD营销-活动日志表", description="整合链路活动日志表名")
+    dedupe_field: str = Field(
+        default="参加商品链接ID",
+        description="检索字段（与店铺名称组合定位唯一行）",
+    )
+    activity_618_id: str = Field(default="20981", description="拼多多 618 大促活动 ID（运行时匹配用）")
+    activity_discount_id: str = Field(default="21365", description="拼多多七折活动 ID（运行时匹配用）")
+    marketing_tool_name: str = Field(default="限时限量购", description="预建行「营销工具名称」单选值")
+    activity_plan: str = Field(default="商品原价立减5元", description="预建行「活动方案」单选值")
+    marketing_activity_618_label: str = Field(default="618", description="预建行「营销活动ID」单选值")
+    marketing_activity_discount_label: str = Field(default="7折", description="预建行「营销活动ID~」单选值")
+    marketing_tool_options: list[str] = Field(default_factory=lambda: ["限时限量购"])
+    activity_plan_options: list[str] = Field(default_factory=lambda: ["商品原价立减5元"])
+    marketing_activity_618_options: list[str] = Field(default_factory=lambda: ["618"])
+    marketing_activity_discount_options: list[str] = Field(default_factory=lambda: ["7折"])
     lookup_retries: int = Field(default=6, ge=1, le=20)
     lookup_interval_seconds: float = Field(default=5.0, ge=0.5, le=30.0)
     seed_on_listing: bool = Field(
@@ -211,10 +230,20 @@ class PddActivityLogConfig(BaseModel):
         description="限时限量购回写时查活动表已有行的重试次数（上架后紧接执行，行应已预建）",
     )
     limited_time_status_options: list[str] = Field(
-        default_factory=lambda: ["进行中", "失败", "未执行"],
+        default_factory=lambda: ["进行中", "失败", "未执行", "程序异常"],
+        description="「参加状态」单选选项（须与飞书表一致）",
     )
     activity_register_status_options: list[str] = Field(
-        default_factory=lambda: ["报名成功", "活动下线", "失败", "未执行"],
+        default_factory=lambda: ["报名成功", "活动下线", "失败", "未执行", "程序异常"],
+        description="「618活动状态」「七折状态」单选选项（须与飞书表一致）",
+    )
+    activity_register_failure_reason_options: list[str] = Field(
+        default_factory=lambda: [
+            "新商品需等24h后才可报",
+            "活动价格低于成本价",
+            "程序异常",
+        ],
+        description="「7折失败原因」单选选项（须与飞书表一致）",
     )
     field_names: PddActivityLogFieldNames = Field(default_factory=PddActivityLogFieldNames)
 
@@ -368,7 +397,7 @@ class PddUploadLogConfig(BaseModel):
     )
     failure_log_enabled: bool = Field(
         default=True,
-        description="是否写入「全平台发布日志表（失败）」；关闭后上架失败/跳过不再回写该表",
+        description="true=上架失败/跳过时写入「全平台发布日志表（失败）」；false=完全不写该表",
     )
     failure_record_type_options: list[str] = Field(
         default_factory=lambda: ["失败", "跳过"],
@@ -389,7 +418,7 @@ class PddUploadLogConfig(BaseModel):
         default_factory=PddFailureCycleRelistWatchConfig,
     )
     dedupe_field: str = Field(
-        default="商品ID",
+        default="商品链接ID",
         description="幂等去重字段名",
     )
     log_spec_sku_rows_enabled: bool = Field(

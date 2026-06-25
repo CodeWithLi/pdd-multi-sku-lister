@@ -919,6 +919,17 @@ def _step_infos(row) -> list[dict[str, Any]]:
     listing_detail = "将素材上架到拼多多"
     if listing_outcome == LISTING_SKIPPED_OUTCOME:
         listing_detail = listing_skip_reason or "商品已上架，跳过上架步骤"
+    else:
+        from pdd_agent.api.services.pipeline_listing_throttle import throttle_listing_detail
+
+        throttle_hint = throttle_listing_detail(dict(meta.get("listing_throttle") or {}))
+        if throttle_hint:
+            listing_detail = throttle_hint
+        if str(row.current_step or "").startswith("waiting_listing_batch_"):
+            throttle = dict(meta.get("listing_throttle") or {})
+            next_at = str(throttle.get("next_batch_scheduled_at") or "")
+            if next_at:
+                listing_detail = f"{listing_detail}；下一批约 {next_at}"
 
     steps = [
         {
@@ -1053,6 +1064,10 @@ def start_integrated_pipeline(
     listing_skip_selectors: list[str] | None = None,
     material_source: str = "",
     listing_input_mode: ListingInputMode = "selector",
+    relist_strategy: str = "ignore",
+    listing_throttle_enabled: bool = False,
+    listing_batch_set_count: int = 5,
+    listing_batch_interval_minutes: int = 30,
 ) -> dict[str, Any]:
     account_id = str(account_id or "").strip()
     normalized_activity_ids = _normalize_pipeline_activity_ids(activity_id, activity_ids)
@@ -1062,15 +1077,33 @@ def start_integrated_pipeline(
     if not normalized_activity_ids:
         raise ValueError("activity_ids is required")
 
+    from pdd_agent.api.services.pipeline_listing_throttle import (
+        apply_throttle_to_listing_codes,
+        build_listing_throttle_state,
+        enqueue_listing_batch_for_pipeline,
+    )
+    from pdd_agent.api.services.pipeline_relist_strategy import (
+        build_pipeline_listing_plan,
+        enqueue_pipeline_relist_prep,
+        normalize_relist_strategy,
+        resolve_listing_flags_for_strategy,
+        validate_relist_strategy_for_start,
+    )
+
+    strategy = normalize_relist_strategy(relist_strategy)
+    validate_relist_strategy_for_start(strategy)
+    skip_listing, skip_selectors = resolve_listing_flags_for_strategy(
+        strategy,
+        skip_listing=skip_listing,
+        listing_skip_selectors=listing_skip_selectors,
+    )
+
     codes, listing_input_meta = _resolve_pipeline_listing_codes(
         product_codes,
         listing_input_mode=listing_input_mode,
     )
 
-    skip_selector_set = set(
-        s for s in (listing_skip_selectors or []) if str(s).strip() in set(codes)
-    )
-    skip_selectors = [c for c in codes if c in skip_selector_set]
+    skip_selector_set = set(skip_selectors)
     list_codes = [c for c in codes if c not in skip_selector_set]
 
     pipeline_id = _pipeline_id()
@@ -1086,6 +1119,7 @@ def start_integrated_pipeline(
         "activity_ids": normalized_activity_ids,
         "campaign_activity_index": 0,
         "campaign_results": [],
+        "relist_strategy": strategy,
         **listing_input_meta,
     }
     if batch_id:
@@ -1180,21 +1214,88 @@ def start_integrated_pipeline(
             },
         )
 
-    enqueue_task(
-        agent=AgentKind.LISTING.value,
-        run_id=listing_run_id,
+    listing_plan = build_pipeline_listing_plan(
+        relist_strategy=strategy,
         account_id=account_id,
-        payload={
-            "product_codes": listing_codes,
-            "dry_run": False,
+        selectors=codes,
+        skip_listing=skip_listing,
+        skip_selectors=skip_selectors,
+        listing_payload_base={
             "category_keyword": category_keyword,
             "platform_listing_code": platform_listing_code,
-            "pipeline_id": pipeline_id,
             "slot_alignment_test": bool(slot_alignment_test),
             "material_source": str(material_source or ""),
         },
-        scheduled_at=listing_scheduled_at or datetime.now(),
     )
+
+    effective_listing_codes = listing_plan.listing_codes or listing_codes
+    listing_payload_base = {
+        "category_keyword": category_keyword,
+        "platform_listing_code": platform_listing_code,
+        "slot_alignment_test": bool(slot_alignment_test),
+        "material_source": str(material_source or ""),
+    }
+    throttle_state = build_listing_throttle_state(
+        effective_listing_codes,
+        enabled=bool(listing_throttle_enabled),
+        batch_set_count=listing_batch_set_count,
+        interval_minutes=listing_batch_interval_minutes,
+        listing_payload_base=listing_payload_base,
+    )
+    if throttle_state:
+        meta["listing_throttle"] = throttle_state
+        update_integrated_pipeline(pipeline_id, meta_patch={"listing_throttle": throttle_state})
+
+    if listing_plan.action == "relist_prep":
+        pending = dict(listing_plan.pending_listing or {})
+        if throttle_state:
+            pending["listing_throttle_enabled"] = True
+        enqueue_pipeline_relist_prep(
+            pipeline_id=pipeline_id,
+            account_id=account_id,
+            targets=listing_plan.relist_targets,
+            pending_listing=pending,
+        )
+        logger.info(
+            "integrated pipeline started with relist prep pipeline_id=%s account=%s targets=%s",
+            pipeline_id,
+            account_id,
+            len(listing_plan.relist_targets),
+        )
+        refreshed = get_integrated_pipeline(pipeline_id)
+        return pipeline_to_dict(refreshed or row)
+
+    first_batch_codes = apply_throttle_to_listing_codes(effective_listing_codes, throttle_state)
+    if throttle_state:
+        enqueue_listing_batch_for_pipeline(
+            pipeline_id=pipeline_id,
+            account_id=account_id,
+            batch_codes=first_batch_codes,
+            listing_payload_base=listing_payload_base,
+            scheduled_at=listing_scheduled_at or datetime.now(),
+        )
+        logger.info(
+            "integrated pipeline started with throttled listing pipeline_id=%s batch=1/%s sets_per_batch=%s",
+            pipeline_id,
+            throttle_state.get("total_batches"),
+            throttle_state.get("batch_set_count"),
+        )
+    else:
+        enqueue_task(
+            agent=AgentKind.LISTING.value,
+            run_id=listing_run_id,
+            account_id=account_id,
+            payload={
+                "product_codes": first_batch_codes,
+                "dry_run": False,
+                "category_keyword": category_keyword,
+                "platform_listing_code": platform_listing_code,
+                "pipeline_id": pipeline_id,
+                "slot_alignment_test": bool(slot_alignment_test),
+                "material_source": str(material_source or ""),
+            },
+            scheduled_at=listing_scheduled_at or datetime.now(),
+        )
     logger.info(
         "integrated pipeline started pipeline_id=%s account=%s activity=%s demo=%s",
         pipeline_id,
@@ -1226,6 +1327,10 @@ def start_integrated_pipeline_batch(
     skip_listing: bool = False,
     listing_skip_selectors: list[str] | None = None,
     material_source: str = "",
+    relist_strategy: str = "ignore",
+    listing_throttle_enabled: bool = False,
+    listing_batch_set_count: int = 5,
+    listing_batch_interval_minutes: int = 30,
 ) -> dict[str, Any]:
     """批量创建整合链路；各条链路上架任务按启动间隔错开入队。"""
     normalized_activity_ids = _normalize_pipeline_activity_ids(activity_id, activity_ids)
@@ -1265,6 +1370,10 @@ def start_integrated_pipeline_batch(
             skip_listing=skip_listing,
             listing_skip_selectors=listing_skip_selectors,
             material_source=material_source,
+            relist_strategy=relist_strategy,
+            listing_throttle_enabled=listing_throttle_enabled,
+            listing_batch_set_count=listing_batch_set_count,
+            listing_batch_interval_minutes=listing_batch_interval_minutes,
         )
         pipelines.append(
             {
@@ -1317,6 +1426,17 @@ def on_queue_task_finished(
             _on_campaign_finished(row, run_id=run_id, success=success, result=result, error=error)
     elif agent == AgentKind.TRAFFIC.value:
         _on_traffic_finished(row, run_id=run_id, success=success, error=error)
+    elif agent == AgentKind.DELIST.value:
+        from pdd_agent.api.services.pipeline_relist_strategy import handle_pipeline_delist_task_finished
+
+        if handle_pipeline_delist_task_finished(
+            pipeline_id=pipeline_id,
+            run_id=run_id,
+            success=success,
+            result=result,
+            error=error,
+        ):
+            return
 
     try:
         from pdd_agent.api.services.pipeline_issue_report_service import ingest_queue_task_outcome
@@ -1456,6 +1576,28 @@ def _on_listing_finished(row, *, run_id: str, success: bool, result: dict[str, A
     }
     listing_meta.update(_listing_failure_meta(result))
     refreshed = get_integrated_pipeline(row.pipeline_id) or row
+
+    from pdd_agent.api.services.pipeline_listing_throttle import (
+        resolve_listing_products_after_batches,
+        schedule_next_listing_batch_after_finish,
+    )
+
+    if schedule_next_listing_batch_after_finish(
+        refreshed,
+        pdd_ids=pdd_ids,
+        mapping_ids=mapping_ids,
+        listing_meta=listing_meta,
+    ):
+        logger.info(
+            "pipeline %s listing batch finished, next batch scheduled run_id=%s",
+            row.pipeline_id,
+            run_id,
+        )
+        return
+
+    pdd_ids, mapping_ids = resolve_listing_products_after_batches(refreshed, pdd_ids, mapping_ids)
+    refreshed = get_integrated_pipeline(row.pipeline_id) or refreshed
+
     if _pipeline_auto_limited_time(refreshed):
         limited_time_at = datetime.now() + timedelta(seconds=LIMITED_TIME_POST_LISTING_DELAY_SECONDS)
         _enqueue_pipeline_limited_time(

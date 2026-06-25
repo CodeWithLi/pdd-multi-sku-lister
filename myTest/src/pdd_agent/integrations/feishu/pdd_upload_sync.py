@@ -1,9 +1,9 @@
 """PDD发布日志表 — 成功/失败分表写入飞书。
 
 流程：
-1. 上架核验成功 → 写入「PDD发布日志表」（按商品ID去重）
+1. 上架核验成功 → 写入「PDD发布日志表」（按商品链接ID去重）
 2. 上架失败/跳过 → 写入「淘宝+拼多多发布日志表（失败）」（简短失败原因，与淘宝共用）
-3. 限时限量购 / 活动报名 / 推广 → 按商品ID检索成功表记录后 update 对应列
+3. 限时限量购 / 活动报名 / 推广 → 按商品链接ID检索成功表记录后 update 对应列
 """
 
 from __future__ import annotations
@@ -568,7 +568,7 @@ def build_pdd_upload_failure_log_fields(
         )[:500],
         names.system_reason: ListingErrors.sanitize_feishu_failure_reason(
             str(system_reason or "").strip()
-        )[:500],
+        )[:2000],
         names.publish_start: _ms_timestamp(start_at),
         names.publish_end: _ms_timestamp(end_at),
         names.duration_seconds: round(float(duration), 2),
@@ -692,6 +692,13 @@ def push_pdd_upload_failure_log(
     }
 
 
+def _pdd_upload_dedupe_field(config: FeishuConfig) -> str:
+    names = config.pdd_upload_log.field_names
+    return str(
+        config.pdd_upload_log.dedupe_field or names.link_product_id or "商品链接ID"
+    ).strip()
+
+
 def _field_defs_for_pdd_upload_log(config: FeishuConfig) -> list[dict[str, Any]]:
     names = config.pdd_upload_log.field_names
     datetime_prop = {"date_formatter": "yyyy/MM/dd HH:mm", "auto_fill": False}
@@ -701,9 +708,9 @@ def _field_defs_for_pdd_upload_log(config: FeishuConfig) -> list[dict[str, Any]]
         {"field_name": names.combo_barcode, "type": FIELD_TEXT},
         {"field_name": names.title, "type": FIELD_TEXT},
         {"field_name": names.account_name, "type": FIELD_TEXT},
-        {"field_name": names.product_id, "type": FIELD_TEXT},
+        {"field_name": names.link_product_id, "type": FIELD_TEXT},
         {"field_name": names.group_price, "type": FIELD_NUMBER},
-        {"field_name": names.single_price, "type": FIELD_NUMBER},
+        {"field_name": names.single_sell_price, "type": FIELD_NUMBER},
         {"field_name": names.link, "type": 15},
         {"field_name": names.publish_start, "type": FIELD_DATETIME, "property": datetime_prop},
         {"field_name": names.publish_end, "type": FIELD_DATETIME, "property": datetime_prop},
@@ -851,7 +858,7 @@ def lookup_pdd_upload_log_identity_fields(
     if not table_id:
         return {}
 
-    dedupe_field = str(pdd_cfg.dedupe_field or pdd_cfg.field_names.product_id or "商品ID").strip()
+    dedupe_field = _pdd_upload_dedupe_field(pdd_cfg)
     upload_names = pdd_cfg.field_names
     lookup_retries = max(1, int(retries if retries is not None else pdd_cfg.limited_time_lookup_retries))
     lookup_interval = max(
@@ -908,7 +915,7 @@ def _push_pdd_upload_select_field_by_product_ids(
     if not field_name:
         return {"skipped": True, "reason": "missing_status_field"}
 
-    dedupe_field = str(pdd_cfg.dedupe_field or pdd_cfg.field_names.product_id or "商品ID").strip()
+    dedupe_field = _pdd_upload_dedupe_field(pdd_cfg)
     api = client or FeishuClient(cfg)
     table_id, resolve_method = resolve_pdd_upload_table_id(cfg, api)
     if not table_id:
@@ -987,7 +994,7 @@ def push_pdd_upload_limited_time_status(
     config: FeishuConfig | None = None,
     client: FeishuClient | None = None,
 ) -> dict[str, Any]:
-    """按商品ID更新飞书「限时限量购状态」单选字段。"""
+    """按商品链接ID更新飞书「限时限量购状态」单选字段。"""
     cfg = config or load_feishu_config()
     pdd_cfg = cfg.pdd_upload_log
     if not pdd_cfg.enabled or not pdd_cfg.update_limited_time_status:
@@ -1026,7 +1033,7 @@ def push_pdd_upload_activity_register_status(
     config: FeishuConfig | None = None,
     client: FeishuClient | None = None,
 ) -> dict[str, Any]:
-    """按商品ID更新飞书活动报名列（20981→618报名，21365→21365限量七折）。"""
+    """按商品链接ID更新飞书活动报名列（20981→618报名，21365→21365限量七折）。"""
     cfg = config or load_feishu_config()
     pdd_cfg = cfg.pdd_upload_log
     if not pdd_cfg.enabled or not pdd_cfg.update_activity_register_status:
@@ -1058,7 +1065,7 @@ def push_pdd_upload_promotion_status(
     config: FeishuConfig | None = None,
     client: FeishuClient | None = None,
 ) -> dict[str, Any]:
-    """按商品ID更新飞书「推广状态」单选字段。"""
+    """按商品链接ID更新飞书「推广状态」单选字段。"""
     cfg = config or load_feishu_config()
     pdd_cfg = cfg.pdd_upload_log
     if not pdd_cfg.enabled or not pdd_cfg.update_promotion_status:
@@ -1087,7 +1094,7 @@ def _push_pdd_upload_field_status_safe(*, log_label: str, push_fn: Any, **kwargs
             if missing:
                 print(
                     f"[{account_id}] 飞书{log_label}已更新 {len(result.get('record_ids') or [])} 条，"
-                    f"未找到记录的商品ID：{', '.join(missing)}",
+                    f"未找到记录的商品链接ID：{', '.join(missing)}",
                     flush=True,
                 )
         elif result.get("skipped"):
@@ -1321,11 +1328,13 @@ def build_pdd_upload_log_fields(
         names.merchant_code: str(merchant_code or "").strip(),
         names.title: str(title or "").strip(),
         names.account_name: str(account_name or "").strip(),
-        names.product_id: str(product_id or "").strip(),
         names.publish_start: _ms_timestamp(start_at),
         names.publish_end: _ms_timestamp(end_at),
         names.duration_seconds: round(duration, 2),
     }
+    pid = str(product_id or "").strip()
+    if pid and names.link_product_id:
+        fields[names.link_product_id] = pid
     combo = str(combo_barcode or "").strip()
     if combo and names.combo_barcode:
         fields[names.combo_barcode] = combo
@@ -1336,11 +1345,11 @@ def build_pdd_upload_log_fields(
             fields[names.group_price] = float(group)
         except (TypeError, ValueError):
             fields[names.group_price] = group
-    if single and names.single_price:
+    if single and names.single_sell_price:
         try:
-            fields[names.single_price] = float(single)
+            fields[names.single_sell_price] = float(single)
         except (TypeError, ValueError):
-            fields[names.single_price] = single
+            fields[names.single_sell_price] = single
     if link:
         fields[names.link] = {"link": link, "text": "查看商品"}
     return fields
@@ -1416,7 +1425,7 @@ def _upsert_pdd_upload_log_rows(
 ) -> dict[str, Any]:
     names = cfg.pdd_upload_log.field_names
     combo_field = str(names.combo_barcode or "组合商品条码").strip()
-    dedupe_field = str(cfg.pdd_upload_log.dedupe_field or names.product_id or "商品ID").strip()
+    dedupe_field = _pdd_upload_dedupe_field(cfg)
 
     try:
         existing_rows = search_records_by_field(
@@ -1649,7 +1658,7 @@ def push_pdd_upload_log(
 
     fields = map_fields_to_table_names(api, app_token, table_id, fields)
 
-    dedupe_field = str(pdd_cfg.dedupe_field or "").strip()
+    dedupe_field = _pdd_upload_dedupe_field(cfg)
     dedupe_value = product_id
     if not dedupe_value:
         dedupe_field = str(pdd_cfg.field_names.merchant_code or "商品编码").strip()
@@ -1824,7 +1833,7 @@ def _push_pdd_upload_log_safe(**kwargs: Any) -> None:
             )
         elif result.get("updated"):
             print(
-                f"[{account_id}] [{label}] 飞书 PDD 上传日志已更新（商品ID已存在） "
+                f"[{account_id}] [{label}] 飞书 PDD 上传日志已更新（商品链接ID已存在） "
                 f"record_id={result.get('record_ids', [''])[0]} "
                 f"table={result.get('table_id')}",
                 flush=True,

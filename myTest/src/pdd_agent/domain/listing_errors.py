@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import re
+from typing import Any
 
 
 class ListingErrorCode:
@@ -359,6 +360,8 @@ class ListingErrors:
         STYLE_NOT_IN_CATALOG_DISPLAY = "{prefix} 商品表无款式编码[{style}]，仅后台展示不上架 {name}"
         SUBCODE_NOT_IN_CATALOG_SKIP = "{prefix} 商品表无子编码[{model}]，不上架 {name}"
         SUBCODE_NOT_IN_CATALOG_DISPLAY = "{prefix} 商品表无子编码[{model}]，仅后台展示不上架 {name}"
+        CATALOG_CODE_PRICING_MISSING = "{prefix} 商品表无编码[{codes}]，无法定价"
+        CATALOG_PRICING_INVALID = "{prefix} 商品表编码[{codes}]拼多多定价无效"
         NO_NUMBERED_IMAGES = "无任何数字命名图 ({range})"
 
         # 兄弟款规格
@@ -411,6 +414,110 @@ class ListingErrors:
         s = s.replace("拼多多", "")
         s = re.sub(r"(?i)pdd", "", s)
         return s
+
+    @classmethod
+    def compact_system_diagnostic(cls, text: str) -> str:
+        """系统原因：去掉 [套图路径][来源目录] 等前缀，保留具体诊断句。"""
+        raw = str(text or "").strip()
+        while raw.startswith("[") and "]" in raw:
+            raw = raw.split("]", 1)[-1].strip(" :：")
+        return raw
+
+    @classmethod
+    def build_preflight_no_skus_system_reason(
+        cls,
+        preflight: Any,
+        listing_label: str,
+        fallback_message: str = "",
+    ) -> str:
+        """无有效 SKU：从 preflight 单元 warnings / issues 拼飞书系统原因。"""
+        label = str(listing_label or "").strip()
+        fallback = cls.compact_system_diagnostic(fallback_message)
+        if not label:
+            return fallback
+
+        units: list[Any] = []
+        issues: list[Any] = []
+        if isinstance(preflight, dict):
+            units = list(preflight.get("units") or [])
+            issues = list(preflight.get("issues") or [])
+        elif preflight is not None:
+            units = list(getattr(preflight, "units", None) or [])
+            issues = list(getattr(preflight, "issues", None) or [])
+
+        details: list[str] = []
+        seen: set[str] = set()
+
+        def _add(line: str) -> None:
+            text = cls.compact_system_diagnostic(line)
+            if not text or text in seen:
+                return
+            if text == label:
+                return
+            if text == "未解析到任何有效 SKU":
+                return
+            seen.add(text)
+            details.append(text)
+
+        for unit in units:
+            unit_label = str(
+                getattr(unit, "listing_label", None)
+                or (unit.get("listing_label") if isinstance(unit, dict) else "")
+                or ""
+            ).strip()
+            if unit_label != label:
+                continue
+            warnings = getattr(unit, "warnings", None) or (
+                unit.get("warnings") if isinstance(unit, dict) else []
+            ) or []
+            for warning in warnings:
+                _add(str(warning or ""))
+            carousel = getattr(unit, "carousel_images", None) or (
+                unit.get("carousel_images") if isinstance(unit, dict) else []
+            ) or []
+            detail_imgs = getattr(unit, "detail_images", None) or (
+                unit.get("detail_images") if isinstance(unit, dict) else []
+            ) or []
+            _add(f"主图 {len(carousel)} 张，详情图 {len(detail_imgs)} 张")
+            break
+
+        for issue in issues:
+            issue_label = str(
+                getattr(issue, "listing_label", None)
+                or (issue.get("listing_label") if isinstance(issue, dict) else "")
+                or ""
+            ).strip()
+            if issue_label != label:
+                continue
+            level = str(
+                getattr(issue, "level", None)
+                or (issue.get("level") if isinstance(issue, dict) else "")
+                or ""
+            ).strip().lower()
+            if level not in {"warning", "error"}:
+                continue
+            reason_code = str(
+                getattr(issue, "reason_code", None)
+                or (issue.get("reason_code") if isinstance(issue, dict) else "")
+                or ""
+            ).strip()
+            if reason_code == ListingErrorCode.PREFLIGHT_NO_SKUS:
+                continue
+            _add(
+                str(
+                    getattr(issue, "message", None)
+                    or (issue.get("message") if isinstance(issue, dict) else "")
+                    or ""
+                )
+            )
+
+        if details:
+            header = f"{label}："
+            body = "；".join(details)
+            return cls.sanitize_feishu_failure_reason(f"{header}{body}")[:2000]
+        if fallback and fallback != label:
+            return cls.sanitize_feishu_failure_reason(f"{label}：{fallback}")[:2000]
+        return cls.sanitize_feishu_failure_reason(f"{label}：未解析到任何有效 SKU，且无进一步诊断信息")[:2000]
 
     @classmethod
     def _aspect_text_to_brief(cls, aspect_text: str) -> str:

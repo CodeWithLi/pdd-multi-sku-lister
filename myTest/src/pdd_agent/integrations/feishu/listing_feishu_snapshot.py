@@ -48,6 +48,9 @@ class ListingFeishuSnapshot:
     _min_field: str = ""
     _max_field: str = ""
     _retail_cost_field: str = ""
+    _color_spec_field: str = ""
+    _product_type_field: str = ""
+    _inventory_field: str = ""
 
     def record_items(self) -> list[dict[str, Any]]:
         return [{"fields": fields} for fields in self.records_by_code.values()]
@@ -68,11 +71,19 @@ class ListingFeishuSnapshot:
 
     def product_catalog(self, cfg: FeishuConfig) -> dict[str, PddProductEntry]:
         names = cfg.pdd_product_catalog.field_names
+        resolved_fields = {
+            "product_code": self._code_field or names.product_code,
+            "color_spec": self._color_spec_field or names.color_spec,
+            "product_type": self._product_type_field or names.product_type,
+            "available_inventory": self._inventory_field or names.available_inventory,
+            "pricing": self._pricing_field or names.pricing,
+        }
         catalog: dict[str, PddProductEntry] = {}
         for code, fields in self.records_by_code.items():
             row = dict(fields)
-            row[names.product_code] = _field_text(row, names.product_code) or code
-            entry = _entry_from_feishu_fields(row, names)
+            code_field = resolved_fields["product_code"]
+            row[names.product_code] = _field_text(row, code_field) or code
+            entry = _entry_from_feishu_fields(row, names, resolved_fields=resolved_fields)
             if entry:
                 catalog[entry.code] = entry
         return catalog
@@ -182,6 +193,15 @@ def warm_listing_feishu_snapshot(
     snapshot._min_field = min_field
     snapshot._max_field = max_field
     snapshot._retail_cost_field = retail_cost_field
+    snapshot._color_spec_field = resolve_table_field_name(
+        api, app_token, table_id, names.color_spec
+    )
+    snapshot._product_type_field = resolve_table_field_name(
+        api, app_token, table_id, names.product_type
+    )
+    snapshot._inventory_field = resolve_table_field_name(
+        api, app_token, table_id, names.available_inventory
+    )
 
     try:
         records = search_records_by_field_values(

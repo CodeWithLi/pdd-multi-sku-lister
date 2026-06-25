@@ -13,6 +13,16 @@ import {
 } from '@/utils/listingTargets'
 import { formatAutoPipelineFeedback } from '@/utils/autoPipeline'
 import {
+  loadListingBatchIntervalMinutes,
+  loadListingBatchSetCount,
+  loadListingThrottleEnabled,
+  loadPipelineRelistStrategy,
+  saveListingBatchIntervalMinutes,
+  saveListingBatchSetCount,
+  saveListingThrottleEnabled,
+  savePipelineRelistStrategy,
+} from '@/utils/pipelinePreferences'
+import {
   failureReasonLabel,
   listingUnitStatusType,
 } from '@/utils/labels'
@@ -25,6 +35,7 @@ import type {
   ListingTargetOption,
   MarketingActivityOption,
   PreflightResponse,
+  RelistStrategy,
 } from '@/types'
 
 const router = useRouter()
@@ -57,6 +68,10 @@ const continueAfterActivityFailure = ref(false)
 const demoMode = ref(true)
 const activityDelayHours = ref(24)
 const slotAlignmentTest = ref(true)
+const relistStrategy = ref<RelistStrategy>(loadPipelineRelistStrategy())
+const listingThrottleEnabled = ref(loadListingThrottleEnabled())
+const listingBatchSetCount = ref(loadListingBatchSetCount())
+const listingBatchIntervalMinutes = ref(loadListingBatchIntervalMinutes())
 const excelFallbackEnabled = ref(false)
 const excelFallbackSaving = ref(false)
 const logSpecSkuRowsEnabled = ref(false)
@@ -343,6 +358,13 @@ interface ListingIntent {
 }
 
 async function resolveListingIntent(): Promise<ListingIntent | null> {
+  if (relistStrategy.value === 'delist_and_relist') {
+    return { skipListing: false, listingSkipSelectors: [] }
+  }
+  if (relistStrategy.value === 'append_to_existing') {
+    ElMessage.warning('「原 ID 链接补漏」功能尚未实现，请选择其他策略')
+    return null
+  }
   const listed = listedSelectors.value
   const unlisted = unlistedSelectors.value
   if (!listed.length) {
@@ -862,8 +884,16 @@ async function startPipeline() {
         skip_listing: skipListing,
         listing_skip_selectors: listingSkipSelectors,
         material_source: materialSource.value,
+        relist_strategy: relistStrategy.value,
+        listing_throttle_enabled: listingThrottleEnabled.value,
+        listing_batch_set_count: listingBatchSetCount.value,
+        listing_batch_interval_minutes: listingBatchIntervalMinutes.value,
       })
-      success.value = `批量整合链路已提交：${result.total} 条，批次 ${result.batch_id}，活动 ${activityIds.value.length} 个，启动间隔 ${result.store_start_delay_min_seconds}-${result.store_start_delay_max_seconds} 秒`
+      success.value = `批量整合链路已提交：${result.total} 条，批次 ${result.batch_id}，活动 ${activityIds.value.length} 个，启动间隔 ${result.store_start_delay_min_seconds}-${result.store_start_delay_max_seconds} 秒${
+        listingThrottleEnabled.value
+          ? `；分批上架 ${listingBatchSetCount.value} 套/批，间隔 ${listingBatchIntervalMinutes.value} 分钟`
+          : ''
+      }`
       pipelinePage.value = 1
       if (result.pipelines.length) {
         const first = await api.getIntegratedPipeline(result.pipelines[0].pipeline_id)
@@ -885,6 +915,10 @@ async function startPipeline() {
         skip_listing: skipListing,
         listing_skip_selectors: listingSkipSelectors,
         material_source: materialSource.value,
+        relist_strategy: relistStrategy.value,
+        listing_throttle_enabled: listingThrottleEnabled.value,
+        listing_batch_set_count: listingBatchSetCount.value,
+        listing_batch_interval_minutes: listingBatchIntervalMinutes.value,
       })
       pipelinePage.value = 1
       activePipeline.value = result
@@ -893,13 +927,20 @@ async function startPipeline() {
       const partialHint = listingSkipSelectors.length
         ? `（已上架 ${listingSkipSelectors.length} 个跳过上架）`
         : ''
+      const relistHint =
+        relistStrategy.value === 'delist_and_relist'
+          ? '（将先下架原商品并删除已发布记录）'
+          : ''
+      const throttleHint = listingThrottleEnabled.value
+        ? `（分批上架：${selectedSetCount.value} 套分 ${listingBatchPlanCount.value} 批，每批 ${listingBatchSetCount.value} 套，间隔 ${listingBatchIntervalMinutes.value} 分钟）`
+        : ''
       success.value = skipListing
         ? demoMode.value
           ? `整合链路已启动（跳过上架，先限时限量购再约 2 分钟后报活动${activityHint}）`
           : `整合链路已启动（跳过上架，先限时限量购再 ${activityDelayHours.value} 小时后报活动${activityHint}）`
         : demoMode.value
-          ? `整合链路已启动（演示：上架后限时限量购 → 约 2 分钟后报活动${activityHint}${partialHint}）`
-          : `整合链路已启动（上架 → 限时限量购 → ${activityDelayHours.value} 小时后报活动${activityHint}${partialHint}）`
+          ? `整合链路已启动（演示：上架后限时限量购 → 约 2 分钟后报活动${activityHint}${partialHint}${relistHint}${throttleHint}）`
+          : `整合链路已启动（上架 → 限时限量购 → ${activityDelayHours.value} 小时后报活动${activityHint}${partialHint}${relistHint}${throttleHint}）`
     }
     await refreshPipelines()
     startPolling()
@@ -932,6 +973,29 @@ function openRun(runId: string) {
 }
 
 watch(productCodes, (codes) => syncCheckedProductsForSets(codes), { deep: true })
+const selectedSetCount = computed(() => productCodes.value.length)
+
+const listingBatchPlanCount = computed(() => {
+  if (!listingThrottleEnabled.value || selectedSetCount.value <= 0) return 1
+  return Math.ceil(selectedSetCount.value / Math.max(1, listingBatchSetCount.value))
+})
+
+watch(relistStrategy, (value) => {
+  savePipelineRelistStrategy(value)
+})
+
+watch(listingThrottleEnabled, (value) => {
+  saveListingThrottleEnabled(value)
+})
+
+watch(listingBatchSetCount, (value) => {
+  saveListingBatchSetCount(Number(value) || 5)
+})
+
+watch(listingBatchIntervalMinutes, (value) => {
+  saveListingBatchIntervalMinutes(Number(value) || 30)
+})
+
 watch(resolvedListingSelectors, () => {
   preflightResult.value = null
 })
@@ -1243,6 +1307,54 @@ onUnmounted(() => {
                       套图目录已存在，但暂无可用商品（需在套图下放入带 1.jpg/1.png 等编号主图的商品文件夹）
                     </div>
                   </div>
+                </div>
+              </el-form-item>
+
+              <el-form-item label="已上架处理">
+                <el-radio-group v-model="relistStrategy" class="relist-strategy-group">
+                  <el-radio label="ignore">不管（沿用跳过上架/重新上架提示）</el-radio>
+                  <el-radio label="append_to_existing" disabled>原 ID 链接补漏（开发中）</el-radio>
+                  <el-radio label="delist_and_relist">下架原商品并重新上架</el-radio>
+                </el-radio-group>
+                <div v-if="relistStrategy === 'ignore'" class="form-tip">
+                  若所选商品已在售，启动时会询问是否跳过上架或重新上架；可能产生重复链路。
+                </div>
+                <div v-else-if="relistStrategy === 'delist_and_relist'" class="form-tip form-tip-highlight">
+                  会先按「商品编码」扫在售列表，<strong>同一编码下的全部重复链接都会下架</strong>，并删除系统「已发布商品」记录，再重新上架 1 条；适用于 MinIO 补图后重跑整合链路。
+                </div>
+              </el-form-item>
+
+              <el-form-item label="分批上架">
+                <div class="option-row listing-throttle-row">
+                  <div class="switch-row">
+                    <span class="switch-label">启用分批（防风控）</span>
+                    <el-switch v-model="listingThrottleEnabled" />
+                  </div>
+                  <template v-if="listingThrottleEnabled">
+                    <span class="throttle-inline-label">每批</span>
+                    <el-input-number
+                      v-model="listingBatchSetCount"
+                      :min="1"
+                      :max="100"
+                      controls-position="right"
+                      size="small"
+                    />
+                    <span class="throttle-inline-label">套，间隔</span>
+                    <el-input-number
+                      v-model="listingBatchIntervalMinutes"
+                      :min="1"
+                      :max="1440"
+                      controls-position="right"
+                      size="small"
+                    />
+                    <span class="throttle-inline-label">分钟</span>
+                  </template>
+                </div>
+                <div v-if="listingThrottleEnabled" class="form-tip">
+                  已选 {{ selectedSetCount }} 套图，将分 {{ listingBatchPlanCount }} 批上架；全部批次完成后才进入限时限量购 / 活动 / 推广。
+                </div>
+                <div v-else class="form-tip">
+                  关闭时一次上架所选全部套图；新店铺大量上架建议开启分批。
                 </div>
               </el-form-item>
             </div>
@@ -2261,6 +2373,15 @@ onUnmounted(() => {
   flex-wrap: wrap;
   gap: 20px 28px;
   width: 100%;
+}
+
+.listing-throttle-row {
+  gap: 12px 16px;
+}
+
+.throttle-inline-label {
+  color: var(--text-secondary);
+  font-size: 13px;
 }
 
 .switch-row {

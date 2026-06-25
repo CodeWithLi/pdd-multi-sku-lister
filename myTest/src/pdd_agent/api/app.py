@@ -127,7 +127,7 @@ async def lifespan(app: FastAPI):
             "PDD推广日志表",
             ensure_pdd_promotion_log_tables_ready,
         )
-        activity_ready = await _ensure_feishu_table("PDD活动日志表", ensure_pdd_activity_log_table_ready)
+        activity_ready = await _ensure_feishu_table("PDD营销-活动日志表", ensure_pdd_activity_log_table_ready)
         price_compare_ready = await _ensure_feishu_table(
             "拼多多比价定价",
             ensure_pdd_price_compare_table_ready,
@@ -171,7 +171,7 @@ async def lifespan(app: FastAPI):
                 activity_ready.get("resolve_method"),
             )
             print(
-                f"[feishu] PDD活动日志表已就绪：{activity_ready.get('table_id')}",
+                f"[feishu] PDD营销-活动日志表已就绪：{activity_ready.get('table_id')}",
                 flush=True,
             )
         elif not activity_ready.get("skipped"):

@@ -13,6 +13,17 @@ from pdd_agent.skills.base import Skill
 from pdd_agent.skills.listing.catalog import parse_listing_target
 
 
+def _warning_issue_level(message: str) -> tuple[str, str]:
+    text = str(message or "").strip()
+    if "槽位对齐" in text:
+        return "error", ""
+    if "无法定价" in text or "拼多多定价无效" in text:
+        if "定价无效" in text or "定价为空" in text:
+            return "error", ListingErrorCode.FEISHU_PRICING_MISSING
+        return "error", ListingErrorCode.FEISHU_PRODUCT_CATALOG_MISSING
+    return "warning", ""
+
+
 def run_preflight(
     product_codes: list[str],
     settings: YamlSettings,
@@ -71,14 +82,15 @@ def run_preflight(
                     )
                 )
             for w in unit.warnings:
-                if "槽位对齐" in w:
-                    report.issues.append(
-                        PreflightIssue(level="error", message=w, listing_label=unit.listing_label)
+                level, reason_code = _warning_issue_level(w)
+                report.issues.append(
+                    PreflightIssue(
+                        level=level,
+                        message=w,
+                        listing_label=unit.listing_label,
+                        reason_code=reason_code,
                     )
-                else:
-                    report.issues.append(
-                        PreflightIssue(level="warning", message=w, listing_label=unit.listing_label)
-                    )
+                )
     return report
 
 

@@ -219,19 +219,43 @@ onMounted(load)
         </el-card>
 
         <el-card shadow="never" class="stat-card settings-card">
-          <template #header>飞书发布失败日志</template>
+          <template #header>飞书 · 全平台失败日志表</template>
           <el-form label-position="top">
-            <el-form-item label="写入全平台发布日志表（失败）">
+            <el-alert
+              :type="failureLogEnabled ? 'info' : 'warning'"
+              :closable="false"
+              show-icon
+              class="failure-log-alert"
+            >
+              <template #title>
+                {{
+                  failureLogEnabled
+                    ? '当前：上架失败 / 跳过时会自动写入飞书失败表'
+                    : '当前：不会往飞书失败表写任何记录（本地任务记录仍保留）'
+                }}
+              </template>
+              <template #default>
+                <span v-if="failureLogEnabled">
+                  例如「该商品不适用于此平台上架，自动跳过」、无有效 SKU、提交被驳回等，都会出现在飞书
+                  「全平台发布日志表（失败）」。
+                </span>
+                <span v-else>
+                  笔袋视图不适用、上架校验失败等也<strong>不会</strong>再同步到飞书；若仍看到新行，请确认已保存并重启后端。
+                </span>
+              </template>
+            </el-alert>
+            <el-form-item label="是否同步写入飞书失败表" style="margin-top: 14px">
               <el-switch
                 v-model="failureLogEnabled"
-                active-text="开启"
-                inactive-text="关闭"
+                active-text="要写入"
+                inactive-text="不写入"
               />
               <div class="form-tip">
-                关闭后，上架失败、平台跳过等记录不再写入飞书失败表；不影响 PDD发布日志表（成功）及其它飞书表。
+                此开关只控制「全平台发布日志表（失败）」一张表；与 PDD 发布成功日志、活动日志等无关。
+                需要飞书留痕选「要写入」，不想产生失败行选「不写入」。
               </div>
             </el-form-item>
-            <el-form-item v-if="failureLogSettings?.failure_table_name" label="当前失败表">
+            <el-form-item v-if="failureLogSettings?.failure_table_name" label="目标飞书表">
               <div class="form-tip" style="margin-top: 0">
                 {{ failureLogSettings.failure_table_name }}
                 <template v-if="failureLogSettings.failure_table_id">
@@ -412,6 +436,10 @@ onMounted(load)
 </template>
 
 <style scoped>
+.failure-log-alert {
+  margin-bottom: 4px;
+}
+
 .settings-card {
   margin-bottom: 16px;
 }

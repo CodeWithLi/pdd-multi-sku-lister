@@ -31,6 +31,7 @@ from pdd_agent.domain.models import ListingUnit, SkuCombo
 from pdd_agent.skills.base import Skill
 from pdd_agent.skills.listing.pdd_product_catalog import (
     BUNDLE_MODEL_CODE,
+    ComboPricingError,
     PddProductEntry,
     default_catalog_path,
     get_pdd_product_catalog,
@@ -58,6 +59,42 @@ IMAGE_SET_PATTERN = re.compile(
     r"^(?:第?\s*[一二三四五六七八九十\d]+\s*套(?:图)?|套图\s*[一二三四五六七八九十\d]+)(?:[\s\-_（(].*)?$"
 )
 _PRODUCT_CODE_PREFIX = re.compile(r"^([A-Z0-9]+)")
+
+
+def _resolve_sku_pricing_or_warn(
+    unit: ListingUnit,
+    *,
+    prefix: str,
+    style_code: str,
+    model_code: str,
+    catalog: dict[str, PddProductEntry],
+    defaults: dict[str, str],
+    bundle_components: list[str] | None = None,
+) -> tuple[str, str, str] | None:
+    try:
+        return resolve_combo_pricing(
+            style_code,
+            model_code,
+            catalog,
+            defaults,
+            listing_scope=resolve_listing_price_scope(
+                family_code=unit.family_code,
+                image_set=unit.image_set,
+                listing_label=unit.listing_label,
+            ),
+            bundle_components=bundle_components,
+        )
+    except ComboPricingError as exc:
+        codes = "、".join(exc.invalid_codes or exc.missing_codes)
+        if exc.reason == "pricing_invalid":
+            unit.warnings.append(
+                ListingErrors.Msg.CATALOG_PRICING_INVALID.format(prefix=prefix, codes=codes)
+            )
+        else:
+            unit.warnings.append(
+                ListingErrors.Msg.CATALOG_CODE_PRICING_MISSING.format(prefix=prefix, codes=codes)
+            )
+        return None
 
 
 def _extract_product_code_prefix(name: str) -> str:
@@ -180,37 +217,86 @@ def _collect_flat_preview_images(folder: Path) -> list[Path]:
     return sorted(files, key=_natural_sort_key)
 
 
+def _preview_stem_matches_code_dir(stem: str, dir_name: str) -> bool:
+    """规格图文件名是否属于该编码文件夹（支持 BD037B+… 匹配 BD037B奶油色长条笔袋）。"""
+    text = str(stem or "").strip()
+    dir_key = str(dir_name or "").strip().casefold()
+    if not text or not dir_key:
+        return False
+    if "+" in text:
+        style_part = text.split("+", 1)[0].strip().casefold()
+        if style_part == dir_key:
+            return True
+        return dir_key.startswith(style_part) and len(style_part) < len(dir_key)
+    return text.casefold() == dir_key
+
+
 def _filter_preview_images_for_code_dir(code_dir: Path, previews: list[Path]) -> list[Path]:
     """
-    兄弟目录合并规格图时，只保留与文件夹商品编码匹配的规格图。
-    例如 BD046B/ 目录接受 BD046B.png、BD046B+AXBD001A.png；
-    MinIO 同步后亦接受 BD046B毛绒小狗笔袋+YKL001N.png（按编码前缀匹配）。
+    兄弟目录合并规格图时，只保留与文件夹名匹配的规格图。
+    例如 BD037A奶油泡芙笔袋/ 接受 BD037A奶油泡芙笔袋.jpg、BD037A奶油泡芙笔袋+YKL001A.jpg。
     """
-    dir_code = _extract_product_code_prefix(code_dir.name.strip())
-    if not dir_code:
+    dir_name = code_dir.name.strip()
+    if not dir_name:
         return previews
     filtered: list[Path] = []
     for preview in previews:
         stem = preview.stem.strip()
-        if not stem:
-            continue
-        if "+" in stem:
-            style_part = stem.split("+", 1)[0].strip()
-            style_code = _extract_product_code_prefix(style_part)
-            if style_code.upper() == dir_code.upper():
-                filtered.append(preview)
-            continue
-        stem_code = _extract_product_code_prefix(stem)
-        if stem_code.upper() == dir_code.upper():
+        if stem and _preview_stem_matches_code_dir(stem, dir_name):
             filtered.append(preview)
     return filtered
 
 
+def _split_combo_stem_parts(stem: str, default_style_code: str = "") -> list[str]:
+    """按 + 切段；首段若为文件夹短编码前缀则还原为完整主商品名（含中文）。"""
+    text = Path(stem).stem.strip() if stem else ""
+    if not text:
+        return []
+    if "+" not in text:
+        return [text]
+    parts = [part.strip() for part in text.split("+") if part.strip()]
+    default_style = str(default_style_code or "").strip()
+    if default_style and parts:
+        first = parts[0]
+        if first.casefold() != default_style.casefold():
+            if default_style.casefold().startswith(first.casefold()) and len(first) < len(default_style):
+                parts[0] = default_style
+    return parts
+
+
+def combo_slot_signature(stem: str, default_style_code: str = "") -> str:
+    """槽位对齐签名：单款 / 单配 / 套餐（与中文主商品名、文件名排序无关）。"""
+    parsed = _parse_combo_code(stem, default_style_code)
+    if not parsed:
+        return str(stem or "").strip()
+    style, model = parsed
+    style_key = style.strip().upper()
+    model_key = model.strip().upper()
+    if model_key == style_key:
+        return "solo"
+    if model_key == BUNDLE_MODEL_CODE:
+        parts = _split_combo_stem_parts(stem, default_style_code)
+        subs = parts[1:] if len(parts) > 1 else []
+        return "bundle:" + "+".join(subs)
+    return f"combo:{model_key}"
+
+
 def _preview_sort_key(path: Path, product_code: str):
+    """规格图排序：单款 → 单配（按子编码）→ 套餐，避免字母序把套餐/挂件槽位弄反。"""
     parsed = _parse_combo_code(path.stem, product_code)
-    if parsed and parsed[0] == product_code and parsed[1] == product_code:
-        return (0, _natural_sort_key(path))
-    return (1, _natural_sort_key(path))
+    if not parsed:
+        return (9, "", _natural_sort_key(path))
+    style, model = parsed
+    if model.strip().upper() == style.strip().upper():
+        tier = 0
+        tie = ""
+    elif model.strip().upper() == BUNDLE_MODEL_CODE:
+        tier = 2
+        tie = path.stem.casefold()
+    else:
+        tier = 1
+        tie = model.strip().upper()
+    return (tier, tie, _natural_sort_key(path))
 
 
 def _find_preview_image(combo_dir: Path) -> Path | None:
@@ -223,51 +309,44 @@ def _find_preview_image(combo_dir: Path) -> Path | None:
 
 
 def _parse_combo_code(name: str, default_style_code: str = "") -> tuple[str, str] | None:
-    """解析规格图文件名 → (款式编码, 型号编码)。
+    """解析规格图文件名 → (款式名, 型号名)。按 + 切段，保留中文，与飞书/MinIO 命名一致。
 
-    - ``BD719A`` → 单款
-    - ``BD719A+GJ361A`` → 款式 + 子配件
-    - ``BD719A毛绒小狗笔袋+YKL001N`` → 按编码前缀解析（MinIO 常见命名）
-    - ``BD719A+YKL001A+YKL020A+GJ361A`` → 多段组合按套装处理 → (BD719A, 套装)
+    - ``BD037A奶油泡芙笔袋`` → 单款
+    - ``BD037A奶油泡芙笔袋+YKL001A`` → 款式 + 1 个子配件
+    - ``BD037A奶油泡芙笔袋+YKL001A+YKL020A+YKL004L`` → 2 个及以上子配件 → 套餐
+    - ``BD037B+YKL001N`` + 文件夹 ``BD037B奶油色长条笔袋`` → 首段补全为完整主商品名
     """
     stem = Path(name).stem.strip()
     if not stem:
         return None
-    default_style = _extract_product_code_prefix(default_style_code) or default_style_code
+    default_style = str(default_style_code or "").strip()
     if "+" in stem:
-        parts = [part.strip() for part in stem.split("+") if part.strip()]
-        if len(parts) >= 3:
-            style = _extract_product_code_prefix(parts[0]) or parts[0]
-            return style, BUNDLE_MODEL_CODE
-        if len(parts) == 2:
-            style = _extract_product_code_prefix(parts[0]) or parts[0]
-            model = _extract_product_code_prefix(parts[1]) or parts[1]
-            return style, model
-        return None
+        parts = _split_combo_stem_parts(stem, default_style)
+        if not parts:
+            return None
+        if len(parts) == 1:
+            return parts[0], parts[0]
+        accessory_count = len(parts) - 1
+        if accessory_count >= 2:
+            return parts[0], BUNDLE_MODEL_CODE
+        return parts[0], parts[1]
     if default_style:
-        model = _extract_product_code_prefix(stem) or stem
-        return default_style, model
-    code = _extract_product_code_prefix(stem) or stem
-    return code, code
+        if stem.casefold() == default_style.casefold():
+            return default_style, default_style
+        if default_style.casefold().startswith(stem.casefold()) and len(stem) < len(default_style):
+            return default_style, default_style
+        return default_style, stem
+    return stem, stem
 
 
 def _parse_combo_component_codes(name: str, default_style_code: str = "") -> list[str]:
-    """规格图文件名 → 参与定价的商品编码列表（套装为多段编码之和）。"""
+    """规格图文件名 → 参与定价的商品名列表（按 + 切段，保留中文）。"""
     stem = Path(name).stem.strip()
     if not stem:
         return []
-    default_style = _extract_product_code_prefix(default_style_code) or default_style_code
     if "+" in stem:
-        parts = [part.strip() for part in stem.split("+") if part.strip()]
-        codes = [_extract_product_code_prefix(part) or part for part in parts]
-        return list(dict.fromkeys(code for code in codes if code))
-    if default_style:
-        model = _extract_product_code_prefix(stem) or stem
-        if model.upper() == default_style.upper():
-            return [default_style]
-        return [default_style, model]
-    code = _extract_product_code_prefix(stem) or stem
-    return [code] if code else []
+        return list(dict.fromkeys(_split_combo_stem_parts(stem, default_style_code)))
+    return [stem]
 
 
 def _new_layout_units(product_code: str, assets_root: Path) -> list[tuple[str, Path]]:
@@ -413,6 +492,7 @@ def collect_feishu_catalog_codes_for_targets(
         selector = _parse_listing_target_selector(target)
         if selector:
             family_code, image_set = selector
+            codes.append(family_code)
             set_dir = assets_root / family_code / image_set
             for sibling_dir in _list_sibling_code_dirs(set_dir):
                 codes.append(sibling_dir.name)
@@ -522,20 +602,20 @@ def _append_skus_from_previews(
         if model_code not in unit.model_codes:
             unit.model_codes.append(model_code)
 
-        inv, gp, sp = resolve_combo_pricing(
-            style_code,
-            model_code,
-            catalog,
-            defaults,
-            listing_scope=resolve_listing_price_scope(
-                family_code=unit.family_code,
-                image_set=unit.image_set,
-                listing_label=unit.listing_label,
-            ),
+        pricing = _resolve_sku_pricing_or_warn(
+            unit,
+            prefix=prefix,
+            style_code=style_code,
+            model_code=model_code,
+            catalog=catalog,
+            defaults=defaults,
             bundle_components=_parse_combo_component_codes(preview.stem, default_style_code)
             if is_bundle
             else None,
         )
+        if pricing is None:
+            continue
+        inv, gp, sp = pricing
         unit.skus.append(
             SkuCombo(
                 style_code=style_code,
@@ -564,6 +644,32 @@ def list_image_sets(product_code: str, assets_root: Path) -> list[str]:
         for d in sorted(root.iterdir(), key=lambda p: _image_set_sort_key(p.name))
         if d.is_dir() and is_image_set_dir(d.name)
     ]
+
+
+def _append_no_sku_material_diagnostics(unit: ListingUnit, sibling_dirs: list[Path]) -> None:
+    """无 SKU 时补充素材目录诊断（写入 warnings，供飞书系统原因展示）。"""
+    label = unit.listing_label
+    if not sibling_dirs:
+        unit.warnings.append(f"[{label}] 未找到兄弟款规格目录（路径 {unit.root}）")
+        return
+    for sibling_dir in sibling_dirs:
+        code = sibling_dir.name
+        raw_previews = _collect_flat_preview_images(sibling_dir)
+        filtered = _filter_preview_images_for_code_dir(sibling_dir, raw_previews)
+        if not raw_previews:
+            unit.warnings.append(f"[{label}] 目录「{code}」无规格预览图（需非数字命名的 png/jpg）")
+            continue
+        if not filtered:
+            sample = "、".join(p.name for p in raw_previews[:4])
+            extra = f" 等共{len(raw_previews)}张" if len(raw_previews) > 4 else ""
+            unit.warnings.append(
+                f"[{label}] 目录「{code}」有{len(raw_previews)}张图但文件名与编码不匹配"
+                f"（如 {sample}{extra}；期望 {code}.png 或 {code}+子编码.png）"
+            )
+        elif len(filtered) < len(raw_previews):
+            unit.warnings.append(
+                f"[{label}] 目录「{code}」仅 {len(filtered)}/{len(raw_previews)} 张规格图通过编码过滤"
+            )
 
 
 def parse_new_listing_unit(
@@ -624,6 +730,7 @@ def parse_new_listing_unit(
         )
 
     if not unit.skus:
+        _append_no_sku_material_diagnostics(unit, sibling_dirs)
         unit.warnings.append(ListingErrors.Msg.NO_SKU_PARSED.format(label=label))
     else:
         for msg in apply_unit_listing_specs(
@@ -698,20 +805,20 @@ def parse_legacy_listing_unit(
             if model_code not in unit.model_codes:
                 unit.model_codes.append(model_code)
 
-            inv, gp, sp = resolve_combo_pricing(
-                style_code,
-                model_code,
-                catalog,
-                defaults,
-                listing_scope=resolve_listing_price_scope(
-                    family_code=unit.family_code,
-                    image_set=unit.image_set,
-                    listing_label=unit.listing_label,
-                ),
+            pricing = _resolve_sku_pricing_or_warn(
+                unit,
+                prefix=f"[{label}]",
+                style_code=style_code,
+                model_code=model_code,
+                catalog=catalog,
+                defaults=defaults,
                 bundle_components=_parse_combo_component_codes(combo_dir.name, style_code)
                 if model_code == BUNDLE_MODEL_CODE
                 else None,
             )
+            if pricing is None:
+                continue
+            inv, gp, sp = pricing
             unit.skus.append(
                 SkuCombo(
                     style_code=style_code,

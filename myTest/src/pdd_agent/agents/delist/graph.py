@@ -28,6 +28,7 @@ async def delist_browser_node(state: DelistState) -> dict:
         return {"errors": [f"unknown account: {account_id}"], "finished": True}
 
     raw = state.get("delist_params") or {}
+    mode = str(raw.get("mode") or "").strip()
     target_product_id = str(raw.get("target_product_id") or "").strip()
     target_mapping_id = str(raw.get("target_mapping_id") or "").strip()
     ds = DelistSettings(
@@ -39,12 +40,22 @@ async def delist_browser_node(state: DelistState) -> dict:
             raw.get("max_delist_per_run", settings.delist.max_delist_per_run)
         ),
     )
-    if not ds.min_created_after:
+    if not ds.min_created_after and mode != "pipeline_relist_prep" and not target_product_id:
         return {"errors": ["未配置 delist.min_created_after"], "finished": True}
 
     account_dict = account.model_dump()
 
     def _job(dp):
+        if mode == "pipeline_relist_prep":
+            from pdd_agent.skills.delist.pipeline_relist_prep import process_pipeline_relist_prep_delist
+
+            targets = list(raw.get("targets") or [])
+            return process_pipeline_relist_prep_delist(
+                dp,
+                account_dict,
+                targets,
+                dry_run=bool(raw.get("dry_run", False)),
+            )
         if target_product_id:
             return process_single_product_delist(
                 dp,
@@ -57,6 +68,10 @@ async def delist_browser_node(state: DelistState) -> dict:
 
     try:
         stats = await run_browser_job_async(settings, account, _job)
+        if mode == "pipeline_relist_prep":
+            if stats.get("errors"):
+                return {"errors": list(stats.get("errors") or []), "results": stats.get("results") or [], "finished": True}
+            return {"phase": "delist_done", "results": stats.get("results") or [], "finished": True}
         if stats.get("error"):
             return {"errors": [stats["error"]], "results": [stats], "finished": True}
         return {"phase": "delist_done", "results": [stats], "finished": True}

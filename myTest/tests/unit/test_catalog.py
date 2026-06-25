@@ -1,5 +1,7 @@
 """catalog Skill 单元测试（无需浏览器）。"""
 
+from pathlib import Path
+
 from pdd_agent.core.config import MultiSpecConfig, PathsConfig, YamlSettings
 from pdd_agent.skills.listing.catalog import (
     _parse_combo_code,
@@ -158,6 +160,21 @@ def test_parse_combo_code_multi_part_is_bundle():
     )
 
 
+def test_parse_combo_code_keeps_chinese_product_name():
+    assert _parse_combo_code("BD037A奶油泡芙笔袋+YKL001A", "BD037A奶油泡芙笔袋") == (
+        "BD037A奶油泡芙笔袋",
+        "YKL001A",
+    )
+    assert _parse_combo_code("BD037A奶油泡芙笔袋", "BD037A奶油泡芙笔袋") == (
+        "BD037A奶油泡芙笔袋",
+        "BD037A奶油泡芙笔袋",
+    )
+    assert _parse_combo_code("BD037A奶油泡芙笔袋+YKL020A+YKL001A+YKL004L", "BD037A奶油泡芙笔袋") == (
+        "BD037A奶油泡芙笔袋",
+        BUNDLE_MODEL_CODE,
+    )
+
+
 def test_parse_combo_component_codes_for_bundle():
     from pdd_agent.skills.listing.catalog import _parse_combo_component_codes
 
@@ -168,13 +185,17 @@ def test_parse_combo_component_codes_for_bundle():
         "YKL007P",
     ]
     assert _parse_combo_component_codes("BD719A+GJ361A", "BD719A") == ["BD719A", "GJ361A"]
+    assert _parse_combo_component_codes("BD037A奶油泡芙笔袋+YKL001A", "BD037A奶油泡芙笔袋") == [
+        "BD037A奶油泡芙笔袋",
+        "YKL001A",
+    ]
 
 
 def test_resolve_combo_pricing_bundle_sums_all_components():
     from pdd_agent.skills.listing.listing_price_float import reset_listing_price_float_registry
     from pdd_agent.skills.listing.pdd_product_catalog import resolve_combo_pricing
 
-    reset_listing_price_float_registry(enabled=False)
+    reset_listing_price_float_registry(enabled=False, single_float_min=0.0, single_float_max=0.0)
     catalog = {
         "BD032D": PddProductEntry("BD032D", "棕色笔袋", "笔袋", 2855, 14.0),
         "YKL020A": PddProductEntry("YKL020A", "磁吸夹", "亚克力", 100, 4.09),
@@ -191,7 +212,7 @@ def test_resolve_combo_pricing_bundle_sums_all_components():
     )
     assert inv == "100"
     assert gp == "27.14"
-    assert sp == "127.14"
+    assert 27.14 <= float(sp) <= 29.14
 
 
 def test_bundle_preview_parsed_as_sku(tmp_path, monkeypatch):
@@ -259,35 +280,104 @@ def test_sibling_spec_merge_ignores_misnamed_preview_files(tmp_path, monkeypatch
 
 
 def test_minio_style_preview_filenames_with_chinese_suffix(tmp_path, monkeypatch):
-    """MinIO 同步后目录为 BD023A，但规格图仍带中文商品名前缀。"""
+    """MinIO：目录与规格图均带中文商品名，按 + 切段查飞书，不再截取字母编码。"""
     monkeypatch.setattr("pdd_agent.core.config.PROJECT_ROOT", tmp_path)
     monkeypatch.setattr("pdd_agent.paths.PROJECT_ROOT", tmp_path)
     get_pdd_product_catalog.cache_clear()
     root = tmp_path / "data/assets/商品上架规格文件"
-    unit_root = root / "BD023" / "第一套图" / "BD023A"
+    folder = "BD023A毛绒小狗笔袋"
+    unit_root = root / "BD023" / "第一套图" / folder
     unit_root.mkdir(parents=True)
     for index in [1, 2, 3, 4, 5, 7, 8, 9]:
         (unit_root / f"{index}.png").write_bytes(b"img")
-    (unit_root / "BD023A毛绒小狗笔袋.png").write_bytes(b"preview")
-    (unit_root / "BD023A毛绒小狗笔袋+YKL001N.png").write_bytes(b"preview")
-    (unit_root / "BD023A毛绒小狗笔袋+YKL001L.png").write_bytes(b"preview")
-    (unit_root / "BD023A毛绒小狗笔袋+YKL020A+YKL001N+YKL004L.png").write_bytes(b"preview")
+    (unit_root / f"{folder}.png").write_bytes(b"preview")
+    (unit_root / f"{folder}+YKL001N.png").write_bytes(b"preview")
+    (unit_root / f"{folder}+YKL001L.png").write_bytes(b"preview")
+    (unit_root / f"{folder}+YKL020A+YKL001N+YKL004L.png").write_bytes(b"preview")
 
     settings = YamlSettings(
         paths=PathsConfig(assets_root="data/assets/商品上架规格文件"),
         multi_spec=MultiSpecConfig(excel="missing.xlsx"),
     )
-    units = parse_all_listings("BD023A", settings, include_excel_missing_previews=True)
+    units = parse_all_listings(folder, settings, include_excel_missing_previews=True)
     assert len(units) == 1
     unit = units[0]
     assert len(unit.carousel_images) == 5
     assert len(unit.detail_images) == 3
     combo_folders = [sku.combo_folder for sku in unit.skus]
     assert len(unit.skus) == 4
-    assert "BD023A毛绒小狗笔袋" in combo_folders
-    assert "BD023A毛绒小狗笔袋+YKL001N" in combo_folders
-    assert "BD023A毛绒小狗笔袋+YKL001L" in combo_folders
-    assert "BD023A毛绒小狗笔袋+YKL020A+YKL001N+YKL004L" in combo_folders
+    assert folder in combo_folders
+    assert f"{folder}+YKL001N" in combo_folders
+    assert f"{folder}+YKL001L" in combo_folders
+    assert f"{folder}+YKL020A+YKL001N+YKL004L" in combo_folders
     style_models = {(sku.style_code, sku.model_code) for sku in unit.skus}
-    assert ("BD023A", "YKL001N") in style_models
-    assert ("BD023A", "YKL001L") in style_models
+    assert (folder, folder) in style_models
+    assert (folder, "YKL001N") in style_models
+    assert (folder, "YKL001L") in style_models
+
+
+def test_parse_combo_code_short_prefix_with_chinese_dir():
+    folder = "BD037B奶油色长条笔袋"
+    assert _parse_combo_code("BD037B+YKL001N", folder) == (folder, "YKL001N")
+    assert _parse_combo_code("BD037B+YKL001N+YKL020D+YKU007P", folder) == (
+        folder,
+        BUNDLE_MODEL_CODE,
+    )
+
+
+def test_combo_slot_signature_consistent_across_colors():
+    from pdd_agent.skills.listing.catalog import combo_slot_signature
+
+    folder_a = "BD037A奶油泡芙笔袋"
+    folder_b = "BD037B奶油色长条笔袋"
+    assert combo_slot_signature(folder_a, folder_a) == "solo"
+    assert combo_slot_signature("BD037B", folder_b) == "solo"
+    assert combo_slot_signature(f"{folder_a}+YKL001N", folder_a) == combo_slot_signature(
+        "BD037B+YKL001N", folder_b
+    )
+    assert combo_slot_signature(f"{folder_a}+YKL020A+YKL001N+YKL004L", folder_a).startswith(
+        "bundle:"
+    )
+    assert combo_slot_signature("BD037B+YKL001N+YKL020D+YKU007P", folder_b).startswith(
+        "bundle:"
+    )
+
+
+def test_preview_sort_key_bundle_after_single_combo():
+    from pdd_agent.skills.listing.catalog import _preview_sort_key
+
+    folder = "BD037B奶油色长条笔袋"
+    paths = [
+        Path("BD037B+YKL001N+YKL020D+YKU007P.png"),
+        Path(f"{folder}+YKL020A+YKL001N+YKL004L.png"),
+        Path(f"{folder}+YKL001N.png"),
+        Path(f"{folder}.png"),
+    ]
+    sorted_stems = [p.stem for p in sorted(paths, key=lambda p: _preview_sort_key(p, folder))]
+    assert sorted_stems[0] == folder
+    assert sorted_stems[1] == f"{folder}+YKL001N"
+    assert sorted_stems[2:] == [
+        "BD037B+YKL001N+YKL020D+YKU007P",
+        f"{folder}+YKL020A+YKL001N+YKL004L",
+    ]
+
+
+def test_preview_stem_matches_short_prefix_dir():
+    from pdd_agent.skills.listing.catalog import (
+        _filter_preview_images_for_code_dir,
+        _preview_stem_matches_code_dir,
+    )
+
+    folder = "BD037B奶油色长条笔袋"
+    assert _preview_stem_matches_code_dir("BD037B+YKL001N", folder)
+    assert _preview_stem_matches_code_dir(f"{folder}+YKL001N", folder)
+    assert not _preview_stem_matches_code_dir("BD037A+YKL001N", folder)
+
+    code_dir = Path(folder)
+    previews = [
+        Path("BD037B+YKL001N.png"),
+        Path(f"{folder}+YKL001N.png"),
+        Path("BD037A+YKL001N.png"),
+    ]
+    matched = _filter_preview_images_for_code_dir(code_dir, previews)
+    assert [p.name for p in matched] == ["BD037B+YKL001N.png", f"{folder}+YKL001N.png"]

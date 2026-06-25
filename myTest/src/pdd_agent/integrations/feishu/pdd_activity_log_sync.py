@@ -1,9 +1,9 @@
-"""PDD活动日志表 — 仅记录上架成功后的活动步骤（限时限量购 / 618 / 七折，一行一商品）。
+"""PDD营销-活动日志表 — 仅记录上架成功后的活动步骤（限时限量购 / 618 / 七折，一行一商品）。
 
 时序：
-1. 上架成功 → 同步预建行（日期 + 店铺名称 + 商品ID + 各活动「未执行」）
-2. 限时限量购（上架后紧接）→ 只更新限时限量购列；行应已预建
-3. 618 / 七折（可能延迟 24h）→ 只更新对应活动列；按店铺名称 + 商品ID 定位已有行
+1. 上架成功 → 同步预建行（日期 + 店铺 + 参加商品链接ID + 营销工具/活动方案 + 各活动「未执行」）
+2. 限时限量购（上架后紧接）→ 只更新参加状态 / 具体原因
+3. 618 / 七折（可能延迟 24h）→ 只更新对应活动状态列；按店铺名称 + 参加商品链接ID 定位已有行
 """
 
 from __future__ import annotations
@@ -45,9 +45,49 @@ _INVALID_FILTER_CODES = frozenset({1254018})
 _LIMITED_TIME_ONGOING = "进行中"
 _LIMITED_TIME_FAILURE = "失败"
 _LIMITED_TIME_PENDING = "未执行"
+_PROGRAM_EXCEPTION = "程序异常"
 _ACTIVITY_REGISTER_SUCCESS = "报名成功"
 _ACTIVITY_REGISTER_FAILURE = "失败"
 _ACTIVITY_REGISTER_PENDING = "未执行"
+
+_PROGRAM_ERROR_MARKERS = (
+    "traceback",
+    "cannot import",
+    "import error",
+    "attributeerror",
+    "typeerror",
+    "nameerror",
+    "keyerror",
+    "runtimeerror",
+    "recursionerror",
+    "maximum recursion depth",
+    "exception:",
+    "unexpected error",
+    "程序异常",
+)
+
+
+def _is_program_exception_error(error: str) -> bool:
+    text = str(error or "").strip().lower()
+    if not text:
+        return False
+    return any(marker in text for marker in _PROGRAM_ERROR_MARKERS)
+
+
+def map_limited_time_activity_status(*, success: bool, error: str = "") -> str:
+    if success:
+        return _LIMITED_TIME_ONGOING
+    if _is_program_exception_error(error):
+        return _PROGRAM_EXCEPTION
+    return _LIMITED_TIME_FAILURE
+
+
+def map_activity_register_activity_status(*, success: bool, error: str = "") -> str:
+    if success:
+        return _ACTIVITY_REGISTER_SUCCESS
+    if _is_program_exception_error(error):
+        return _PROGRAM_EXCEPTION
+    return _ACTIVITY_REGISTER_FAILURE
 
 
 def _date_to_ms(day: date) -> int:
@@ -64,6 +104,8 @@ def _brief_activity_failure_reason(error: str) -> str:
     text = str(error or "").strip()
     if not text:
         return ""
+    if _is_program_exception_error(text):
+        return "需人工查验"
     try:
         from pdd_agent.skills.campaign.marketing_activities import (
             normalize_activity_register_failure_for_feishu,
@@ -88,12 +130,52 @@ def _brief_activity_failure_reason(error: str) -> str:
     return line[:500]
 
 
-def map_limited_time_activity_status(*, success: bool) -> str:
-    return _LIMITED_TIME_ONGOING if success else _LIMITED_TIME_FAILURE
+def _pick_failure_reason_option(options: list[str], *, contains: str = "", exact: str = "") -> str:
+    opts = [str(x).strip() for x in options if str(x).strip()]
+    if exact:
+        for opt in opts:
+            if opt == exact:
+                return opt
+    if contains:
+        for opt in opts:
+            if contains in opt:
+                return opt
+    return ""
 
 
-def map_activity_register_activity_status(*, success: bool) -> str:
-    return _ACTIVITY_REGISTER_SUCCESS if success else _ACTIVITY_REGISTER_FAILURE
+def normalize_activity_register_failure_reason_option(
+    error: str,
+    options: list[str] | None = None,
+) -> str:
+    """活动报名失败原因映射为飞书单选选项（用于「7折失败原因」）。"""
+    opts = [str(x).strip() for x in (options or []) if str(x).strip()]
+    text = str(error or "").strip()
+    if not text:
+        return ""
+    if _is_program_exception_error(text):
+        return _pick_failure_reason_option(opts, exact="程序异常", contains="程序异常")
+    brief = _brief_activity_failure_reason(text)
+    if not brief:
+        return ""
+    if _is_program_exception_error(brief) or "需人工查验" in brief:
+        return _pick_failure_reason_option(opts, exact="程序异常", contains="程序异常")
+    time_markers = ("24h", "24小时", "过24", "等24", "等待", "1天", "一天")
+    if any(marker in brief for marker in time_markers) or any(marker in text for marker in time_markers):
+        picked = _pick_failure_reason_option(opts, contains="24h")
+        if picked:
+            return picked
+        return _pick_failure_reason_option(opts, contains="24") or "新商品需等24h后才可报"
+    if "成本" in brief or "成本" in text:
+        picked = _pick_failure_reason_option(opts, contains="成本")
+        if picked:
+            return picked
+        return "活动价格低于成本价"
+    if brief in opts:
+        return brief
+    for opt in opts:
+        if opt in brief or brief in opt:
+            return opt
+    return ""
 
 
 def resolve_activity_log_phase(activity_id: str, config: FeishuConfig | None = None) -> str:
@@ -120,11 +202,26 @@ def _field_defs_for_pdd_activity_log(config: FeishuConfig) -> list[dict[str, Any
         {"field_name": names.account_name, "type": FIELD_TEXT},
         {"field_name": names.product_id, "type": FIELD_TEXT},
         {
+            "field_name": names.marketing_tool_name,
+            "type": FIELD_SINGLE_SELECT,
+            "property": {"options": [{"name": x} for x in activity_cfg.marketing_tool_options]},
+        },
+        {
+            "field_name": names.activity_plan,
+            "type": FIELD_SINGLE_SELECT,
+            "property": {"options": [{"name": x} for x in activity_cfg.activity_plan_options]},
+        },
+        {
             "field_name": names.limited_time_status,
             "type": FIELD_SINGLE_SELECT,
             "property": {"options": [{"name": x} for x in activity_cfg.limited_time_status_options]},
         },
         {"field_name": names.limited_time_failure_reason, "type": FIELD_TEXT},
+        {
+            "field_name": names.marketing_activity_618,
+            "type": FIELD_SINGLE_SELECT,
+            "property": {"options": [{"name": x} for x in activity_cfg.marketing_activity_618_options]},
+        },
         {
             "field_name": names.activity_618_status,
             "type": FIELD_SINGLE_SELECT,
@@ -132,11 +229,22 @@ def _field_defs_for_pdd_activity_log(config: FeishuConfig) -> list[dict[str, Any
         },
         {"field_name": names.activity_618_failure_reason, "type": FIELD_TEXT},
         {
+            "field_name": names.marketing_activity_discount,
+            "type": FIELD_SINGLE_SELECT,
+            "property": {"options": [{"name": x} for x in activity_cfg.marketing_activity_discount_options]},
+        },
+        {
             "field_name": names.activity_discount_status,
             "type": FIELD_SINGLE_SELECT,
             "property": {"options": [{"name": x} for x in activity_cfg.activity_register_status_options]},
         },
-        {"field_name": names.activity_discount_failure_reason, "type": FIELD_TEXT},
+        {
+            "field_name": names.activity_discount_failure_reason,
+            "type": FIELD_SINGLE_SELECT,
+            "property": {
+                "options": [{"name": x} for x in activity_cfg.activity_register_failure_reason_options],
+            },
+        },
     ]
 
 
@@ -218,7 +326,7 @@ def _find_activity_log_record(
     if not product_id:
         return None
     names = config.pdd_activity_log.field_names
-    dedupe_field = str(config.pdd_activity_log.dedupe_field or names.product_id or "商品ID").strip()
+    dedupe_field = str(config.pdd_activity_log.dedupe_field or names.product_id or "参加商品链接ID").strip()
     store_name = _resolve_store_name(account_id=account_id, account_name=account_name, config=config)
     attempts = max(1, int(retries))
     for attempt in range(attempts):
@@ -261,16 +369,21 @@ def _build_activity_log_base_fields(
     activity_at: datetime | None = None,
 ) -> dict[str, Any]:
     names = config.pdd_activity_log.field_names
+    activity_cfg = config.pdd_activity_log
     when = activity_at or datetime.now()
     store_name = _resolve_store_name(account_id=account_id, account_name=account_name, config=config)
     return {
         names.date: _date_to_ms(when.date()),
         names.account_name: store_name,
         names.product_id: str(product_id or "").strip(),
+        names.marketing_tool_name: str(activity_cfg.marketing_tool_name or "限时限量购").strip(),
+        names.activity_plan: str(activity_cfg.activity_plan or "商品原价立减5元").strip(),
         names.limited_time_status: _LIMITED_TIME_PENDING,
         names.limited_time_failure_reason: "",
+        names.marketing_activity_618: str(activity_cfg.marketing_activity_618_label or "618").strip(),
         names.activity_618_status: _ACTIVITY_REGISTER_PENDING,
         names.activity_618_failure_reason: "",
+        names.marketing_activity_discount: str(activity_cfg.marketing_activity_discount_label or "7折").strip(),
         names.activity_discount_status: _ACTIVITY_REGISTER_PENDING,
         names.activity_discount_failure_reason: "",
     }
@@ -610,7 +723,7 @@ def push_pdd_activity_log_limited_time(
 ) -> dict[str, Any]:
     cfg = config or load_feishu_config()
     names = cfg.pdd_activity_log.field_names
-    status_value = map_limited_time_activity_status(success=success)
+    status_value = map_limited_time_activity_status(success=success, error=error)
     default_reason = "" if success else _brief_activity_failure_reason(error)
 
     store_name = _account_name_for_push(
@@ -624,8 +737,11 @@ def push_pdd_activity_log_limited_time(
     missing: list[str] = []
     for pid in dict.fromkeys(str(x or "").strip() for x in product_ids if str(x or "").strip()):
         row_reason = default_reason
+        row_error = error
         if not success and product_errors:
-            row_reason = _brief_activity_failure_reason(product_errors.get(pid) or error)
+            row_error = product_errors.get(pid) or error
+            row_reason = _brief_activity_failure_reason(row_error)
+        status_value = map_limited_time_activity_status(success=success, error=row_error)
         patch = {
             names.limited_time_status: status_value,
             names.limited_time_failure_reason: row_reason,
@@ -674,7 +790,7 @@ def push_pdd_activity_log_activity_register(
         return {"skipped": True, "reason": "activity_not_configured", "activity_id": activity_id}
 
     names = cfg.pdd_activity_log.field_names
-    status_value = map_activity_register_activity_status(success=success)
+    status_value = map_activity_register_activity_status(success=success, error=error)
     default_reason = "" if success else _brief_activity_failure_reason(error)
 
     if phase == "activity_618":
@@ -695,8 +811,16 @@ def push_pdd_activity_log_activity_register(
     missing: list[str] = []
     for pid in dict.fromkeys(str(x or "").strip() for x in product_ids if str(x or "").strip()):
         row_reason = default_reason
+        row_error = error
         if not success and product_errors:
-            row_reason = _brief_activity_failure_reason(product_errors.get(pid) or error)
+            row_error = product_errors.get(pid) or error
+            row_reason = _brief_activity_failure_reason(row_error)
+        if phase == "activity_discount" and not success:
+            row_reason = normalize_activity_register_failure_reason_option(
+                row_error,
+                cfg.pdd_activity_log.activity_register_failure_reason_options,
+            )
+        status_value = map_activity_register_activity_status(success=success, error=row_error)
         patch = {
             status_field: status_value,
             reason_field: row_reason,

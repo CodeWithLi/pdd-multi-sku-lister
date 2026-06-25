@@ -101,6 +101,8 @@ def test_build_pdd_upload_log_fields_maps_taobao_columns():
             "&refer_page_app=mms&refer_page_name=mms_goods"
         ),
         account_name="测试店铺",
+        group_price="11.44",
+        single_price="111.4",
         publish_start=publish_start,
         publish_end=verified_at,
         verified_at=verified_at,
@@ -109,7 +111,11 @@ def test_build_pdd_upload_log_fields_maps_taobao_columns():
     assert fields["标题"] == "可爱草莓软糯造型毛绒零钱包"
     assert fields["商品编码"] == "BD737A"
     assert fields["店铺名称"] == "测试店铺"
-    assert fields["商品ID"] == "966965874378"
+    assert "商品ID" not in fields
+    assert fields["商品链接ID"] == "966965874378"
+    assert fields["拼单价"] == 11.44
+    assert "单独买价" not in fields
+    assert fields["单买价"] == 111.4
     assert isinstance(fields["日期"], int)
     assert isinstance(fields["发布开始时间"], int)
     assert isinstance(fields["发布结束时间"], int)
@@ -234,7 +240,7 @@ def test_push_pdd_upload_log_updates_existing_row_by_product_id(monkeypatch):
             pdd_upload_log=PddUploadLogConfig(
                 enabled=True,
                 table_id="tbldwkpLiuvBWwe9",
-                dedupe_field="商品ID",
+                dedupe_field="商品链接ID",
             ),
         ),
     )
@@ -307,6 +313,11 @@ def test_push_pdd_upload_log_writes_spec_rows_when_enabled(monkeypatch):
     assert len(rows) == 2
     assert rows[0].get("组合商品条码", "") == ""
     assert rows[1].get("组合商品条码") == "BD034B+YKL001I"
+    assert rows[0].get("商品链接ID") == "966965874378"
+    assert "商品ID" not in rows[0]
+    assert rows[0].get("单买价") == 15.0
+    assert "单独买价" not in rows[0]
+    assert rows[1].get("单买价") == 111.98
 
 
 def test_format_pdd_upload_log_context_includes_link_source():
@@ -366,7 +377,7 @@ def test_push_pdd_upload_limited_time_status_updates_by_product_id(monkeypatch):
 
     def fake_search(client, app_token, table_id, *, field_name, value):
         if value == "967058176181":
-            return [{"record_id": "rec_967058", "fields": {"商品ID": value}}]
+            return [{"record_id": "rec_967058", "fields": {"商品链接ID": value}}]
         return []
 
     def fake_batch_update(client, app_token, table_id, updates):
@@ -446,7 +457,7 @@ def test_push_pdd_upload_activity_register_status_updates_field(monkeypatch):
 
     def fake_search(client, app_token, table_id, *, field_name, value):
         if value == "965182969751":
-            return [{"record_id": "rec_act", "fields": {"商品ID": value}}]
+            return [{"record_id": "rec_act", "fields": {"商品链接ID": value}}]
         return []
 
     def fake_batch_update(client, app_token, table_id, updates):
@@ -513,7 +524,7 @@ def test_push_pdd_upload_promotion_status_updates_field(monkeypatch):
 
     def fake_search(client, app_token, table_id, *, field_name, value):
         if value == "967058176181":
-            return [{"record_id": "rec_promo", "fields": {"商品ID": value}}]
+            return [{"record_id": "rec_promo", "fields": {"商品链接ID": value}}]
         return []
 
     def fake_batch_update(client, app_token, table_id, updates):
@@ -687,8 +698,11 @@ def test_schedule_feishu_listing_result_log_expands_no_skus_system_reason(monkey
 
     assert len(captured) == 1
     assert captured[0]["reason_code"] == "preflight_no_skus"
-    assert "规格图文件名无法解析组合编码" in captured[0]["system_reason"]
-    assert "商品表无子编码" in captured[0]["system_reason"]
+    sr = captured[0]["system_reason"]
+    assert "BD023B毛绒小猫笔袋/第二套图：" in sr
+    assert "规格图文件名无法解析组合编码" in sr
+    assert "商品表无子编码" in sr
+    assert "主图" in sr
 
 
 def test_schedule_feishu_listing_result_log_dedupes_one_failure(monkeypatch):

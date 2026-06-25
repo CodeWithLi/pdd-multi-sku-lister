@@ -150,6 +150,10 @@ def start_integrated(body: IntegratedPipelineStartRequest):
             skip_listing=body.skip_listing,
             listing_skip_selectors=body.listing_skip_selectors,
             material_source=body.material_source,
+            relist_strategy=body.relist_strategy,
+            listing_throttle_enabled=body.listing_throttle_enabled,
+            listing_batch_set_count=body.listing_batch_set_count,
+            listing_batch_interval_minutes=body.listing_batch_interval_minutes,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -198,6 +202,10 @@ def start_integrated_batch(body: IntegratedPipelineBatchStartRequest):
             store_start_delay_max_seconds=body.store_start_delay_max_seconds,
             max_concurrent_stores=body.max_concurrent_stores,
             material_source=body.material_source,
+            relist_strategy=body.relist_strategy,
+            listing_throttle_enabled=body.listing_throttle_enabled,
+            listing_batch_set_count=body.listing_batch_set_count,
+            listing_batch_interval_minutes=body.listing_batch_interval_minutes,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc

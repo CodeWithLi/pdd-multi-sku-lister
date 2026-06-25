@@ -379,6 +379,13 @@ def test_enrich_listing_unit_specs_dedupes_duplicate_display_rows(monkeypatch):
 
 
 def test_resolve_combo_pricing_from_catalog():
+    from pdd_agent.skills.listing.listing_price_float import reset_listing_price_float_registry
+
+    reset_listing_price_float_registry(
+        enabled=False,
+        single_float_min=1.0,
+        single_float_max=1.0,
+    )
     catalog = {
         "BD716A": PddProductEntry("BD716A", "灰色笔袋", "笔袋", 100, 20.0),
         "YKL001N": PddProductEntry("YKL001N", "挂件", "亚克力", 50, 30.0),
@@ -388,7 +395,7 @@ def test_resolve_combo_pricing_from_catalog():
     inv, gp, sp = resolve_combo_pricing("BD716A", "YKL001N", catalog, {})
     assert inv == "50"
     assert gp == "50"
-    assert sp == "150"
+    assert sp == "51"
 
 
 def test_build_sub_category_cache_uses_catalog_not_ai(monkeypatch):

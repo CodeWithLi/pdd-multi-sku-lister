@@ -620,6 +620,201 @@ def _find_exact_product_row(page, product_id: str):
     return None
 
 
+def _match_merchant_code_in_row(row_text: str, merchant_codes: list[str]) -> str:
+    """行文本匹配商品编码：取最长全名命中，避免 BD029A 误匹配 BD029A卡皮巴拉笔袋。"""
+    text = str(row_text or "")
+    if not text:
+        return ""
+    matched = ""
+    for code in sorted({str(c or "").strip() for c in merchant_codes if str(c or "").strip()}, key=len, reverse=True):
+        if code not in text:
+            continue
+        if matched and matched != code and code in matched:
+            continue
+        if not matched or len(code) > len(matched):
+            matched = code
+    return matched
+
+
+def _scan_filtered_rows_on_page(page) -> list[dict[str, str]]:
+    rows: list[dict[str, str]] = []
+    for row in _get_table_rows(page):
+        text = row.text or ""
+        product_id = str(extract_product_id_from_text(text) or "").strip()
+        if not product_id:
+            continue
+        rows.append({"product_id": product_id, "row_text": text})
+    return rows
+
+
+def scan_filtered_product_rows_all_pages(
+    page,
+    account_id: str,
+    *,
+    merchant_codes: list[str] | None = None,
+) -> list[dict[str, str]]:
+    """在当前筛选结果下翻页扫描全部商品行。"""
+    codes = [str(c or "").strip() for c in (merchant_codes or []) if str(c or "").strip()]
+    found: list[dict[str, str]] = []
+    seen_ids: set[str] = set()
+    for page_num in range(1, MAX_PAGES + 1):
+        page_rows = _scan_filtered_rows_on_page(page)
+        _log(account_id, f"商品列表第 {page_num} 页，扫描 {len(page_rows)} 行")
+        if not page_rows:
+            break
+        for item in page_rows:
+            product_id = item["product_id"]
+            if product_id in seen_ids:
+                continue
+            seen_ids.add(product_id)
+            row_text = item.get("row_text") or ""
+            merchant_code = _match_merchant_code_in_row(row_text, codes) if codes else ""
+            found.append(
+                {
+                    "product_id": product_id,
+                    "merchant_code": merchant_code,
+                    "row_text": row_text,
+                }
+            )
+        if not _go_next_page(page, account_id):
+            break
+    return found
+
+
+def _click_goods_table_select_all(page) -> bool:
+    clicked = page.run_js(
+        """
+        function isVisible(el) {
+            if (!el || !el.getBoundingClientRect) return false;
+            const r = el.getBoundingClientRect();
+            const s = window.getComputedStyle(el);
+            return r.width > 2 && r.height > 2
+                && s.display !== 'none' && s.visibility !== 'hidden'
+                && parseFloat(s.opacity || '1') > 0.05;
+        }
+        function clickEl(el) {
+            el.scrollIntoView({ block: 'center', inline: 'nearest' });
+            el.click();
+            return true;
+        }
+        const table = document.querySelector('table') || document.body;
+        const headerCell = Array.from(table.querySelectorAll('thead th, thead td, th'))
+            .find((el) => isVisible(el) && el.querySelector('input[type="checkbox"], [role="checkbox"], label'));
+        if (headerCell) {
+            const box = headerCell.querySelector('input[type="checkbox"], [role="checkbox"], label, span');
+            if (box && clickEl(box)) return true;
+            if (clickEl(headerCell)) return true;
+        }
+        const boxes = Array.from(document.querySelectorAll('thead input[type="checkbox"], thead [role="checkbox"]'))
+            .filter(isVisible);
+        if (boxes[0]) return clickEl(boxes[0]);
+        return false;
+        """
+    )
+    return bool(clicked)
+
+
+def _click_batch_delist_toolbar(page) -> bool:
+    for sel in (
+        "text:批量下架",
+        'xpath://button[contains(normalize-space(.),"批量下架")]',
+        'xpath://a[contains(normalize-space(.),"批量下架")]',
+    ):
+        btn = page.ele(sel, timeout=2)
+        if btn:
+            try:
+                btn.click()
+                return True
+            except Exception:
+                continue
+    return False
+
+
+def _batch_delist_current_page(page, account_id: str, *, dry_run: bool = False) -> tuple[int, str]:
+    rows = _scan_filtered_rows_on_page(page)
+    count = len(rows)
+    if count <= 0:
+        return 0, ""
+    if dry_run:
+        _log(account_id, f"[试运行] 本页 {count} 条将批量下架")
+        return count, ""
+
+    if not _click_goods_table_select_all(page):
+        return 0, "select_all_failed"
+    time.sleep(0.5)
+    if not _click_batch_delist_toolbar(page):
+        return 0, "batch_delist_button_not_found"
+    time.sleep(0.8)
+    sample_id = rows[0]["product_id"]
+    if not _confirm_delist_dialog(page, account_id, sample_id):
+        _dismiss_delist_modal(page, account_id)
+        return 0, "confirm_batch_delist_failed"
+    _log(account_id, f"本页批量下架成功 {count} 条")
+    time.sleep(1.2)
+    return count, ""
+
+
+def batch_delist_filtered_goods(
+    page,
+    account_id: str,
+    *,
+    dry_run: bool = False,
+) -> tuple[int, list[str]]:
+    """在当前筛选结果下逐页全选并批量下架。"""
+    total = 0
+    errors: list[str] = []
+    stagnant_rounds = 0
+    for round_idx in range(1, MAX_PAGES + 1):
+        rows = _scan_filtered_rows_on_page(page)
+        if not rows:
+            break
+        hit, err = _batch_delist_current_page(page, account_id, dry_run=dry_run)
+        if err:
+            errors.append(err)
+            break
+        if hit <= 0:
+            stagnant_rounds += 1
+            if stagnant_rounds >= 2:
+                break
+            time.sleep(1)
+            continue
+        stagnant_rounds = 0
+        total += hit
+        _log(account_id, f"批量下架累计 {total} 条（第 {round_idx} 轮）")
+        time.sleep(1)
+    return total, errors
+
+
+def filter_goods_by_merchant_codes(page, account_id: str, merchant_codes: list[str]) -> bool:
+    codes = [str(code or "").strip() for code in merchant_codes if str(code or "").strip()]
+    if not codes:
+        return False
+    filter_value = " ".join(codes)
+    _clear_goods_filters(page)
+    if not _set_goods_filter(page, "商品编码", filter_value):
+        _log(account_id, f"商品编码批量筛选失败：{filter_value[:120]}")
+        return False
+    _click_goods_search(page)
+    time.sleep(1.5)
+    _log(account_id, f"已按 {len(codes)} 个商品编码批量筛选")
+    return True
+
+
+def filter_goods_by_product_ids(page, account_id: str, product_ids: list[str]) -> bool:
+    ids = [str(pid or "").strip() for pid in product_ids if str(pid or "").strip()]
+    if not ids:
+        return False
+    filter_value = " ".join(ids)
+    _clear_goods_filters(page)
+    if not _set_goods_filter(page, "商品ID", filter_value):
+        _log(account_id, f"商品ID批量筛选失败：{filter_value[:120]}")
+        return False
+    _click_goods_search(page)
+    time.sleep(1.5)
+    _log(account_id, f"已按 {len(ids)} 个商品ID批量筛选")
+    return True
+
+
 def process_single_product_delist(
     page,
     account_config: dict,
@@ -627,6 +822,7 @@ def process_single_product_delist(
     product_id: str,
     mapping_id: str = "",
     dry_run: bool = False,
+    list_already_open: bool = False,
 ) -> dict:
     """精准下架单个已发布商品：只按拼多多商品ID匹配，ID不一致绝不下架。"""
     account_id = account_config.get("account_id", "")
@@ -645,9 +841,10 @@ def process_single_product_delist(
 
     try:
         _log(account_id, f"开始精准下架商品ID={product_id}")
-        if not open_goods_list_on_sale(page, account_id):
-            stats["error"] = "open_list_failed"
-            return stats
+        if not list_already_open:
+            if not open_goods_list_on_sale(page, account_id):
+                stats["error"] = "open_list_failed"
+                return stats
 
         _clear_goods_filters(page)
         if not _set_goods_filter(page, "商品ID", product_id):

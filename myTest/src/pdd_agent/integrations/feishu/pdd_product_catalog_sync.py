@@ -204,18 +204,30 @@ def ensure_pdd_product_catalog_table_ready(
     }
 
 
-def _entry_from_feishu_fields(fields: dict[str, Any], names) -> PddProductEntry | None:
-    raw_code = _field_text(fields, names.product_code)
+def _entry_from_feishu_fields(
+    fields: dict[str, Any],
+    names,
+    *,
+    resolved_fields: dict[str, str] | None = None,
+) -> PddProductEntry | None:
+    resolved = dict(resolved_fields or {})
+    product_code_field = str(resolved.get("product_code") or names.product_code or "").strip()
+    color_spec_field = str(resolved.get("color_spec") or names.color_spec or "").strip()
+    product_type_field = str(resolved.get("product_type") or names.product_type or "").strip()
+    inventory_field = str(resolved.get("available_inventory") or names.available_inventory or "").strip()
+    pricing_field = str(resolved.get("pricing") or names.pricing or "").strip()
+
+    raw_code = _field_text(fields, product_code_field)
     code = _norm_code(raw_code)
-    color_spec = _field_text(fields, names.color_spec)
+    color_spec = _field_text(fields, color_spec_field)
     if not code or not color_spec:
         return None
-    inventory = _field_number(fields, names.available_inventory)
-    pricing = _field_number(fields, names.pricing)
+    inventory = _field_number(fields, inventory_field)
+    pricing = _field_number(fields, pricing_field)
     return PddProductEntry(
         code=code,
         color_spec=color_spec,
-        product_type=_field_text(fields, names.product_type),
+        product_type=_field_text(fields, product_type_field),
         inventory=int(inventory or 0),
         price=float(pricing or 0.0),
     )
@@ -327,11 +339,7 @@ def _collect_product_catalog_issue_details(
             )
             return aspects
 
-    entry = catalog.get(code)
-    if not entry:
-        from pdd_agent.integrations.feishu.listing_feishu_catalog import catalog_entry
-
-        entry = catalog_entry(catalog, code)
+    entry = catalog.get(_norm_code(code))
     if not entry:
         aspect = _row_missing_aspect(code, merchant_code)
         aspects.append(_aspect_label(aspect))

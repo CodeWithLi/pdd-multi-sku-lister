@@ -16,6 +16,7 @@ from pdd_agent.skills.listing.catalog import (
     _collect_flat_preview_images,
     _filter_preview_images_for_code_dir,
     _preview_sort_key,
+    combo_slot_signature,
 )
 
 
@@ -163,7 +164,9 @@ def apply_slot_alignment(unit: ListingUnit, *, account_id: str = "") -> SlotAlig
             errors=[ListingErrors.Msg.SLOT_REF_NO_SKU.format(label=unit.listing_label, reference=reference)],
         )
 
+    ref_signatures = [combo_slot_signature(sku.combo_folder, reference) for sku in ref_skus]
     slot_labels = [sku.model_name for sku in ref_skus]
+    sig_to_label = dict(zip(ref_signatures, slot_labels))
     slot_count = len(slot_labels)
 
     for code, skus in groups.items():
@@ -183,12 +186,17 @@ def apply_slot_alignment(unit: ListingUnit, *, account_id: str = "") -> SlotAlig
     for code, skus in groups.items():
         if code == reference:
             continue
-        for idx, sku in enumerate(skus):
+        for sku in skus:
+            sig = combo_slot_signature(sku.combo_folder, code)
+            target_label = sig_to_label.get(sig)
+            if not target_label:
+                idx = skus.index(sku)
+                target_label = slot_labels[idx] if idx < len(slot_labels) else sku.model_name
             old = sku.model_name
-            sku.model_name = slot_labels[idx]
+            sku.model_name = target_label
             if prefix and old != sku.model_name:
                 print(
-                    f"{prefix}[{unit.listing_label}] 槽位对齐 {code}#{idx + 1}："
+                    f"{prefix}[{unit.listing_label}] 槽位对齐 {code} [{sig}]："
                     f"{sku.combo_folder} {old} → {sku.model_name}",
                     flush=True,
                 )

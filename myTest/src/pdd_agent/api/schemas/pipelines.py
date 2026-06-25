@@ -32,6 +32,10 @@ class IntegratedPipelineStartRequest(BaseModel):
     skip_listing: bool = False
     listing_skip_selectors: list[str] = Field(default_factory=list)
     material_source: str = ""
+    relist_strategy: str = "ignore"
+    listing_throttle_enabled: bool = False
+    listing_batch_set_count: int = Field(default=5, ge=1, le=100)
+    listing_batch_interval_minutes: int = Field(default=30, ge=1, le=1440)
 
     @model_validator(mode="after")
     def validate_activity_ids(self) -> "IntegratedPipelineStartRequest":
@@ -63,6 +67,10 @@ class IntegratedPipelineBatchStartRequest(BaseModel):
     skip_listing: bool = False
     listing_skip_selectors: list[str] = Field(default_factory=list)
     material_source: str = ""
+    relist_strategy: str = "ignore"
+    listing_throttle_enabled: bool = False
+    listing_batch_set_count: int = Field(default=5, ge=1, le=100)
+    listing_batch_interval_minutes: int = Field(default=30, ge=1, le=1440)
     account_ids: list[str] = Field(default_factory=list)
     product_codes: list[str] = Field(default_factory=list)
     items: list[IntegratedPipelineBatchItem] = Field(default_factory=list)

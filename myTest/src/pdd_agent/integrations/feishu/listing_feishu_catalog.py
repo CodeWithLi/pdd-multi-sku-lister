@@ -90,6 +90,31 @@ def catalog_entry(catalog: dict[str, PddProductEntry], code: str) -> PddProductE
     return None
 
 
+def merchant_code_from_selector(raw: str) -> str:
+    """从套图 selector 提取商品文件夹名（飞书商品编码）。"""
+    text = str(raw or "").strip()
+    if not text:
+        return ""
+    if "/" in text:
+        parts = [part.strip() for part in text.split("/") if part.strip()]
+        if len(parts) >= 3:
+            return normalize_listing_code(parts[-1])
+        if len(parts) == 2:
+            return normalize_listing_code(parts[0])
+        return normalize_listing_code(parts[0])
+    return normalize_listing_code(text)
+
+
+def collect_merchant_codes_from_selectors(targets: list[str]) -> list[str]:
+    """从整合链路 selector 列表提取需拉飞书的母商品编码。"""
+    codes: list[str] = []
+    for raw in targets or []:
+        code = merchant_code_from_selector(raw)
+        if code:
+            codes.append(code)
+    return list(dict.fromkeys(codes))
+
+
 def collect_warm_codes_from_units(units: list[Any], *, extra_codes: list[str] | None = None) -> list[str]:
     """收集需拉取飞书的编码：母商品文件夹名 + 子 SKU 型号码。"""
     codes: list[str] = []

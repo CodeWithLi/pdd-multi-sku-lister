@@ -24,6 +24,8 @@ from pdd_agent.integrations.feishu.pdd_activity_log_sync import (
 
     map_limited_time_activity_status,
 
+    normalize_activity_register_failure_reason_option,
+
     push_pdd_activity_log_activity_register,
 
     push_pdd_activity_log_limited_time,
@@ -61,15 +63,23 @@ def activity_cfg() -> FeishuConfig:
 
 
 def test_map_activity_status_values():
-
     assert map_limited_time_activity_status(success=True) == "进行中"
-
     assert map_limited_time_activity_status(success=False) == "失败"
-
+    assert map_limited_time_activity_status(success=False, error="cannot import name 'x'") == "程序异常"
     assert map_activity_register_activity_status(success=True) == "报名成功"
-
     assert map_activity_register_activity_status(success=False) == "失败"
+    assert map_activity_register_activity_status(success=False, error="Traceback (most recent call last)") == "程序异常"
 
+
+def test_normalize_activity_register_failure_reason_option():
+    opts = ["新商品需等24h后才可报", "活动价格低于成本价", "程序异常"]
+    assert (
+        normalize_activity_register_failure_reason_option("商品需过24h后才可以报活动", opts)
+        == "新商品需等24h后才可报"
+    )
+    assert normalize_activity_register_failure_reason_option("立减后低于成本", opts) == "活动价格低于成本价"
+    assert normalize_activity_register_failure_reason_option("RecursionError: max depth", opts) == "程序异常"
+    assert normalize_activity_register_failure_reason_option("", opts) == ""
 
 
 
@@ -118,22 +128,20 @@ def test_push_pdd_activity_log_seed_creates_pending_row(monkeypatch, activity_cf
 
 
 
+    names = activity_cfg.pdd_activity_log.field_names
+
     def fake_resolve(**kwargs):
-
         return {
-
             "日期": 1,
-
             "店铺名称": "测试店",
-
-            "商品ID": kwargs.get("product_id"),
-
-            "限时限量购状态": "未执行",
-
-            "618状态": "未执行",
-
-            "七折状态": "未执行",
-
+            names.product_id: kwargs.get("product_id"),
+            names.marketing_tool_name: "限时限量购",
+            names.activity_plan: "商品原价立减5元",
+            names.limited_time_status: "未执行",
+            names.marketing_activity_618: "618",
+            names.activity_618_status: "未执行",
+            names.marketing_activity_discount: "7折",
+            names.activity_discount_status: "未执行",
         }
 
 
@@ -254,27 +262,19 @@ def test_push_pdd_activity_log_limited_time_creates_row(monkeypatch, activity_cf
 
 
 
+    names = activity_cfg.pdd_activity_log.field_names
+
     push_pdd_activity_log_limited_time(
-
         account_id="store_A",
-
         product_ids=["968277091707"],
-
         success=True,
-
         account_name="测试店",
-
         config=activity_cfg,
-
     )
-
     assert captured[0]["product_id"] == "968277091707"
-
     assert captured[0]["account_name"] == "测试店"
-
     assert captured[0]["identity_mode"] == "immediate"
-
-    assert captured[0]["patch_fields"]["限时限量购状态"] == "进行中"
+    assert captured[0]["patch_fields"][names.limited_time_status] == "进行中"
 
 
 def test_push_pdd_activity_log_limited_time_failure_writes_reason(monkeypatch, activity_cfg):
@@ -288,6 +288,8 @@ def test_push_pdd_activity_log_limited_time_failure_writes_reason(monkeypatch, a
 
     monkeypatch.setattr(pdd_activity_log_sync, "upsert_pdd_activity_log_fields", fake_upsert)
 
+    names = activity_cfg.pdd_activity_log.field_names
+
     push_pdd_activity_log_limited_time(
         account_id="store_A",
         product_ids=["968599179476"],
@@ -297,8 +299,8 @@ def test_push_pdd_activity_log_limited_time_failure_writes_reason(monkeypatch, a
         config=activity_cfg,
     )
 
-    assert captured[0]["patch_fields"]["限时限量购状态"] == "失败"
-    assert "get_account_config" in captured[0]["patch_fields"]["限时限量购失败原因"]
+    assert captured[0]["patch_fields"][names.limited_time_status] == "程序异常"
+    assert captured[0]["patch_fields"][names.limited_time_failure_reason] == "需人工查验"
 
 
 def test_safe_load_activity_log_product_context_falls_back(monkeypatch, activity_cfg):
@@ -365,52 +367,35 @@ def test_push_pdd_activity_log_activity_register_618_and_discount(monkeypatch, a
 
 
 
+    names = activity_cfg.pdd_activity_log.field_names
+
     push_pdd_activity_log_activity_register(
-
         account_id="store_A",
-
         activity_id="20981",
-
         product_ids=["968277091707"],
-
         success=True,
-
         account_name="测试店",
-
         config=activity_cfg,
-
     )
-
     assert captured[-1]["identity_mode"] == "delayed"
-
-    assert captured[-1]["patch_fields"]["618状态"] == "报名成功"
-
-
+    assert captured[-1]["patch_fields"][names.activity_618_status] == "报名成功"
 
     push_pdd_activity_log_activity_register(
-
         account_id="store_A",
-
         activity_id="21365",
-
         product_ids=["968277091707"],
-
         success=False,
-
         error="拼多多未确认报名成功",
-
         account_name="测试店",
-
         config=activity_cfg,
-
     )
-
-    assert captured[-1]["patch_fields"]["七折状态"] == "失败"
+    assert captured[-1]["patch_fields"][names.activity_discount_status] == "失败"
 
 
 def test_upsert_pdd_activity_log_fields_skips_unchanged(monkeypatch, activity_cfg):
     from pdd_agent.integrations.feishu import pdd_activity_log_sync
 
+    names = activity_cfg.pdd_activity_log.field_names
     monkeypatch.setattr(
         pdd_activity_log_sync,
         "resolve_pdd_activity_log_table_id",
@@ -420,7 +405,10 @@ def test_upsert_pdd_activity_log_fields_skips_unchanged(monkeypatch, activity_cf
     monkeypatch.setattr(
         pdd_activity_log_sync,
         "map_fields_to_table_names",
-        lambda *a, **k: {"限时限量购状态": "失败", "限时限量购失败原因": "活动价格不符合价格区间，不继续创建活动"},
+        lambda *a, **k: {
+            names.limited_time_status: "失败",
+            names.limited_time_failure_reason: "活动价格不符合价格区间，不继续创建活动",
+        },
     )
     monkeypatch.setattr(
         pdd_activity_log_sync,
@@ -428,8 +416,8 @@ def test_upsert_pdd_activity_log_fields_skips_unchanged(monkeypatch, activity_cf
         lambda *a, **k: {
             "record_id": "rec1",
             "fields": {
-                "限时限量购状态": "失败",
-                "限时限量购失败原因": "活动价格不符合价格区间，不继续创建活动",
+                names.limited_time_status: "失败",
+                names.limited_time_failure_reason: "活动价格不符合价格区间，不继续创建活动",
             },
         },
     )
@@ -444,8 +432,8 @@ def test_upsert_pdd_activity_log_fields_skips_unchanged(monkeypatch, activity_cf
     result = pdd_activity_log_sync.upsert_pdd_activity_log_fields(
         product_id="968599179476",
         patch_fields={
-            "限时限量购状态": "失败",
-            "限时限量购失败原因": "活动价格不符合价格区间，不继续创建活动",
+            names.limited_time_status: "失败",
+            names.limited_time_failure_reason: "活动价格不符合价格区间，不继续创建活动",
         },
         account_id="store_A",
         account_name="测试店",

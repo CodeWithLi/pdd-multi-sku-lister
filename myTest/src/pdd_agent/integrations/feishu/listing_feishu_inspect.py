@@ -28,17 +28,9 @@ from pdd_agent.skills.campaign.price_rules import find_pdd_price_range, price_ru
 
 
 def _merchant_code_from_selector(raw: str) -> str:
-    text = str(raw or "").strip()
-    if not text:
-        return ""
-    if "/" in text:
-        parts = [p for p in text.split("/") if p]
-        if len(parts) >= 3:
-            return normalize_listing_code(parts[-1])
-        if len(parts) == 2:
-            return normalize_listing_code(parts[0])
-        return normalize_listing_code(parts[0])
-    return normalize_listing_code(text)
+    from pdd_agent.integrations.feishu.listing_feishu_catalog import merchant_code_from_selector
+
+    return merchant_code_from_selector(raw)
 
 
 def _format_price(value: float | None) -> str:

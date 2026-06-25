@@ -1387,6 +1387,15 @@ def _scroll_product_modal_row_into_view(page: DpPage, product_id: str) -> bool:
         return False
 
 
+def _snapshot_modal_state(state: dict[str, Any] | None) -> dict[str, Any]:
+    """商品弹窗状态快照，避免 initial_state 自引用导致序列化递归溢出。"""
+    if not isinstance(state, dict):
+        return {}
+    snap = dict(state)
+    snap.pop("initial_state", None)
+    return snap
+
+
 def _select_product_rows_in_modal(page: DpPage, account_id: str, product_ids: list[str]) -> dict[str, Any]:
     def inspect_state() -> dict[str, Any]:
         return page.run_js(
@@ -1617,7 +1626,7 @@ def _select_product_rows_in_modal(page: DpPage, account_id: str, product_ids: li
                 counter_ok = final_count is not None and final_count >= expected_selected
                 if not after_select_all.get("missing_ids") and counter_ok:
                     after_select_all["selection_method"] = "header_select_all"
-                    after_select_all["initial_state"] = initial
+                    after_select_all["initial_state"] = _snapshot_modal_state(initial)
                     after_select_all["click_results"] = click_results
                     print(
                         f"[{account_id}] 商品弹窗表头全选成功：{after_select_all.get('selected_counter_text')}",
@@ -1626,7 +1635,7 @@ def _select_product_rows_in_modal(page: DpPage, account_id: str, product_ids: li
                     return after_select_all
                 if not after_select_all.get("missing_ids"):
                     after_select_all["selection_method"] = "header_select_all"
-                    after_select_all["initial_state"] = initial
+                    after_select_all["initial_state"] = _snapshot_modal_state(initial)
                     after_select_all["click_results"] = click_results
                     print(
                         f"[{account_id}] 商品弹窗表头全选后行级已全部勾选："
@@ -1682,7 +1691,8 @@ def _select_product_rows_in_modal(page: DpPage, account_id: str, product_ids: li
                     if before_count is not None and after_count is not None and after_count > before_count:
                         break
 
-        result["initial_state"] = initial
+        if result is not initial:
+            result["initial_state"] = _snapshot_modal_state(initial)
         result["click_results"] = click_results
         if not result.get("selection_method"):
             result["selection_method"] = "row_by_row" if click_results else "already_selected"

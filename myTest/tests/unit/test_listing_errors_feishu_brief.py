@@ -81,3 +81,35 @@ def test_sanitize_feishu_failure_reason_strips_platform_markers():
         )
         == "1、BD716A定价为空，2、YKL001N控价为空"
     )
+
+
+def test_build_preflight_no_skus_system_reason_includes_warnings_and_counts():
+    preflight = {
+        "units": [
+            {
+                "listing_label": "BD037B奶油泡芙笔袋/第一套图",
+                "warnings": [
+                    "[BD037B奶油泡芙笔袋/第一套图] 目录「BD037B奶油泡芙笔袋」无规格预览图（需非数字命名的 png/jpg）",
+                    "[BD037B奶油泡芙笔袋/第一套图] 未解析到任何有效 SKU",
+                ],
+                "carousel_images": ["1.png", "2.png"],
+                "detail_images": [],
+            }
+        ],
+        "issues": [],
+    }
+    text = ListingErrors.build_preflight_no_skus_system_reason(
+        preflight,
+        "BD037B奶油泡芙笔袋/第一套图",
+    )
+    assert text.startswith("BD037B奶油泡芙笔袋/第一套图：")
+    assert "无规格预览图" in text
+    assert "主图 2 张" in text
+    assert "未解析到任何有效 SKU" not in text
+
+
+def test_compact_system_diagnostic_strips_leading_brackets():
+    raw = "[BD037B/第一套图][BD037B] 商品表无编码[BD037B]，不上架 x.png"
+    compact = ListingErrors.compact_system_diagnostic(raw)
+    assert compact.startswith("商品表无编码")
+    assert "[BD037B/第一套图]" not in compact

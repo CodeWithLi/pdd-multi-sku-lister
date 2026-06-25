@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from pdd_agent.domain.models import ListingUnit
 from pdd_agent.integrations.feishu.config import FeishuConfig, PddProductCatalogConfig, PddUploadLogConfig, PddPriceCompareConfig, PipelineIntegrationConfig
 from pdd_agent.integrations.feishu.pdd_product_catalog_sync import (
@@ -19,6 +21,7 @@ from pdd_agent.integrations.feishu.pdd_product_catalog_sync import (
 from pdd_agent.integrations.feishu.config import PddProductCatalogFieldNames
 from pdd_agent.skills.listing.listing_price_float import reset_listing_price_float_registry
 from pdd_agent.skills.listing.pdd_product_catalog import PddProductEntry, resolve_combo_pricing
+from pdd_agent.skills.listing.pdd_product_catalog import ComboPricingError
 
 
 def test_entry_from_feishu_fields_maps_inventory_and_pricing():
@@ -61,6 +64,31 @@ def test_resolve_combo_pricing_uses_different_float_when_base_price_differs():
 
     _, gp, _ = resolve_combo_pricing("BD716A", "YKL001N", catalog, {}, listing_scope=scope)
     assert gp == "5"
+
+
+def test_resolve_combo_pricing_raises_when_catalog_code_missing():
+    reset_listing_price_float_registry(enabled=False)
+    with pytest.raises(ComboPricingError) as exc:
+        resolve_combo_pricing("MISSING", "MISSING", {}, {})
+    assert exc.value.reason == "catalog_code_missing"
+
+
+def test_resolve_combo_pricing_single_price_adds_zero_to_two_float():
+    catalog = {
+        "BD716A": PddProductEntry("BD716A", "白色笔袋", "笔袋", 100, 10.0),
+    }
+    reset_listing_price_float_registry(
+        enabled=False,
+        single_float_min=0.0,
+        single_float_max=2.0,
+    )
+    scope = "BD716/第一套图"
+    _, gp, sp = resolve_combo_pricing("BD716A", "BD716A", catalog, {}, listing_scope=scope)
+    assert gp == "10"
+    assert 10 <= float(sp) <= 12
+    _, gp2, sp2 = resolve_combo_pricing("BD716A", "BD716A", catalog, {}, listing_scope=scope)
+    assert gp2 == gp
+    assert sp2 == sp
 
 
 def test_feishu_product_catalog_missing_message_includes_code():

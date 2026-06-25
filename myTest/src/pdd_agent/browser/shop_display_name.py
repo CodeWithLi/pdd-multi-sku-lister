@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from pdd_agent.db.repositories import get_cached_shop_display_name, update_shop_display_name
@@ -125,3 +126,43 @@ def maybe_refresh_shop_display_name(
             update_shop_display_name(aid, scraped)
         return scraped
     return cached
+
+
+@dataclass(frozen=True)
+class ShopVerifyResult:
+    ok: bool
+    expected: str
+    actual: str
+    error: str = ""
+
+
+def verify_shop_for_account(
+    account_id: str,
+    dp: DpPage,
+    *,
+    login_username: str = "",
+) -> ShopVerifyResult:
+    """
+    校验浏览器当前登录店铺与 account_id 缓存的展示名一致。
+
+    防止浏览器 profile 串店导致误下架其他店铺商品。
+    """
+    aid = str(account_id or "").strip()
+    expected = get_cached_shop_display_name(aid)
+    actual = maybe_refresh_shop_display_name(aid, dp, login_username=login_username)
+
+    if not actual:
+        return ShopVerifyResult(
+            ok=False,
+            expected=expected,
+            actual="",
+            error="shop_display_name_not_detected",
+        )
+    if expected and actual != expected:
+        return ShopVerifyResult(
+            ok=False,
+            expected=expected,
+            actual=actual,
+            error="shop_display_name_mismatch",
+        )
+    return ShopVerifyResult(ok=True, expected=expected or actual, actual=actual)

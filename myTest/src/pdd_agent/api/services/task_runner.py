@@ -39,14 +39,22 @@ _LARGE_RESULT_TEXT_KEYS = frozenset({
 })
 
 
-def _json_safe(value: Any) -> Any:
-    """把 graph 返回值转为可 JSON 序列化的结构。"""
+def _json_safe(value: Any, _seen: set[int] | None = None) -> Any:
+    """把 graph 返回值转为可 JSON 序列化的结构（跳过循环引用）。"""
+    seen = _seen if _seen is not None else set()
     if isinstance(value, PlannedTask):
         return value.model_dump(mode="json")
-    if isinstance(value, list):
-        return [_json_safe(v) for v in value]
-    if isinstance(value, dict):
-        return {k: _json_safe(v) for k, v in value.items()}
+    if isinstance(value, (dict, list)):
+        oid = id(value)
+        if oid in seen:
+            return None
+        seen.add(oid)
+        try:
+            if isinstance(value, list):
+                return [_json_safe(v, seen) for v in value]
+            return {k: _json_safe(v, seen) for k, v in value.items()}
+        finally:
+            seen.discard(oid)
     if hasattr(value, "model_dump"):
         return value.model_dump(mode="json")
     return value
@@ -659,6 +667,12 @@ def _sku_rows_from_listing_item(item: dict[str, Any]) -> list[dict[str, Any]]:
     return sku_rows_from_spec_metadata(item.get("spec_metadata"))
 
 
+def _preflight_has_units(preflight: Any) -> bool:
+    if isinstance(preflight, dict):
+        return bool(preflight.get("units"))
+    return bool(getattr(preflight, "units", None))
+
+
 def _schedule_feishu_listing_result_log(
     *,
     account_id: str,
@@ -666,6 +680,7 @@ def _schedule_feishu_listing_result_log(
     run_id: str = "",
     product_codes: list[str] | None = None,
 ) -> None:
+    from pdd_agent.domain.listing_errors import ListingErrors
     from pdd_agent.integrations.feishu.pdd_upload_sync import (
         map_listing_failure_record_type,
         schedule_pdd_upload_failure_log,
@@ -685,44 +700,18 @@ def _schedule_feishu_listing_result_log(
             fallback_code = text
             break
 
-    def _compact_system_reason(text: str) -> str:
-        raw = str(text or "").strip()
-        if not raw:
-            return ""
-        if raw.startswith("[") and "]" in raw:
-            raw = raw.split("]", 1)[-1].strip(" :：")
-        return raw
+    preflight_data = result.get("preflight")
+    if run_id and (not preflight_data or not _preflight_has_units(preflight_data)):
+        try:
+            from pdd_agent.storage import TaskRunStore
 
-    def _preflight_no_skus_system_reason(preflight_obj: Any, listing_label: str, fallback_message: str) -> str:
-        label = str(listing_label or "").strip()
-        fallback = _compact_system_reason(fallback_message)
-        if not label:
-            return fallback
-        units: list[Any] = []
-        if isinstance(preflight_obj, dict):
-            units = list(preflight_obj.get("units") or [])
-        elif preflight_obj is not None:
-            units = list(getattr(preflight_obj, "units", None) or [])
-
-        details: list[str] = []
-        for unit in units:
-            unit_label = str(
-                getattr(unit, "listing_label", None)
-                or (unit.get("listing_label") if isinstance(unit, dict) else "")
-                or ""
-            ).strip()
-            if unit_label != label:
-                continue
-            warnings = getattr(unit, "warnings", None) or (unit.get("warnings") if isinstance(unit, dict) else []) or []
-            for warning in warnings:
-                text = _compact_system_reason(warning)
-                if text and text not in details:
-                    details.append(text)
-            break
-
-        if details:
-            return "；".join(details)[:500]
-        return fallback
+            record = TaskRunStore().load(run_id)
+            if record and isinstance(record.result, dict):
+                stored = record.result.get("preflight")
+                if stored and _preflight_has_units(stored):
+                    preflight_data = stored
+        except Exception:
+            logger.exception("load preflight snapshot for feishu log failed run_id=%s", run_id)
 
     failures: dict[str, dict[str, Any]] = {}
 
@@ -833,7 +822,7 @@ def _schedule_feishu_listing_result_log(
         if summary:
             _queue_failure(message=summary, reason_code="no_valid_units", priority=0)
 
-    preflight = result.get("preflight")
+    preflight = preflight_data if preflight_data is not None else result.get("preflight")
     issues: list[Any] = []
     if isinstance(preflight, dict):
         issues = list(preflight.get("issues") or [])
@@ -882,9 +871,11 @@ def _schedule_feishu_listing_result_log(
             retryable="兄弟款规格不齐" in message or "槽位对齐" in message,
             priority=3,
             system_reason=(
-                _preflight_no_skus_system_reason(preflight, listing_label, message)
+                ListingErrors.build_preflight_no_skus_system_reason(
+                    preflight, listing_label, message
+                )
                 if reason_code == "preflight_no_skus"
-                else message
+                else ""
             ),
         )
 
@@ -914,7 +905,6 @@ def _schedule_feishu_listing_result_log(
 
     from collections import defaultdict
 
-    from pdd_agent.domain.listing_errors import ListingErrors
     from pdd_agent.integrations.feishu.pdd_upload_sync import _format_brief_listing_failure_reason
 
     grouped_rows: dict[str, list[dict[str, Any]]] = defaultdict(list)
@@ -937,6 +927,12 @@ def _schedule_feishu_listing_result_log(
                 lines.append(brief)
         combined = ListingErrors.format_numbered(lines)
         row_label = str(primary.get("listing_label") or "")
+        system_parts: list[str] = []
+        for row in group:
+            sr = str(row.get("system_reason") or "").strip()
+            if sr and sr not in system_parts:
+                system_parts.append(sr)
+        combined_system = "；".join(system_parts)[:2000]
         schedule_pdd_upload_failure_log(
             account_id=account_id,
             account_name=account_name,
@@ -952,7 +948,7 @@ def _schedule_feishu_listing_result_log(
             error=str(primary.get("error") or ""),
             message=combined or str(primary.get("message") or row_label),
             failure_reason=combined,
-            system_reason=str(primary.get("system_reason") or ""),
+            system_reason=combined_system,
             publish_start=publish_start,
             publish_end=publish_end,
             duration_seconds=duration_seconds,
@@ -1198,6 +1194,8 @@ async def execute_listing(
             float_min=cat_cfg.price_float_min,
             float_max=cat_cfg.price_float_max,
             enabled=cat_cfg.price_float_enabled,
+            single_float_min=cat_cfg.single_price_float_min,
+            single_float_max=cat_cfg.single_price_float_max,
         )
     except Exception:
         logger.exception("reset listing price float registry failed run_id=%s", run_id)
@@ -1435,7 +1433,8 @@ async def execute_delist(
         )
         result = _json_safe(raw)
         status = RunStatus.SUCCESS if not result.get("errors") else RunStatus.FAILED
-        if status == RunStatus.SUCCESS:
+        delist_mode = str((params or {}).get("mode") or "").strip()
+        if status == RunStatus.SUCCESS and delist_mode != "pipeline_relist_prep":
             _sync_single_delist_result(result)
         store.finish(
             run_id,

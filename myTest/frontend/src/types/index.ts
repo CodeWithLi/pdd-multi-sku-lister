@@ -772,6 +772,8 @@ export interface AutoUploadConfig {
   auto_sync_minio: boolean
 }
 
+export type RelistStrategy = 'ignore' | 'append_to_existing' | 'delist_and_relist'
+
 export interface IntegratedPipelineStartPayload {
   account_id: string
   product_codes: string[]
@@ -789,6 +791,10 @@ export interface IntegratedPipelineStartPayload {
   skip_listing?: boolean
   listing_skip_selectors?: string[]
   material_source?: 'local' | 'minio'
+  relist_strategy?: RelistStrategy
+  listing_throttle_enabled?: boolean
+  listing_batch_set_count?: number
+  listing_batch_interval_minutes?: number
 }
 
 export interface IntegratedPipelineBatchStartPayload {
@@ -811,6 +817,10 @@ export interface IntegratedPipelineBatchStartPayload {
   skip_listing?: boolean
   listing_skip_selectors?: string[]
   material_source?: 'local' | 'minio'
+  relist_strategy?: RelistStrategy
+  listing_throttle_enabled?: boolean
+  listing_batch_set_count?: number
+  listing_batch_interval_minutes?: number
 }
 
 export interface IntegratedPipelineBatchRunItem {

@@ -27,6 +27,7 @@ from pdd_agent.skills.listing.multi_spec_page import (
     wait_multi_sku_rows,
 )
 from pdd_agent.skills.listing.page_ai_title import apply_title_after_cover_upload
+from pdd_agent.skills.listing.listing_publish_settings import apply_listing_publish_settings
 from pdd_agent.skills.listing.listing_spec_pipeline import apply_unit_listing_specs
 from pdd_agent.skills.listing.spec_labels import ordered_style_names
 from pdd_agent.skills.listing.title import resolve_listing_title
@@ -1350,6 +1351,13 @@ def upload_one_listing(
             phase="upload",
             step="skip_submit_preview",
             page_url=page_url,
+        )
+
+    publish_settings = apply_listing_publish_settings(page, account_id, label)
+    if not publish_settings.get("ok"):
+        print(
+            f"[{account_id}] [{label}] 提交前定价/运费设置未全部完成，仍继续提交：{publish_settings}",
+            flush=True,
         )
 
     ok, submitted_at, blocked_reason = _click_submit(page, account_id, label)

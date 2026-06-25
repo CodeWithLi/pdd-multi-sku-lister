@@ -184,6 +184,27 @@ def resolve_listing_price_scope(*, family_code: str = "", image_set: str = "", l
     return str(listing_label or "").strip()
 
 
+class ComboPricingError(Exception):
+    """商品表缺编码或定价无效，无法计算拼单价/单买价。"""
+
+    def __init__(
+        self,
+        *,
+        missing_codes: list[str] | None = None,
+        invalid_codes: list[str] | None = None,
+        reason: str = "catalog_code_missing",
+    ) -> None:
+        self.missing_codes = [str(code).strip() for code in (missing_codes or []) if str(code).strip()]
+        self.invalid_codes = [str(code).strip() for code in (invalid_codes or []) if str(code).strip()]
+        self.reason = str(reason or "catalog_code_missing").strip() or "catalog_code_missing"
+        codes = self.invalid_codes or self.missing_codes
+        label = "、".join(codes)
+        if self.reason == "pricing_invalid":
+            super().__init__(f"商品表编码[{label}]拼多多定价无效")
+        else:
+            super().__init__(f"商品表无编码[{label}]，无法定价")
+
+
 def resolve_combo_pricing(
     style_code: str,
     model_code: str,
@@ -193,54 +214,61 @@ def resolve_combo_pricing(
     listing_scope: str = "",
     bundle_components: list[str] | None = None,
 ) -> tuple[str, str, str]:
-    """组合 SKU 库存/拼单价/单买价（定价来自商品表，上架时加同 scope 同定价共享浮动）。"""
+    """组合 SKU 库存/拼单价/单买价（定价来自商品表；缺编码或定价无效时报错）。"""
     from pdd_agent.skills.listing.listing_price_float import get_listing_price_float_registry
 
-    fallback_inv = defaults.get("inventory", "10")
-    fallback_gp = defaults.get("group_price", "199.9")
-    fallback_sp = defaults.get("single_price", "299.9")
+    _ = defaults  # 保留入参兼容；不再使用 199.9/299.9 兜底
+    fallback_inv = "10"
     registry = get_listing_price_float_registry()
     scope = str(listing_scope or "").strip()
 
-    def _component_price(entry: PddProductEntry | None) -> float:
+    def _require_entry(code: str) -> PddProductEntry:
+        entry = catalog.get(_norm_code(code))
         if not entry:
-            return 0.0
+            raise ComboPricingError(missing_codes=[code], reason="catalog_code_missing")
+        if float(entry.price or 0.0) <= 0:
+            raise ComboPricingError(invalid_codes=[code], reason="pricing_invalid")
+        return entry
+
+    def _component_price(entry: PddProductEntry) -> float:
         base = float(entry.price or 0.0)
         if scope and registry.enabled:
             return registry.effective_price(scope, base)
         return base
 
+    def _finalize(style_entry: PddProductEntry, group_price: float, inventory: int | str) -> tuple[str, str, str]:
+        gp = round(float(group_price), 2)
+        if gp <= 0:
+            raise ComboPricingError(invalid_codes=[style_entry.code], reason="pricing_invalid")
+        sp = registry.effective_single_price(scope, gp)
+        inv = str(inventory if inventory is not None else style_entry.inventory or fallback_inv)
+        return inv, _format_price(gp), _format_price(sp)
+
     style = catalog.get(_norm_code(style_code))
     model_norm = _norm_code(model_code)
     style_norm = _norm_code(style_code)
     if model_norm == style_norm:
-        if not style:
-            return fallback_inv, fallback_gp, fallback_sp
-        group_price = _component_price(style)
-        return str(style.inventory or fallback_inv), _format_price(group_price), _format_price(group_price + 100)
+        style_entry = _require_entry(style_code)
+        group_price = _component_price(style_entry)
+        return _finalize(style_entry, group_price, style_entry.inventory)
 
     if model_norm == BUNDLE_MODEL_CODE and bundle_components:
         component_codes = list(
             dict.fromkeys(_norm_code(code) for code in bundle_components if _norm_code(code))
         )
-        entries = [catalog.get(code) for code in component_codes]
-        if not component_codes or any(entry is None for entry in entries):
-            return fallback_inv, fallback_gp, fallback_sp
-        inventories = [int(entry.inventory or 0) for entry in entries if entry]
+        if not component_codes:
+            raise ComboPricingError(missing_codes=[style_code], reason="catalog_code_missing")
+        entries = [_require_entry(code) for code in component_codes]
+        inventories = [int(entry.inventory or 0) for entry in entries]
         inventory = min(inventories) if inventories else fallback_inv
-        group_price = sum(_component_price(entry) for entry in entries if entry)
-        if group_price <= 0:
-            return fallback_inv, fallback_gp, fallback_sp
-        return str(inventory), _format_price(group_price), _format_price(group_price + 100)
+        group_price = sum(_component_price(entry) for entry in entries)
+        return _finalize(entries[0], group_price, inventory)
 
-    model = catalog.get(model_norm)
-    if not style or not model:
-        return fallback_inv, fallback_gp, fallback_sp
-
-    inventory = min(style.inventory, model.inventory)
-    group_price = _component_price(style) + _component_price(model)
-    single_price = group_price + 100
-    return str(inventory), _format_price(group_price), _format_price(single_price)
+    style_entry = _require_entry(style_code)
+    model_entry = _require_entry(model_code)
+    inventory = min(int(style_entry.inventory or 0), int(model_entry.inventory or 0))
+    group_price = _component_price(style_entry) + _component_price(model_entry)
+    return _finalize(style_entry, group_price, inventory)
 
 
 def catalog_has_code(code: str) -> bool:
