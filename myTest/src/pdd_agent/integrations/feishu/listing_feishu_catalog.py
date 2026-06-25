@@ -127,7 +127,7 @@ def collect_warm_codes_from_units(units: list[Any], *, extra_codes: list[str] | 
             if text and is_sub_sku_code(text, merchant):
                 codes.append(text)
     for raw in extra_codes or []:
-        text = normalize_listing_code(raw)
+        text = merchant_code_from_selector(raw) or normalize_listing_code(raw)
         if text:
             codes.append(text)
     return list(dict.fromkeys(codes))

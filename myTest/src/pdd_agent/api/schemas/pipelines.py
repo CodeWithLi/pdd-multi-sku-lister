@@ -201,6 +201,20 @@ class PipelineLogSpecSkuRowsUpdateIn(BaseModel):
     enabled: bool
 
 
+class PipelinePlatformSkipDedupeOut(BaseModel):
+    enabled: bool
+    sync_seconds: int = 300
+    code_count: int = 0
+    updated_at: str = ""
+    redis_available: bool = False
+    last_sync_at: str = ""
+    last_error: str = ""
+
+
+class PipelinePlatformSkipDedupeUpdateIn(BaseModel):
+    enabled: bool
+
+
 class AutoUploadConfigResponse(BaseModel):
     enabled: bool = False
     trigger_mode: str = "new_product_folder"

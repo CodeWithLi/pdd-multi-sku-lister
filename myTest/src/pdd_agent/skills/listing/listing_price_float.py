@@ -21,7 +21,7 @@ class ListingPriceFloatRegistry:
         float_min: float = 0.0,
         float_max: float = 5.0,
         enabled: bool = True,
-        single_float_min: float = 0.0,
+        single_float_min: float = 1.01,
         single_float_max: float = 2.0,
     ) -> None:
         self.float_min = max(0.0, float(float_min))
@@ -49,7 +49,7 @@ class ListingPriceFloatRegistry:
         return round(base + self.get_float_delta(listing_scope, base), 2)
 
     def get_single_price_delta(self, listing_scope: str, group_price: float) -> float:
-        """单买价在拼单价基础上追加的浮动（默认 0~2 元，同 scope+拼单价共享）。"""
+        """单买价在拼单价基础上追加的浮动（默认 1.01~2.00 元，同 scope+拼单价共享）。"""
         scope = str(listing_scope or "").strip() or "__default__"
         base = round(float(group_price or 0), 2)
         if base <= 0:
@@ -99,7 +99,7 @@ def reset_listing_price_float_registry(
     float_min: float = 0.0,
     float_max: float = 5.0,
     enabled: bool = True,
-    single_float_min: float = 0.0,
+    single_float_min: float = 1.01,
     single_float_max: float = 2.0,
 ) -> ListingPriceFloatRegistry:
     registry = ListingPriceFloatRegistry(

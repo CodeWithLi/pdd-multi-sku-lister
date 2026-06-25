@@ -32,6 +32,7 @@ from pdd_agent.db import database_status, init_database
 from pdd_agent.api.services.failure_cycle_relist_scheduler import (
     get_failure_cycle_relist_watch_scheduler,
 )
+from pdd_agent.api.services.platform_skip_dedupe_scheduler import get_platform_skip_dedupe_scheduler
 from pdd_agent.api.services.traffic_report_scheduler import get_traffic_report_scheduler
 from pdd_agent.api.services.task_queue import TaskQueueWorker
 
@@ -39,6 +40,7 @@ logger = get_logger(__name__)
 worker = TaskQueueWorker()
 traffic_report_scheduler = get_traffic_report_scheduler()
 failure_cycle_relist_watch_scheduler = get_failure_cycle_relist_watch_scheduler()
+platform_skip_dedupe_scheduler = get_platform_skip_dedupe_scheduler()
 
 
 @asynccontextmanager
@@ -52,6 +54,7 @@ async def lifespan(app: FastAPI):
     worker.start()
     traffic_report_scheduler.start()
     failure_cycle_relist_watch_scheduler.start()
+    platform_skip_dedupe_scheduler.start()
 
     from pdd_agent.integrations.minio.broadcast import bind_event_loop
     from pdd_agent.integrations.minio.rabbitmq_consumer import get_minio_rabbitmq_consumer
@@ -206,6 +209,7 @@ async def lifespan(app: FastAPI):
     yield
     minio_consumer.stop()
     await failure_cycle_relist_watch_scheduler.stop()
+    await platform_skip_dedupe_scheduler.stop()
     await traffic_report_scheduler.stop()
     await worker.stop()
     logger.info("PDD Agent API stopped")

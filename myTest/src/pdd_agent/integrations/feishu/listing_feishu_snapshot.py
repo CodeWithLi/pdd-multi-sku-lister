@@ -249,7 +249,7 @@ def warm_listing_feishu_snapshot(
             for key in keys_to_store
             if key in snapshot.records_by_code
         ]
-        if existing_scores and new_score < max(existing_scores):
+        if existing_scores and new_score <= max(existing_scores):
             return norm
 
         for key in keys_to_store:

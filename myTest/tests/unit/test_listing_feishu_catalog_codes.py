@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from pdd_agent.domain.models import ListingUnit
 from pdd_agent.integrations.feishu.config import (
     FeishuConfig,
     PddProductCatalogConfig,
@@ -64,6 +65,147 @@ def test_product_catalog_reads_resolved_pricing_field():
     }
     catalog = snapshot.product_catalog(cfg)
     assert catalog["BD029B"].price == 7.97
+
+
+def test_entry_from_feishu_fields_falls_back_color_spec():
+    from pdd_agent.integrations.feishu.pdd_product_catalog_sync import _entry_from_feishu_fields
+    from pdd_agent.integrations.feishu.config import PddProductCatalogFieldNames
+
+    names = PddProductCatalogFieldNames()
+    entry = _entry_from_feishu_fields(
+        {
+            "商品编码": "BD029B",
+            "拼多多定价": 7.97,
+        },
+        names,
+        resolved_fields={
+            "product_code": "商品编码",
+            "pricing": "拼多多定价",
+            "color_spec": "颜色规格",
+        },
+    )
+    assert entry is not None
+    assert entry.code == "BD029B"
+    assert entry.color_spec == "BD029B"
+    assert entry.price == 7.97
+
+
+def test_diagnose_skips_pricing_missing_when_pricing_catalog_has_price(monkeypatch):
+    from pdd_agent.integrations.feishu import pdd_product_catalog_sync
+    from pdd_agent.integrations.feishu.listing_feishu_snapshot import (
+        ListingFeishuSnapshot,
+        clear_listing_feishu_snapshot,
+    )
+
+    clear_listing_feishu_snapshot()
+
+    cfg = FeishuConfig(
+        app_id="x",
+        app_secret="y",
+        bitable_app_token="z",
+        pdd_product_catalog=PddProductCatalogConfig(
+            enabled=True,
+            prefer_feishu=True,
+        ),
+        pdd_price_compare=PddPriceCompareConfig(
+            enabled=True,
+            prefer_feishu=True,
+        ),
+    )
+    unit = ListingUnit(
+        product_code="BD029B",
+        family_code="BD029",
+        image_set="第一套图",
+        root=Path("."),
+    )
+
+    snapshot = ListingFeishuSnapshot(source="feishu")
+    snapshot._code_field = "商品编码"
+    snapshot._pricing_field = "拼多多定价"
+    snapshot._color_spec_field = "颜色规格"
+    snapshot.records_by_code["BD029B"] = {
+        "商品编码": "BD029B",
+        "拼多多定价": 7.97,
+    }
+    from pdd_agent.integrations.feishu import listing_feishu_snapshot as snap_mod
+
+    snap_mod._listing_snapshot.set(snapshot)
+
+    class PricingCatalog:
+        source = "feishu"
+        prices = {"BD029B": 7.97}
+        incomplete_codes = frozenset()
+        feishu_record_codes = frozenset({"BD029B"})
+
+    class ControlCatalog:
+        source = "feishu"
+        prices = {"BD029B": 7.97}
+        incomplete_codes = frozenset()
+        feishu_record_codes = frozenset({"BD029B"})
+
+    class RangeCatalog:
+        source = "feishu"
+        ranges = {"BD029B": object()}
+        incomplete_codes = frozenset()
+        feishu_record_codes = frozenset({"BD029B"})
+
+    monkeypatch.setattr(
+        "pdd_agent.integrations.feishu.pdd_price_compare_sync.load_pricing_catalog",
+        lambda **kwargs: PricingCatalog(),
+    )
+    monkeypatch.setattr(
+        "pdd_agent.integrations.feishu.pdd_price_compare_sync.load_control_catalog",
+        lambda **kwargs: ControlCatalog(),
+    )
+    monkeypatch.setattr(
+        "pdd_agent.integrations.feishu.pdd_price_compare_sync.load_price_range_catalog",
+        lambda **kwargs: RangeCatalog(),
+    )
+    monkeypatch.setattr(
+        "pdd_agent.integrations.feishu.pdd_price_compare_sync.resolve_feishu_range_aspect",
+        lambda *_args, **_kwargs: None,
+    )
+
+    issues = pdd_product_catalog_sync.diagnose_feishu_listing_catalog_issues(units=[unit], config=cfg)
+    assert issues == []
+
+
+def test_diagnose_fallback_uses_merchant_code_from_selector(monkeypatch):
+    from pdd_agent.integrations.feishu import pdd_product_catalog_sync
+    from pdd_agent.integrations.feishu.listing_feishu_snapshot import clear_listing_feishu_snapshot
+
+    clear_listing_feishu_snapshot()
+    cfg = FeishuConfig(
+        app_id="x",
+        app_secret="y",
+        bitable_app_token="z",
+        pdd_product_catalog=PddProductCatalogConfig(
+            enabled=True,
+            prefer_feishu=True,
+        ),
+        pdd_price_compare=PddPriceCompareConfig(
+            enabled=False,
+            prefer_feishu=False,
+        ),
+    )
+
+    captured: list[str] = []
+
+    def _fake_load(**kwargs):
+        captured.append("loaded")
+        return pdd_product_catalog_sync.ProductCatalogLoadResult(
+            catalog={"BD029B": PddProductEntry("BD029B", "笔袋", "笔袋", 10, 8.0)},
+            source="feishu",
+        )
+
+    monkeypatch.setattr(pdd_product_catalog_sync, "load_pdd_product_catalog_from_feishu", _fake_load)
+
+    issues = pdd_product_catalog_sync.diagnose_feishu_listing_catalog_issues(
+        product_codes=["BD029/第一套图/BD029B"],
+        config=cfg,
+    )
+    assert issues == []
+    assert captured == ["loaded"]
 
 
 def test_resolve_combo_pricing_exact_catalog_key(monkeypatch):

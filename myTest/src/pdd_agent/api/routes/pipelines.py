@@ -16,6 +16,8 @@ from pdd_agent.api.schemas.pipelines import (
     PipelineExcelFallbackUpdateIn,
     PipelineLogSpecSkuRowsOut,
     PipelineLogSpecSkuRowsUpdateIn,
+    PipelinePlatformSkipDedupeOut,
+    PipelinePlatformSkipDedupeUpdateIn,
 )
 from pdd_agent.api.services.config_service import get_account_or_none
 from pdd_agent.api.services.pipeline_service import (
@@ -30,9 +32,13 @@ from pdd_agent.db.session import is_database_available
 from pdd_agent.api.schemas.feishu_inspect import FeishuInspectListingPricesOut
 from pdd_agent.integrations.feishu.config import (
     excel_fallback_enabled,
+    platform_skip_dedupe_enabled,
     save_pipeline_excel_fallback_to_config,
+    save_pipeline_platform_skip_dedupe_to_config,
     save_pdd_upload_log_spec_rows_to_config,
 )
+from pdd_agent.integrations.feishu.platform_skip_dedupe_cache import get_platform_skip_dedupe_status
+from pdd_agent.api.services.platform_skip_dedupe_scheduler import get_platform_skip_dedupe_scheduler
 from pdd_agent.integrations.feishu.pdd_upload_spec_log import log_spec_sku_rows_enabled
 from pdd_agent.integrations.feishu.listing_feishu_inspect_store import (
     capture_and_save_pipeline_feishu_inspect,
@@ -97,6 +103,50 @@ def update_integrated_log_spec_sku_rows(body: PipelineLogSpecSkuRowsUpdateIn):
     """保存按规格展开写发布日志开关（写入 feishu.yaml pdd_upload_log）。"""
     save_pdd_upload_log_spec_rows_to_config(body.enabled)
     return PipelineLogSpecSkuRowsOut(enabled=bool(body.enabled))
+
+
+def _platform_skip_dedupe_response() -> PipelinePlatformSkipDedupeOut:
+    status = get_platform_skip_dedupe_status()
+    scheduler = get_platform_skip_dedupe_scheduler()
+    return PipelinePlatformSkipDedupeOut(
+        enabled=bool(status.get("enabled")),
+        sync_seconds=int(status.get("sync_seconds") or 300),
+        code_count=int(status.get("code_count") or 0),
+        updated_at=str(status.get("updated_at") or ""),
+        redis_available=bool(status.get("redis_available")),
+        last_sync_at=str(scheduler.last_sync_at or status.get("updated_at") or ""),
+        last_error=str(scheduler.last_error or ""),
+    )
+
+
+@router.get("/integrated/platform-skip-dedupe", response_model=PipelinePlatformSkipDedupeOut)
+def get_integrated_platform_skip_dedupe():
+    """读取「平台跳过去重」开关及 Redis 缓存状态。"""
+    return _platform_skip_dedupe_response()
+
+
+@router.put("/integrated/platform-skip-dedupe", response_model=PipelinePlatformSkipDedupeOut)
+async def update_integrated_platform_skip_dedupe(body: PipelinePlatformSkipDedupeUpdateIn):
+    """保存「平台跳过去重」开关；开启时立即同步飞书跳过编码到 Redis。"""
+    save_pipeline_platform_skip_dedupe_to_config(body.enabled)
+    scheduler = get_platform_skip_dedupe_scheduler()
+    if body.enabled:
+        if not scheduler.is_running:
+            scheduler.start()
+        await scheduler.sync_once()
+    return _platform_skip_dedupe_response()
+
+
+@router.post("/integrated/platform-skip-dedupe/sync", response_model=PipelinePlatformSkipDedupeOut)
+async def sync_integrated_platform_skip_dedupe():
+    """手动触发一次飞书跳过编码同步（需已开启开关）。"""
+    if not platform_skip_dedupe_enabled():
+        raise HTTPException(status_code=400, detail="platform_skip_dedupe is disabled")
+    scheduler = get_platform_skip_dedupe_scheduler()
+    result = await scheduler.sync_once()
+    if not result.get("ok"):
+        raise HTTPException(status_code=502, detail=str(result.get("error") or "sync failed"))
+    return _platform_skip_dedupe_response()
 
 
 def _auto_upload_config_response() -> AutoUploadConfigResponse:

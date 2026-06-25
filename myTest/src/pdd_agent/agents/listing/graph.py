@@ -59,10 +59,16 @@ async def preflight_node(state: ListingState) -> dict:
         assets_root=assets_root,
     )
     try:
+        from pdd_agent.integrations.feishu.listing_feishu_catalog import collect_merchant_codes_from_selectors
         from pdd_agent.integrations.feishu.listing_feishu_snapshot import warm_listing_feishu_snapshot
         from pdd_agent.integrations.feishu.pdd_product_catalog_sync import _collect_catalog_codes
 
-        warm_listing_feishu_snapshot(_collect_catalog_codes(units=report.units, extra_codes=codes))
+        warm_listing_feishu_snapshot(
+            _collect_catalog_codes(
+                units=report.units,
+                extra_codes=collect_merchant_codes_from_selectors(codes),
+            )
+        )
     except Exception:
         logger.exception("warm listing feishu snapshot after preflight failed")
     run_id = str(state.get("run_id") or "")

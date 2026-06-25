@@ -182,7 +182,7 @@ pdd_product_catalog:
   price_float_enabled: true
   price_float_min: 0
   price_float_max: 5
-  single_price_float_min: 0
+  single_price_float_min: 1.01
   single_price_float_max: 2
   field_names:
     product_code: 商品编码
@@ -211,3 +211,6 @@ pdd_price_compare:
     pdd_control_price: 拼多多控价
 pipeline:
   excel_fallback_enabled: false
+  platform_skip_dedupe_enabled: false
+  platform_skip_dedupe_sync_seconds: 300
+  platform_skip_dedupe_fetch_limit: 2000

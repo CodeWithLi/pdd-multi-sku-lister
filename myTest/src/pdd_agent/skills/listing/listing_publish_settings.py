@@ -12,58 +12,104 @@ from pdd_agent.skills.listing.multi_spec_page import _safe_exc
 DEFAULT_BULK_DISCOUNT = "9.9"
 DEFAULT_SHIPPING_TEMPLATE = "最新全国"
 
-_SET_BULK_DISCOUNT_JS = """
+_NATIVE_INPUT_SETTER_JS = """
+const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
 function setInputValue(input, value) {
-  input.focus();
-  input.value = value;
-  input.dispatchEvent(new Event('input', { bubbles: true }));
+  if (!input) return false;
+  try { input.scrollIntoView({ block: 'center', behavior: 'instant' }); } catch (e) {}
+  try { input.focus({ preventScroll: true }); } catch (e) { try { input.focus(); } catch (e2) {} }
+  const text = String(value);
+  setter.call(input, text);
+  input.dispatchEvent(new InputEvent('input', {
+    bubbles: true, data: text, inputType: 'insertText'
+  }));
   input.dispatchEvent(new Event('change', { bubbles: true }));
-  input.blur();
+  try { input.blur(); } catch (e) {}
+  return String(input.value || '').trim() === text;
 }
-function setBulkDiscount(value) {
-  const markers = ['满件折扣', '满2件'];
+"""
+
+_SCROLL_BULK_DISCOUNT_JS = """
+for (const marker of ['满2件折扣', '满件折扣', '满2件']) {
+  for (const el of document.querySelectorAll('label,div,span,p,td,th')) {
+    const t = (el.textContent || '').trim();
+    if (!t.includes(marker) || t.length > 120) continue;
+    el.scrollIntoView({ block: 'center', behavior: 'instant' });
+    return { ok: true, marker };
+  }
+}
+return { ok: false };
+"""
+
+_FIND_DISCOUNT_INPUT_JS = """
+function isDiscountInput(input) {
+  if (!input || input.disabled || input.readOnly) return false;
+  const type = (input.type || 'text').toLowerCase();
+  if (['hidden', 'file', 'checkbox', 'radio', 'button', 'submit'].includes(type)) return false;
+  const ph = input.getAttribute('placeholder') || '';
+  const v = String(input.value || '').trim();
+  return ph.includes('5.0') || ph.includes('9.9') || v === '9.5' || v === '9.9' || /^\\d(\\.\\d)?$/.test(v);
+}
+function findDiscountInput() {
+  const markers = ['满2件折扣', '满件折扣', '满2件'];
   for (const marker of markers) {
-    for (const el of document.querySelectorAll('label,div,span,p,td')) {
+    for (const el of document.querySelectorAll('label,div,span,p,td,th,section')) {
       const t = (el.textContent || '').trim();
-      if (!t.includes(marker) || t.length > 160) continue;
+      if (!t.includes(marker) || t.length > 220) continue;
       let node = el;
-      for (let depth = 0; depth < 12 && node; depth++) {
-        const inputs = Array.from(node.querySelectorAll('input')).filter((inp) => {
-          const type = (inp.type || 'text').toLowerCase();
-          return !['hidden', 'file', 'checkbox', 'radio', 'button', 'submit'].includes(type);
-        });
-        const target = inputs.find((inp) => {
-          const ph = inp.getAttribute('placeholder') || '';
-          const v = String(inp.value || '').trim();
-          return ph.includes('5.0') || ph.includes('9.9') || v === '9.5' || v === '9.9';
-        }) || inputs[0];
-        if (target) {
-          const before = String(target.value || '').trim();
-          setInputValue(target, value);
-          return { ok: true, marker, before, after: String(target.value || '').trim() };
-        }
+      for (let depth = 0; depth < 14 && node; depth++) {
+        const inputs = Array.from(node.querySelectorAll(
+          'input[data-testid="beast-core-input-htmlInput"],'
+          + 'input[data-testid="beast-core-input-nativeInput"], input'
+        )).filter(isDiscountInput);
+        if (inputs.length) return inputs[0];
         node = node.parentElement;
       }
     }
   }
   for (const input of document.querySelectorAll(
-    'input[data-testid="beast-core-input-htmlInput"], input'
+    'input[data-testid="beast-core-input-htmlInput"], input[data-testid="beast-core-input-nativeInput"], input'
   )) {
-    const ph = input.getAttribute('placeholder') || '';
-    if (ph.includes('5.0') && ph.includes('9.9')) {
-      const before = String(input.value || '').trim();
-      setInputValue(input, value);
-      return { ok: true, method: 'placeholder', before, after: String(input.value || '').trim() };
-    }
+    if (isDiscountInput(input)) return input;
   }
-  return { ok: false, reason: 'discount_input_not_found' };
+  return null;
+}
+"""
+
+_SET_BULK_DISCOUNT_JS = (
+    _NATIVE_INPUT_SETTER_JS
+    + _FIND_DISCOUNT_INPUT_JS
+    + """
+function setBulkDiscount(value) {
+  const input = findDiscountInput();
+  if (!input) return { ok: false, reason: 'discount_input_not_found' };
+  const before = String(input.value || '').trim();
+  const applied = setInputValue(input, value);
+  const after = String(input.value || '').trim();
+  return {
+    ok: applied || after === String(value),
+    before,
+    after,
+    verified: after === String(value),
+  };
 }
 return setBulkDiscount(arguments[0]);
 """
+)
+
+_READ_BULK_DISCOUNT_JS = (
+    _FIND_DISCOUNT_INPUT_JS
+    + """
+const input = findDiscountInput();
+return input ? String(input.value || '').trim() : '';
+"""
+)
 
 _CLICK_EXPAND_SERVICE_EDIT_JS = """
 function clickExpandEdit() {
-  const tracked = document.querySelector('[data-tracking-click-viewid*="expand_edit"]');
+  const tracked = document.querySelector(
+    '[data-tracking-click-viewid*="expand_edit"], [data-tracking-viewid*="expand_modify"]'
+  );
   if (tracked) {
     tracked.click();
     return { ok: true, method: 'tracking' };
@@ -74,8 +120,9 @@ function clickExpandEdit() {
       return { ok: true, method: 'bottom_switch' };
     }
   }
-  for (const el of document.querySelectorAll('span,div,a')) {
-    if ((el.textContent || '').trim() === '展开修改') {
+  for (const el of document.querySelectorAll('span,div,a,button')) {
+    const t = (el.textContent || '').replace(/\\s+/g, '');
+    if (t === '展开修改') {
       el.click();
       return { ok: true, method: 'text' };
     }
@@ -104,28 +151,48 @@ function clickRadioByText(scope, text) {
   }
   return false;
 }
+function visibleOptionRoots() {
+  const roots = [
+    ...document.querySelectorAll('[data-testid="beast-core-portal-main"]'),
+    document.body,
+  ];
+  return roots.filter((el) => el && el.isConnected);
+}
 function selectDropdownOption(optionText) {
-  const plate = document.querySelector('#tm-plate, .goods-basic-line.template') || document.body;
-  const headers = Array.from(document.querySelectorAll(
+  const plate = document.querySelector(
+    '#tm-plate, .goods-basic-line.template, .goods-basic-container, [class*="goods-basic"]'
+  ) || document.body;
+  const headers = Array.from(plate.querySelectorAll(
     '[data-testid="beast-core-select-header"], [data-testid*="select-header"], [role="combobox"]'
-  )).filter((h) => plate.contains(h));
-  const header = headers[headers.length - 1];
+  )).filter((h) => {
+    const ctx = (h.closest('div,section')?.textContent || '').replace(/\\s+/g, '');
+    return ctx.includes('运费') || ctx.includes('模板') || ctx.includes('服务与承诺');
+  });
+  const header = headers[headers.length - 1]
+    || Array.from(plate.querySelectorAll(
+      '[data-testid="beast-core-select-header"], [data-testid*="select-header"], [role="combobox"]'
+    )).pop();
   if (!header) return { ok: false, step: 'header_not_found' };
   header.click();
-  const options = document.querySelectorAll(
-    '[data-testid="beast-core-select-option"], [role="option"], li, div'
-  );
-  for (const opt of options) {
-    const t = (opt.textContent || '').trim();
-    if (t === optionText || t.startsWith(optionText)) {
-      opt.click();
-      return { ok: true, selected: t };
+  const roots = visibleOptionRoots();
+  for (const root of roots) {
+    const options = root.querySelectorAll(
+      '[data-testid="beast-core-select-option"], [role="option"], li, div, span'
+    );
+    for (const opt of options) {
+      const t = (opt.textContent || '').trim();
+      if (t === optionText || t.startsWith(optionText)) {
+        opt.click();
+        return { ok: true, selected: t };
+      }
     }
   }
   return { ok: false, step: 'option_not_found', optionText };
 }
 function selectShipping(templateName) {
-  const plate = document.querySelector('#tm-plate, .goods-basic-line.template');
+  const plate = document.querySelector(
+    '#tm-plate, .goods-basic-line.template, .goods-basic-container, [class*="goods-basic"]'
+  );
   const scope = plate || document;
   if (!clickRadioByText(scope, '其他模板') && !clickRadioByText(document, '其他模板')) {
     return { ok: false, step: 'other_template_radio' };
@@ -152,6 +219,12 @@ for (const el of document.querySelectorAll('div,section')) {
     return { ok: true, method: 'heading' };
   }
 }
+for (const el of document.querySelectorAll('span,div')) {
+  if ((el.textContent || '').trim() === '展开修改') {
+    el.scrollIntoView({ block: 'center', behavior: 'instant' });
+    return { ok: true, method: 'expand_button' };
+  }
+}
 return { ok: false };
 """
 
@@ -173,6 +246,62 @@ def _normalize_js_result(raw: Any) -> dict[str, Any]:
     return {"value": raw}
 
 
+def _read_bulk_discount_value(page: DpPage) -> str:
+    try:
+        raw = page.run_js(_READ_BULK_DISCOUNT_JS)
+        return str(raw or "").strip()
+    except Exception:
+        return ""
+
+
+def _fill_discount_via_playwright(page: DpPage, discount: str) -> dict[str, Any]:
+    try:
+        raw_page = page._page
+        for marker in ("满2件折扣", "满件折扣", "满2件"):
+            label = raw_page.get_by_text(marker, exact=False).first
+            try:
+                label.wait_for(state="attached", timeout=800)
+            except Exception:
+                continue
+            container = label.locator(
+                "xpath=ancestor::*[self::div or self::section or self::tr or self::td][position()<=8]"
+            ).first
+            inputs = container.locator(
+                'input[data-testid="beast-core-input-htmlInput"],'
+                'input[data-testid="beast-core-input-nativeInput"], input'
+            )
+            count = inputs.count()
+            for idx in range(count):
+                inp = inputs.nth(idx)
+                try:
+                    if not inp.is_visible():
+                        continue
+                except Exception:
+                    continue
+                value = ""
+                try:
+                    value = (inp.input_value(timeout=500) or "").strip()
+                except Exception:
+                    pass
+                if value in {"9.5", "9.9"} or (value.replace(".", "", 1).isdigit() and len(value) <= 4):
+                    before = value
+                    inp.scroll_into_view_if_needed(timeout=2000)
+                    inp.fill(str(discount))
+                    inp.blur()
+                    after = (inp.input_value(timeout=500) or "").strip()
+                    if after == str(discount):
+                        return {
+                            "ok": True,
+                            "method": "playwright_fill",
+                            "marker": marker,
+                            "before": before,
+                            "after": after,
+                        }
+        return {"ok": False, "reason": "discount_input_not_found"}
+    except Exception as exc:
+        return {"ok": False, "reason": "exception", "error": _safe_exc(exc)}
+
+
 def _set_bulk_discount(
     page: DpPage,
     account_id: str,
@@ -180,27 +309,39 @@ def _set_bulk_discount(
     *,
     discount: str,
 ) -> dict[str, Any]:
+    discount = str(discount or DEFAULT_BULK_DISCOUNT).strip() or DEFAULT_BULK_DISCOUNT
     try:
-        raw = page.run_js(_SET_BULK_DISCOUNT_JS, str(discount))
+        page.run_js(_SCROLL_BULK_DISCOUNT_JS)
+        time.sleep(0.25)
+        raw = page.run_js(_SET_BULK_DISCOUNT_JS, discount)
         result = _normalize_js_result(raw)
+        if not result.get("ok") or result.get("after") != discount:
+            btn = page.ele("text:修改", timeout=1)
+            if btn and "满" in str(page.html or ""):
+                btn.click()
+                time.sleep(0.4)
+                raw = page.run_js(_SET_BULK_DISCOUNT_JS, discount)
+                result = _normalize_js_result(raw)
+        if result.get("after") != discount:
+            pw_result = _fill_discount_via_playwright(page, discount)
+            if pw_result.get("ok"):
+                result = pw_result
+        time.sleep(0.2)
+        visible = _read_bulk_discount_value(page)
+        if visible == discount:
+            result["ok"] = True
+            result["after"] = visible
+            result["verified"] = True
         if result.get("ok"):
             print(
                 f"[{account_id}] [{label}] 满件折扣已设为 {discount}"
-                f"（原值 {result.get('before', '-')}）",
+                f"（原值 {result.get('before', visible or '-')}）",
                 flush=True,
             )
             return result
-        btn = page.ele("text:修改", timeout=1)
-        if btn and "满" in str(page.html or ""):
-            btn.click()
-            time.sleep(0.4)
-            raw = page.run_js(_SET_BULK_DISCOUNT_JS, str(discount))
-            result = _normalize_js_result(raw)
-            if result.get("ok"):
-                print(f"[{account_id}] [{label}] 满件折扣已设为 {discount}（经修改入口）", flush=True)
-                return result
         print(
-            f"[{account_id}] [{label}] 未找到满件折扣输入框：{result.get('reason', 'unknown')}",
+            f"[{account_id}] [{label}] 未找到满件折扣输入框或写入未生效："
+            f"{result.get('reason', 'verify_failed')}，当前值={visible or '<空>'}",
             flush=True,
         )
         return result
@@ -222,8 +363,14 @@ def _expand_service_section(page: DpPage, account_id: str, label: str) -> dict[s
             if btn:
                 btn.click(by_js=True)
                 result = {"ok": True, "method": "ele"}
+        if not result.get("ok"):
+            try:
+                page._page.get_by_text("展开修改", exact=True).click(timeout=2000)
+                result = {"ok": True, "method": "playwright"}
+            except Exception:
+                pass
         if result.get("ok"):
-            time.sleep(0.6)
+            time.sleep(0.8)
             print(f"[{account_id}] [{label}] 已展开服务与承诺", flush=True)
         else:
             print(
@@ -243,9 +390,10 @@ def _select_shipping_template(
     *,
     template_name: str,
 ) -> dict[str, Any]:
+    template_name = str(template_name or DEFAULT_SHIPPING_TEMPLATE).strip() or DEFAULT_SHIPPING_TEMPLATE
     try:
         time.sleep(0.4)
-        raw = page.run_js(_SELECT_SHIPPING_TEMPLATE_JS, str(template_name))
+        raw = page.run_js(_SELECT_SHIPPING_TEMPLATE_JS, template_name)
         result = _normalize_js_result(raw)
         if result.get("ok"):
             print(
@@ -256,7 +404,7 @@ def _select_shipping_template(
         other = page.ele("text:其他模板", timeout=2)
         if other:
             other.click(by_js=True)
-            time.sleep(0.5)
+            time.sleep(0.6)
             option = page.ele(f"text:{template_name}", timeout=2)
             if option:
                 option.click(by_js=True)
@@ -265,6 +413,15 @@ def _select_shipping_template(
                     flush=True,
                 )
                 return {"ok": True, "method": "ele", "template": template_name}
+            try:
+                page._page.get_by_text(template_name, exact=False).last.click(timeout=2000)
+                print(
+                    f"[{account_id}] [{label}] 运费模板已选「{template_name}」（Playwright 点击）",
+                    flush=True,
+                )
+                return {"ok": True, "method": "playwright", "template": template_name}
+            except Exception:
+                pass
         print(
             f"[{account_id}] [{label}] 运费模板设置失败：{result.get('step', result.get('reason', 'unknown'))}",
             flush=True,

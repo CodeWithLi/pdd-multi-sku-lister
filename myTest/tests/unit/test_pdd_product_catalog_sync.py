@@ -73,19 +73,19 @@ def test_resolve_combo_pricing_raises_when_catalog_code_missing():
     assert exc.value.reason == "catalog_code_missing"
 
 
-def test_resolve_combo_pricing_single_price_adds_zero_to_two_float():
+def test_resolve_combo_pricing_single_price_adds_one_to_two_float():
     catalog = {
         "BD716A": PddProductEntry("BD716A", "白色笔袋", "笔袋", 100, 10.0),
     }
     reset_listing_price_float_registry(
         enabled=False,
-        single_float_min=0.0,
+        single_float_min=1.01,
         single_float_max=2.0,
     )
     scope = "BD716/第一套图"
     _, gp, sp = resolve_combo_pricing("BD716A", "BD716A", catalog, {}, listing_scope=scope)
     assert gp == "10"
-    assert 10 <= float(sp) <= 12
+    assert 11.01 <= float(sp) <= 12.0
     _, gp2, sp2 = resolve_combo_pricing("BD716A", "BD716A", catalog, {}, listing_scope=scope)
     assert gp2 == gp
     assert sp2 == sp

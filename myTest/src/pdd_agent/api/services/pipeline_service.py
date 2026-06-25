@@ -520,6 +520,7 @@ LISTING_PARTIAL_OUTCOME = "partial_listing_failure"
 
 LISTING_UNIT_STATUS_LABELS: dict[str, str] = {
     "skipped": "已跳过",
+    "platform_skip_dedupe": "平台不适用已跳过",
     "preflight_failed": "校验未通过",
     "ready": "可上架",
     "pending": "等待中",
@@ -647,12 +648,16 @@ def build_listing_unit_statuses(row) -> list[dict[str, Any]]:
         elif label in result_by_label:
             item = result_by_label[label]
             item_status = str(item.get("status") or "").strip().lower()
+            item_reason = str(item.get("reason") or item.get("reason_code") or "").strip()
             product_id = str(item.get("pdd_product_id") or "").strip()
             if item_status in {"success", "listed"} and bool(product_id or item_status == "listed"):
                 status = "success"
+            elif item_status == "skipped" or item_reason == "platform_skip_dedupe":
+                status = "platform_skip_dedupe"
+                reason_code = "platform_skip_dedupe"
             else:
                 status = "failed"
-                reason_code = str(item.get("reason") or item.get("reason_code") or "listing_failed").strip()
+                reason_code = item_reason or "listing_failed"
         elif label in preflight_errors:
             status = "preflight_failed"
             reason_code = preflight_errors[label]

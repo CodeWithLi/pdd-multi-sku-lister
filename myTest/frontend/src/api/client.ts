@@ -664,6 +664,45 @@ export const api = {
       .put<{ enabled: boolean }>('/pipelines/integrated/log-spec-sku-rows', { enabled })
       .then((r) => r.data),
 
+  getPipelinePlatformSkipDedupe: () =>
+    http
+      .get<{
+        enabled: boolean
+        sync_seconds: number
+        code_count: number
+        updated_at: string
+        redis_available: boolean
+        last_sync_at: string
+        last_error: string
+      }>('/pipelines/integrated/platform-skip-dedupe')
+      .then((r) => r.data),
+
+  updatePipelinePlatformSkipDedupe: (enabled: boolean) =>
+    http
+      .put<{
+        enabled: boolean
+        sync_seconds: number
+        code_count: number
+        updated_at: string
+        redis_available: boolean
+        last_sync_at: string
+        last_error: string
+      }>('/pipelines/integrated/platform-skip-dedupe', { enabled })
+      .then((r) => r.data),
+
+  syncPipelinePlatformSkipDedupe: () =>
+    http
+      .post<{
+        enabled: boolean
+        sync_seconds: number
+        code_count: number
+        updated_at: string
+        redis_available: boolean
+        last_sync_at: string
+        last_error: string
+      }>('/pipelines/integrated/platform-skip-dedupe/sync')
+      .then((r) => r.data),
+
   getAutoUploadConfig: () =>
     http.get<AutoUploadConfig>('/pipelines/auto-upload-config').then((r) => r.data),
 

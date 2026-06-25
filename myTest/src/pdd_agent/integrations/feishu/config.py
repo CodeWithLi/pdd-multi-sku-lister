@@ -185,7 +185,7 @@ class PddProductCatalogConfig(BaseModel):
     price_float_enabled: bool = Field(default=True, description="上架拼单价是否在定价基础上加随机浮动")
     price_float_min: float = Field(default=0.0, ge=0, description="拼单价定价浮动下限（元）")
     price_float_max: float = Field(default=5.0, ge=0, description="拼单价定价浮动上限（元）")
-    single_price_float_min: float = Field(default=0.0, ge=0, description="单买价在拼单价基础上追加浮动下限（元）")
+    single_price_float_min: float = Field(default=1.01, ge=0, description="单买价在拼单价基础上追加浮动下限（元）")
     single_price_float_max: float = Field(default=2.0, ge=0, description="单买价在拼单价基础上追加浮动上限（元）")
     field_names: PddProductCatalogFieldNames = Field(default_factory=PddProductCatalogFieldNames)
 
@@ -196,6 +196,22 @@ class PipelineIntegrationConfig(BaseModel):
     excel_fallback_enabled: bool = Field(
         default=False,
         description="开启后飞书商品/定价表无数据时回退本地 Excel；关闭则一律不回退",
+    )
+    platform_skip_dedupe_enabled: bool = Field(
+        default=False,
+        description="开启后从飞书失败日志同步「平台不适用跳过」编码到 Redis，上架时静默跳过",
+    )
+    platform_skip_dedupe_sync_seconds: int = Field(
+        default=300,
+        ge=60,
+        le=3600,
+        description="平台跳过编码 Redis 同步间隔（秒）",
+    )
+    platform_skip_dedupe_fetch_limit: int = Field(
+        default=2000,
+        ge=100,
+        le=5000,
+        description="同步失败日志表时最多读取行数",
     )
 
 
@@ -609,6 +625,12 @@ def excel_fallback_enabled(cfg: FeishuConfig | None = None) -> bool:
     return bool(cfg.pipeline.excel_fallback_enabled)
 
 
+def platform_skip_dedupe_enabled(cfg: FeishuConfig | None = None) -> bool:
+    """整合链路「平台跳过去重」开关。"""
+    cfg = cfg or load_feishu_config()
+    return bool(cfg.pipeline.platform_skip_dedupe_enabled)
+
+
 def load_feishu_config(path: Path | None = None) -> FeishuConfig:
     """合并 feishu.yaml 与 .env 中的飞书凭据。"""
     cfg_path = path or Path(os.getenv("FEISHU_CONFIG_PATH", DEFAULT_FEISHU_CONFIG_PATH))
@@ -812,6 +834,23 @@ def save_pipeline_excel_fallback_to_config(enabled: bool, path: Path | None = No
     if not isinstance(pipeline_raw, dict):
         pipeline_raw = {}
     pipeline_raw["excel_fallback_enabled"] = bool(enabled)
+    data["pipeline"] = pipeline_raw
+    cfg_path.parent.mkdir(parents=True, exist_ok=True)
+    with open(cfg_path, "w", encoding="utf-8") as f:
+        yaml.dump(data, f, allow_unicode=True, default_flow_style=False, sort_keys=False)
+
+
+def save_pipeline_platform_skip_dedupe_to_config(enabled: bool, path: Path | None = None) -> None:
+    """整合链路：写入「平台跳过去重」开关到 feishu.yaml。"""
+    cfg_path = path or Path(os.getenv("FEISHU_CONFIG_PATH", DEFAULT_FEISHU_CONFIG_PATH))
+    data: dict = {}
+    if cfg_path.is_file():
+        with open(cfg_path, encoding="utf-8") as f:
+            data = yaml.safe_load(f) or {}
+    pipeline_raw = data.get("pipeline")
+    if not isinstance(pipeline_raw, dict):
+        pipeline_raw = {}
+    pipeline_raw["platform_skip_dedupe_enabled"] = bool(enabled)
     data["pipeline"] = pipeline_raw
     cfg_path.parent.mkdir(parents=True, exist_ok=True)
     with open(cfg_path, "w", encoding="utf-8") as f:

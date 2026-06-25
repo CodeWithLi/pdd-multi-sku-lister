@@ -759,6 +759,9 @@ def _schedule_feishu_listing_result_log(
         if not isinstance(item, dict):
             continue
         status = str(item.get("status") or "").strip().lower()
+        item_reason = str(item.get("reason") or item.get("reason_code") or "").strip()
+        if status == "skipped" and (item.get("dedupe") or item_reason == "platform_skip_dedupe"):
+            continue
         product_id = str(item.get("pdd_product_id") or "").strip()
         listing_label = str(item.get("listing_label") or "")
         merchant_code = str(
@@ -1184,6 +1187,45 @@ async def execute_listing(
     store.update_status(run_id, RunStatus.RUNNING)
     store.update_phase(run_id, TaskPhase.PREFLIGHT)
 
+    dedupe_skipped_results: list[dict[str, Any]] = []
+    try:
+        from pdd_agent.integrations.feishu.listing_feishu_platform_guard import PLATFORM_SKIP_REASON
+        from pdd_agent.integrations.feishu.platform_skip_dedupe_cache import (
+            filter_selectors_by_platform_skip_dedupe,
+            platform_skip_dedupe_enabled,
+        )
+
+        if platform_skip_dedupe_enabled():
+            dedupe = filter_selectors_by_platform_skip_dedupe(list(codes))
+            for item in dedupe.get("skipped") or []:
+                selector = str(item.get("selector") or "")
+                folder = str(item.get("merchant_code") or "")
+                listing_label = str(item.get("listing_label") or selector)
+                dedupe_skipped_results.append(
+                    {
+                        "status": "skipped",
+                        "reason": "platform_skip_dedupe",
+                        "listing_label": listing_label,
+                        "platform_listing_code": folder,
+                        "error": PLATFORM_SKIP_REASON,
+                        "dedupe": True,
+                    }
+                )
+            codes = list(dedupe.get("passed_selectors") or [])
+            if not codes and dedupe_skipped_results:
+                result = {"results": dedupe_skipped_results, "errors": [], "platform_skip_dedupe": True}
+                store.finish(
+                    run_id,
+                    RunStatus.SUCCESS,
+                    "platform skip dedupe",
+                    result=_compact_run_result_for_storage(result),
+                    listing_labels=[str(item.get("listing_label") or "") for item in dedupe_skipped_results],
+                )
+                mark_feishu_terminal_logged(run_id)
+                return result
+    except Exception:
+        logger.exception("platform skip dedupe filter failed run_id=%s", run_id)
+
     try:
         from pdd_agent.integrations.feishu.config import load_feishu_config
         from pdd_agent.skills.listing.listing_price_float import reset_listing_price_float_registry
@@ -1317,6 +1359,10 @@ async def execute_listing(
             }
         )
         result = _json_safe(raw)
+        if dedupe_skipped_results:
+            merged = list(dedupe_skipped_results) + list(result.get("results") or [])
+            result["results"] = merged
+            result["platform_skip_dedupe"] = True
         # 批次内已成功的商品先落库，避免取消/中断时丢失
         _persist_published_products(run_id, account_id, result)
         record = store.load(run_id)

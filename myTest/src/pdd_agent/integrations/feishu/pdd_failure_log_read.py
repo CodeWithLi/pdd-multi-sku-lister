@@ -20,6 +20,8 @@ from pdd_agent.integrations.feishu.field_display import (
     format_user_names,
     resolve_process_status,
 )
+from pdd_agent.integrations.feishu.listing_feishu_catalog import normalize_listing_code
+from pdd_agent.integrations.feishu.listing_feishu_platform_guard import PLATFORM_SKIP_REASON
 from pdd_agent.integrations.feishu.pdd_upload_sync import (
     _verify_pdd_table_id,
     resolve_pdd_upload_failure_table_id,
@@ -220,3 +222,79 @@ def list_pdd_failure_logs(
             for f in table_fields
         ],
     }
+
+
+def list_platform_skip_records(
+    *,
+    config: FeishuConfig | None = None,
+    client: FeishuClient | None = None,
+    report_platform: str = "拼多多",
+    failure_reason: str = PLATFORM_SKIP_REASON,
+    fetch_limit: int | None = None,
+) -> list[dict[str, str]]:
+    """读取失败日志表中「平台不适用自动跳过」的拼多多商品编码（全店铺去重）。"""
+    cfg = config or load_feishu_config()
+    api = client or FeishuClient(cfg)
+    app_token = str(cfg.bitable_app_token or "").strip()
+    if not app_token:
+        return []
+
+    table_id, _, _ = _resolve_failure_log_table(cfg, api)
+    if not table_id:
+        return []
+
+    names = cfg.pdd_upload_log.failure_field_names
+    limit = fetch_limit
+    if limit is None:
+        limit = int(cfg.pipeline.platform_skip_dedupe_fetch_limit or 2000)
+    limit = max(1, min(int(limit), 5000))
+
+    raw_records = list_all_records(api, app_token, table_id, page_size=min(limit, 500))
+    if len(raw_records) > limit:
+        raw_records = raw_records[:limit]
+
+    target_platform = str(report_platform or "拼多多").strip()
+    target_reason = str(failure_reason or PLATFORM_SKIP_REASON).strip()
+    records: list[dict[str, str]] = []
+    seen: set[str] = set()
+    for record in raw_records:
+        fields = record.get("fields") if isinstance(record.get("fields"), dict) else {}
+        platform = format_single_select(fields.get(names.report_platform))
+        reason = str(fields.get(names.failure_reason) or "").strip()
+        if platform != target_platform:
+            continue
+        if reason != target_reason:
+            continue
+        merchant_code = normalize_listing_code(str(fields.get(names.merchant_code) or ""))
+        if not merchant_code:
+            continue
+        dedupe_key = f"{platform}|{merchant_code}"
+        if dedupe_key in seen:
+            continue
+        seen.add(dedupe_key)
+        records.append(
+            {
+                "merchant_code": merchant_code,
+                "report_platform": platform,
+            }
+        )
+    return records
+
+
+def list_platform_skip_merchant_codes(
+    *,
+    config: FeishuConfig | None = None,
+    client: FeishuClient | None = None,
+    report_platform: str = "拼多多",
+    failure_reason: str = PLATFORM_SKIP_REASON,
+    fetch_limit: int | None = None,
+) -> list[str]:
+    """兼容旧调用：仅返回商品编码列表。"""
+    records = list_platform_skip_records(
+        config=config,
+        client=client,
+        report_platform=report_platform,
+        failure_reason=failure_reason,
+        fetch_limit=fetch_limit,
+    )
+    return list(dict.fromkeys(item["merchant_code"] for item in records if item.get("merchant_code")))

@@ -76,6 +76,10 @@ const excelFallbackEnabled = ref(false)
 const excelFallbackSaving = ref(false)
 const logSpecSkuRowsEnabled = ref(false)
 const logSpecSkuRowsSaving = ref(false)
+const platformSkipDedupeEnabled = ref(false)
+const platformSkipDedupeSaving = ref(false)
+const platformSkipDedupeCodeCount = ref(0)
+const platformSkipDedupeUpdatedAt = ref('')
 const pipelineBatchEnabled = ref(false)
 const batchAccountIds = ref<string[]>([])
 const startDelayMin = ref(30)
@@ -675,11 +679,6 @@ async function loadExcelFallbackSetting() {
   excelFallbackEnabled.value = !!data.enabled
 }
 
-async function loadLogSpecSkuRowsSetting() {
-  const data = await api.getPipelineLogSpecSkuRows()
-  logSpecSkuRowsEnabled.value = !!data.enabled
-}
-
 function applyAutoUploadConfig(cfg: AutoUploadConfig) {
   autoUploadConfig.value = { ...cfg }
   autoUploadEnabled.value = !!cfg.enabled
@@ -789,6 +788,38 @@ async function onExcelFallbackChange(enabled: boolean) {
     ElMessage.error(e instanceof Error ? e.message : String(e))
   } finally {
     excelFallbackSaving.value = false
+  }
+}
+
+async function loadLogSpecSkuRowsSetting() {
+  const data = await api.getPipelineLogSpecSkuRows()
+  logSpecSkuRowsEnabled.value = !!data.enabled
+}
+
+async function loadPlatformSkipDedupeSetting() {
+  const data = await api.getPipelinePlatformSkipDedupe()
+  platformSkipDedupeEnabled.value = !!data.enabled
+  platformSkipDedupeCodeCount.value = Number(data.code_count || 0)
+  platformSkipDedupeUpdatedAt.value = String(data.updated_at || data.last_sync_at || '')
+}
+
+async function onPlatformSkipDedupeChange(enabled: boolean) {
+  platformSkipDedupeSaving.value = true
+  try {
+    const data = await api.updatePipelinePlatformSkipDedupe(enabled)
+    platformSkipDedupeEnabled.value = !!data.enabled
+    platformSkipDedupeCodeCount.value = Number(data.code_count || 0)
+    platformSkipDedupeUpdatedAt.value = String(data.updated_at || data.last_sync_at || '')
+    ElMessage.success(
+      enabled
+        ? `已开启平台跳过去重，Redis 缓存 ${data.code_count} 个编码`
+        : '已关闭平台跳过去重',
+    )
+  } catch (e) {
+    platformSkipDedupeEnabled.value = !enabled
+    ElMessage.error(e instanceof Error ? e.message : String(e))
+  } finally {
+    platformSkipDedupeSaving.value = false
   }
 }
 
@@ -1009,6 +1040,7 @@ onMounted(async () => {
     await loadBaseData()
     await loadExcelFallbackSetting()
     await loadLogSpecSkuRowsSetting()
+    await loadPlatformSkipDedupeSetting()
     await loadAutoUploadConfig()
     await refreshPipelines()
     if (materialSource.value === 'minio') {
@@ -1446,6 +1478,14 @@ onUnmounted(() => {
                       @change="onLogSpecSkuRowsChange"
                     />
                   </div>
+                  <div class="switch-row">
+                    <span class="switch-label">平台跳过去重</span>
+                    <el-switch
+                      v-model="platformSkipDedupeEnabled"
+                      :loading="platformSkipDedupeSaving"
+                      @change="onPlatformSkipDedupeChange"
+                    />
+                  </div>
                 </div>
                 <div v-if="continueAfterLimitedTimeFailure" class="form-tip">
                   限时限量购失败时仍继续活动报名；若同时开启自动推广，活动全部处理完后仍会创建推广。
@@ -1476,6 +1516,16 @@ onUnmounted(() => {
                 </div>
                 <div v-else class="form-tip">
                   默认关闭：上架成功仅写 1 条商品摘要行到 PDD 发布日志表。
+                </div>
+                <div v-if="platformSkipDedupeEnabled" class="form-tip">
+                  已开启：从飞书失败日志同步「平台不适用跳过」的拼多多商品编码到 Redis（全店铺共用，每 5 分钟刷新）。上架时编码命中则静默跳过，不打开拼多多页面、不写失败日志。
+                  <span v-if="platformSkipDedupeCodeCount > 0">
+                    当前缓存 {{ platformSkipDedupeCodeCount }} 个编码
+                    <template v-if="platformSkipDedupeUpdatedAt">（更新于 {{ platformSkipDedupeUpdatedAt }}）</template>。
+                  </span>
+                </div>
+                <div v-else class="form-tip">
+                  默认关闭：每次上架仍会走笔袋视图校验，不适用商品会写入失败日志表。
                 </div>
               </el-form-item>
             </div>

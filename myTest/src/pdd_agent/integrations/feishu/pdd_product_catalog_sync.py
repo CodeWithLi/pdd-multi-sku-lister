@@ -204,6 +204,27 @@ def ensure_pdd_product_catalog_table_ready(
     }
 
 
+def _resolved_catalog_fields_from_snapshot(snapshot: Any | None, names) -> dict[str, str]:
+    """飞书表实际列名（快照 warm 后解析）优先于配置里的默认字段名。"""
+    if snapshot is None:
+        return {
+            "product_code": str(names.product_code or "").strip(),
+            "color_spec": str(names.color_spec or "").strip(),
+            "product_type": str(names.product_type or "").strip(),
+            "available_inventory": str(names.available_inventory or "").strip(),
+            "pricing": str(names.pricing or "").strip(),
+        }
+    return {
+        "product_code": str(getattr(snapshot, "_code_field", "") or names.product_code or "").strip(),
+        "color_spec": str(getattr(snapshot, "_color_spec_field", "") or names.color_spec or "").strip(),
+        "product_type": str(getattr(snapshot, "_product_type_field", "") or names.product_type or "").strip(),
+        "available_inventory": str(
+            getattr(snapshot, "_inventory_field", "") or names.available_inventory or ""
+        ).strip(),
+        "pricing": str(getattr(snapshot, "_pricing_field", "") or names.pricing or "").strip(),
+    }
+
+
 def _entry_from_feishu_fields(
     fields: dict[str, Any],
     names,
@@ -219,9 +240,13 @@ def _entry_from_feishu_fields(
 
     raw_code = _field_text(fields, product_code_field)
     code = _norm_code(raw_code)
-    color_spec = _field_text(fields, color_spec_field)
-    if not code or not color_spec:
+    if not code:
         return None
+    color_spec = _field_text(fields, color_spec_field)
+    if not color_spec:
+        color_spec = _field_text(fields, product_type_field)
+    if not color_spec:
+        color_spec = code
     inventory = _field_number(fields, inventory_field)
     pricing = _field_number(fields, pricing_field)
     return PddProductEntry(
@@ -310,9 +335,17 @@ def _collect_product_catalog_issue_details(
     listing_label: str,
     merchant_code: str,
     details: list[FeishuCatalogIssueDetail],
+    resolved_fields: dict[str, str] | None = None,
+    pricing_catalog: Any | None = None,
 ) -> list[str]:
     """返回 legacy aspect 标签列表，并追加结构化 details。"""
+    from pdd_agent.integrations.feishu.listing_feishu_catalog import catalog_entry
+    from pdd_agent.integrations.feishu.pdd_price_compare_sync import resolve_code_price_from_catalog
+
     aspects: list[str] = []
+    resolved = dict(resolved_fields or {})
+    color_spec_field = str(resolved.get("color_spec") or names.color_spec or "").strip()
+
     if source in {"feishu_empty", "feishu_table_missing", "feishu_not_configured"}:
         aspect = _row_missing_aspect(code, merchant_code)
         aspects.append(_aspect_label(aspect))
@@ -326,7 +359,16 @@ def _collect_product_catalog_issue_details(
         return aspects
 
     if raw_fields:
-        color_spec = _field_text(raw_fields, names.color_spec)
+        color_spec = _field_text(raw_fields, color_spec_field)
+        product_type_field = str(resolved.get("product_type") or names.product_type or "").strip()
+        if not color_spec:
+            color_spec = _field_text(raw_fields, product_type_field)
+        if not color_spec:
+            row_code = _field_text(
+                raw_fields,
+                str(resolved.get("product_code") or names.product_code or "").strip(),
+            )
+            color_spec = _norm_code(row_code or code)
         if not color_spec:
             aspect = "color_spec_missing"
             aspects.append(_aspect_label(aspect))
@@ -339,8 +381,13 @@ def _collect_product_catalog_issue_details(
             )
             return aspects
 
-    entry = catalog.get(_norm_code(code))
+    entry = catalog_entry(catalog, code)
     if not entry:
+        if raw_fields:
+            if pricing_catalog and getattr(pricing_catalog, "source", "") == "feishu":
+                _price, reason = resolve_code_price_from_catalog(pricing_catalog, code)
+                if not reason:
+                    return aspects
         aspect = _row_missing_aspect(code, merchant_code)
         aspects.append(_aspect_label(aspect))
         _append_catalog_detail(
@@ -353,6 +400,10 @@ def _collect_product_catalog_issue_details(
         return aspects
 
     if float(entry.price or 0.0) <= 0:
+        if pricing_catalog and getattr(pricing_catalog, "source", "") == "feishu":
+            _price, reason = resolve_code_price_from_catalog(pricing_catalog, code)
+            if not reason:
+                return aspects
         aspect = "pricing_missing"
         aspects.append(_aspect_label(aspect))
         _append_catalog_detail(
@@ -438,15 +489,31 @@ def diagnose_feishu_listing_catalog_issues(
     ):
         return []
 
+    from pdd_agent.integrations.feishu.listing_feishu_catalog import merchant_code_from_selector
+
     unit_list = list(units or [])
     if not unit_list and product_codes:
-        unit_list = [
-            type("_U", (), {"product_code": code, "style_codes": [], "model_codes": [], "listing_label": code})()
-            for code in product_codes
-            if _norm_code(code)
-        ]
+        unit_list = []
+        for code in product_codes:
+            merchant = merchant_code_from_selector(code) or _norm_code(code)
+            if not merchant:
+                continue
+            unit_list.append(
+                type(
+                    "_U",
+                    (),
+                    {
+                        "product_code": merchant,
+                        "style_codes": [],
+                        "model_codes": [],
+                        "listing_label": code,
+                    },
+                )()
+            )
 
     snapshot = get_listing_feishu_snapshot()
+    names = cat_cfg.field_names
+    resolved_fields = _resolved_catalog_fields_from_snapshot(snapshot, names)
     product_catalog: dict[str, PddProductEntry] = {}
     product_source = ""
     if snapshot is not None:
@@ -459,17 +526,11 @@ def diagnose_feishu_listing_catalog_issues(
 
     pricing_catalog = control_catalog = range_catalog = None
     if price_cfg.enabled and price_cfg.prefer_feishu:
-        if snapshot is not None and snapshot.records_by_code:
-            pricing_catalog = snapshot.pricing_catalog(cfg)
-            control_catalog = snapshot.control_catalog(cfg)
-            range_catalog = snapshot.range_catalog(cfg)
-        elif snapshot is None:
-            pricing_catalog = load_pricing_catalog(config=cfg, client=client)
-            control_catalog = load_control_catalog(config=cfg, client=client)
-            range_catalog = load_price_range_catalog(config=cfg, client=client)
+        pricing_catalog = load_pricing_catalog(config=cfg, client=client)
+        control_catalog = load_control_catalog(config=cfg, client=client)
+        range_catalog = load_price_range_catalog(config=cfg, client=client)
 
     issues: list[FeishuListingCatalogIssue] = []
-    names = cat_cfg.field_names
     for unit in unit_list:
         listing_label = str(
             getattr(unit, "listing_label", "") or getattr(unit, "product_code", "") or ""
@@ -495,6 +556,8 @@ def diagnose_feishu_listing_catalog_issues(
                         listing_label=listing_label,
                         merchant_code=merchant_code,
                         details=details,
+                        resolved_fields=resolved_fields,
+                        pricing_catalog=pricing_catalog,
                     )
                 )
             if not price_cfg.enabled or not price_cfg.prefer_feishu:

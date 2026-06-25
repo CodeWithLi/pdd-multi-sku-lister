@@ -216,16 +216,19 @@ def _row_price_fields_score(
     pricing_field: str = "",
     control_field: str = "",
 ) -> int:
+    """飞书同编码多行时优先保留「拼多多定价」有效的行。"""
     score = 0
+    pricing_val = _field_number(fields, pricing_field) if pricing_field else None
+    if pricing_val is not None and pricing_val > 0:
+        score += 1000
+    control_val = _field_number(fields, control_field) if control_field else None
+    if control_val is not None and control_val > 0:
+        score += 10
     if _field_number(fields, min_field) is not None:
         score += 1
     max_val = _field_number(fields, max_field)
     if max_val is not None and max_val > 0:
         score += 4
-    if pricing_field and (_field_number(fields, pricing_field) or 0) > 0:
-        score += 1
-    if control_field and (_field_number(fields, control_field) or 0) > 0:
-        score += 1
     return score
 
 
@@ -548,11 +551,14 @@ def _build_code_price_catalog_from_feishu_records(
             price=float(price_val or 0.0),
         )
         entries.append(entry)
+        row_keys = [key for key in price_rule_candidates(raw_code) if key]
         if price_val is None or price_val <= 0:
-            for key in price_rule_candidates(raw_code):
-                incomplete.add(key)
+            for key in row_keys:
+                if key not in prices:
+                    incomplete.add(key)
             continue
-        for key in price_rule_candidates(raw_code):
+        for key in row_keys:
+            incomplete.discard(key)
             prices[key] = float(price_val)
 
     return CodePriceCatalog(

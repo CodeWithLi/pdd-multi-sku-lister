@@ -69,6 +69,15 @@ async def delist_browser_node(state: DelistState) -> dict:
     try:
         stats = await run_browser_job_async(settings, account, _job)
         if mode == "pipeline_relist_prep":
+            if stats.get("delist_skipped"):
+                return {
+                    "phase": "delist_skipped",
+                    "delist_skipped": True,
+                    "results": stats.get("results") or [],
+                    "warnings": list(stats.get("warnings") or []),
+                    "skip_reason": str(stats.get("skip_reason") or ""),
+                    "finished": True,
+                }
             if stats.get("errors"):
                 return {"errors": list(stats.get("errors") or []), "results": stats.get("results") or [], "finished": True}
             return {"phase": "delist_done", "results": stats.get("results") or [], "finished": True}

@@ -391,6 +391,30 @@ def handle_pipeline_delist_task_finished(
         )
         return True
 
+    if result.get("delist_skipped"):
+        skip_reason = str(result.get("skip_reason") or "verification_failed")
+        warnings = list(result.get("warnings") or [])
+        warning_text = warnings[0] if warnings else "下架校验未通过，已跳过下架"
+        update_integrated_pipeline(
+            pipeline_id,
+            meta_patch={
+                "relist_prep_skipped": True,
+                "relist_prep_skip_reason": skip_reason,
+                "relist_prep_skip_message": warning_text,
+            },
+        )
+        try:
+            refreshed = get_integrated_pipeline(pipeline_id) or row
+            enqueue_pending_listing_after_relist_prep(refreshed)
+        except Exception as exc:
+            update_integrated_pipeline(
+                pipeline_id,
+                status="failed",
+                current_step="relist_prep_failed",
+                error=str(exc),
+            )
+        return True
+
     deleted, finalize_errors = finalize_relist_prep_after_delist(result)
     if finalize_errors:
         err = "；".join(finalize_errors)
