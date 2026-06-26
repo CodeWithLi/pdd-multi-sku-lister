@@ -690,33 +690,9 @@ def _set_goods_filter(page, label: str, value: str) -> bool:
 
 
 def _read_goods_merchant_code_filter(page) -> str:
-    """读取商品列表「商品编码」筛选框当前值。"""
-    try:
-        value = page.run_js(
-            """
-            function isVisible(el) {
-                if (!el || !el.getBoundingClientRect) return false;
-                const r = el.getBoundingClientRect();
-                const s = window.getComputedStyle(el);
-                return r.width > 4 && r.height > 4
-                    && s.display !== 'none' && s.visibility !== 'hidden';
-            }
-            const nodes = Array.from(document.querySelectorAll('label, span, div'));
-            for (const node of nodes) {
-                const text = (node.innerText || node.textContent || '').trim();
-                if (text !== '商品编码' || !isVisible(node)) continue;
-                let cur = node;
-                for (let depth = 0; depth < 7 && cur; depth++, cur = cur.parentElement) {
-                    const input = Array.from(cur.querySelectorAll?.('input') || []).find(isVisible);
-                    if (input) return String(input.value || '').trim();
-                }
-            }
-            return '';
-            """
-        )
-        return str(value or "").strip()
-    except Exception:
-        return ""
+    from pdd_agent.skills.listing.upload import _read_goods_merchant_code_filter as _read
+
+    return _read(page)
 
 
 def _log_search_result_diagnostics(
@@ -1555,23 +1531,44 @@ def batch_delist_filtered_goods(
 
 
 def filter_goods_by_merchant_codes(page, account_id: str, merchant_codes: list[str]) -> bool:
+    from pdd_agent.skills.listing.upload import (
+        _click_goods_search as click_search,
+        _fill_goods_merchant_code_filter,
+    )
+
     codes = _normalize_merchant_code_list(merchant_codes)
     if not codes:
         return False
     filter_value = " ".join(codes)
     _clear_goods_filters(page)
-    if not _set_goods_filter(page, "商品编码", filter_value):
-        _log(account_id, f"商品编码筛选失败：{filter_value[:200]}")
+    fill_result = _fill_goods_merchant_code_filter(page, filter_value)
+    if not fill_result.get("filled"):
+        _log(
+            account_id,
+            f"商品编码写入筛选框失败：{filter_value[:200]}"
+            f"（读回={fill_result.get('value') or '<空>'}）",
+        )
         return False
-    _click_goods_search(page)
+    _log(
+        account_id,
+        f"商品编码已写入筛选框：{str(fill_result.get('value') or filter_value)[:200]}"
+        f"（{fill_result.get('method')}）",
+    )
+
+    search_result = click_search(page)
+    if not search_result.get("clicked"):
+        _log(account_id, "未点击到「查询」按钮，列表可能仍是全部商品，中止本编码搜索")
+        return False
+    _log(account_id, f"已点击「查询」按钮（{search_result.get('method')}）")
     time.sleep(1.5)
+
     applied = _read_goods_merchant_code_filter(page)
     _log(
         account_id,
-        f"已搜索商品编码（{len(codes)} 个）：{filter_value[:200]}"
-        + (f"；筛选框读回：{applied[:200]}" if applied else "；筛选框读回为空（可能未写入）"),
+        f"已执行商品编码搜索（{len(codes)} 个）：{filter_value[:200]}"
+        + (f"；筛选框读回：{applied[:200]}" if applied else "；筛选框读回为空"),
     )
-    if applied and applied != filter_value:
+    if applied and applied != filter_value and filter_value not in applied and applied not in filter_value:
         _log(
             account_id,
             f"警告：筛选框值与期望不一致（期望 {len(filter_value)} 字，实际 {len(applied)} 字）",
@@ -1580,6 +1577,8 @@ def filter_goods_by_merchant_codes(page, account_id: str, merchant_codes: list[s
 
 
 def filter_goods_by_product_ids(page, account_id: str, product_ids: list[str]) -> bool:
+    from pdd_agent.skills.listing.upload import _click_goods_search as click_search
+
     ids = [str(pid or "").strip() for pid in product_ids if str(pid or "").strip()]
     if not ids:
         return False
@@ -1588,7 +1587,11 @@ def filter_goods_by_product_ids(page, account_id: str, product_ids: list[str]) -
     if not _set_goods_filter(page, "商品ID", filter_value):
         _log(account_id, f"商品ID批量筛选失败：{filter_value[:120]}")
         return False
-    _click_goods_search(page)
+    search_result = click_search(page)
+    if not search_result.get("clicked"):
+        _log(account_id, "未点击到「查询」按钮，商品ID筛选可能未生效")
+        return False
+    _log(account_id, f"已点击「查询」按钮（{search_result.get('method')}）")
     time.sleep(1.5)
     _log(account_id, f"已按 {len(ids)} 个商品ID批量筛选")
     return True

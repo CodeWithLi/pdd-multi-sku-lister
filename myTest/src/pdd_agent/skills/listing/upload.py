@@ -597,6 +597,134 @@ def _fill_goods_id_filter(page: DpPage, product_id: str) -> dict[str, Any]:
     return {"filled": False, "method": "", "value": _read_goods_id_filter(page)}
 
 
+def _read_goods_merchant_code_filter(page: DpPage) -> str:
+    """读取商品列表筛选区「商品编码」输入框（仅限 .goods-search-wrap）。"""
+    try:
+        value = page.run_js(
+            """
+            function isVisible(el) {
+                if (!el || !el.getBoundingClientRect) return false;
+                const r = el.getBoundingClientRect();
+                const s = window.getComputedStyle(el);
+                return r.width > 4 && r.height > 4
+                    && s.display !== 'none'
+                    && s.visibility !== 'hidden';
+            }
+            const wrap = document.querySelector('.goods-search-wrap');
+            if (!wrap) return '';
+            for (const node of wrap.querySelectorAll('label, span, div')) {
+                const text = (node.innerText || node.textContent || '').trim();
+                if (text !== '商品编码' || !isVisible(node)) continue;
+                let cur = node;
+                for (let depth = 0; depth < 7 && cur; depth++, cur = cur.parentElement) {
+                    const input = Array.from(cur.querySelectorAll?.('input') || []).find(isVisible);
+                    if (input) return String(input.value || '').trim();
+                }
+            }
+            return '';
+            """
+        )
+        return str(value or "").strip()
+    except Exception:
+        return ""
+
+
+def _fill_goods_merchant_code_filter(page: DpPage, merchant_code: str) -> dict[str, Any]:
+    """填写商品列表筛选区「商品编码」，并校验值已写入。"""
+    merchant_code = str(merchant_code or "").strip()
+    if not merchant_code:
+        return {"filled": False, "method": "", "value": ""}
+
+    raw = page._page
+    try:
+        wrap = raw.locator(".goods-search-wrap")
+        if wrap.count() > 0:
+            label = wrap.get_by_text("商品编码", exact=True).first
+            if label.is_visible(timeout=1500):
+                container = label.locator("xpath=ancestor::*[contains(@class,'form') or contains(@class,'Form') or contains(@class,'item') or contains(@class,'Item')][1]")
+                if container.count() <= 0:
+                    container = label.locator("xpath=..")
+                inp = container.locator('input[data-testid="beast-core-input-htmlInput"], input').first
+                if inp.is_visible(timeout=1500):
+                    inp.scroll_into_view_if_needed(timeout=3000)
+                    inp.click(timeout=3000)
+                    inp.fill("", timeout=3000)
+                    inp.fill(merchant_code, timeout=3000)
+                    time.sleep(0.3)
+                    current = str(inp.input_value(timeout=1000) or "").strip()
+                    if merchant_code in current or current in merchant_code:
+                        return {"filled": True, "method": "playwright_goods_search_wrap", "value": current}
+    except Exception:
+        pass
+
+    try:
+        ok = page.run_js(
+            """
+            const value = String(arguments[0] || '').trim();
+            function isVisible(el) {
+                if (!el || !el.getBoundingClientRect) return false;
+                const r = el.getBoundingClientRect();
+                const s = window.getComputedStyle(el);
+                return r.width > 4 && r.height > 4
+                    && s.display !== 'none'
+                    && s.visibility !== 'hidden'
+                    && parseFloat(s.opacity || '1') > 0.05;
+            }
+            function fillInput(input, text) {
+                input.scrollIntoView({ block: 'center', inline: 'nearest' });
+                input.focus();
+                const setter = Object.getOwnPropertyDescriptor(
+                    window.HTMLInputElement.prototype, 'value'
+                )?.set;
+                if (setter) {
+                    setter.call(input, text);
+                } else {
+                    input.value = text;
+                }
+                input.dispatchEvent(new Event('input', { bubbles: true }));
+                input.dispatchEvent(new Event('change', { bubbles: true }));
+                return String(input.value || '').trim();
+            }
+            const wrap = document.querySelector('.goods-search-wrap');
+            if (!wrap) return { filled: false };
+            for (const node of wrap.querySelectorAll('label, span, div')) {
+                const text = (node.innerText || node.textContent || '').trim();
+                if (text !== '商品编码' || !isVisible(node)) continue;
+                let cur = node;
+                for (let depth = 0; depth < 7 && cur; depth++, cur = cur.parentElement) {
+                    const inputs = Array.from(cur.querySelectorAll?.('input') || []).filter(isVisible);
+                    if (!inputs.length) continue;
+                    const labelRect = node.getBoundingClientRect();
+                    const input = inputs
+                        .map((i) => ({ input: i, rect: i.getBoundingClientRect() }))
+                        .filter((x) => x.rect.left >= labelRect.left - 8)
+                        .sort((a, b) => Math.abs(a.rect.top - labelRect.top) - Math.abs(b.rect.top - labelRect.top))[0]?.input
+                        || inputs[0];
+                    const current = fillInput(input, value);
+                    return { filled: current.includes(value) || value.includes(current), value: current, method: 'js_goods_search_wrap' };
+                }
+            }
+            return { filled: false };
+            """,
+            merchant_code,
+        )
+        if isinstance(ok, dict) and ok.get("filled"):
+            return {
+                "filled": True,
+                "method": str(ok.get("method") or "js_goods_search_wrap"),
+                "value": str(ok.get("value") or merchant_code),
+            }
+    except Exception:
+        pass
+
+    if _set_goods_filter(page, "商品编码", merchant_code):
+        current = _read_goods_merchant_code_filter(page)
+        if merchant_code in current or current in merchant_code:
+            return {"filled": True, "method": "set_goods_filter_fallback", "value": current}
+
+    return {"filled": False, "method": "", "value": _read_goods_merchant_code_filter(page)}
+
+
 def _click_goods_search(page: DpPage) -> dict[str, Any]:
     """点击商品列表筛选区的「查询」按钮。"""
     raw = page._page
@@ -713,8 +841,10 @@ def _click_goods_search(page: DpPage) -> dict[str, Any]:
         pass
 
     for selector in (
-        'input[placeholder*="商品ID"]',
+        '.goods-search-wrap input[placeholder*="商品编码"]',
+        'input[placeholder*="商品编码"]',
         '.goods-search-wrap input[data-testid="beast-core-input-htmlInput"]',
+        'input[placeholder*="商品ID"]',
     ):
         try:
             inp = raw.locator(selector).first
@@ -980,9 +1110,13 @@ def _search_goods_tab(
     if not _open_goods_list(page, account_id, tab_text):
         return _capture_result(status="open_goods_list_failed", tab=tab_key)
     _reset_goods_list_filters(page)
-    filter_ok = _set_goods_filter(page, "商品编码", merchant_code)
+    fill_result = _fill_goods_merchant_code_filter(page, merchant_code)
+    if not fill_result.get("filled"):
+        filter_ok = _set_goods_filter(page, "商品编码", merchant_code)
+    else:
+        filter_ok = True
     if filter_ok:
-        _click_goods_search(page)
+        search_result = _click_goods_search(page)
 
     matches = _parse_goods_list_matches(page, merchant_code, title)
     if not matches:
