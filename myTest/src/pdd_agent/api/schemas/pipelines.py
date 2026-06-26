@@ -36,6 +36,7 @@ class IntegratedPipelineStartRequest(BaseModel):
     listing_throttle_enabled: bool = False
     listing_batch_set_count: int = Field(default=5, ge=1, le=100)
     listing_batch_interval_minutes: int = Field(default=30, ge=1, le=1440)
+    listing_per_batch_limited_time_enabled: bool = False
 
     @model_validator(mode="after")
     def validate_activity_ids(self) -> "IntegratedPipelineStartRequest":
@@ -71,6 +72,7 @@ class IntegratedPipelineBatchStartRequest(BaseModel):
     listing_throttle_enabled: bool = False
     listing_batch_set_count: int = Field(default=5, ge=1, le=100)
     listing_batch_interval_minutes: int = Field(default=30, ge=1, le=1440)
+    listing_per_batch_limited_time_enabled: bool = False
     account_ids: list[str] = Field(default_factory=list)
     product_codes: list[str] = Field(default_factory=list)
     items: list[IntegratedPipelineBatchItem] = Field(default_factory=list)

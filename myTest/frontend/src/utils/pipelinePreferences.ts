@@ -4,6 +4,7 @@ const RELIST_STRATEGY_KEY = 'pdd_agent.pipeline.relist_strategy'
 const LISTING_THROTTLE_ENABLED_KEY = 'pdd_agent.pipeline.listing_throttle_enabled'
 const LISTING_BATCH_SET_COUNT_KEY = 'pdd_agent.pipeline.listing_batch_set_count'
 const LISTING_BATCH_INTERVAL_KEY = 'pdd_agent.pipeline.listing_batch_interval_minutes'
+const LISTING_PER_BATCH_LIMITED_TIME_KEY = 'pdd_agent.pipeline.listing_per_batch_limited_time_enabled'
 
 const VALID_RELIST_STRATEGIES = new Set<RelistStrategy>([
   'ignore',
@@ -81,6 +82,22 @@ export function saveListingBatchIntervalMinutes(minutes: number): void {
       LISTING_BATCH_INTERVAL_KEY,
       String(Math.max(1, Math.min(1440, minutes))),
     )
+  } catch {
+    // ignore
+  }
+}
+
+export function loadListingPerBatchLimitedTimeEnabled(): boolean {
+  try {
+    return localStorage.getItem(LISTING_PER_BATCH_LIMITED_TIME_KEY) === '1'
+  } catch {
+    return false
+  }
+}
+
+export function saveListingPerBatchLimitedTimeEnabled(enabled: boolean): void {
+  try {
+    localStorage.setItem(LISTING_PER_BATCH_LIMITED_TIME_KEY, enabled ? '1' : '0')
   } catch {
     // ignore
   }

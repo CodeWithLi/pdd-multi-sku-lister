@@ -16,10 +16,12 @@ import {
   loadListingBatchIntervalMinutes,
   loadListingBatchSetCount,
   loadListingThrottleEnabled,
+  loadListingPerBatchLimitedTimeEnabled,
   loadPipelineRelistStrategy,
   saveListingBatchIntervalMinutes,
   saveListingBatchSetCount,
   saveListingThrottleEnabled,
+  saveListingPerBatchLimitedTimeEnabled,
   savePipelineRelistStrategy,
 } from '@/utils/pipelinePreferences'
 import {
@@ -72,6 +74,7 @@ const relistStrategy = ref<RelistStrategy>(loadPipelineRelistStrategy())
 const listingThrottleEnabled = ref(loadListingThrottleEnabled())
 const listingBatchSetCount = ref(loadListingBatchSetCount())
 const listingBatchIntervalMinutes = ref(loadListingBatchIntervalMinutes())
+const listingPerBatchLimitedTimeEnabled = ref(loadListingPerBatchLimitedTimeEnabled())
 const excelFallbackEnabled = ref(false)
 const excelFallbackSaving = ref(false)
 const logSpecSkuRowsEnabled = ref(false)
@@ -919,10 +922,13 @@ async function startPipeline() {
         listing_throttle_enabled: listingThrottleEnabled.value,
         listing_batch_set_count: listingBatchSetCount.value,
         listing_batch_interval_minutes: listingBatchIntervalMinutes.value,
+        listing_per_batch_limited_time_enabled: listingPerBatchLimitedTimeEnabled.value,
       })
       success.value = `批量整合链路已提交：${result.total} 条，批次 ${result.batch_id}，活动 ${activityIds.value.length} 个，启动间隔 ${result.store_start_delay_min_seconds}-${result.store_start_delay_max_seconds} 秒${
         listingThrottleEnabled.value
-          ? `；分批上架 ${listingBatchSetCount.value} 套/批，间隔 ${listingBatchIntervalMinutes.value} 分钟`
+          ? `；分批上架 ${listingBatchSetCount.value} 套/批，间隔 ${listingBatchIntervalMinutes.value} 分钟${
+              listingPerBatchLimitedTimeEnabled.value ? '，每批完成后跑限时限量购' : ''
+            }`
           : ''
       }`
       pipelinePage.value = 1
@@ -950,6 +956,7 @@ async function startPipeline() {
         listing_throttle_enabled: listingThrottleEnabled.value,
         listing_batch_set_count: listingBatchSetCount.value,
         listing_batch_interval_minutes: listingBatchIntervalMinutes.value,
+        listing_per_batch_limited_time_enabled: listingPerBatchLimitedTimeEnabled.value,
       })
       pipelinePage.value = 1
       activePipeline.value = result
@@ -963,7 +970,9 @@ async function startPipeline() {
           ? '（将先下架原商品并删除已发布记录）'
           : ''
       const throttleHint = listingThrottleEnabled.value
-        ? `（分批上架：${selectedSetCount.value} 套分 ${listingBatchPlanCount.value} 批，每批 ${listingBatchSetCount.value} 套，间隔 ${listingBatchIntervalMinutes.value} 分钟）`
+        ? `（分批上架：${selectedSetCount.value} 套分 ${listingBatchPlanCount.value} 批，每批 ${listingBatchSetCount.value} 套，间隔 ${listingBatchIntervalMinutes.value} 分钟${
+            listingPerBatchLimitedTimeEnabled.value ? '，每批完成后跑限时限量购' : ''
+          }）`
         : ''
       success.value = skipListing
         ? demoMode.value
@@ -1017,6 +1026,7 @@ watch(relistStrategy, (value) => {
 
 watch(listingThrottleEnabled, (value) => {
   saveListingThrottleEnabled(value)
+  if (!value) listingPerBatchLimitedTimeEnabled.value = false
 })
 
 watch(listingBatchSetCount, (value) => {
@@ -1025,6 +1035,10 @@ watch(listingBatchSetCount, (value) => {
 
 watch(listingBatchIntervalMinutes, (value) => {
   saveListingBatchIntervalMinutes(Number(value) || 30)
+})
+
+watch(listingPerBatchLimitedTimeEnabled, (value) => {
+  saveListingPerBatchLimitedTimeEnabled(value)
 })
 
 watch(resolvedListingSelectors, () => {
@@ -1383,7 +1397,17 @@ onUnmounted(() => {
                   </template>
                 </div>
                 <div v-if="listingThrottleEnabled" class="form-tip">
-                  已选 {{ selectedSetCount }} 套图，将分 {{ listingBatchPlanCount }} 批上架；全部批次完成后才进入限时限量购 / 活动 / 推广。
+                  已选 {{ selectedSetCount }} 套图，将分 {{ listingBatchPlanCount }} 批上架{{
+                    listingPerBatchLimitedTimeEnabled
+                      ? '；每批上架完成后先跑限时限量购，再按间隔进入下一批'
+                      : '；全部批次完成后才进入限时限量购 / 活动 / 推广'
+                  }}。
+                </div>
+                <div v-if="listingThrottleEnabled" class="option-row listing-throttle-row per-batch-lt-row">
+                  <div class="switch-row">
+                    <span class="switch-label">每批完成后跑限时限量购</span>
+                    <el-switch v-model="listingPerBatchLimitedTimeEnabled" />
+                  </div>
                 </div>
                 <div v-else class="form-tip">
                   关闭时一次上架所选全部套图；新店铺大量上架建议开启分批。

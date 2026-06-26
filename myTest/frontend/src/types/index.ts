@@ -795,6 +795,7 @@ export interface IntegratedPipelineStartPayload {
   listing_throttle_enabled?: boolean
   listing_batch_set_count?: number
   listing_batch_interval_minutes?: number
+  listing_per_batch_limited_time_enabled?: boolean
 }
 
 export interface IntegratedPipelineBatchStartPayload {
@@ -821,6 +822,7 @@ export interface IntegratedPipelineBatchStartPayload {
   listing_throttle_enabled?: boolean
   listing_batch_set_count?: number
   listing_batch_interval_minutes?: number
+  listing_per_batch_limited_time_enabled?: boolean
 }
 
 export interface IntegratedPipelineBatchRunItem {

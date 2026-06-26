@@ -1073,6 +1073,7 @@ def start_integrated_pipeline(
     listing_throttle_enabled: bool = False,
     listing_batch_set_count: int = 5,
     listing_batch_interval_minutes: int = 30,
+    listing_per_batch_limited_time_enabled: bool = False,
 ) -> dict[str, Any]:
     account_id = str(account_id or "").strip()
     normalized_activity_ids = _normalize_pipeline_activity_ids(activity_id, activity_ids)
@@ -1129,6 +1130,11 @@ def start_integrated_pipeline(
     }
     if batch_id:
         meta["batch_id"] = batch_id
+    from pdd_agent.api.services.pipeline_per_batch_limited_time import per_batch_limited_time_meta_patch
+
+    meta.update(
+        per_batch_limited_time_meta_patch(enabled=bool(listing_per_batch_limited_time_enabled))
+    )
     if skip_selectors:
         meta["listing_skip_selectors"] = skip_selectors
     row = create_integrated_pipeline(
@@ -1336,6 +1342,7 @@ def start_integrated_pipeline_batch(
     listing_throttle_enabled: bool = False,
     listing_batch_set_count: int = 5,
     listing_batch_interval_minutes: int = 30,
+    listing_per_batch_limited_time_enabled: bool = False,
 ) -> dict[str, Any]:
     """批量创建整合链路；各条链路上架任务按启动间隔错开入队。"""
     normalized_activity_ids = _normalize_pipeline_activity_ids(activity_id, activity_ids)
@@ -1379,6 +1386,7 @@ def start_integrated_pipeline_batch(
             listing_throttle_enabled=listing_throttle_enabled,
             listing_batch_set_count=listing_batch_set_count,
             listing_batch_interval_minutes=listing_batch_interval_minutes,
+            listing_per_batch_limited_time_enabled=listing_per_batch_limited_time_enabled,
         )
         pipelines.append(
             {
@@ -1586,6 +1594,17 @@ def _on_listing_finished(row, *, run_id: str, success: bool, result: dict[str, A
         resolve_listing_products_after_batches,
         schedule_next_listing_batch_after_finish,
     )
+    from pdd_agent.api.services.pipeline_per_batch_limited_time import (
+        maybe_run_per_batch_limited_time_after_listing,
+    )
+
+    if maybe_run_per_batch_limited_time_after_listing(
+        refreshed,
+        pdd_ids=pdd_ids,
+        mapping_ids=mapping_ids,
+        listing_meta=listing_meta,
+    ):
+        return
 
     if schedule_next_listing_batch_after_finish(
         refreshed,
@@ -1794,6 +1813,20 @@ def _on_campaign_finished(row, *, run_id: str, success: bool, result: dict[str, 
 
 
 def _on_limited_time_finished(row, *, run_id: str, success: bool, result: dict[str, Any], error: str) -> None:
+    from pdd_agent.api.services.pipeline_per_batch_limited_time import (
+        maybe_continue_after_per_batch_limited_time,
+        prepare_pipeline_row_for_post_listing_steps,
+    )
+
+    if maybe_continue_after_per_batch_limited_time(
+        row,
+        run_id=run_id,
+        success=success,
+        error=error,
+    ):
+        return
+
+    row = prepare_pipeline_row_for_post_listing_steps(row) or row
     meta = dict(row.meta or {})
     if meta.get("limited_time_finish_handled"):
         return
