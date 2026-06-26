@@ -145,9 +145,11 @@ const {
   materialPolling,
   sseConnected,
   switchingMode,
+  materialRefreshPaused,
   refreshMode,
   restart: restartMaterialRefresh,
   stop: stopMaterialRefresh,
+  setMaterialRefreshPaused,
   setRefreshMode,
 } = useMinioMaterialRefresh({
   materialSource,
@@ -730,7 +732,17 @@ onMounted(async () => {
                 </el-radio-button>
                 <el-radio-button label="rabbitmq">RabbitMQ 推送</el-radio-button>
               </el-radio-group>
-              <el-tag v-if="refreshMode === 'poll' && materialPolling" size="small" type="info">
+              <el-switch
+                :model-value="!materialRefreshPaused"
+                inline-prompt
+                active-text="自动拉取"
+                inactive-text="已关闭"
+                @change="setMaterialRefreshPaused(!$event)"
+              />
+              <el-tag v-if="materialRefreshPaused" size="small" type="warning">
+                已暂停拉取
+              </el-tag>
+              <el-tag v-else-if="refreshMode === 'poll' && materialPolling" size="small" type="info">
                 轮询中
               </el-tag>
               <el-tag v-else-if="refreshMode === 'rabbitmq' && sseConnected" size="small" type="success">

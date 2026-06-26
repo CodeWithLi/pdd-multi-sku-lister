@@ -1074,6 +1074,7 @@ def start_integrated_pipeline(
     listing_batch_set_count: int = 5,
     listing_batch_interval_minutes: int = 30,
     listing_per_batch_limited_time_enabled: bool = False,
+    listing_per_batch_campaign_enabled: bool = False,
 ) -> dict[str, Any]:
     account_id = str(account_id or "").strip()
     normalized_activity_ids = _normalize_pipeline_activity_ids(activity_id, activity_ids)
@@ -1135,6 +1136,9 @@ def start_integrated_pipeline(
     meta.update(
         per_batch_limited_time_meta_patch(enabled=bool(listing_per_batch_limited_time_enabled))
     )
+    from pdd_agent.api.services.pipeline_per_batch_campaign import per_batch_campaign_meta_patch
+
+    meta.update(per_batch_campaign_meta_patch(enabled=bool(listing_per_batch_campaign_enabled)))
     if skip_selectors:
         meta["listing_skip_selectors"] = skip_selectors
     row = create_integrated_pipeline(
@@ -1343,6 +1347,7 @@ def start_integrated_pipeline_batch(
     listing_batch_set_count: int = 5,
     listing_batch_interval_minutes: int = 30,
     listing_per_batch_limited_time_enabled: bool = False,
+    listing_per_batch_campaign_enabled: bool = False,
 ) -> dict[str, Any]:
     """批量创建整合链路；各条链路上架任务按启动间隔错开入队。"""
     normalized_activity_ids = _normalize_pipeline_activity_ids(activity_id, activity_ids)
@@ -1387,6 +1392,7 @@ def start_integrated_pipeline_batch(
             listing_batch_set_count=listing_batch_set_count,
             listing_batch_interval_minutes=listing_batch_interval_minutes,
             listing_per_batch_limited_time_enabled=listing_per_batch_limited_time_enabled,
+            listing_per_batch_campaign_enabled=listing_per_batch_campaign_enabled,
         )
         pipelines.append(
             {
@@ -1524,6 +1530,17 @@ def _listing_failure_meta(result: dict[str, Any]) -> dict[str, Any]:
 
 def _on_listing_finished(row, *, run_id: str, success: bool, result: dict[str, Any], error: str) -> None:
     if not success:
+        from pdd_agent.api.services.pipeline_listing_batch_continue import (
+            maybe_continue_listing_batch_after_failure,
+        )
+
+        if maybe_continue_listing_batch_after_failure(
+            row,
+            run_id=run_id,
+            result=result,
+            error=error,
+        ):
+            return
         err = error or "上架失败"
         update_integrated_pipeline(
             row.pipeline_id,
@@ -1597,8 +1614,19 @@ def _on_listing_finished(row, *, run_id: str, success: bool, result: dict[str, A
     from pdd_agent.api.services.pipeline_per_batch_limited_time import (
         maybe_run_per_batch_limited_time_after_listing,
     )
+    from pdd_agent.api.services.pipeline_per_batch_campaign import (
+        maybe_run_per_batch_campaign_after_listing,
+    )
 
     if maybe_run_per_batch_limited_time_after_listing(
+        refreshed,
+        pdd_ids=pdd_ids,
+        mapping_ids=mapping_ids,
+        listing_meta=listing_meta,
+    ):
+        return
+
+    if maybe_run_per_batch_campaign_after_listing(
         refreshed,
         pdd_ids=pdd_ids,
         mapping_ids=mapping_ids,
@@ -1686,6 +1714,17 @@ def _format_multi_campaign_skip_reason(
 
 
 def _on_campaign_finished(row, *, run_id: str, success: bool, result: dict[str, Any], error: str) -> None:
+    from pdd_agent.api.services.pipeline_per_batch_campaign import maybe_continue_after_per_batch_campaign
+
+    if maybe_continue_after_per_batch_campaign(
+        row,
+        run_id=run_id,
+        success=success,
+        result=result,
+        error=error,
+    ):
+        return
+
     if _campaign_run_already_handled(row, run_id):
         logger.debug(
             "skip duplicate campaign finished pipeline=%s run_id=%s",
@@ -1817,6 +1856,17 @@ def _on_limited_time_finished(row, *, run_id: str, success: bool, result: dict[s
         maybe_continue_after_per_batch_limited_time,
         prepare_pipeline_row_for_post_listing_steps,
     )
+    from pdd_agent.api.services.pipeline_per_batch_campaign import (
+        maybe_start_per_batch_campaign_after_limited_time,
+    )
+
+    if maybe_start_per_batch_campaign_after_limited_time(
+        row,
+        run_id=run_id,
+        success=success,
+        error=error,
+    ):
+        return
 
     if maybe_continue_after_per_batch_limited_time(
         row,
@@ -1870,6 +1920,16 @@ def _on_limited_time_finished(row, *, run_id: str, success: bool, result: dict[s
 
 
 def _on_traffic_finished(row, *, run_id: str, success: bool, error: str) -> None:
+    from pdd_agent.api.services.pipeline_per_batch_campaign import maybe_continue_after_per_batch_traffic
+
+    if maybe_continue_after_per_batch_traffic(
+        row,
+        run_id=run_id,
+        success=success,
+        error=error,
+    ):
+        return
+
     meta = dict(row.meta or {})
     if meta.get("traffic_finish_handled"):
         logger.debug(
@@ -1993,6 +2053,13 @@ def _ensure_pipeline_failed_after_task(
 ) -> None:
     if success:
         return
+    if agent == AgentKind.LISTING.value:
+        from pdd_agent.api.services.pipeline_listing_batch_continue import (
+            is_listing_batch_failure_continuing,
+        )
+
+        if is_listing_batch_failure_continuing(pipeline_id):
+            return
     row = get_integrated_pipeline(pipeline_id)
     if not row or row.status in TERMINAL_PIPELINE_STATUSES:
         return

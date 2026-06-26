@@ -2,6 +2,10 @@ import { computed, onUnmounted, ref, type Ref } from 'vue'
 import { ElMessage } from 'element-plus'
 import { api } from '@/api/client'
 import { formatAutoPipelineFeedback } from '@/utils/autoPipeline'
+import {
+  loadMinioMaterialRefreshPaused,
+  saveMinioMaterialRefreshPaused,
+} from '@/utils/pipelinePreferences'
 
 export type MinioRefreshMode = 'poll' | 'rabbitmq'
 
@@ -45,6 +49,7 @@ export function useMinioMaterialRefresh(options: {
   const materialPolling = ref(false)
   const sseConnected = ref(false)
   const switchingMode = ref(false)
+  const materialRefreshPaused = ref(loadMinioMaterialRefreshPaused())
 
   const refreshMode = computed<MinioRefreshMode>(
     () => options.minioHealth.value?.refresh_mode ?? 'poll',
@@ -135,12 +140,38 @@ export function useMinioMaterialRefresh(options: {
 
   function restart() {
     stop()
+    if (materialRefreshPaused.value) return
     if (options.materialSource.value !== 'minio') return
     if (refreshMode.value === 'rabbitmq') {
       startSse()
     } else {
       startPolling()
     }
+  }
+
+  function pauseRefresh() {
+    if (materialRefreshPaused.value) return
+    materialRefreshPaused.value = true
+    saveMinioMaterialRefreshPaused(true)
+    stop()
+    ElMessage.info('已暂停 MinIO 自动拉取；可手动点「刷新」更新列表')
+  }
+
+  function resumeRefresh() {
+    if (!materialRefreshPaused.value) return
+    materialRefreshPaused.value = false
+    saveMinioMaterialRefreshPaused(false)
+    restart()
+    ElMessage.success(
+      refreshMode.value === 'rabbitmq'
+        ? '已恢复 RabbitMQ 实时监听'
+        : `已恢复定时拉取（每 ${options.minioHealth.value?.listing_poll_seconds ?? 30} 秒）`,
+    )
+  }
+
+  function setMaterialRefreshPaused(paused: boolean) {
+    if (paused) pauseRefresh()
+    else resumeRefresh()
   }
 
   async function setRefreshMode(mode: MinioRefreshMode) {
@@ -170,9 +201,13 @@ export function useMinioMaterialRefresh(options: {
     materialPolling,
     sseConnected,
     switchingMode,
+    materialRefreshPaused,
     refreshMode,
     restart,
     stop,
+    pauseRefresh,
+    resumeRefresh,
+    setMaterialRefreshPaused,
     setRefreshMode,
   }
 }

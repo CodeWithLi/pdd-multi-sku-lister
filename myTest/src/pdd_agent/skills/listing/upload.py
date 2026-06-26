@@ -1253,6 +1253,170 @@ def _schedule_feishu_pdd_upload_log(
         )
 
 
+def _category_page_body_text(page: DpPage) -> str:
+    try:
+        text = page.run_js("return document.body?.innerText || '';")
+        return str(text or "")
+    except Exception:
+        return ""
+
+
+def _category_page_needs_manual_selection(page: DpPage) -> bool:
+    """图二：暂无推荐分类，需点击「选择分类」后在搜索框选类目。"""
+    body = _category_page_body_text(page)
+    if "暂无推荐的分类" in body:
+        return True
+    if "暂无推荐" in body and "手动选择" in body:
+        return True
+    if page.ele("text:选择分类", timeout=0.5):
+        if "确认发布该类商品" in body:
+            return False
+        if body.count(">") >= 2 and "玩具" in body and "暂无推荐" not in body:
+            return False
+        return True
+    return False
+
+
+def _open_category_selector_panel(page: DpPage) -> bool:
+    for locator in (
+        "text:选择分类",
+        "text:手动选择商品分类",
+        "text:手动选择分类",
+    ):
+        el = page.ele(locator, timeout=1)
+        if el:
+            try:
+                page.run_js("arguments[0].click();", el)
+            except Exception:
+                el.click()
+            time.sleep(2)
+            return True
+    try:
+        clicked = page.run_js(
+            """
+            const labels = ['选择分类', '手动选择商品分类', '手动选择分类'];
+            for (const el of document.querySelectorAll('button,a,span,div')) {
+                const text = (el.innerText || el.textContent || '').trim();
+                if (!labels.includes(text)) continue;
+                const r = el.getBoundingClientRect();
+                if (r.width < 2 || r.height < 2) continue;
+                el.click();
+                return true;
+            }
+            return false;
+            """
+        )
+        if clicked:
+            time.sleep(2)
+            return True
+    except Exception:
+        pass
+    return False
+
+
+def _find_first_category_search_result(page: DpPage):
+    for sel in (
+        "css:li.SPP_searchItem_5-188-0",
+        "css:li[class*='searchItem']",
+        "css:li[class*='SearchItem']",
+    ):
+        el = page.ele(sel, timeout=1)
+        if el:
+            return el
+    return None
+
+
+def _select_category_by_keyword_search(
+    page: DpPage,
+    account_id: str,
+    label: str,
+    category_keyword: str,
+) -> bool:
+    keyword = str(category_keyword or "玩偶").strip() or "玩偶"
+    search_input = page.ele('css:input[placeholder="请输入关键词搜索分类"]', timeout=3)
+    if not search_input:
+        print(f"[{account_id}] [{label}] 未找到分类搜索框", flush=True)
+        return False
+    search_input.click()
+    time.sleep(0.5)
+    search_input.input(keyword, clear=True)
+    time.sleep(2)
+
+    first_cat = _find_first_category_search_result(page)
+    if first_cat:
+        try:
+            page.run_js("arguments[0].click();", first_cat)
+        except Exception:
+            first_cat.click()
+        time.sleep(1)
+        print(f"[{account_id}] [{label}] 已选择搜索分类：{keyword}", flush=True)
+        return True
+
+    try:
+        clicked = page.run_js(
+            """
+            const items = Array.from(document.querySelectorAll(
+                'li[class*="searchItem"], li[class*="SearchItem"], [class*="searchItem"] li'
+            )).filter(el => {
+                const t = (el.innerText || el.textContent || '').trim();
+                return t && t.length > 2 && !t.includes('最近使用') && !t.includes('清空');
+            });
+            if (!items.length) return false;
+            items[0].click();
+            return true;
+            """
+        )
+        if clicked:
+            time.sleep(1)
+            print(f"[{account_id}] [{label}] 已选择搜索分类（JS）：{keyword}", flush=True)
+            return True
+    except Exception:
+        pass
+
+    print(f"[{account_id}] [{label}] 分类搜索无结果：{keyword}", flush=True)
+    return False
+
+
+def _click_category_next_step(page: DpPage, *, ui_type: str = "C") -> bool:
+    for locator in (
+        "#bottomSubmitBtnId",
+        "text:下一步, 完善商品信息",
+        "text:下一步，完善商品信息",
+    ):
+        btn = page.ele(locator, timeout=1)
+        if btn:
+            btn.click()
+            return True
+    if ui_type != "C":
+        confirm = page.ele("text:确认发布该类商品", timeout=1)
+        if confirm:
+            confirm.click()
+            return True
+    return False
+
+
+def _upload_category_branch_c_covers(
+    page: DpPage,
+    account_id: str,
+    product_info: dict[str, Any],
+    listing_info: dict[str, Any],
+    covers: list[str],
+) -> str:
+    section_ele = page.ele("css:.goodsCarousel_btns__22KMn")
+    if section_ele:
+        page.run_js('arguments[0].style.display = "flex";', section_ele)
+    time.sleep(1)
+    cover_input = page.ele('css:input[data-tracking-click-viewid="local_upload"]')
+    if cover_input:
+        cover_input.input(covers)
+    time.sleep(random.uniform(1.5, 2.5))
+    title = apply_title_after_cover_upload(
+        page, account_id, product_info, listing_info.get("title", "")
+    )
+    time.sleep(1)
+    return title
+
+
 def upload_one_listing(
     page: DpPage,
     account_id: str,
@@ -1316,21 +1480,66 @@ def upload_one_listing(
     print(f"[{account_id}] [{label}] 路由判定：分支 {ui_type}")
 
     if ui_type == "C":
-        section_ele = page.ele("css:.goodsCarousel_btns__22KMn")
-        if section_ele:
-            page.run_js('arguments[0].style.display = "flex";', section_ele)
-        time.sleep(1)
-        cover_input = page.ele('css:input[data-tracking-click-viewid="local_upload"]')
-        if cover_input:
-            cover_input.input(covers)
-        time.sleep(random.uniform(1.5, 2.5))
-        listing_info["title"] = apply_title_after_cover_upload(
-            page, account_id, product_info, listing_info.get("title", "")
+        listing_info["title"] = _upload_category_branch_c_covers(
+            page,
+            account_id,
+            product_info,
+            listing_info,
+            covers,
         )
-        time.sleep(2)
-        next_btn = page.ele("#bottomSubmitBtnId")
-        if next_btn:
-            next_btn.click()
+        manual_category = _category_page_needs_manual_selection(page)
+        if manual_category:
+            print(
+                f"[{account_id}] [{label}] 分支 C-手动：暂无推荐分类，点击选择分类后搜索",
+                flush=True,
+            )
+            if not _open_category_selector_panel(page):
+                _clear_beforeunload(page)
+                return _finish_listing(
+                    run_id,
+                    account_id,
+                    unit,
+                    status="retryable",
+                    reason="category_selector_not_found",
+                    error="未找到「选择分类」入口",
+                    retryable=True,
+                    legacy_status="skipped",
+                    phase="upload",
+                    step="open_category_selector",
+                )
+            if not _select_category_by_keyword_search(
+                page,
+                account_id,
+                label,
+                str(listing_info.get("category_keyword") or "玩偶"),
+            ):
+                _clear_beforeunload(page)
+                return _finish_listing(
+                    run_id,
+                    account_id,
+                    unit,
+                    status="retryable",
+                    reason="category_search_failed",
+                    error=f"分类搜索失败：{listing_info.get('category_keyword', '玩偶')}",
+                    retryable=True,
+                    legacy_status="skipped",
+                    phase="upload",
+                    step="search_category",
+                )
+        if not _click_category_next_step(page, ui_type="C"):
+            _clear_beforeunload(page)
+            return _finish_listing(
+                run_id,
+                account_id,
+                unit,
+                status="retryable",
+                reason="category_next_step_not_found",
+                error="未找到「下一步，完善商品信息」按钮",
+                retryable=True,
+                legacy_status="skipped",
+                phase="upload",
+                step="category_next_step",
+            )
         time.sleep(5)
         page.wait.load_start()
     else:
@@ -1340,21 +1549,39 @@ def upload_one_listing(
                 page.run_js("arguments[0].click();", tab)
                 time.sleep(3)
 
-        search_input = page.ele('css:input[placeholder="请输入关键词搜索分类"]')
-        if search_input:
-            search_input.click()
-            time.sleep(0.5)
-            search_input.input(listing_info.get("category_keyword", "玩偶"), clear=True)
-        time.sleep(2)
-        first_cat = page.ele("css:li.SPP_searchItem_5-188-0")
-        if first_cat:
-            first_cat.click()
-        time.sleep(1)
-        confirm = page.ele("text:下一步, 完善商品信息") if ui_type == "B" else page.ele(
-            "text:确认发布该类商品"
-        )
-        if confirm:
-            confirm.click()
+        if not _select_category_by_keyword_search(
+            page,
+            account_id,
+            label,
+            str(listing_info.get("category_keyword") or "玩偶"),
+        ):
+            _clear_beforeunload(page)
+            return _finish_listing(
+                run_id,
+                account_id,
+                unit,
+                status="retryable",
+                reason="category_search_failed",
+                error=f"分类搜索失败：{listing_info.get('category_keyword', '玩偶')}",
+                retryable=True,
+                legacy_status="skipped",
+                phase="upload",
+                step="search_category",
+            )
+        if not _click_category_next_step(page, ui_type=ui_type):
+            _clear_beforeunload(page)
+            return _finish_listing(
+                run_id,
+                account_id,
+                unit,
+                status="retryable",
+                reason="category_next_step_not_found",
+                error="未找到分类确认/下一步按钮",
+                retryable=True,
+                legacy_status="skipped",
+                phase="upload",
+                step="category_next_step",
+            )
         time.sleep(5)
         page.wait.load_start()
         if _dismiss_address_required_page(page, account_id, label):

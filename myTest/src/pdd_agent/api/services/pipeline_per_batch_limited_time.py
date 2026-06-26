@@ -194,6 +194,11 @@ def maybe_continue_after_per_batch_limited_time(
     if state.get("awaiting_final_activity"):
         return False
 
+    from pdd_agent.api.services.pipeline_per_batch_campaign import is_per_batch_campaign_enabled
+
+    if is_per_batch_campaign_enabled(row):
+        return False
+
     pending = dict(state.get("pending") or {})
     if not pending:
         return False

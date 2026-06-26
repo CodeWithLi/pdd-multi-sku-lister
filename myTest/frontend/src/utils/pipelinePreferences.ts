@@ -5,6 +5,8 @@ const LISTING_THROTTLE_ENABLED_KEY = 'pdd_agent.pipeline.listing_throttle_enable
 const LISTING_BATCH_SET_COUNT_KEY = 'pdd_agent.pipeline.listing_batch_set_count'
 const LISTING_BATCH_INTERVAL_KEY = 'pdd_agent.pipeline.listing_batch_interval_minutes'
 const LISTING_PER_BATCH_LIMITED_TIME_KEY = 'pdd_agent.pipeline.listing_per_batch_limited_time_enabled'
+const LISTING_PER_BATCH_CAMPAIGN_KEY = 'pdd_agent.pipeline.listing_per_batch_campaign_enabled'
+const MINIO_MATERIAL_REFRESH_PAUSED_KEY = 'pdd_agent.minio_material_refresh_paused'
 
 const VALID_RELIST_STRATEGIES = new Set<RelistStrategy>([
   'ignore',
@@ -98,6 +100,43 @@ export function loadListingPerBatchLimitedTimeEnabled(): boolean {
 export function saveListingPerBatchLimitedTimeEnabled(enabled: boolean): void {
   try {
     localStorage.setItem(LISTING_PER_BATCH_LIMITED_TIME_KEY, enabled ? '1' : '0')
+  } catch {
+    // ignore
+  }
+}
+
+export function loadListingPerBatchCampaignEnabled(): boolean {
+  try {
+    return localStorage.getItem(LISTING_PER_BATCH_CAMPAIGN_KEY) === '1'
+  } catch {
+    return false
+  }
+}
+
+export function saveListingPerBatchCampaignEnabled(enabled: boolean): void {
+  try {
+    localStorage.setItem(LISTING_PER_BATCH_CAMPAIGN_KEY, enabled ? '1' : '0')
+  } catch {
+    // ignore
+  }
+}
+
+/** MinIO 素材自动拉取（定时轮询 / RabbitMQ）是否暂停；手动「刷新」不受影响。 */
+export function loadMinioMaterialRefreshPaused(): boolean {
+  try {
+    return localStorage.getItem(MINIO_MATERIAL_REFRESH_PAUSED_KEY) === '1'
+  } catch {
+    return false
+  }
+}
+
+export function saveMinioMaterialRefreshPaused(paused: boolean): void {
+  try {
+    if (paused) {
+      localStorage.setItem(MINIO_MATERIAL_REFRESH_PAUSED_KEY, '1')
+    } else {
+      localStorage.removeItem(MINIO_MATERIAL_REFRESH_PAUSED_KEY)
+    }
   } catch {
     // ignore
   }

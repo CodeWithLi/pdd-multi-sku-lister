@@ -17,11 +17,13 @@ import {
   loadListingBatchSetCount,
   loadListingThrottleEnabled,
   loadListingPerBatchLimitedTimeEnabled,
+  loadListingPerBatchCampaignEnabled,
   loadPipelineRelistStrategy,
   saveListingBatchIntervalMinutes,
   saveListingBatchSetCount,
   saveListingThrottleEnabled,
   saveListingPerBatchLimitedTimeEnabled,
+  saveListingPerBatchCampaignEnabled,
   savePipelineRelistStrategy,
 } from '@/utils/pipelinePreferences'
 import {
@@ -75,6 +77,7 @@ const listingThrottleEnabled = ref(loadListingThrottleEnabled())
 const listingBatchSetCount = ref(loadListingBatchSetCount())
 const listingBatchIntervalMinutes = ref(loadListingBatchIntervalMinutes())
 const listingPerBatchLimitedTimeEnabled = ref(loadListingPerBatchLimitedTimeEnabled())
+const listingPerBatchCampaignEnabled = ref(loadListingPerBatchCampaignEnabled())
 const excelFallbackEnabled = ref(false)
 const excelFallbackSaving = ref(false)
 const logSpecSkuRowsEnabled = ref(false)
@@ -116,9 +119,11 @@ const {
   materialPolling,
   sseConnected,
   switchingMode,
+  materialRefreshPaused,
   refreshMode,
   restart: restartMaterialRefresh,
   stop: stopMaterialRefresh,
+  setMaterialRefreshPaused,
   setRefreshMode,
 } = useMinioMaterialRefresh({
   materialSource,
@@ -923,12 +928,13 @@ async function startPipeline() {
         listing_batch_set_count: listingBatchSetCount.value,
         listing_batch_interval_minutes: listingBatchIntervalMinutes.value,
         listing_per_batch_limited_time_enabled: listingPerBatchLimitedTimeEnabled.value,
+        listing_per_batch_campaign_enabled: listingPerBatchCampaignEnabled.value,
       })
       success.value = `批量整合链路已提交：${result.total} 条，批次 ${result.batch_id}，活动 ${activityIds.value.length} 个，启动间隔 ${result.store_start_delay_min_seconds}-${result.store_start_delay_max_seconds} 秒${
         listingThrottleEnabled.value
           ? `；分批上架 ${listingBatchSetCount.value} 套/批，间隔 ${listingBatchIntervalMinutes.value} 分钟${
-              listingPerBatchLimitedTimeEnabled.value ? '，每批完成后跑限时限量购' : ''
-            }`
+              listingPerBatchLimitedTimeEnabled.value ? '，每批限时限量购' : ''
+            }${listingPerBatchCampaignEnabled.value ? '，每批活动/推广' : ''}`
           : ''
       }`
       pipelinePage.value = 1
@@ -957,6 +963,7 @@ async function startPipeline() {
         listing_batch_set_count: listingBatchSetCount.value,
         listing_batch_interval_minutes: listingBatchIntervalMinutes.value,
         listing_per_batch_limited_time_enabled: listingPerBatchLimitedTimeEnabled.value,
+        listing_per_batch_campaign_enabled: listingPerBatchCampaignEnabled.value,
       })
       pipelinePage.value = 1
       activePipeline.value = result
@@ -971,8 +978,8 @@ async function startPipeline() {
           : ''
       const throttleHint = listingThrottleEnabled.value
         ? `（分批上架：${selectedSetCount.value} 套分 ${listingBatchPlanCount.value} 批，每批 ${listingBatchSetCount.value} 套，间隔 ${listingBatchIntervalMinutes.value} 分钟${
-            listingPerBatchLimitedTimeEnabled.value ? '，每批完成后跑限时限量购' : ''
-          }）`
+            listingPerBatchLimitedTimeEnabled.value ? '，每批限时限量购' : ''
+          }${listingPerBatchCampaignEnabled.value ? '，每批活动/推广' : ''}）`
         : ''
       success.value = skipListing
         ? demoMode.value
@@ -1026,7 +1033,10 @@ watch(relistStrategy, (value) => {
 
 watch(listingThrottleEnabled, (value) => {
   saveListingThrottleEnabled(value)
-  if (!value) listingPerBatchLimitedTimeEnabled.value = false
+  if (!value) {
+    listingPerBatchLimitedTimeEnabled.value = false
+    listingPerBatchCampaignEnabled.value = false
+  }
 })
 
 watch(listingBatchSetCount, (value) => {
@@ -1039,6 +1049,10 @@ watch(listingBatchIntervalMinutes, (value) => {
 
 watch(listingPerBatchLimitedTimeEnabled, (value) => {
   saveListingPerBatchLimitedTimeEnabled(value)
+})
+
+watch(listingPerBatchCampaignEnabled, (value) => {
+  saveListingPerBatchCampaignEnabled(value)
 })
 
 watch(resolvedListingSelectors, () => {
@@ -1184,7 +1198,10 @@ onUnmounted(() => {
                       >
                         {{ minioHealth?.available ? 'MinIO 已连接' : (minioHealth?.error || 'MinIO 未连接') }}
                       </el-tag>
-                      <el-tag v-if="materialSource === 'minio' && refreshMode === 'poll' && materialPolling" size="small" type="info">
+                      <el-tag v-if="materialSource === 'minio' && materialRefreshPaused" size="small" type="warning">
+                        已暂停拉取
+                      </el-tag>
+                      <el-tag v-else-if="materialSource === 'minio' && refreshMode === 'poll' && materialPolling" size="small" type="info">
                         自动刷新
                       </el-tag>
                       <template v-if="materialSource === 'minio'">
@@ -1197,8 +1214,15 @@ onUnmounted(() => {
                           <el-radio-button label="poll">定时 {{ minioHealth?.listing_poll_seconds ?? 30 }}s</el-radio-button>
                           <el-radio-button label="rabbitmq">RabbitMQ 推送</el-radio-button>
                         </el-radio-group>
-                        <el-tag v-if="refreshMode === 'rabbitmq' && sseConnected" size="small" type="success">实时监听</el-tag>
-                        <el-tag v-else-if="refreshMode === 'rabbitmq'" size="small" type="warning">推送未连接</el-tag>
+                        <el-switch
+                          :model-value="!materialRefreshPaused"
+                          inline-prompt
+                          active-text="自动拉取"
+                          inactive-text="已关闭"
+                          @change="setMaterialRefreshPaused(!$event)"
+                        />
+                        <el-tag v-if="!materialRefreshPaused && refreshMode === 'rabbitmq' && sseConnected" size="small" type="success">实时监听</el-tag>
+                        <el-tag v-else-if="!materialRefreshPaused && refreshMode === 'rabbitmq'" size="small" type="warning">推送未连接</el-tag>
                       </template>
                     </div>
                     <el-radio-group v-model="showOnlyUnlistedGroups" size="small" class="filter-segment">
@@ -1398,15 +1422,23 @@ onUnmounted(() => {
                 </div>
                 <div v-if="listingThrottleEnabled" class="form-tip">
                   已选 {{ selectedSetCount }} 套图，将分 {{ listingBatchPlanCount }} 批上架{{
-                    listingPerBatchLimitedTimeEnabled
-                      ? '；每批上架完成后先跑限时限量购，再按间隔进入下一批'
+                    listingPerBatchLimitedTimeEnabled || listingPerBatchCampaignEnabled
+                      ? '；每批完成后'
                       : '；全部批次完成后才进入限时限量购 / 活动 / 推广'
-                  }}。
+                  }}<template v-if="listingPerBatchLimitedTimeEnabled || listingPerBatchCampaignEnabled">
+                    <template v-if="listingPerBatchLimitedTimeEnabled">先跑限时限量购</template><template v-if="listingPerBatchLimitedTimeEnabled && listingPerBatchCampaignEnabled">，</template><template v-if="listingPerBatchCampaignEnabled">再跑活动{{ autoPromotion ? '/推广' : '' }}</template>（仅本批商品），再按间隔进入下一批
+                  </template>。
                 </div>
                 <div v-if="listingThrottleEnabled" class="option-row listing-throttle-row per-batch-lt-row">
                   <div class="switch-row">
                     <span class="switch-label">每批完成后跑限时限量购</span>
                     <el-switch v-model="listingPerBatchLimitedTimeEnabled" />
+                  </div>
+                </div>
+                <div v-if="listingThrottleEnabled" class="option-row listing-throttle-row per-batch-lt-row">
+                  <div class="switch-row">
+                    <span class="switch-label">每批完成后跑活动{{ autoPromotion ? '/推广' : '' }}</span>
+                    <el-switch v-model="listingPerBatchCampaignEnabled" />
                   </div>
                 </div>
                 <div v-else class="form-tip">
