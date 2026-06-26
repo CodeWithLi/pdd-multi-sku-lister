@@ -1,4 +1,4 @@
-"""整合链路 — 批量精准下架（商品编码空格筛选 + 商品ID校验通过才下架）。"""
+"""整合链路 — 批量精准下架（商品编码筛选 + 逐行勾选 + 分页批量下架）。"""
 
 from __future__ import annotations
 
@@ -7,8 +7,10 @@ from typing import Any
 from pdd_agent.browser.shop_display_name import verify_shop_for_account
 from pdd_agent.skills.delist.automation import (
     _log,
+    batch_delist_by_verified_checkboxes,
     filter_goods_by_merchant_codes,
     filter_goods_by_product_ids,
+    merchant_code_matches_expected,
     open_goods_list_on_sale,
     process_single_product_delist,
     scan_filtered_product_rows_all_pages,
@@ -43,10 +45,7 @@ def _verify_scanned_rows_for_merchant_codes(
     scanned_rows: list[dict[str, Any]],
     merchant_codes: list[str],
 ) -> tuple[list[dict[str, Any]], str]:
-    """
-    校验筛选是否生效：每一行都必须命中预期商品编码之一。
-    若出现无法匹配编码的行，视为筛选失败（可能展示了全部商品）。
-    """
+    """只保留行内商品编码与目标编码完全一致的行，其余跳过。"""
     expected = {str(code or "").strip() for code in merchant_codes if str(code or "").strip()}
     if not expected:
         return [], "missing_merchant_codes"
@@ -57,9 +56,10 @@ def _verify_scanned_rows_for_merchant_codes(
         merchant_code = str(row.get("merchant_code") or "").strip()
         if not product_id:
             continue
-        if merchant_code not in expected:
-            return [], SKIP_REASON_FILTER_UNVERIFIED
-        verified.append(row)
+        matched = merchant_code_matches_expected(merchant_code, expected)
+        if not matched:
+            continue
+        verified.append({**row, "merchant_code": matched})
     return verified, ""
 
 
@@ -162,6 +162,48 @@ def _delist_verified_product_ids(
     return results
 
 
+def _results_from_batch_delist(
+    batch_result: dict[str, object],
+    merchant_groups: dict[str, dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """将分页批量下架结果映射为 pipeline 结果行。"""
+    results: list[dict[str, Any]] = []
+    delisted_by_code: dict[str, list[str]] = {}
+    for item in batch_result.get("delisted_items") or []:
+        if not isinstance(item, dict):
+            continue
+        matched = str(item.get("matched_code") or item.get("merchant_code") or "").strip()
+        product_id = str(item.get("product_id") or "").strip()
+        if matched and product_id:
+            delisted_by_code.setdefault(matched, []).append(product_id)
+
+    for code, group in merchant_groups.items():
+        mapping_id = str(group.get("mapping_id") or "")
+        selector = str(group.get("selector") or "")
+        product_ids = list(dict.fromkeys(delisted_by_code.get(code, [])))
+        if not product_ids:
+            results.append(
+                {
+                    "mapping_id": mapping_id,
+                    "selector": selector,
+                    "merchant_code": code,
+                    "error": "product_id_not_found_on_sale",
+                }
+            )
+            continue
+        for product_id in product_ids:
+            results.append(
+                {
+                    "mapping_id": mapping_id,
+                    "selector": selector,
+                    "merchant_code": code,
+                    "target_product_id": product_id,
+                    "status": "delisted",
+                }
+            )
+    return results
+
+
 def process_pipeline_relist_prep_delist(
     page,
     account_config: dict,
@@ -170,7 +212,7 @@ def process_pipeline_relist_prep_delist(
     dry_run: bool = False,
 ) -> dict[str, Any]:
     """
-    按商品编码批量筛选，校验每一行商品编码/商品ID 通过后才精准下架。
+    按商品编码批量筛选，逐页逐行勾选校验后批量下架。
 
     校验失败时不执行任何下架，返回 delist_skipped=True，整合链路继续上架。
     """
@@ -247,86 +289,104 @@ def process_pipeline_relist_prep_delist(
         key: group for key, group in groups.items() if str(key).startswith("__id__:")
     }
 
-    merchant_codes = list(
-        dict.fromkeys(
-            str(group.get("merchant_code") or "").strip()
-            for group in merchant_groups.values()
-            if str(group.get("merchant_code") or "").strip()
-        )
-    )
-
     delist_plan: list[dict[str, Any]] = []
+    id_delist_from_groups: list[dict[str, Any]] = []
+    merchant_groups_without_id: dict[str, dict[str, Any]] = {}
 
-    if merchant_codes:
-        _log(
-            account_id,
-            f"整合链路下架预备：店铺「{shop_check.actual}」，"
-            f"批量筛选 {len(merchant_codes)} 个商品编码并校验商品ID",
-        )
-        if not filter_goods_by_merchant_codes(page, account_id, merchant_codes):
-            return _skip_delist_result(
-                account_id=account_id,
-                skip_reason=SKIP_REASON_SET_FILTER_FAILED,
-            )
-
-        scanned_rows = scan_filtered_product_rows_all_pages(
-            page,
-            account_id,
-            merchant_codes=merchant_codes,
-        )
-        verified_rows, verify_err = _verify_scanned_rows_for_merchant_codes(scanned_rows, merchant_codes)
-        if verify_err:
-            return _skip_delist_result(account_id=account_id, skip_reason=verify_err)
-
-        discovered_by_code: dict[str, list[str]] = {code: [] for code in merchant_codes}
-        for row in verified_rows:
-            product_id = str(row.get("product_id") or "").strip()
-            merchant_code = str(row.get("merchant_code") or "").strip()
-            if product_id and merchant_code in discovered_by_code:
-                discovered_by_code[merchant_code].append(product_id)
-
-        id_verify_err = _verify_known_product_ids(merchant_groups, discovered_by_code)
-        if id_verify_err:
-            return _skip_delist_result(account_id=account_id, skip_reason=id_verify_err)
-
-        for code, group in merchant_groups.items():
-            mapping_id = str(group.get("mapping_id") or "")
-            selector = str(group.get("selector") or "")
-            known_ids = list(dict.fromkeys(str(pid).strip() for pid in (group.get("known_ids") or []) if str(pid).strip()))
-            scanned_ids = list(dict.fromkeys(discovered_by_code.get(code, [])))
-
-            if known_ids:
-                product_ids = [pid for pid in scanned_ids if pid in known_ids]
-                extra_ids = [pid for pid in scanned_ids if pid not in known_ids]
-                if extra_ids:
-                    _log(
-                        account_id,
-                        f"商品编码 {code} 另扫到 {len(extra_ids)} 个重复链接，将一并精准下架",
-                    )
-                    product_ids = list(dict.fromkeys([*product_ids, *extra_ids]))
-            else:
-                product_ids = scanned_ids
-
-            if not product_ids:
-                results.append(
+    for code, group in merchant_groups.items():
+        known_ids = [
+            str(pid or "").strip()
+            for pid in (group.get("known_ids") or [])
+            if str(pid or "").strip()
+        ]
+        if known_ids:
+            for product_id in dict.fromkeys(known_ids):
+                id_delist_from_groups.append(
                     {
-                        "mapping_id": mapping_id,
-                        "selector": selector,
-                        "merchant_code": code,
-                        "error": "product_id_not_found_on_sale",
-                    }
-                )
-                continue
-
-            for product_id in product_ids:
-                delist_plan.append(
-                    {
-                        "mapping_id": mapping_id,
-                        "selector": selector,
+                        "mapping_id": str(group.get("mapping_id") or ""),
+                        "selector": str(group.get("selector") or ""),
                         "merchant_code": code,
                         "target_product_id": product_id,
                     }
                 )
+        else:
+            merchant_groups_without_id[code] = group
+
+    if id_delist_from_groups:
+        _log(
+            account_id,
+            f"本地已记录 {len(id_delist_from_groups)} 个拼多多商品ID，按ID精准下架（不依赖编码搜索）",
+        )
+        id_results = _delist_verified_product_ids(
+            page,
+            account_config,
+            id_delist_from_groups,
+            dry_run=dry_run,
+        )
+        results.extend(id_results)
+        delisted_ids = {
+            str(item.get("target_product_id") or "").strip()
+            for item in id_results
+            if isinstance(item, dict) and item.get("status") == "delisted"
+        }
+        if delisted_ids:
+            _log(account_id, f"按商品ID下架成功 {len(delisted_ids)} 条")
+
+    codes_without_local_id = list(merchant_groups_without_id.keys())
+    if codes_without_local_id:
+        _log(
+            account_id,
+            f"以下 {len(codes_without_local_id)} 个编码无本地商品ID，改按编码逐个搜索下架："
+            f"{', '.join(codes_without_local_id)}",
+        )
+        for code in codes_without_local_id:
+            group = merchant_groups_without_id[code]
+            if not filter_goods_by_merchant_codes(page, account_id, [code]):
+                results.append(
+                    {
+                        "mapping_id": str(group.get("mapping_id") or ""),
+                        "selector": str(group.get("selector") or ""),
+                        "merchant_code": code,
+                        "error": SKIP_REASON_SET_FILTER_FAILED,
+                    }
+                )
+                continue
+
+            batch_result = batch_delist_by_verified_checkboxes(
+                page,
+                account_id,
+                [code],
+                dry_run=dry_run,
+            )
+            batch_errors = [str(e).strip() for e in (batch_result.get("errors") or []) if str(e).strip()]
+            if batch_errors and int(batch_result.get("total_delisted") or 0) <= 0:
+                results.append(
+                    {
+                        "mapping_id": str(group.get("mapping_id") or ""),
+                        "selector": str(group.get("selector") or ""),
+                        "merchant_code": code,
+                        "error": batch_errors[0],
+                    }
+                )
+            results.extend(
+                _results_from_batch_delist(
+                    batch_result,
+                    {code: group},
+                )
+            )
+            found = batch_result.get("found_codes") or []
+            if not found:
+                _log(
+                    account_id,
+                    f"编码 {code} 搜索未命中（请核对拼多多后台「商品编码」是否与文件夹名完全一致）",
+                )
+
+    elif merchant_groups and id_delist_from_groups:
+        _log(
+            account_id,
+            f"整合链路下架预备：店铺「{shop_check.actual}」，"
+            f"已按本地商品ID处理 {len(id_delist_from_groups)} 条",
+        )
 
     if id_only_groups:
         id_targets = list(

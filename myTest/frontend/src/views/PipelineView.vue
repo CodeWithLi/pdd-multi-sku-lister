@@ -1352,7 +1352,7 @@ onUnmounted(() => {
                   若所选商品已在售，启动时会询问是否跳过上架或重新上架；可能产生重复链路。
                 </div>
                 <div v-else-if="relistStrategy === 'delist_and_relist'" class="form-tip form-tip-highlight">
-                  会先按「商品编码」扫在售列表，<strong>同一编码下的全部重复链接都会下架</strong>，并删除系统「已发布商品」记录，再重新上架 1 条；适用于 MinIO 补图后重跑整合链路。
+                  上架前一次性将全部商品编码原样填入搜索框，逐页勾选校验后批量下架；全部完成后才进入上架（不是每个商品上架前单独下架）。
                 </div>
               </el-form-item>
 

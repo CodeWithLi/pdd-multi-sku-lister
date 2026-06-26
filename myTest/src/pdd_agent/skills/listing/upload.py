@@ -198,9 +198,16 @@ def _dismiss_address_required_page(page: DpPage, account_id: str, label: str) ->
         result = page.run_js(
             """
             const bodyText = document.body?.innerText || '';
-            const present = bodyText.includes('真实有效')
-                && (bodyText.includes('联系/经营地址') || bodyText.includes('经营地址'))
-                && bodyText.includes('确认补充');
+            const addressModal = Array.from(document.querySelectorAll(
+                '[class*="PersonalShopBusinessAddressModifyModal"], [data-testid="beast-core-modal"]'
+            )).find((el) => {
+                const t = el.innerText || el.textContent || '';
+                return t.includes('经营地址') || t.includes('联系/经营地址') || t.includes('确认补充');
+            });
+            const present = !!addressModal
+                || (bodyText.includes('真实有效')
+                    && (bodyText.includes('联系/经营地址') || bodyText.includes('经营地址'))
+                    && bodyText.includes('确认补充'));
             if (!present) return { present: false, clicked: false };
 
             function isVisible(el) {
@@ -229,9 +236,14 @@ def _dismiss_address_required_page(page: DpPage, account_id: str, label: str) ->
                 return el;
             }
 
-            const exactClose = Array.from(document.querySelectorAll(
-                '[data-testid="beast-core-icon-close"], [class*="PersonalShopBusinessAddressModifyModal2_closeIcon"], [class*="closeIcon"]'
-            )).find(isVisible);
+            const exactClose = (addressModal
+                ? Array.from(addressModal.querySelectorAll(
+                    '[data-testid="beast-core-icon-close"], [class*="PersonalShopBusinessAddressModifyModal2_closeIcon"], [class*="closeIcon"]'
+                )).find(isVisible)
+                : null)
+                || Array.from(document.querySelectorAll(
+                    '[data-testid="beast-core-icon-close"], [class*="PersonalShopBusinessAddressModifyModal2_closeIcon"], [class*="closeIcon"]'
+                )).find(isVisible);
             if (exactClose) {
                 clickableParent(exactClose).click();
                 return { present: true, clicked: true, method: 'address_close_icon' };

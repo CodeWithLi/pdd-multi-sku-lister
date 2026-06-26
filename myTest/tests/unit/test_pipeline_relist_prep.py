@@ -5,19 +5,16 @@ from __future__ import annotations
 from unittest.mock import MagicMock, patch
 
 
-def test_verify_scanned_rows_rejects_unmatched_merchant_code():
-    from pdd_agent.skills.delist.pipeline_relist_prep import (
-        SKIP_REASON_FILTER_UNVERIFIED,
-        _verify_scanned_rows_for_merchant_codes,
-    )
+def test_verify_scanned_rows_filters_unmatched_merchant_code():
+    from pdd_agent.skills.delist.pipeline_relist_prep import _verify_scanned_rows_for_merchant_codes
 
     rows = [
         {"product_id": "111", "merchant_code": "BD001"},
-        {"product_id": "999", "merchant_code": ""},
+        {"product_id": "999", "merchant_code": "OTHER"},
     ]
     verified, err = _verify_scanned_rows_for_merchant_codes(rows, ["BD001"])
-    assert verified == []
-    assert err == SKIP_REASON_FILTER_UNVERIFIED
+    assert verified == [{"product_id": "111", "merchant_code": "BD001"}]
+    assert err == ""
 
 
 def test_verify_known_product_ids_requires_overlap():
@@ -45,24 +42,29 @@ def test_skip_delist_when_filter_verification_fails(monkeypatch):
     monkeypatch.setattr(mod, "filter_goods_by_merchant_codes", lambda *_a, **_k: True)
     monkeypatch.setattr(
         mod,
-        "scan_filtered_product_rows_all_pages",
-        lambda *_a, **_k: [{"product_id": "999", "merchant_code": ""}],
+        "batch_delist_by_verified_checkboxes",
+        lambda *_a, **_k: {
+            "ok": False,
+            "filter_error": "filter_verification_failed",
+            "total_checked": 0,
+            "total_delisted": 0,
+            "delisted_items": [],
+            "errors": ["filter_verification_failed"],
+        },
     )
-    delist = MagicMock()
-    monkeypatch.setattr(mod, "_delist_verified_product_ids", delist)
 
     stats = mod.process_pipeline_relist_prep_delist(
         MagicMock(),
         {"account_id": "多多李子2601", "username": "多多李子2601"},
-        [{"selector": "a/b/BD001", "merchant_code": "BD001", "mapping_id": "m1", "target_product_id": "111"}],
+        [{"selector": "a/b/BD001", "merchant_code": "BD001", "mapping_id": "m1"}],
     )
 
-    assert stats.get("delist_skipped") is True
-    assert stats.get("errors") == []
-    delist.assert_not_called()
+    assert stats.get("delist_skipped") is not True
+    assert stats["hit"] == 0
+    assert any("filter_verification_failed" in str(item.get("error") or "") for item in stats["results"])
 
 
-def test_delist_only_verified_product_ids(monkeypatch):
+def test_batch_delist_merchant_codes(monkeypatch):
     from pdd_agent.skills.delist import pipeline_relist_prep as mod
 
     monkeypatch.setattr(mod, "open_goods_list_on_sale", lambda *_a, **_k: True)
@@ -74,27 +76,70 @@ def test_delist_only_verified_product_ids(monkeypatch):
     monkeypatch.setattr(mod, "filter_goods_by_merchant_codes", lambda *_a, **_k: True)
     monkeypatch.setattr(
         mod,
-        "scan_filtered_product_rows_all_pages",
-        lambda *_a, **_k: [{"product_id": "111", "merchant_code": "BD001"}],
+        "batch_delist_by_verified_checkboxes",
+        lambda *_a, **_k: {
+            "ok": True,
+            "filter_error": "",
+            "total_checked": 2,
+            "total_delisted": 2,
+            "pages_processed": 1,
+            "delisted_items": [
+                {"product_id": "111", "merchant_code": "BD001", "matched_code": "BD001"},
+                {"product_id": "112", "merchant_code": "BD001", "matched_code": "BD001"},
+            ],
+            "errors": [],
+        },
     )
-
-    delist_calls: list[list[dict]] = []
-
-    def _fake_delist(_page, _cfg, plan, *, dry_run=False):
-        delist_calls.append(list(plan))
-        return [{"target_product_id": "111", "status": "delisted", "mapping_id": "m1"}]
-
-    monkeypatch.setattr(mod, "_delist_verified_product_ids", _fake_delist)
 
     stats = mod.process_pipeline_relist_prep_delist(
         MagicMock(),
         {"account_id": "多多李子2601", "username": "多多李子2601"},
-        [{"selector": "a/b/BD001", "merchant_code": "BD001", "mapping_id": "m1", "target_product_id": "111"}],
+        [{"selector": "a/b/BD001", "merchant_code": "BD001", "mapping_id": "m1"}],
     )
 
     assert stats.get("delist_skipped") is not True
-    assert delist_calls[0][0]["target_product_id"] == "111"
+    assert stats["hit"] == 2
+    assert all(item.get("status") == "delisted" for item in stats["results"])
+
+
+def test_delist_by_known_product_id(monkeypatch):
+    from pdd_agent.skills.delist import pipeline_relist_prep as mod
+
+    monkeypatch.setattr(mod, "open_goods_list_on_sale", lambda *_a, **_k: True)
+    monkeypatch.setattr(
+        mod,
+        "verify_shop_for_account",
+        lambda *_a, **_k: MagicMock(ok=True, expected="兔兔潮玩屋", actual="兔兔潮玩屋", error=""),
+    )
+    monkeypatch.setattr(
+        mod,
+        "_delist_verified_product_ids",
+        lambda *_a, **_k: [
+            {
+                "mapping_id": "m1",
+                "selector": "a/b/BD001",
+                "merchant_code": "BD001",
+                "target_product_id": "970478951304",
+                "status": "delisted",
+            }
+        ],
+    )
+
+    stats = mod.process_pipeline_relist_prep_delist(
+        MagicMock(),
+        {"account_id": "多多李子2601", "username": "多多李子2601"},
+        [
+            {
+                "selector": "a/b/BD001",
+                "merchant_code": "BD001",
+                "mapping_id": "m1",
+                "target_product_id": "970478951304",
+            }
+        ],
+    )
+
     assert stats["hit"] == 1
+    assert stats["results"][0]["status"] == "delisted"
 
 
 def test_handle_pipeline_delist_skipped_continues_listing():
