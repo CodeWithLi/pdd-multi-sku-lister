@@ -25,6 +25,8 @@ def test_js_blocks_contain_key_markers():
     assert "满件折扣" in lps._SET_BULK_DISCOUNT_JS
     assert "满2件折扣" in lps._FIND_DISCOUNT_INPUT_JS
     assert "展开修改" in lps._CLICK_EXPAND_SERVICE_EDIT_JS
+    assert "服务与承诺" in lps._CLICK_SERVICE_TAB_JS
+    assert "运费模板" in lps._FIND_SHIPPING_BLOCK_JS
     assert "其他模板" in lps._SELECT_SHIPPING_TEMPLATE_JS
     assert "最新全国" not in lps._SELECT_SHIPPING_TEMPLATE_JS  # passed as arg
 
@@ -35,9 +37,11 @@ def test_apply_listing_publish_settings_all_ok():
             {"ok": True, "marker": "满2件折扣"},
             {"ok": True, "before": "9.5", "after": "9.9", "verified": True},
             "9.9",
-            {"ok": True, "selector": "#tm-plate"},
-            {"ok": True, "method": "tracking"},
+            {"ok": True, "method": "section_heading"},
+            {"visible": True},
+            {"found": False, "current": "", "otherChecked": False},
             {"ok": True, "template": "最新全国"},
+            {"found": True, "current": "最新全国", "otherChecked": True},
         ]
     )
     result = lps.apply_listing_publish_settings(page, "store_A", "BD001/第一套图")
@@ -46,16 +50,36 @@ def test_apply_listing_publish_settings_all_ok():
     assert result["shipping_template"]["template"] == "最新全国"
 
 
-def test_apply_listing_publish_settings_skips_shipping_when_not_expanded():
+def test_apply_listing_publish_settings_fails_when_expand_not_working():
     page = _FakePage(
         js_results=[
             {"ok": True, "marker": "满2件折扣"},
             {"ok": True, "before": "9.5", "after": "9.9", "verified": True},
             "9.9",
-            {"ok": True, "selector": "#tm-plate"},
+            {"ok": True, "method": "section_heading"},
+            {"visible": False},
+            {"ok": True, "method": "expand_button"},
             {"ok": False, "reason": "expand_button_not_found"},
+            {"expanded": False, "hasExpandButton": True},
+            {"ok": True, "method": "expand_button"},
+            {"visible": False},
+            {"expanded": False, "hasExpandButton": True},
+            {"ok": True, "method": "expand_button"},
+            {"ok": False, "reason": "expand_button_not_found"},
+            {"expanded": False, "hasExpandButton": True},
+            {"ok": True, "method": "expand_button"},
+            {"visible": False},
+            {"expanded": False, "hasExpandButton": True},
+            {"ok": False, "reason": "service_tab_not_found"},
+            {"ok": True, "method": "expand_button"},
+            {"ok": False, "reason": "expand_button_not_found"},
+            {"expanded": False, "hasExpandButton": True},
+            {"ok": True, "method": "expand_button"},
+            {"ok": False, "reason": "expand_button_not_found"},
+            {"expanded": False, "hasExpandButton": True},
+            {"visible": False},
         ]
     )
     result = lps.apply_listing_publish_settings(page, "store_A", "BD001/第一套图")
     assert result["ok"] is False
-    assert result["shipping_template"]["reason"] == "service_section_not_expanded"
+    assert result["shipping_template"]["reason"] == "shipping_section_not_ready"

@@ -105,26 +105,87 @@ return input ? String(input.value || '').trim() : '';
 """
 )
 
-_CLICK_EXPAND_SERVICE_EDIT_JS = """
-function clickExpandEdit() {
+_CLICK_SERVICE_TAB_JS = """
+function clickServiceTab() {
   const tracked = document.querySelector(
-    '[data-tracking-click-viewid*="expand_edit"], [data-tracking-viewid*="expand_modify"]'
+    '[data-tracking-click-viewid*="service_promise"],'
+    + '[data-tracking-click-viewid*="service_commitment"],'
+    + '[data-tracking-click-viewid*="service_tab"]'
   );
   if (tracked) {
     tracked.click();
     return { ok: true, method: 'tracking' };
   }
-  for (const el of document.querySelectorAll('.bottom-switch .text-v2, .bottom-switch, .text-v2')) {
-    if ((el.textContent || '').trim() === '展开修改') {
-      (el.closest('.bottom-switch') || el).click();
-      return { ok: true, method: 'bottom_switch' };
+  for (const el of document.querySelectorAll('div,span,a,li,button,[role="tab"]')) {
+    const t = (el.textContent || '').replace(/\\s+/g, '');
+    if (t === '服务与承诺' || t.endsWith('服务与承诺') || t.includes('3服务与承诺')) {
+      (el.closest('[role="tab"]') || el.closest('button') || el).click();
+      return { ok: true, method: 'tab_text' };
     }
   }
-  for (const el of document.querySelectorAll('span,div,a,button')) {
-    const t = (el.textContent || '').replace(/\\s+/g, '');
-    if (t === '展开修改') {
-      el.click();
-      return { ok: true, method: 'text' };
+  return { ok: false, reason: 'service_tab_not_found' };
+}
+return clickServiceTab();
+"""
+
+_CLICK_EXPAND_SERVICE_EDIT_JS = """
+function norm(text) {
+  return String(text || '').replace(/\\s+/g, '');
+}
+function hasExpandButton() {
+  for (const el of document.querySelectorAll('span,div,a,button,.text-v2,.bottom-switch')) {
+    if (norm(el.textContent) === '展开修改') return true;
+  }
+  return false;
+}
+function findShippingBlock() {
+  for (const el of document.querySelectorAll('label,div,span,th,td,section')) {
+    const t = norm(el.textContent);
+    if (t !== '运费模板' && !t.startsWith('运费模板')) continue;
+    let node = el;
+    for (let depth = 0; depth < 18 && node; depth++) {
+      const ctx = norm(node.textContent);
+      if (ctx.includes('运费模板') && ctx.includes('其他模板')) {
+        return node;
+      }
+      node = node.parentElement;
+    }
+  }
+  return null;
+}
+function clickExpandEdit() {
+  try {
+    window.scrollTo(0, document.documentElement.scrollHeight);
+  } catch (e) {}
+  const section = Array.from(document.querySelectorAll('div,section')).find((el) => {
+    const t = (el.textContent || '').trim();
+    return t.startsWith('3 服务与承诺') || t.includes('3服务与承诺');
+  });
+  if (section) {
+    try { section.scrollIntoView({ block: 'center', behavior: 'instant' }); } catch (e) {}
+  }
+  const candidates = [];
+  for (const el of document.querySelectorAll('.bottom-switch, .text-v2, span, div, a, button')) {
+    const t = norm(el.textContent);
+    if (t === '展开修改' || t.endsWith('展开修改')) {
+      candidates.push(el.closest('.bottom-switch') || el);
+    }
+  }
+  for (const target of candidates) {
+    try { target.scrollIntoView({ block: 'center', behavior: 'instant' }); } catch (e) {}
+    target.click();
+    target.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, view: window }));
+    if (findShippingBlock() || !hasExpandButton()) {
+      return { ok: true, method: 'force_click' };
+    }
+  }
+  const tracked = document.querySelector(
+    '[data-tracking-click-viewid*="expand_edit"], [data-tracking-click-viewid*="expand_modify"]'
+  );
+  if (tracked) {
+    tracked.click();
+    if (findShippingBlock() || !hasExpandButton()) {
+      return { ok: true, method: 'tracking' };
     }
   }
   return { ok: false, reason: 'expand_button_not_found' };
@@ -132,13 +193,124 @@ function clickExpandEdit() {
 return clickExpandEdit();
 """
 
+_IS_SERVICE_EXPANDED_JS = """
+function norm(text) {
+  return String(text || '').replace(/\\s+/g, '');
+}
+function findShippingBlock() {
+  for (const el of document.querySelectorAll('label,div,span,th,td,section')) {
+    const t = norm(el.textContent);
+    if (t !== '运费模板' && !t.startsWith('运费模板')) continue;
+    let node = el;
+    for (let depth = 0; depth < 18 && node; depth++) {
+      const ctx = norm(node.textContent);
+      if (ctx.includes('运费模板') && ctx.includes('其他模板')) {
+        return true;
+      }
+      node = node.parentElement;
+    }
+  }
+  return false;
+}
+function hasExpandButton() {
+  for (const el of document.querySelectorAll('span,div,a,button,.text-v2,.bottom-switch')) {
+    if (norm(el.textContent) === '展开修改') return true;
+  }
+  return false;
+}
+return { expanded: findShippingBlock() || !hasExpandButton(), hasExpandButton: hasExpandButton() };
+"""
+
+_FIND_SHIPPING_BLOCK_JS = """
+function norm(text) {
+  return String(text || '').replace(/\\s+/g, '');
+}
+function findShippingBlock() {
+  for (const el of document.querySelectorAll('label,div,span,th,td,section')) {
+    const t = norm(el.textContent);
+    if (t !== '运费模板' && !t.startsWith('运费模板')) continue;
+    let node = el;
+    for (let depth = 0; depth < 18 && node; depth++) {
+      const ctx = norm(node.textContent);
+      if (ctx.includes('运费模板') && ctx.includes('其他模板')) {
+        return node;
+      }
+      node = node.parentElement;
+    }
+  }
+  for (const el of document.querySelectorAll('div,section')) {
+    const t = norm(el.textContent);
+    if (t.includes('运费模板') && t.includes('其他模板') && t.length < 5000) {
+      return el;
+    }
+  }
+  return null;
+}
+return findShippingBlock() ? { visible: true } : { visible: false };
+"""
+
+_READ_SHIPPING_TEMPLATE_JS = """
+function norm(text) {
+  return String(text || '').replace(/\\s+/g, '');
+}
+function findShippingBlock() {
+  for (const el of document.querySelectorAll('label,div,span,th,td,section')) {
+    const t = norm(el.textContent);
+    if (t !== '运费模板' && !t.startsWith('运费模板')) continue;
+    let node = el;
+    for (let depth = 0; depth < 18 && node; depth++) {
+      const ctx = norm(node.textContent);
+      if (ctx.includes('运费模板') && ctx.includes('其他模板')) {
+        return node;
+      }
+      node = node.parentElement;
+    }
+  }
+  return null;
+}
+const block = findShippingBlock();
+if (!block) return { found: false, current: '', otherChecked: false };
+const header = block.querySelector(
+  '[data-testid="beast-core-select-header"], [data-testid*="select-header"], [role="combobox"]'
+);
+const current = header ? norm(header.textContent) : '';
+const otherChecked = Array.from(block.querySelectorAll(
+  'label,[data-testid="beast-core-radio"],span,div'
+)).some((el) => {
+  const t = norm(el.textContent);
+  if (t !== '其他模板' && !t.startsWith('其他模板')) return false;
+  const radio = el.querySelector?.('input[type="radio"]')
+    || el.closest('label')?.querySelector?.('input[type="radio"]');
+  return radio ? radio.checked : false;
+});
+return { found: true, current, otherChecked };
+"""
+
 _SELECT_SHIPPING_TEMPLATE_JS = """
+function norm(text) {
+  return String(text || '').replace(/\\s+/g, '');
+}
+function findShippingBlock() {
+  for (const el of document.querySelectorAll('label,div,span,th,td,section')) {
+    const t = norm(el.textContent);
+    if (t !== '运费模板' && !t.startsWith('运费模板')) continue;
+    let node = el;
+    for (let depth = 0; depth < 18 && node; depth++) {
+      const ctx = norm(node.textContent);
+      if (ctx.includes('运费模板') && ctx.includes('其他模板')) {
+        return node;
+      }
+      node = node.parentElement;
+    }
+  }
+  return null;
+}
 function clickRadioByText(scope, text) {
   const nodes = scope.querySelectorAll(
     'label,[data-testid="beast-core-radio"],span,div'
   );
   for (const el of nodes) {
-    const t = (el.textContent || '').replace(/\\s+/g, '');
+    const t = norm(el.textContent);
     if (t !== text && !t.startsWith(text)) continue;
     const clickEl = el.closest('label')
       || el.closest('[data-testid="beast-core-radio"]')
@@ -146,35 +318,25 @@ function clickRadioByText(scope, text) {
     clickEl.click();
     const radio = clickEl.querySelector?.('input[type="radio"]')
       || el.querySelector?.('input[type="radio"]');
-    if (radio) radio.click();
+    if (radio) {
+      radio.checked = true;
+      radio.dispatchEvent(new Event('change', { bubbles: true }));
+      radio.click();
+    }
     return true;
   }
   return false;
 }
-function visibleOptionRoots() {
+function selectDropdownOption(scope, optionText) {
+  const header = scope.querySelector(
+    '[data-testid="beast-core-select-header"], [data-testid*="select-header"], [role="combobox"]'
+  );
+  if (!header) return { ok: false, step: 'header_not_found' };
+  header.click();
   const roots = [
     ...document.querySelectorAll('[data-testid="beast-core-portal-main"]'),
     document.body,
   ];
-  return roots.filter((el) => el && el.isConnected);
-}
-function selectDropdownOption(optionText) {
-  const plate = document.querySelector(
-    '#tm-plate, .goods-basic-line.template, .goods-basic-container, [class*="goods-basic"]'
-  ) || document.body;
-  const headers = Array.from(plate.querySelectorAll(
-    '[data-testid="beast-core-select-header"], [data-testid*="select-header"], [role="combobox"]'
-  )).filter((h) => {
-    const ctx = (h.closest('div,section')?.textContent || '').replace(/\\s+/g, '');
-    return ctx.includes('运费') || ctx.includes('模板') || ctx.includes('服务与承诺');
-  });
-  const header = headers[headers.length - 1]
-    || Array.from(plate.querySelectorAll(
-      '[data-testid="beast-core-select-header"], [data-testid*="select-header"], [role="combobox"]'
-    )).pop();
-  if (!header) return { ok: false, step: 'header_not_found' };
-  header.click();
-  const roots = visibleOptionRoots();
   for (const root of roots) {
     const options = root.querySelectorAll(
       '[data-testid="beast-core-select-option"], [role="option"], li, div, span'
@@ -190,14 +352,13 @@ function selectDropdownOption(optionText) {
   return { ok: false, step: 'option_not_found', optionText };
 }
 function selectShipping(templateName) {
-  const plate = document.querySelector(
-    '#tm-plate, .goods-basic-line.template, .goods-basic-container, [class*="goods-basic"]'
-  );
-  const scope = plate || document;
-  if (!clickRadioByText(scope, '其他模板') && !clickRadioByText(document, '其他模板')) {
+  const block = findShippingBlock();
+  if (!block) return { ok: false, step: 'shipping_block_not_found' };
+  try { block.scrollIntoView({ block: 'center', behavior: 'instant' }); } catch (e) {}
+  if (!clickRadioByText(block, '其他模板')) {
     return { ok: false, step: 'other_template_radio' };
   }
-  const drop = selectDropdownOption(templateName);
+  const drop = selectDropdownOption(block, templateName);
   if (!drop.ok) return { ok: false, step: 'dropdown', detail: drop };
   return { ok: true, template: templateName, dropdown: drop };
 }
@@ -205,24 +366,29 @@ return selectShipping(arguments[0]);
 """
 
 _SCROLL_SERVICE_SECTION_JS = """
-for (const sel of ['#tm-plate', '.goods-basic-line.template', '.goods-basic-container']) {
-  const el = document.querySelector(sel);
-  if (el) {
-    el.scrollIntoView({ block: 'center', behavior: 'instant' });
-    return { ok: true, selector: sel };
-  }
+function norm(text) {
+  return String(text || '').replace(/\\s+/g, '');
 }
+try {
+  window.scrollTo(0, document.documentElement.scrollHeight);
+} catch (e) {}
 for (const el of document.querySelectorAll('div,section')) {
   const t = (el.textContent || '').trim();
-  if (t.startsWith('3 服务与承诺') || t === '服务与承诺') {
+  if (t.startsWith('3 服务与承诺') || t.includes('3 服务与承诺')) {
     el.scrollIntoView({ block: 'center', behavior: 'instant' });
-    return { ok: true, method: 'heading' };
+    return { ok: true, method: 'section_heading' };
   }
 }
-for (const el of document.querySelectorAll('span,div')) {
-  if ((el.textContent || '').trim() === '展开修改') {
-    el.scrollIntoView({ block: 'center', behavior: 'instant' });
+for (const el of document.querySelectorAll('span,div,a,button,.bottom-switch,.text-v2')) {
+  if (norm(el.textContent) === '展开修改') {
+    (el.closest('.bottom-switch') || el).scrollIntoView({ block: 'center', behavior: 'instant' });
     return { ok: true, method: 'expand_button' };
+  }
+}
+for (const el of document.querySelectorAll('span,div,label')) {
+  if (norm(el.textContent) === '运费模板' || norm(el.textContent).startsWith('运费模板')) {
+    el.scrollIntoView({ block: 'center', behavior: 'instant' });
+    return { ok: true, method: 'freight_label' };
   }
 }
 return { ok: false };
@@ -252,6 +418,37 @@ def _read_bulk_discount_value(page: DpPage) -> str:
         return str(raw or "").strip()
     except Exception:
         return ""
+
+
+def _is_shipping_template_visible(page: DpPage) -> bool:
+    try:
+        raw = page.run_js(_FIND_SHIPPING_BLOCK_JS)
+        result = _normalize_js_result(raw)
+        return bool(result.get("visible"))
+    except Exception:
+        return False
+
+
+def _is_service_section_expanded(page: DpPage) -> bool:
+    try:
+        raw = page.run_js(_IS_SERVICE_EXPANDED_JS)
+        result = _normalize_js_result(raw)
+        return bool(result.get("expanded"))
+    except Exception:
+        return _is_shipping_template_visible(page)
+
+
+def _read_shipping_template_state(page: DpPage) -> dict[str, Any]:
+    try:
+        return _normalize_js_result(page.run_js(_READ_SHIPPING_TEMPLATE_JS))
+    except Exception:
+        return {"found": False, "current": "", "otherChecked": False}
+
+
+def _shipping_template_matches(state: dict[str, Any], template_name: str) -> bool:
+    current = str(state.get("current") or "").replace(" ", "")
+    target = str(template_name or "").replace(" ", "")
+    return bool(target) and target in current
 
 
 def _fill_discount_via_playwright(page: DpPage, discount: str) -> dict[str, Any]:
@@ -350,37 +547,161 @@ def _set_bulk_discount(
         return {"ok": False, "reason": "exception", "error": _safe_exc(exc)}
 
 
-def _expand_service_section(page: DpPage, account_id: str, label: str) -> dict[str, Any]:
+def _click_service_tab(page: DpPage, account_id: str, label: str) -> dict[str, Any]:
+    try:
+        raw = page.run_js(_CLICK_SERVICE_TAB_JS)
+        result = _normalize_js_result(raw)
+        if result.get("ok"):
+            time.sleep(0.6)
+            return result
+        tab = page.ele("text:服务与承诺", timeout=2)
+        if tab:
+            tab.click(by_js=True)
+            time.sleep(0.6)
+            return {"ok": True, "method": "ele"}
+        try:
+            page._page.get_by_text("服务与承诺", exact=False).first.click(timeout=2500)
+            time.sleep(0.6)
+            return {"ok": True, "method": "playwright"}
+        except Exception:
+            pass
+        print(f"[{account_id}] [{label}] 未找到「服务与承诺」Tab", flush=True)
+        return result
+    except Exception as exc:
+        print(f"[{account_id}] [{label}] 切换服务与承诺 Tab 异常：{_safe_exc(exc)}", flush=True)
+        return {"ok": False, "reason": "exception", "error": _safe_exc(exc)}
+
+
+def _click_expand_service_edit(page: DpPage, account_id: str, label: str) -> dict[str, Any]:
+    """滚到页面底部并点击「展开修改」。"""
+    page.run_js(_SCROLL_SERVICE_SECTION_JS)
+    time.sleep(0.35)
+    raw = page.run_js(_CLICK_EXPAND_SERVICE_EDIT_JS)
+    result = _normalize_js_result(raw)
+    if result.get("ok"):
+        time.sleep(0.9)
+        return result
+
+    btn = page.ele("text:展开修改", timeout=1)
+    if btn:
+        try:
+            page.run_js(
+                """
+                try { window.scrollTo(0, document.documentElement.scrollHeight); } catch (e) {}
+                """
+            )
+            time.sleep(0.2)
+            btn.click(by_js=True)
+            time.sleep(0.9)
+            if _is_service_section_expanded(page):
+                return {"ok": True, "method": "ele_js"}
+        except Exception:
+            pass
+
+    try:
+        page._page.evaluate(
+            """
+            () => {
+              window.scrollTo(0, document.documentElement.scrollHeight);
+              for (const el of document.querySelectorAll('.bottom-switch, .text-v2, span, div, a')) {
+                const t = (el.textContent || '').replace(/\\s+/g, '');
+                if (t !== '展开修改') continue;
+                const target = el.closest('.bottom-switch') || el;
+                target.click();
+                return true;
+              }
+              return false;
+            }
+            """
+        )
+        time.sleep(0.9)
+        if _is_service_section_expanded(page):
+            return {"ok": True, "method": "playwright_eval"}
+    except Exception:
+        pass
+
+    print(f"[{account_id}] [{label}] 未能点击「展开修改」", flush=True)
+    return result or {"ok": False, "reason": "expand_button_not_found"}
+
+
+def _ensure_service_section_ready(page: DpPage, account_id: str, label: str) -> dict[str, Any]:
+    """在当前页滚到底部，展开「3 服务与承诺」，直到运费模板可选。"""
     try:
         page.run_js(_SCROLL_SERVICE_SECTION_JS)
         time.sleep(0.3)
-        if page.ele("text:收起", timeout=0.5):
-            return {"ok": True, "method": "already_expanded"}
-        raw = page.run_js(_CLICK_EXPAND_SERVICE_EDIT_JS)
-        result = _normalize_js_result(raw)
-        if not result.get("ok"):
-            btn = page.ele("text:展开修改", timeout=2)
-            if btn:
-                btn.click(by_js=True)
-                result = {"ok": True, "method": "ele"}
-        if not result.get("ok"):
-            try:
-                page._page.get_by_text("展开修改", exact=True).click(timeout=2000)
-                result = {"ok": True, "method": "playwright"}
-            except Exception:
-                pass
-        if result.get("ok"):
-            time.sleep(0.8)
-            print(f"[{account_id}] [{label}] 已展开服务与承诺", flush=True)
-        else:
-            print(
-                f"[{account_id}] [{label}] 未找到「展开修改」：{result.get('reason', 'unknown')}",
-                flush=True,
-            )
-        return result
+
+        if _is_shipping_template_visible(page):
+            print(f"[{account_id}] [{label}] 运费模板区域已可见", flush=True)
+            return {"ok": True, "method": "already_visible"}
+
+        expand_result: dict[str, Any] = {"ok": False}
+        for attempt in range(3):
+            if _is_shipping_template_visible(page) or _is_service_section_expanded(page):
+                break
+            expand_result = _click_expand_service_edit(page, account_id, label)
+            page.run_js(_SCROLL_SERVICE_SECTION_JS)
+            time.sleep(0.25)
+            if _is_shipping_template_visible(page):
+                break
+            if attempt < 2:
+                print(
+                    f"[{account_id}] [{label}] 展开服务与承诺重试 ({attempt + 2}/3)...",
+                    flush=True,
+                )
+
+        if not _is_shipping_template_visible(page):
+            tab_result = _click_service_tab(page, account_id, label)
+            page.run_js(_SCROLL_SERVICE_SECTION_JS)
+            time.sleep(0.3)
+            for _ in range(2):
+                if _is_shipping_template_visible(page):
+                    break
+                _click_expand_service_edit(page, account_id, label)
+                time.sleep(0.5)
+            if _is_shipping_template_visible(page):
+                return {
+                    "ok": True,
+                    "method": "tab_then_expand",
+                    "tab": tab_result.get("method"),
+                }
+
+        if _is_shipping_template_visible(page):
+            print(f"[{account_id}] [{label}] 已展开服务与承诺，运费模板可见", flush=True)
+            return {"ok": True, "method": expand_result.get("method", "expanded")}
+
+        print(
+            f"[{account_id}] [{label}] 运费模板区域仍不可见（展开修改可能未生效）",
+            flush=True,
+        )
+        return {"ok": False, "reason": "shipping_block_not_visible", "expand": expand_result}
     except Exception as exc:
-        print(f"[{account_id}] [{label}] 展开服务与承诺异常：{_safe_exc(exc)}", flush=True)
+        print(f"[{account_id}] [{label}] 准备服务与承诺区域异常：{_safe_exc(exc)}", flush=True)
         return {"ok": False, "reason": "exception", "error": _safe_exc(exc)}
+
+
+def _select_shipping_template_playwright(page: DpPage, template_name: str) -> dict[str, Any]:
+    raw = page._page
+    page.run_js(_SCROLL_SERVICE_SECTION_JS)
+    time.sleep(0.2)
+    raw.evaluate("window.scrollTo(0, document.documentElement.scrollHeight)")
+    time.sleep(0.2)
+
+    block = raw.locator("div").filter(has_text="运费模板").filter(has_text="其他模板").last
+    block.get_by_text("其他模板", exact=True).click(timeout=5000, force=True)
+    time.sleep(0.5)
+    header = block.locator('[data-testid="beast-core-select-header"]').first
+    if header.count() == 0:
+        header = raw.locator('[data-testid="beast-core-select-header"]').last
+    header.click(timeout=5000, force=True)
+    time.sleep(0.4)
+    portal = raw.locator('[data-testid="beast-core-portal-main"]')
+    option = portal.get_by_text(template_name, exact=True).first
+    option.click(timeout=5000, force=True)
+    time.sleep(0.3)
+    state = _read_shipping_template_state(page)
+    if _shipping_template_matches(state, template_name):
+        return {"ok": True, "method": "playwright", "template": template_name, "state": state}
+    return {"ok": False, "method": "playwright", "reason": "verify_failed", "state": state}
 
 
 def _select_shipping_template(
@@ -392,41 +713,43 @@ def _select_shipping_template(
 ) -> dict[str, Any]:
     template_name = str(template_name or DEFAULT_SHIPPING_TEMPLATE).strip() or DEFAULT_SHIPPING_TEMPLATE
     try:
-        time.sleep(0.4)
+        state = _read_shipping_template_state(page)
+        if _shipping_template_matches(state, template_name) and state.get("otherChecked"):
+            print(
+                f"[{account_id}] [{label}] 运费模板已是「{template_name}」",
+                flush=True,
+            )
+            return {"ok": True, "method": "already_set", "template": template_name, "state": state}
+
+        time.sleep(0.3)
         raw = page.run_js(_SELECT_SHIPPING_TEMPLATE_JS, template_name)
         result = _normalize_js_result(raw)
-        if result.get("ok"):
+        time.sleep(0.3)
+        state = _read_shipping_template_state(page)
+        if result.get("ok") and _shipping_template_matches(state, template_name):
             print(
                 f"[{account_id}] [{label}] 运费模板已选「其他模板」→「{template_name}」",
                 flush=True,
             )
-            return result
-        other = page.ele("text:其他模板", timeout=2)
-        if other:
-            other.click(by_js=True)
-            time.sleep(0.6)
-            option = page.ele(f"text:{template_name}", timeout=2)
-            if option:
-                option.click(by_js=True)
+            return {**result, "state": state}
+
+        try:
+            pw_result = _select_shipping_template_playwright(page, template_name)
+            if pw_result.get("ok"):
                 print(
-                    f"[{account_id}] [{label}] 运费模板已选「其他模板」→「{template_name}」（元素点击）",
+                    f"[{account_id}] [{label}] 运费模板已选「其他模板」→「{template_name}」（Playwright）",
                     flush=True,
                 )
-                return {"ok": True, "method": "ele", "template": template_name}
-            try:
-                page._page.get_by_text(template_name, exact=False).last.click(timeout=2000)
-                print(
-                    f"[{account_id}] [{label}] 运费模板已选「{template_name}」（Playwright 点击）",
-                    flush=True,
-                )
-                return {"ok": True, "method": "playwright", "template": template_name}
-            except Exception:
-                pass
+                return pw_result
+        except Exception as exc:
+            result = {**result, "playwright_error": _safe_exc(exc)}
+
         print(
-            f"[{account_id}] [{label}] 运费模板设置失败：{result.get('step', result.get('reason', 'unknown'))}",
+            f"[{account_id}] [{label}] 运费模板设置失败："
+            f"{result.get('step', result.get('reason', 'unknown'))}，当前={state.get('current') or '<空>'}",
             flush=True,
         )
-        return result
+        return {**result, "state": state}
     except Exception as exc:
         print(f"[{account_id}] [{label}] 运费模板设置异常：{_safe_exc(exc)}", flush=True)
         return {"ok": False, "reason": "exception", "error": _safe_exc(exc)}
@@ -440,7 +763,7 @@ def apply_listing_publish_settings(
     bulk_discount: str = DEFAULT_BULK_DISCOUNT,
     shipping_template: str = DEFAULT_SHIPPING_TEMPLATE,
 ) -> dict[str, Any]:
-    """提交前设置满件折扣与运费模板；单步失败不阻断上架，仅记日志。"""
+    """提交前设置满件折扣与运费模板；未完成则阻断提交。"""
     summary: dict[str, Any] = {
         "bulk_discount": _set_bulk_discount(
             page,
@@ -448,20 +771,22 @@ def apply_listing_publish_settings(
             label,
             discount=str(bulk_discount or DEFAULT_BULK_DISCOUNT).strip() or DEFAULT_BULK_DISCOUNT,
         ),
-        "expand_service": _expand_service_section(page, account_id, label),
+        "service_section": _ensure_service_section_ready(page, account_id, label),
     }
-    if summary["expand_service"].get("ok"):
+    template_name = (
+        str(shipping_template or DEFAULT_SHIPPING_TEMPLATE).strip() or DEFAULT_SHIPPING_TEMPLATE
+    )
+    if summary["service_section"].get("ok") or _is_shipping_template_visible(page):
         summary["shipping_template"] = _select_shipping_template(
             page,
             account_id,
             label,
-            template_name=str(shipping_template or DEFAULT_SHIPPING_TEMPLATE).strip()
-            or DEFAULT_SHIPPING_TEMPLATE,
+            template_name=template_name,
         )
     else:
         summary["shipping_template"] = {
             "ok": False,
-            "reason": "service_section_not_expanded",
+            "reason": "shipping_section_not_ready",
         }
     summary["ok"] = bool(
         summary["bulk_discount"].get("ok")

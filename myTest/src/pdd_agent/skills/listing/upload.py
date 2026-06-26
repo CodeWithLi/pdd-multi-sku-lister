@@ -1355,9 +1355,35 @@ def upload_one_listing(
 
     publish_settings = apply_listing_publish_settings(page, account_id, label)
     if not publish_settings.get("ok"):
+        shipping = publish_settings.get("shipping_template") or {}
+        bulk = publish_settings.get("bulk_discount") or {}
+        detail_parts = []
+        if not bulk.get("ok"):
+            detail_parts.append(f"满件折扣={bulk.get('reason') or bulk.get('after') or 'failed'}")
+        if not shipping.get("ok"):
+            detail_parts.append(
+                f"运费模板={shipping.get('reason') or shipping.get('step') or 'failed'}"
+            )
+        detail = "；".join(detail_parts) or str(publish_settings)
         print(
-            f"[{account_id}] [{label}] 提交前定价/运费设置未全部完成，仍继续提交：{publish_settings}",
+            f"[{account_id}] [{label}] 提交前设置未完成，跳过提交：{detail}",
             flush=True,
+        )
+        _clear_beforeunload(page)
+        return _finish_listing(
+            run_id,
+            account_id,
+            unit,
+            status="retryable",
+            reason="publish_settings_incomplete",
+            error=f"提交前设置未完成：{detail}",
+            title=listing_info.get("title", ""),
+            retryable=True,
+            legacy_status="skipped",
+            extra={"publish_settings": publish_settings},
+            phase="upload",
+            step="publish_settings",
+            page_url=page_url,
         )
 
     ok, submitted_at, blocked_reason = _click_submit(page, account_id, label)
