@@ -42,6 +42,7 @@ class PddFailureCycleRelistTriggerIn(BaseModel):
     record_id: str = Field(min_length=1)
     merchant_code: str = ""
     account_name: str = ""
+    account_id: str = ""
     report_platform: str = ""
 
 
@@ -63,6 +64,7 @@ class PddFailureCycleRelistClaimIn(BaseModel):
     record_id: str = Field(min_length=1)
     merchant_code: str = ""
     account_name: str = ""
+    account_id: str = ""
 
 
 class PddFailureCycleRelistReleaseIn(BaseModel):
@@ -87,6 +89,7 @@ class PddFailureCycleRelistCandidateOut(BaseModel):
     record_id: str
     merchant_code: str = ""
     account_name: str = ""
+    account_id: str = ""
     report_platform: str = ""
     record_type: str = ""
     failure_reason: str = ""

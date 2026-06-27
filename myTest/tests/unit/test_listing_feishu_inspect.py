@@ -37,10 +37,8 @@ def test_inspect_listing_feishu_prices(monkeypatch):
             snapshot.records_by_code[code] = {
                 "商品编码": code,
                 "拼多多定价": 8.3,
-                "拼多多控价": 7.45,
-                "PDD控价下限价格": 7.45,
-                "PDD控价上限价格": 9.3,
-                "综合零售成本": 2.0,
+                "PDD控价": 7.45,
+                "零售综合成本": 2.0,
             }
         from pdd_agent.integrations.feishu import listing_feishu_snapshot as mod
 
@@ -63,10 +61,8 @@ def test_inspect_listing_feishu_prices(monkeypatch):
                 "fields": {
                     "商品编码": kwargs["query_code"],
                     "拼多多定价": 8.3,
-                    "拼多多控价": 7.45,
-                    "PDD控价下限价格": 7.45,
-                    "PDD控价上限价格": 9.3,
-                    "综合零售成本": 2.0,
+                    "PDD控价": 7.45,
+                    "零售综合成本": 2.0,
                 },
             }
         ],
@@ -77,7 +73,7 @@ def test_inspect_listing_feishu_prices(monkeypatch):
     )
     monkeypatch.setattr(
         "pdd_agent.integrations.feishu.listing_feishu_inspect._resolve_price_range_field_names",
-        lambda *args, **kwargs: ("商品编码", "PDD控价下限价格", "PDD控价上限价格", "综合零售成本"),
+        lambda *args, **kwargs: ("商品编码", "零售综合成本"),
     )
     monkeypatch.setattr(
         "pdd_agent.integrations.feishu.bitable.resolve_table_field_name",
@@ -122,7 +118,7 @@ def test_inspect_listing_feishu_prices(monkeypatch):
 
     result = inspect_listing_feishu_prices(["BD025A面包小狗笔袋"], force_refresh=False, config=cfg)
     assert result["codes"] == ["BD025A面包小狗笔袋"]
-    assert result["items"][0]["parsed"]["PDD控价上限价格"] == "9.3"
-    assert result["items"][0]["parsed"]["综合零售成本"] == "2"
+    assert result["items"][0]["parsed"]["PDD控价"] == "7.45"
+    assert result["items"][0]["parsed"]["零售综合成本"] == "2"
     assert result["items"][0]["catalog_retail_cost"] == "2"
     assert result["items"][0]["feishu_row_count"] == 1

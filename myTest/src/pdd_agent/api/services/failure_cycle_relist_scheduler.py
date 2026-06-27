@@ -217,6 +217,8 @@ class FailureCycleRelistWatchScheduler:
             for item in new_items:
                 rid = str(item.get("record_id") or "")
                 merchant_code = str(item.get("merchant_code") or "")
+                account_name = str(item.get("account_name") or "")
+                account_id = str(item.get("account_id") or "")
                 if auto_process:
                     outcome = process_failure_cycle_relist_candidate(
                         item,
@@ -226,12 +228,14 @@ class FailureCycleRelistWatchScheduler:
                     pipeline_triggers.append(outcome)
                     if outcome.get("claim"):
                         claims.append(dict(outcome["claim"]))
+                    resolved_account = str(outcome.get("account_id") or account_id or "").strip()
+                    store_hint = account_name or resolved_account or "未知店铺"
                     if outcome.get("ok") and outcome.get("pipeline_id"):
                         self._record_action(
                             record_id=rid,
                             merchant_code=merchant_code,
                             status="started",
-                            message="已占用并启动整合链路",
+                            message=f"已占用并启动整合链路（店铺：{store_hint}）",
                             pipeline_id=str(outcome.get("pipeline_id") or ""),
                         )
                     elif outcome.get("skipped"):
@@ -266,6 +270,7 @@ class FailureCycleRelistWatchScheduler:
                         str(item.get("record_id") or ""),
                         merchant_code=str(item.get("merchant_code") or ""),
                         account_name=str(item.get("account_name") or ""),
+                        account_id=str(item.get("account_id") or ""),
                         watch=watch,
                     )
                     claim_dict = claim_result.to_dict()

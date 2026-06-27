@@ -31,6 +31,54 @@ def resolve_account_display_name(account_id: str) -> str:
     return aid
 
 
+def _account_id_exists(account_id: str) -> bool:
+    aid = str(account_id or "").strip()
+    if not aid:
+        return False
+    try:
+        settings = load_yaml_settings()
+        for acc in settings.accounts:
+            if not acc.enabled:
+                continue
+            if str(acc.account_id or "").strip() == aid:
+                return True
+    except Exception:
+        pass
+    return False
+
+
+def resolve_cycle_relist_account_id(
+    *,
+    account_name: str = "",
+    account_id: str = "",
+) -> tuple[str, str]:
+    """
+    失败日志循环上架：按飞书「店铺」/ account_id 列解析目标店铺。
+
+    返回 (account_id, error_message)。成功时 error 为空。
+    """
+    hinted = str(account_id or "").strip()
+    if hinted:
+        if _account_id_exists(hinted):
+            return hinted, ""
+        resolved = resolve_account_id_by_display_name(hinted)
+        if resolved:
+            return resolved, ""
+
+    name = str(account_name or "").strip()
+    if name:
+        if _account_id_exists(name):
+            return name, ""
+        resolved = resolve_account_id_by_display_name(name)
+        if resolved:
+            return resolved, ""
+        return "", f"无法识别店铺「{name}」，请确认飞书「店铺」列与系统店铺名称一致"
+
+    if hinted:
+        return "", f"无法识别店铺 ID「{hinted}」，请检查系统店铺配置"
+    return "", "飞书失败日志缺少店铺信息，无法按记录重跑对应店铺"
+
+
 def resolve_account_id_by_display_name(display_name: str) -> str:
     """按飞书「店铺名称」反查 account_id（展示名 / 登录名 / account_id）。"""
     name = str(display_name or "").strip()

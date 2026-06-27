@@ -1,7 +1,7 @@
-"""拼多多比价定价表 — pdd.xls 控价区间迁移与运行时读取。
+"""拼多多比价定价表 — 飞书运行时读取与 Excel 迁移（遗留）。
 
-Excel 列「下限价格」「上限价格」→ 飞书「PDD控价下限价格」「PDD控价上限价格」。
-运行时优先读飞书；字段缺失时返回「飞书缺少数据」供活动日志写入，不抛异常。
+飞书表当前使用：商品编码、零售综合成本、PDD控价、拼多多定价。
+限时限量购仅校验页面活动价 > 零售综合成本；不再读取 PDD控价下限/上限价格列。
 """
 
 from __future__ import annotations
@@ -46,15 +46,18 @@ logger = get_logger(__name__)
 FEISHU_DATA_MISSING_MESSAGE = "飞书缺少数据"
 FEISHU_PRICE_NOT_FOUND_MESSAGE = "飞书没找到"
 
-MIN_PRICE_FIELD_CANDIDATES = (
-    "PDD控价下限价格",
-    "PDD定价下限价格",
-    "下限价格",
+MIN_PRICE_FIELD_CANDIDATES: tuple[str, ...] = ()
+MAX_PRICE_FIELD_CANDIDATES: tuple[str, ...] = ()
+RETAIL_COST_FIELD_CANDIDATES = (
+    "零售综合成本",
+    "综合零售成本",
 )
-MAX_PRICE_FIELD_CANDIDATES = (
-    "PDD控价上限价格",
-    "PDD定价上限价格",
-    "上限价格",
+CONTROL_PRICE_FIELD_CANDIDATES = (
+    "PDD控价",
+    "拼多多控价",
+)
+PRICING_FIELD_CANDIDATES = (
+    "拼多多定价",
 )
 
 _CACHE: dict[str, Any] = {
@@ -105,24 +108,16 @@ def _resolve_price_range_field_names(
     app_token: str,
     table_id: str,
     names: Any,
-) -> tuple[str, str, str, str]:
+) -> tuple[str, str]:
     code_field = resolve_table_field_name(api, app_token, table_id, names.merchant_code)
-    min_field = resolve_table_field_name_from_candidates(
+    retail_cost_field = resolve_table_field_name_from_candidates(
         api,
         app_token,
         table_id,
-        MIN_PRICE_FIELD_CANDIDATES,
-        names.min_price,
+        RETAIL_COST_FIELD_CANDIDATES,
+        names.retail_cost,
     )
-    max_field = resolve_table_field_name_from_candidates(
-        api,
-        app_token,
-        table_id,
-        MAX_PRICE_FIELD_CANDIDATES,
-        names.max_price,
-    )
-    retail_cost_field = resolve_table_field_name(api, app_token, table_id, names.retail_cost)
-    return code_field, min_field, max_field, retail_cost_field
+    return code_field, retail_cost_field
 
 
 def _to_float(value: Any, default: float = 0.0) -> float:
@@ -211,8 +206,7 @@ def _field_number(fields: dict[str, Any], field_name: str) -> float | None:
 def _row_price_fields_score(
     fields: dict[str, Any],
     *,
-    min_field: str,
-    max_field: str,
+    retail_cost_field: str = "",
     pricing_field: str = "",
     control_field: str = "",
 ) -> int:
@@ -224,11 +218,9 @@ def _row_price_fields_score(
     control_val = _field_number(fields, control_field) if control_field else None
     if control_val is not None and control_val > 0:
         score += 10
-    if _field_number(fields, min_field) is not None:
-        score += 1
-    max_val = _field_number(fields, max_field)
-    if max_val is not None and max_val > 0:
-        score += 4
+    retail_val = _field_number(fields, retail_cost_field) if retail_cost_field else None
+    if retail_val is not None:
+        score += 5
     return score
 
 
@@ -375,8 +367,6 @@ def _field_defs_for_price_compare(config: FeishuConfig) -> list[dict[str, Any]]:
     names = config.pdd_price_compare.field_names
     return [
         {"field_name": names.merchant_code, "type": FIELD_TEXT},
-        {"field_name": names.min_price, "type": FIELD_NUMBER},
-        {"field_name": names.max_price, "type": FIELD_NUMBER},
         {"field_name": names.retail_cost, "type": FIELD_NUMBER},
         {"field_name": names.pdd_pricing, "type": FIELD_NUMBER},
         {"field_name": names.pdd_control_price, "type": FIELD_NUMBER},
@@ -457,13 +447,9 @@ def _build_catalog_from_feishu_records(
     records: list[dict[str, Any]],
     *,
     code_field: str,
-    min_field: str,
-    max_field: str,
     retail_cost_field: str = "",
 ) -> PriceRangeCatalog:
     ranges: dict[str, CampaignPriceRange] = {}
-    incomplete_min: set[str] = set()
-    incomplete_max: set[str] = set()
     incomplete_retail: set[str] = set()
     record_codes: set[str] = set()
     require_retail_cost = bool(str(retail_cost_field or "").strip())
@@ -477,48 +463,32 @@ def _build_catalog_from_feishu_records(
         for key in keys:
             record_codes.add(key)
         norm_code = normalize_price_code(raw_code) or keys[0]
-        min_price = _field_number(fields, min_field)
-        max_price = _field_number(fields, max_field)
         retail_cost = _field_number(fields, retail_cost_field) if require_retail_cost else None
-        min_bad = min_price is None
-        max_bad = max_price is None or max_price <= 0
         retail_bad = require_retail_cost and retail_cost is None
 
-        if min_bad:
-            for key in price_rule_candidates(raw_code):
-                if key not in ranges:
-                    incomplete_min.add(key)
-        if max_bad:
-            for key in price_rule_candidates(raw_code):
-                if key not in ranges:
-                    incomplete_max.add(key)
         if retail_bad:
             for key in price_rule_candidates(raw_code):
                 if key not in ranges:
                     incomplete_retail.add(key)
-        if min_bad or retail_bad:
             continue
 
         rule = CampaignPriceRange(
             code=norm_code,
-            min_price=float(min_price),
-            max_price=float(max_price) if not max_bad else 0.0,
+            min_price=0.0,
+            max_price=0.0,
             retail_cost=float(retail_cost) if retail_cost is not None else None,
         )
         for key in price_rule_candidates(raw_code):
             ranges[key] = rule
-            incomplete_min.discard(key)
-            incomplete_max.discard(key)
             incomplete_retail.discard(key)
 
-    incomplete = incomplete_min | incomplete_max | incomplete_retail
     return PriceRangeCatalog(
         ranges=ranges,
         source="feishu",
-        incomplete_min_codes=frozenset(incomplete_min),
-        incomplete_max_codes=frozenset(incomplete_max),
+        incomplete_min_codes=frozenset(),
+        incomplete_max_codes=frozenset(),
         incomplete_retail_cost_codes=frozenset(incomplete_retail),
-        incomplete_codes=frozenset(incomplete),
+        incomplete_codes=frozenset(incomplete_retail),
         feishu_record_codes=frozenset(record_codes),
     )
 
@@ -592,7 +562,24 @@ def _load_code_price_catalog_from_feishu(
 
     names = compare_cfg.field_names
     code_field = resolve_table_field_name(api, app_token, table_id, names.merchant_code)
-    price_field = resolve_table_field_name(api, app_token, table_id, price_field_name)
+    if price_field_name == names.pdd_control_price:
+        price_field = resolve_table_field_name_from_candidates(
+            api,
+            app_token,
+            table_id,
+            CONTROL_PRICE_FIELD_CANDIDATES,
+            price_field_name,
+        )
+    elif price_field_name == names.pdd_pricing:
+        price_field = resolve_table_field_name_from_candidates(
+            api,
+            app_token,
+            table_id,
+            PRICING_FIELD_CANDIDATES,
+            price_field_name,
+        )
+    else:
+        price_field = resolve_table_field_name(api, app_token, table_id, price_field_name)
     records = list_all_records(api, app_token, table_id)
     return _build_code_price_catalog_from_feishu_records(
         records,
@@ -697,7 +684,7 @@ def load_price_ranges_from_feishu(
         return PriceRangeCatalog(source="empty")
 
     names = compare_cfg.field_names
-    code_field, min_field, max_field, retail_cost_field = _resolve_price_range_field_names(
+    code_field, retail_cost_field = _resolve_price_range_field_names(
         api, app_token, table_id, names
     )
 
@@ -705,8 +692,6 @@ def load_price_ranges_from_feishu(
     return _build_catalog_from_feishu_records(
         records,
         code_field=code_field,
-        min_field=min_field,
-        max_field=max_field,
         retail_cost_field=retail_cost_field,
     )
 
@@ -873,7 +858,7 @@ def load_control_catalog(
 
 
 def is_feishu_price_data_missing(catalog: PriceRangeCatalog, candidates: list[str]) -> bool:
-    """候选编码在飞书有行但 PDD 控价上下限不完整；飞书无行则不算缺失。"""
+    """候选编码在飞书有行但零售综合成本缺失；飞书无行则不算缺失。"""
     return resolve_feishu_range_aspect(catalog, candidates) is not None
 
 
@@ -881,7 +866,7 @@ def resolve_feishu_range_aspect(
     catalog: PriceRangeCatalog,
     candidates: list[str],
 ) -> str | None:
-    """返回 range_min_missing / range_max_missing；数据齐全或飞书无行则 None。"""
+    """返回 range_retail_cost_missing；数据齐全或飞书无行则 None。"""
     from pdd_agent.skills.campaign.price_rules import find_pdd_price_range
 
     if catalog.source != "feishu":
@@ -901,12 +886,8 @@ def resolve_feishu_range_aspect(
     if not _catalog_keys_match(catalog.feishu_record_codes, normalized_candidates):
         return None
 
-    if _catalog_keys_match(catalog.incomplete_min_codes, normalized_candidates):
-        return "range_min_missing"
     if _catalog_keys_match(catalog.incomplete_retail_cost_codes, normalized_candidates):
         return "range_retail_cost_missing"
-    if _catalog_keys_match(catalog.incomplete_max_codes, normalized_candidates):
-        return "range_max_missing"
     return None
 
 
@@ -948,7 +929,7 @@ def migrate_pdd_xls_to_feishu(
         }
 
     names = compare_cfg.field_names
-    code_field, min_field, max_field, _retail_cost_field = _resolve_price_range_field_names(
+    code_field, _retail_cost_field = _resolve_price_range_field_names(
         api, app_token, table_id, names
     )
 
@@ -984,14 +965,29 @@ def migrate_pdd_xls_to_feishu(
         if excel_row is None:
             continue
 
-        if excel_row.max_price <= 0:
+        patch: dict[str, Any] = {}
+        legacy_min_field = resolve_table_field_name_from_candidates(
+            api,
+            app_token,
+            table_id,
+            ("PDD控价下限价格", "PDD定价下限价格", "下限价格", "PDD控价"),
+            "",
+        )
+        legacy_max_field = resolve_table_field_name_from_candidates(
+            api,
+            app_token,
+            table_id,
+            ("PDD控价上限价格", "PDD定价上限价格", "上限价格", "拼多多定价"),
+            "",
+        )
+        if legacy_min_field:
+            patch[legacy_min_field] = excel_row.min_price
+        if legacy_max_field and excel_row.max_price > 0:
+            patch[legacy_max_field] = excel_row.max_price
+        if not patch:
             feishu_missing_field_codes.append(raw_code)
             continue
 
-        patch = {
-            names.min_price: excel_row.min_price,
-            names.max_price: excel_row.max_price,
-        }
         mapped = map_fields_to_table_names(api, app_token, table_id, patch)
         updates.append({"record_id": record_id, "fields": mapped})
         updated_codes.append(raw_code)

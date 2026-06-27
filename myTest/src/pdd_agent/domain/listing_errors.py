@@ -127,9 +127,10 @@ class ListingErrors:
     FEISHU_BRIEF_ASPECT: dict[str, str] = {
         "pricing_missing": "定价为空",
         "control_missing": "控价为空",
-        "range_missing": "控价下限或上限为空",
-        "range_min_missing": "控价下限为空",
-        "range_max_missing": "控价上限为空",
+        "range_missing": "零售综合成本为空",
+        "range_retail_cost_missing": "零售综合成本为空",
+        "range_min_missing": "零售综合成本为空",
+        "range_max_missing": "零售综合成本为空",
         "color_spec_missing": "颜色规格为空",
         "feishu_row_not_found": "飞书无此行",
         "product_row_missing": "飞书无此行",
@@ -216,9 +217,10 @@ class ListingErrors:
     FEISHU_CATALOG_ASPECT: dict[str, tuple[str, str]] = {
         "pricing_missing": (ListingErrorCode.FEISHU_PRICING_MISSING, "拼多多定价没数据"),
         "control_missing": (ListingErrorCode.FEISHU_CONTROL_MISSING, "拼多多控价没数据"),
-        "range_missing": (ListingErrorCode.FEISHU_PRICE_RANGE_MISSING, "PDD控价下限或上限没数据"),
-        "range_min_missing": (ListingErrorCode.FEISHU_PRICE_RANGE_MISSING, "PDD控价下限没数据"),
-        "range_max_missing": (ListingErrorCode.FEISHU_PRICE_RANGE_MISSING, "PDD控价上限没数据"),
+        "range_missing": (ListingErrorCode.FEISHU_PRICE_RANGE_MISSING, "零售综合成本没数据"),
+        "range_retail_cost_missing": (ListingErrorCode.FEISHU_PRICE_RANGE_MISSING, "零售综合成本没数据"),
+        "range_min_missing": (ListingErrorCode.FEISHU_PRICE_RANGE_MISSING, "零售综合成本没数据"),
+        "range_max_missing": (ListingErrorCode.FEISHU_PRICE_RANGE_MISSING, "零售综合成本没数据"),
         "color_spec_missing": (ListingErrorCode.FEISHU_COLOR_SPEC_MISSING, "颜色规格没数据"),
         "feishu_row_not_found": (ListingErrorCode.FEISHU_ROW_NOT_FOUND, "飞书无此行"),
         "product_row_missing": (ListingErrorCode.FEISHU_ROW_NOT_FOUND, "飞书无此行"),
@@ -229,6 +231,7 @@ class ListingErrors:
         "pricing_missing": ListingErrorCode.FEISHU_SUBCODE_PRICING_MISSING,
         "control_missing": ListingErrorCode.FEISHU_SUBCODE_CONTROL_MISSING,
         "range_missing": ListingErrorCode.FEISHU_SUBCODE_RANGE_MISSING,
+        "range_retail_cost_missing": ListingErrorCode.FEISHU_SUBCODE_RANGE_MISSING,
         "range_min_missing": ListingErrorCode.FEISHU_SUBCODE_RANGE_MISSING,
         "range_max_missing": ListingErrorCode.FEISHU_SUBCODE_RANGE_MISSING,
         "color_spec_missing": ListingErrorCode.FEISHU_SUBCODE_COLOR_SPEC_MISSING,
@@ -241,9 +244,10 @@ class ListingErrors:
     FEISHU_CATALOG_ASPECT_SHORT: dict[str, str] = {
         "pricing_missing": "拼多多定价没数据",
         "control_missing": "拼多多控价没数据",
-        "range_missing": "PDD控价下限或上限没数据",
-        "range_min_missing": "PDD控价下限没数据",
-        "range_max_missing": "PDD控价上限没数据",
+        "range_missing": "零售综合成本没数据",
+        "range_retail_cost_missing": "零售综合成本没数据",
+        "range_min_missing": "零售综合成本没数据",
+        "range_max_missing": "零售综合成本没数据",
         "color_spec_missing": "颜色规格没数据",
         "feishu_row_not_found": "飞书无此行",
         "product_row_missing": "飞书无此行",
@@ -424,6 +428,94 @@ class ListingErrors:
         return raw
 
     @classmethod
+    def _catalog_warning_to_brief(cls, text: str) -> str:
+        """从商品表/定价类 warning 提取「编码+具体问题」简述。"""
+        clean = cls.compact_system_diagnostic(text)
+        if not clean:
+            return ""
+        patterns: list[tuple[str, str]] = [
+            (r"商品表无子编码\[([^\]]+)\]", "feishu_row_not_found"),
+            (r"商品表无编码\[([^\]]+)\].*定价无效", "pricing_missing"),
+            (r"商品表无编码\[([^\]]+)\].*无法定价", "pricing_missing"),
+            (r"商品表无编码\[([^\]]+)\]", "feishu_row_not_found"),
+            (r"商品表无款式编码\[([^\]]+)\]", "feishu_row_not_found"),
+        ]
+        for pattern, aspect in patterns:
+            matched = re.search(pattern, clean)
+            if not matched:
+                continue
+            raw_codes = str(matched.group(1) or "").strip()
+            code = raw_codes.split("、")[0].strip().upper()
+            if code:
+                return cls.feishu_catalog_line(code, aspect)
+        return ""
+
+    @classmethod
+    def _unit_warnings_for_label(cls, preflight: Any, listing_label: str) -> list[str]:
+        label = str(listing_label or "").strip()
+        if not label:
+            return []
+        units: list[Any] = []
+        if isinstance(preflight, dict):
+            units = list(preflight.get("units") or [])
+        elif preflight is not None:
+            units = list(getattr(preflight, "units", None) or [])
+        for unit in units:
+            unit_label = str(
+                getattr(unit, "listing_label", None)
+                or (unit.get("listing_label") if isinstance(unit, dict) else "")
+                or ""
+            ).strip()
+            if unit_label != label:
+                continue
+            warnings = getattr(unit, "warnings", None) or (
+                unit.get("warnings") if isinstance(unit, dict) else []
+            ) or []
+            return [str(item or "") for item in warnings if str(item or "").strip()]
+        return []
+
+    @classmethod
+    def infer_no_sku_failure_brief(
+        cls,
+        *,
+        preflight: Any = None,
+        listing_label: str = "",
+        merchant_code: str = "",
+        fallback_message: str = "",
+    ) -> str:
+        """无有效 SKU 时生成飞书失败表一行说明（优先指向组合图/子编码）。"""
+        merchant = str(merchant_code or "").strip().upper()
+        if not merchant and listing_label:
+            merchant = str(listing_label.split("/")[0] or "").strip().upper()
+
+        for warning in cls._unit_warnings_for_label(preflight, listing_label):
+            brief = cls._catalog_warning_to_brief(warning)
+            if brief:
+                return brief
+
+        for source in (fallback_message, listing_label):
+            brief = cls._catalog_warning_to_brief(str(source or ""))
+            if brief:
+                return brief
+
+        if merchant:
+            return cls.sanitize_feishu_failure_reason(f"{merchant}飞书无数据或名称未匹配")
+        return cls.sanitize_feishu_failure_reason("飞书无商品数据或名称未匹配")
+
+    @classmethod
+    def build_preflight_no_skus_brief(
+        cls,
+        preflight: Any,
+        listing_label: str,
+        merchant_code: str = "",
+    ) -> str:
+        return cls.infer_no_sku_failure_brief(
+            preflight=preflight,
+            listing_label=listing_label,
+            merchant_code=merchant_code,
+        )
+
+    @classmethod
     def build_preflight_no_skus_system_reason(
         cls,
         preflight: Any,
@@ -512,12 +604,25 @@ class ListingErrors:
             )
 
         if details:
-            header = f"{label}："
+            brief = cls.infer_no_sku_failure_brief(
+                preflight=preflight,
+                listing_label=label,
+                merchant_code=label.split("/")[0].strip() if label else "",
+            )
+            header = f"{brief}：" if brief else f"{label}："
             body = "；".join(details)
             return cls.sanitize_feishu_failure_reason(f"{header}{body}")[:2000]
+        brief = cls.infer_no_sku_failure_brief(
+            preflight=preflight,
+            listing_label=label,
+            merchant_code=label.split("/")[0].strip() if label else "",
+            fallback_message=fallback,
+        )
+        if brief:
+            return cls.sanitize_feishu_failure_reason(brief)[:2000]
         if fallback and fallback != label:
             return cls.sanitize_feishu_failure_reason(f"{label}：{fallback}")[:2000]
-        return cls.sanitize_feishu_failure_reason(f"{label}：未解析到任何有效 SKU，且无进一步诊断信息")[:2000]
+        return cls.sanitize_feishu_failure_reason(f"{label}：飞书无商品数据或名称未匹配")[:2000]
 
     @classmethod
     def _aspect_text_to_brief(cls, aspect_text: str) -> str:
@@ -539,8 +644,6 @@ class ListingErrors:
 
         if is_sub:
             if aspect in ("feishu_row_not_found", "product_row_missing", "subcode_missing"):
-                if merchant and code_text:
-                    return cls.sanitize_feishu_failure_reason(f"{merchant}缺{code_text}")
                 if code_text:
                     return cls.sanitize_feishu_failure_reason(f"{code_text}飞书无此行")
                 return "飞书无此行"
@@ -589,8 +692,10 @@ class ListingErrors:
                 return cls.Msg.FEISHU_CAROUSEL_MISSING.format(code=code)
             if rc == ListingErrorCode.PREFLIGHT_NO_DETAIL and code:
                 return cls.Msg.FEISHU_DETAIL_MISSING.format(code=code)
-            if rc == ListingErrorCode.PREFLIGHT_NO_SKUS and code:
-                return f"{code}无有效SKU"
+            if rc == ListingErrorCode.PREFLIGHT_NO_SKUS:
+                return cls.infer_no_sku_failure_brief(
+                    merchant_code=code,
+                )
             if code and rc.startswith("feishu_"):
                 aspect = rc.replace("feishu_subcode_", "").replace("feishu_", "")
                 aspect_key = aspect.replace("_missing", "_missing")
@@ -616,6 +721,11 @@ class ListingErrors:
             return cls.feishu_label(rc) if rc else ""
 
         text = re.sub(r"^(失败|跳过)\s*[:：]\s*", "", text)
+
+        catalog_brief = cls._catalog_warning_to_brief(text)
+        if catalog_brief:
+            return catalog_brief
+
         path_msg = re.match(r"^([A-Z0-9]+)/[^:：]+[:：]\s*(.+)", text, flags=re.I)
         if path_msg:
             if not merchant_code:

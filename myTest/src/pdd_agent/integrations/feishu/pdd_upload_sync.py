@@ -539,6 +539,7 @@ def build_pdd_upload_failure_log_fields(
     config: FeishuConfig,
     merchant_code: str,
     account_name: str,
+    account_id: str = "",
     record_type: str,
     failure_reason: str,
     system_reason: str = "",
@@ -573,6 +574,9 @@ def build_pdd_upload_failure_log_fields(
         names.publish_end: _ms_timestamp(end_at),
         names.duration_seconds: round(float(duration), 2),
     }
+    account_id_field = str(getattr(names, "account_id", "") or "").strip()
+    if account_id_field:
+        fields[account_id_field] = str(account_id or "").strip()
     return fields
 
 
@@ -642,6 +646,7 @@ def push_pdd_upload_failure_log(
         config=cfg,
         merchant_code=code or "",
         account_name=store_name,
+        account_id=str(account_id or "").strip(),
         record_type=record_type_value,
         failure_reason=brief,
         system_reason=system_reason_text,

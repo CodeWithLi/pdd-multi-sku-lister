@@ -589,18 +589,6 @@ def diagnose_feishu_listing_catalog_issues(
                     aspects.append(control_aspect)
             if check_range and range_catalog is not None:
                 range_aspect = resolve_feishu_range_aspect(range_catalog, [code])
-                if range_aspect and raw_fields and snapshot is not None:
-                    from pdd_agent.integrations.feishu.pdd_price_compare_sync import _field_number
-
-                    compare_names = cfg.pdd_price_compare.field_names
-                    min_f = str(getattr(snapshot, "_min_field", "") or compare_names.min_price)
-                    max_f = str(getattr(snapshot, "_max_field", "") or compare_names.max_price)
-                    min_val = _field_number(raw_fields, min_f)
-                    max_val = _field_number(raw_fields, max_f)
-                    if range_aspect == "range_max_missing" and max_val is not None and max_val > 0:
-                        range_aspect = None
-                    elif range_aspect == "range_min_missing" and min_val is not None:
-                        range_aspect = None
                 if range_aspect:
                     full_range = load_price_range_catalog(config=cfg, client=client)
                     if not resolve_feishu_range_aspect(full_range, [code]):

@@ -81,6 +81,7 @@ class IntegratedPipelineBatchStartRequest(BaseModel):
     store_start_delay_min_seconds: int | None = Field(default=None, ge=0, le=3600)
     store_start_delay_max_seconds: int | None = Field(default=None, ge=0, le=3600)
     max_concurrent_stores: int | None = Field(default=None, ge=1, le=5)
+    store_sequential_enabled: bool = False
 
     @model_validator(mode="after")
     def validate_batch_items(self) -> "IntegratedPipelineBatchStartRequest":
@@ -178,6 +179,8 @@ class IntegratedPipelineBatchResponse(BaseModel):
     max_concurrent_stores: int
     store_start_delay_min_seconds: int
     store_start_delay_max_seconds: int
+    store_sequential_enabled: bool = False
+    pending_stores: int = 0
     pipelines: list[IntegratedPipelineBatchRunItem]
     message: str
 

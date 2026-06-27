@@ -1075,6 +1075,7 @@ def start_integrated_pipeline(
     listing_batch_interval_minutes: int = 30,
     listing_per_batch_limited_time_enabled: bool = False,
     listing_per_batch_campaign_enabled: bool = False,
+    extra_meta: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     account_id = str(account_id or "").strip()
     normalized_activity_ids = _normalize_pipeline_activity_ids(activity_id, activity_ids)
@@ -1131,6 +1132,8 @@ def start_integrated_pipeline(
     }
     if batch_id:
         meta["batch_id"] = batch_id
+    if extra_meta:
+        meta.update(dict(extra_meta))
     from pdd_agent.api.services.pipeline_per_batch_limited_time import per_batch_limited_time_meta_patch
 
     meta.update(
@@ -1348,8 +1351,14 @@ def start_integrated_pipeline_batch(
     listing_batch_interval_minutes: int = 30,
     listing_per_batch_limited_time_enabled: bool = False,
     listing_per_batch_campaign_enabled: bool = False,
+    store_sequential_enabled: bool = False,
 ) -> dict[str, Any]:
-    """批量创建整合链路；各条链路上架任务按启动间隔错开入队。"""
+    """批量创建整合链路；默认各店按启动间隔错开并行入队；串行模式下一家跑完再跑下一家。"""
+    from pdd_agent.api.services.pipeline_store_sequential import (
+        build_coordinator_sequential_meta,
+        build_store_sequential_common_params,
+    )
+
     normalized_activity_ids = _normalize_pipeline_activity_ids(activity_id, activity_ids)
     activity_id = normalized_activity_ids[0] if normalized_activity_ids else ""
     if not normalized_activity_ids:
@@ -1359,9 +1368,82 @@ def start_integrated_pipeline_batch(
 
     batch_id = _batch_id()
     delay_range = resolve_batch_delay(store_start_delay_min_seconds, store_start_delay_max_seconds)
-    max_concurrent = resolve_batch_concurrency(max_concurrent_stores)
+    max_concurrent = 1 if store_sequential_enabled else resolve_batch_concurrency(max_concurrent_stores)
     scheduled_at = datetime.now()
     pipelines: list[dict[str, Any]] = []
+
+    common_params = build_store_sequential_common_params(
+        activity_id=activity_id,
+        activity_ids=normalized_activity_ids,
+        category_keyword=category_keyword,
+        auto_promotion=auto_promotion,
+        auto_limited_time_setup=auto_limited_time_setup,
+        continue_after_limited_time_failure=continue_after_limited_time_failure,
+        continue_after_activity_failure=continue_after_activity_failure,
+        activity_delay_hours=activity_delay_hours,
+        demo_mode=demo_mode,
+        platform_listing_code=platform_listing_code,
+        slot_alignment_test=slot_alignment_test,
+        skip_listing=skip_listing,
+        listing_skip_selectors=listing_skip_selectors,
+        material_source=material_source,
+        relist_strategy=relist_strategy,
+        listing_throttle_enabled=listing_throttle_enabled,
+        listing_batch_set_count=listing_batch_set_count,
+        listing_batch_interval_minutes=listing_batch_interval_minutes,
+        listing_per_batch_limited_time_enabled=listing_per_batch_limited_time_enabled,
+        listing_per_batch_campaign_enabled=listing_per_batch_campaign_enabled,
+    )
+
+    if store_sequential_enabled:
+        if len(items) < 2:
+            raise ValueError("店铺串行模式至少需要选择 2 家店铺")
+        first_item = items[0]
+        pending_items = items[1:]
+        data = start_integrated_pipeline(
+            account_id=str(first_item.get("account_id") or "").strip(),
+            product_codes=list(first_item.get("product_codes") or []),
+            listing_scheduled_at=scheduled_at,
+            batch_id=batch_id,
+            extra_meta=build_coordinator_sequential_meta(
+                pending_items=pending_items,
+                common_params=common_params,
+                delay_min_seconds=delay_range[0],
+                delay_max_seconds=delay_range[1],
+                total_stores=len(items),
+                active_pipeline_id="",
+            ),
+            **common_params,
+        )
+        coordinator_id = str(data.get("pipeline_id") or "").strip()
+        if coordinator_id:
+            coordinator_row = get_integrated_pipeline(coordinator_id)
+            seq = dict((coordinator_row.meta or {}).get("store_sequential") or {})
+            seq["active_pipeline_id"] = coordinator_id
+            seq["started_pipeline_ids"] = [coordinator_id]
+            update_integrated_pipeline(coordinator_id, meta_patch={"store_sequential": seq})
+        pipelines.append(
+            {
+                "account_id": data["account_id"],
+                "pipeline_id": data["pipeline_id"],
+                "listing_run_id": data["listing_run_id"],
+                "listing_scheduled_at": scheduled_at,
+            }
+        )
+        return {
+            "batch_id": batch_id,
+            "total": len(items),
+            "max_concurrent_stores": max_concurrent,
+            "store_start_delay_min_seconds": delay_range[0],
+            "store_start_delay_max_seconds": delay_range[1],
+            "store_sequential_enabled": True,
+            "pending_stores": len(pending_items),
+            "pipelines": pipelines,
+            "message": (
+                f"batch integrated pipeline queued sequentially: {len(items)} stores, "
+                f"first store started, inter-store delay {delay_range[0]}-{delay_range[1]}s"
+            ),
+        }
 
     for index, item in enumerate(items):
         if index > 0 and delay_range[1] > 0:
@@ -1409,6 +1491,8 @@ def start_integrated_pipeline_batch(
         "max_concurrent_stores": max_concurrent,
         "store_start_delay_min_seconds": delay_range[0],
         "store_start_delay_max_seconds": delay_range[1],
+        "store_sequential_enabled": False,
+        "pending_stores": 0,
         "pipelines": pipelines,
         "message": (
             f"batch integrated pipeline queued: {len(pipelines)} pipelines, "
@@ -1480,6 +1564,15 @@ def on_queue_task_finished(
         error=error,
         result=result,
     )
+
+    refreshed = get_integrated_pipeline(pipeline_id)
+    if refreshed and refreshed.status in TERMINAL_PIPELINE_STATUSES:
+        try:
+            from pdd_agent.api.services.pipeline_store_sequential import maybe_advance_sequential_store
+
+            maybe_advance_sequential_store(refreshed)
+        except Exception:
+            logger.exception("advance sequential store failed pipeline_id=%s", pipeline_id)
 
 
 def _listing_failure_meta(result: dict[str, Any]) -> dict[str, Any]:
@@ -2175,4 +2268,11 @@ def cancel_integrated_pipeline(pipeline_id: str) -> dict[str, Any]:
         logger.warning("pipeline issue ingest failed pipeline_id=%s", pipeline_id, exc_info=True)
     logger.info("integrated pipeline canceled pipeline_id=%s canceled_runs=%s", pipeline_id, pending_run_ids)
     refreshed = get_integrated_pipeline(pipeline_id)
+    if refreshed:
+        try:
+            from pdd_agent.api.services.pipeline_store_sequential import maybe_advance_sequential_store
+
+            maybe_advance_sequential_store(refreshed)
+        except Exception:
+            logger.exception("advance sequential store after cancel failed pipeline_id=%s", pipeline_id)
     return pipeline_to_dict(refreshed or row)

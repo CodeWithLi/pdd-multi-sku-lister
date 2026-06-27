@@ -204,11 +204,9 @@ pdd_price_compare:
   cache_seconds: 300
   field_names:
     merchant_code: 商品编码
-    min_price: PDD控价下限价格
-    max_price: PDD控价上限价格
-    retail_cost: 综合零售成本
+    retail_cost: 零售综合成本
     pdd_pricing: 拼多多定价
-    pdd_control_price: 拼多多控价
+    pdd_control_price: PDD控价
 pipeline:
   excel_fallback_enabled: false
   platform_skip_dedupe_enabled: false

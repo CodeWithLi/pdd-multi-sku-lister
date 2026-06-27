@@ -46,8 +46,8 @@ def test_process_candidate_starts_pipeline(monkeypatch):
         lambda *args, **kwargs: claim,
     )
     monkeypatch.setattr(
-        "pdd_agent.integrations.feishu.pdd_failure_cycle_relist_trigger.resolve_account_id_by_display_name",
-        lambda name: "shop-1" if name == "兔兔潮玩屋" else "",
+        "pdd_agent.integrations.feishu.pdd_failure_cycle_relist_trigger.resolve_cycle_relist_account_id",
+        lambda **kwargs: ("shop-1", ""),
     )
     monkeypatch.setattr(
         "pdd_agent.integrations.feishu.pdd_failure_cycle_relist_trigger.start_integrated_pipeline",
@@ -97,8 +97,8 @@ def test_process_candidate_uses_cycle_relist_input_mode(monkeypatch):
         lambda *args, **kwargs: claim,
     )
     monkeypatch.setattr(
-        "pdd_agent.integrations.feishu.pdd_failure_cycle_relist_trigger.resolve_account_id_by_display_name",
-        lambda name: "shop-1",
+        "pdd_agent.integrations.feishu.pdd_failure_cycle_relist_trigger.resolve_cycle_relist_account_id",
+        lambda **kwargs: ("shop-1", ""),
     )
     monkeypatch.setattr(
         "pdd_agent.integrations.feishu.pdd_failure_cycle_relist_trigger.start_integrated_pipeline",

@@ -11,30 +11,25 @@ from pdd_agent.integrations.feishu.pdd_price_compare_sync import (
 def test_row_price_fields_score_prefers_pricing_over_control_range_only():
     incomplete = {
         "商品编码": "BD083A",
-        "PDD控价下限价格": 7.91,
-        "PDD控价上限价格": 9.40,
-        "拼多多控价": 7.91,
+        "PDD控价": 7.91,
     }
     complete = {
         "商品编码": "BD083A",
         "拼多多定价": 8.40,
-        "PDD控价下限价格": 7.91,
-        "PDD控价上限价格": 9.40,
-        "拼多多控价": 7.91,
+        "PDD控价": 7.91,
+        "零售综合成本": 2.0,
     }
     incomplete_score = _row_price_fields_score(
         incomplete,
-        min_field="PDD控价下限价格",
-        max_field="PDD控价上限价格",
+        retail_cost_field="零售综合成本",
         pricing_field="拼多多定价",
-        control_field="拼多多控价",
+        control_field="PDD控价",
     )
     complete_score = _row_price_fields_score(
         complete,
-        min_field="PDD控价下限价格",
-        max_field="PDD控价上限价格",
+        retail_cost_field="零售综合成本",
         pricing_field="拼多多定价",
-        control_field="拼多多控价",
+        control_field="PDD控价",
     )
     assert complete_score > incomplete_score
 
@@ -51,7 +46,7 @@ def test_build_code_price_catalog_keeps_price_when_later_incomplete_row_exists()
             {
                 "fields": {
                     "商品编码": "BD083A",
-                    "PDD控价上限价格": 9.40,
+                    "PDD控价": 9.40,
                 }
             },
         ],

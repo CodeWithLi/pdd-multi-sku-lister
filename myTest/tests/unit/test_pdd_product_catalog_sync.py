@@ -112,7 +112,7 @@ def test_format_feishu_catalog_issue_detail_message():
         aspect="subcode_missing",
     )
     assert reason == "feishu_subcode_missing"
-    assert msg == "BD034B缺YKL001N"
+    assert msg == "YKL001N飞书无此行"
 
     reason, msg = format_feishu_catalog_issue_detail_message(
         listing_label="BD034B/第一套图",

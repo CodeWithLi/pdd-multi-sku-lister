@@ -825,6 +825,7 @@ export interface IntegratedPipelineBatchStartPayload {
   listing_batch_interval_minutes?: number
   listing_per_batch_limited_time_enabled?: boolean
   listing_per_batch_campaign_enabled?: boolean
+  store_sequential_enabled?: boolean
 }
 
 export interface IntegratedPipelineBatchRunItem {
@@ -840,6 +841,8 @@ export interface IntegratedPipelineBatchResponse {
   max_concurrent_stores: number
   store_start_delay_min_seconds: number
   store_start_delay_max_seconds: number
+  store_sequential_enabled?: boolean
+  pending_stores?: number
   pipelines: IntegratedPipelineBatchRunItem[]
   message: string
 }
@@ -914,11 +917,9 @@ export interface FeishuFailureLogSettings {
 export interface FeishuInspectRowSummary {
   商品编码?: string
   颜色规格?: string
-  综合零售成本?: string
+  零售综合成本?: string
   拼多多定价?: string
-  拼多多控价?: string
-  PDD控价下限价格?: string
-  PDD控价上限价格?: string
+  PDD控价?: string
 }
 
 export interface FeishuInspectListingPriceItem {
@@ -930,11 +931,7 @@ export interface FeishuInspectListingPriceItem {
   parsed: FeishuInspectRowSummary
   catalog_pricing: string
   catalog_control: string
-  catalog_range_min: string
-  catalog_range_max: string
   catalog_retail_cost: string
-  snapshot_range_min: string
-  snapshot_range_max: string
   snapshot_retail_cost: string
   pricing_reason: string
   control_reason: string

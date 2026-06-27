@@ -680,7 +680,7 @@ def _schedule_feishu_listing_result_log(
     run_id: str = "",
     product_codes: list[str] | None = None,
 ) -> None:
-    from pdd_agent.domain.listing_errors import ListingErrors
+    from pdd_agent.domain.listing_errors import ListingErrorCode, ListingErrors
     from pdd_agent.integrations.feishu.pdd_upload_sync import (
         map_listing_failure_record_type,
         schedule_pdd_upload_failure_log,
@@ -919,13 +919,21 @@ def _schedule_feishu_listing_result_log(
         lines: list[str] = []
         primary = group[0]
         for row in group:
-            brief = _format_brief_listing_failure_reason(
-                listing_label=str(row.get("listing_label") or ""),
-                reason_code=str(row.get("reason_code") or ""),
-                error=str(row.get("error") or ""),
-                message=str(row.get("message") or ""),
-                merchant_code=row_code,
-            )
+            reason_code = str(row.get("reason_code") or "")
+            if reason_code == ListingErrorCode.PREFLIGHT_NO_SKUS:
+                brief = ListingErrors.build_preflight_no_skus_brief(
+                    preflight_data,
+                    str(row.get("listing_label") or ""),
+                    row_code,
+                )
+            else:
+                brief = _format_brief_listing_failure_reason(
+                    listing_label=str(row.get("listing_label") or ""),
+                    reason_code=reason_code,
+                    error=str(row.get("error") or ""),
+                    message=str(row.get("message") or ""),
+                    merchant_code=row_code,
+                )
             if brief:
                 lines.append(brief)
         combined = ListingErrors.format_numbered(lines)

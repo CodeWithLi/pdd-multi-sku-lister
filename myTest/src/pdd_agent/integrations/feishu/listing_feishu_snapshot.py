@@ -45,8 +45,6 @@ class ListingFeishuSnapshot:
     _code_field: str = ""
     _pricing_field: str = ""
     _control_field: str = ""
-    _min_field: str = ""
-    _max_field: str = ""
     _retail_cost_field: str = ""
     _color_spec_field: str = ""
     _product_type_field: str = ""
@@ -113,8 +111,6 @@ class ListingFeishuSnapshot:
         return _build_catalog_from_feishu_records(
             self.record_items(),
             code_field=self._code_field,
-            min_field=self._min_field or names.min_price,
-            max_field=self._max_field or names.max_price,
             retail_cost_field=self._retail_cost_field or names.retail_cost,
         )
 
@@ -180,7 +176,7 @@ def warm_listing_feishu_snapshot(
 
     names = cfg.pdd_product_catalog.field_names
     compare_names = cfg.pdd_price_compare.field_names
-    code_field, min_field, max_field, retail_cost_field = _resolve_price_range_field_names(
+    code_field, retail_cost_field = _resolve_price_range_field_names(
         api, app_token, table_id, compare_names
     )
     snapshot._code_field = code_field
@@ -190,8 +186,6 @@ def warm_listing_feishu_snapshot(
     snapshot._control_field = resolve_table_field_name(
         api, app_token, table_id, compare_names.pdd_control_price
     )
-    snapshot._min_field = min_field
-    snapshot._max_field = max_field
     snapshot._retail_cost_field = retail_cost_field
     snapshot._color_spec_field = resolve_table_field_name(
         api, app_token, table_id, names.color_spec
@@ -225,8 +219,7 @@ def warm_listing_feishu_snapshot(
         row = dict(fields)
         new_score = _row_price_fields_score(
             row,
-            min_field=min_field,
-            max_field=max_field,
+            retail_cost_field=retail_cost_field,
             pricing_field=snapshot._pricing_field,
             control_field=snapshot._control_field,
         )
@@ -241,8 +234,7 @@ def warm_listing_feishu_snapshot(
         existing_scores = [
             _row_price_fields_score(
                 snapshot.records_by_code[key],
-                min_field=min_field,
-                max_field=max_field,
+                retail_cost_field=retail_cost_field,
                 pricing_field=snapshot._pricing_field,
                 control_field=snapshot._control_field,
             )

@@ -21,6 +21,7 @@ class CycleRelistCandidate:
     record_id: str
     merchant_code: str
     account_name: str
+    account_id: str
     report_platform: str
     record_type: str
     failure_reason: str
@@ -35,6 +36,7 @@ class CycleRelistCandidate:
             "record_id": self.record_id,
             "merchant_code": self.merchant_code,
             "account_name": self.account_name,
+            "account_id": self.account_id,
             "report_platform": self.report_platform,
             "record_type": self.record_type,
             "failure_reason": self.failure_reason,
@@ -72,6 +74,7 @@ def _item_to_candidate(item: dict[str, Any]) -> CycleRelistCandidate:
         record_id=str(item.get("record_id") or ""),
         merchant_code=str(item.get("merchant_code") or ""),
         account_name=str(item.get("account_name") or ""),
+        account_id=str(item.get("account_id") or ""),
         report_platform=str(item.get("report_platform") or ""),
         record_type=str(item.get("record_type") or ""),
         failure_reason=str(item.get("failure_reason") or ""),

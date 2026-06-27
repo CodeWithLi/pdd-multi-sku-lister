@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import Any
 
 from pdd_agent.api.services.pipeline_service import start_integrated_pipeline
-from pdd_agent.core.account_display import resolve_account_id_by_display_name
+from pdd_agent.core.account_display import resolve_cycle_relist_account_id
 from pdd_agent.core.config import load_yaml_settings
 from pdd_agent.core.logging import get_logger
 from pdd_agent.db.repositories import update_integrated_pipeline
@@ -92,6 +92,7 @@ def process_failure_cycle_relist_candidate(
     record_id = str(candidate.get("record_id") or "").strip()
     merchant_code = str(candidate.get("merchant_code") or "").strip()
     account_name = str(candidate.get("account_name") or "").strip()
+    account_id_hint = str(candidate.get("account_id") or "").strip()
     report_platform = str(candidate.get("report_platform") or "").strip()
 
     base = {
@@ -99,6 +100,7 @@ def process_failure_cycle_relist_candidate(
         "record_id": record_id,
         "merchant_code": merchant_code,
         "account_name": account_name,
+        "account_id": "",
         "pipeline_id": "",
         "claim": {},
         "error": "",
@@ -120,11 +122,21 @@ def process_failure_cycle_relist_candidate(
         return base
 
     claim_result = None
+    account_id, account_error = resolve_cycle_relist_account_id(
+        account_name=account_name,
+        account_id=account_id_hint,
+    )
+    if not account_id:
+        base["error"] = account_error or "无法识别目标店铺"
+        return base
+    base["account_id"] = account_id
+
     if not skip_claim:
         claim_result = try_claim_cycle_relist(
             record_id,
             merchant_code=merchant_code,
             account_name=account_name,
+            account_id=account_id,
             config=cfg,
             watch=watch_cfg,
         )
@@ -141,7 +153,6 @@ def process_failure_cycle_relist_candidate(
         base["error"] = "飞书商品编码为空"
         return base
 
-    account_id = resolve_account_id_by_display_name(account_name) or ""
     product_codes = [merchant_code]
 
     activity_ids = list(watch_cfg.pipeline_activity_ids or [])
@@ -185,6 +196,7 @@ def process_failure_cycle_relist_candidate(
                     "cycle_relist_feishu_record_id": record_id,
                     "cycle_relist_merchant_code": merchant_code,
                     "cycle_relist_account_name": account_name,
+                    "cycle_relist_account_id": account_id,
                     "cycle_relist_source": "failure_log_watch",
                 },
             )

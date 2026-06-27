@@ -121,42 +121,30 @@ def test_activity_create_button_label_ok():
     assert not _activity_create_button_label_ok("确认创建")
 
 
-def test_evaluate_campaign_activity_price_uses_min_only_and_retail_cost():
+def test_evaluate_campaign_activity_price_uses_retail_cost_only():
     ok, reason = evaluate_campaign_activity_price(
         check_price=30.0,
-        min_price=28.0,
         retail_cost=20.0,
         require_retail_cost=True,
     )
     assert ok is True
     assert reason == "price_in_range"
 
-    ok_high, reason_high = evaluate_campaign_activity_price(
-        check_price=40.0,
-        min_price=28.0,
-        retail_cost=20.0,
-        require_retail_cost=True,
-    )
-    assert ok_high is True
-    assert reason_high == "price_in_range"
-
     ok_low, reason_low = evaluate_campaign_activity_price(
-        check_price=27.0,
-        min_price=28.0,
+        check_price=20.0,
         retail_cost=20.0,
         require_retail_cost=True,
     )
     assert ok_low is False
-    assert reason_low == "price_below_min"
+    assert reason_low == "price_below_retail_cost"
 
-    ok_cost, reason_cost = evaluate_campaign_activity_price(
+    ok_missing, reason_missing = evaluate_campaign_activity_price(
         check_price=30.0,
-        min_price=20.0,
-        retail_cost=20.0,
+        retail_cost=None,
         require_retail_cost=True,
     )
-    assert ok_cost is False
-    assert reason_cost == "min_price_not_above_retail_cost"
+    assert ok_missing is False
+    assert reason_missing == "feishu_data_missing"
 
 
 def test_price_filter_failure_message_includes_price_detail():

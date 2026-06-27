@@ -699,7 +699,7 @@ def test_schedule_feishu_listing_result_log_expands_no_skus_system_reason(monkey
     assert len(captured) == 1
     assert captured[0]["reason_code"] == "preflight_no_skus"
     sr = captured[0]["system_reason"]
-    assert "BD023B毛绒小猫笔袋/第二套图：" in sr
+    assert "YKL001飞书无此行" in sr
     assert "规格图文件名无法解析组合编码" in sr
     assert "商品表无子编码" in sr
     assert "主图" in sr

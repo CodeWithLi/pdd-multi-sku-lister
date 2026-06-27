@@ -29,11 +29,11 @@ def test_feishu_catalog_line_specific_aspects():
     )
     assert (
         ListingErrors.feishu_catalog_line("BD021A卡皮巴拉笔袋", "range_min_missing")
-        == "BD021A卡皮巴拉笔袋控价下限为空"
+        == "BD021A卡皮巴拉笔袋零售综合成本为空"
     )
     assert (
         ListingErrors.feishu_catalog_line("BD021A卡皮巴拉笔袋", "range_max_missing")
-        == "BD021A卡皮巴拉笔袋控价上限为空"
+        == "BD021A卡皮巴拉笔袋零售综合成本为空"
     )
     assert (
         ListingErrors.feishu_catalog_line("BD021A卡皮巴拉笔袋", "feishu_row_not_found")
@@ -46,7 +46,7 @@ def test_feishu_catalog_line_specific_aspects():
             merchant_code="BD736B笔袋",
             is_sub=True,
         )
-        == "BD736B笔袋缺YKL001N"
+        == "YKL001N飞书无此行"
     )
 
 
@@ -102,10 +102,56 @@ def test_build_preflight_no_skus_system_reason_includes_warnings_and_counts():
         preflight,
         "BD037B奶油泡芙笔袋/第一套图",
     )
-    assert text.startswith("BD037B奶油泡芙笔袋/第一套图：")
     assert "无规格预览图" in text
     assert "主图 2 张" in text
     assert "未解析到任何有效 SKU" not in text
+    assert "飞书无数据或名称未匹配" in text
+
+
+def test_infer_no_sku_failure_brief_points_to_combo_subcode():
+    preflight = {
+        "units": [
+            {
+                "listing_label": "AXBD001A/第一套图",
+                "warnings": [
+                    "[AXBD001A/第一套图] 商品表无子编码[AXBD001B]，不上架 AXBD001B.png",
+                ],
+            }
+        ]
+    }
+    brief = ListingErrors.infer_no_sku_failure_brief(
+        preflight=preflight,
+        listing_label="AXBD001A/第一套图",
+        merchant_code="AXBD001A",
+    )
+    assert brief == "AXBD001B飞书无此行"
+
+
+def test_infer_no_sku_failure_brief_pricing_missing_on_subcode():
+    preflight = {
+        "units": [
+            {
+                "listing_label": "AXBD001A/第一套图",
+                "warnings": [
+                    "[AXBD001A/第一套图] 商品表无编码[AXBD001B]，无法定价",
+                ],
+            }
+        ]
+    }
+    brief = ListingErrors.infer_no_sku_failure_brief(
+        preflight=preflight,
+        listing_label="AXBD001A/第一套图",
+        merchant_code="AXBD001A",
+    )
+    assert brief == "AXBD001B定价为空"
+
+
+def test_compact_feishu_line_parses_catalog_warning():
+    line = ListingErrors.compact_feishu_line(
+        "[BD027A/第一套图] 商品表无子编码[BD027B]，不上架 preview.png",
+        merchant_code="BD027A",
+    )
+    assert line == "BD027B飞书无此行"
 
 
 def test_compact_system_diagnostic_strips_leading_brackets():

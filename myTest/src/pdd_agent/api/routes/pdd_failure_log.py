@@ -139,6 +139,7 @@ def _candidate_with_action(
         record_id=rid,
         merchant_code=str(row.get("merchant_code") or ""),
         account_name=str(row.get("account_name") or ""),
+        account_id=str(row.get("account_id") or ""),
         report_platform=str(row.get("report_platform") or ""),
         record_type=str(row.get("record_type") or ""),
         failure_reason=str(row.get("failure_reason") or ""),
@@ -232,6 +233,7 @@ def claim_cycle_relist(body: PddFailureCycleRelistClaimIn):
             body.record_id,
             merchant_code=body.merchant_code,
             account_name=body.account_name,
+            account_id=body.account_id,
             config=cfg,
             client=FeishuClient(cfg),
         )
@@ -255,6 +257,7 @@ def trigger_cycle_relist_pipeline(body: PddFailureCycleRelistTriggerIn):
             "record_id": body.record_id,
             "merchant_code": body.merchant_code,
             "account_name": body.account_name,
+            "account_id": body.account_id,
             "report_platform": body.report_platform,
         },
         config=cfg,

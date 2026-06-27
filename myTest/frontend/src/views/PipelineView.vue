@@ -87,6 +87,7 @@ const platformSkipDedupeSaving = ref(false)
 const platformSkipDedupeCodeCount = ref(0)
 const platformSkipDedupeUpdatedAt = ref('')
 const pipelineBatchEnabled = ref(false)
+const storeSequentialEnabled = ref(false)
 const batchAccountIds = ref<string[]>([])
 const startDelayMin = ref(30)
 const startDelayMax = ref(180)
@@ -896,8 +897,8 @@ async function startPipeline() {
     error.value = '请至少选择一套图里的一个商品'
     return
   }
-  if (!activityIds.value.length) {
-    error.value = '请至少选择一个活动'
+  if (pipelineBatchEnabled.value && storeSequentialEnabled.value && accountIds.length < 2) {
+    error.value = '店铺串行模式至少需要选择 2 家店铺'
     return
   }
   const listingIntent = await resolveListingIntent()
@@ -929,8 +930,13 @@ async function startPipeline() {
         listing_batch_interval_minutes: listingBatchIntervalMinutes.value,
         listing_per_batch_limited_time_enabled: listingPerBatchLimitedTimeEnabled.value,
         listing_per_batch_campaign_enabled: listingPerBatchCampaignEnabled.value,
+        store_sequential_enabled: storeSequentialEnabled.value,
       })
-      success.value = `批量整合链路已提交：${result.total} 条，批次 ${result.batch_id}，活动 ${activityIds.value.length} 个，启动间隔 ${result.store_start_delay_min_seconds}-${result.store_start_delay_max_seconds} 秒${
+      success.value = `批量整合链路已提交：${result.total} 家店铺${
+        result.store_sequential_enabled
+          ? `（串行：当前已启动第 1 家，其余 ${result.pending_stores ?? 0} 家待前店完成后自动启动；店间间隔 ${result.store_start_delay_min_seconds}-${result.store_start_delay_max_seconds} 秒）`
+          : `，批次 ${result.batch_id}，启动间隔 ${result.store_start_delay_min_seconds}-${result.store_start_delay_max_seconds} 秒`
+      }，活动 ${activityIds.value.length} 个${
         listingThrottleEnabled.value
           ? `；分批上架 ${listingBatchSetCount.value} 套/批，间隔 ${listingBatchIntervalMinutes.value} 分钟${
               listingPerBatchLimitedTimeEnabled.value ? '，每批限时限量购' : ''
@@ -1117,7 +1123,24 @@ onUnmounted(() => {
                   <el-switch v-model="pipelineBatchEnabled" active-text="开启" inactive-text="关闭" />
                 </div>
                 <div v-if="pipelineBatchEnabled" class="form-tip">
-                  多店共用下方素材选择，各店按启动间隔错开入队
+                  {{
+                    storeSequentialEnabled
+                      ? '串行模式：第一家店整条链路（含全部分批上架、限时限量、活动、推广）全部结束后，再按间隔启动第二家；某店失败或取消不影响后续店铺'
+                      : '多店共用下方素材选择，各店按启动间隔错开入队（可并行）'
+                  }}
+                </div>
+              </el-form-item>
+
+              <el-form-item v-if="pipelineBatchEnabled" label="店铺串行">
+                <div class="batch-toggle-row">
+                  <el-switch
+                    v-model="storeSequentialEnabled"
+                    active-text="一家跑完再跑下一家"
+                    inactive-text="错开并行"
+                  />
+                </div>
+                <div v-if="storeSequentialEnabled" class="form-tip">
+                  推荐开启：同一时刻仅一家店在跑，风控更安全。分批上架仍在单店内按批执行，不会跨店穿插。
                 </div>
               </el-form-item>
 
@@ -1158,12 +1181,12 @@ onUnmounted(() => {
 
               <el-row v-if="pipelineBatchEnabled" :gutter="16">
                 <el-col :span="12">
-                  <el-form-item label="启动间隔最小秒数">
+                  <el-form-item :label="storeSequentialEnabled ? '店间间隔最小秒数' : '启动间隔最小秒数'">
                     <el-input-number v-model="startDelayMin" :min="0" :max="3600" style="width: 100%" />
                   </el-form-item>
                 </el-col>
                 <el-col :span="12">
-                  <el-form-item label="启动间隔最大秒数">
+                  <el-form-item :label="storeSequentialEnabled ? '店间间隔最大秒数' : '启动间隔最大秒数'">
                     <el-input-number
                       v-model="startDelayMax"
                       :min="startDelayMin"
@@ -1948,44 +1971,29 @@ onUnmounted(() => {
                   >
                     <el-table-column prop="商品编码" label="商品编码" min-width="140" />
                     <el-table-column prop="颜色规格" label="颜色规格" width="100" />
-                    <el-table-column prop="综合零售成本" label="综合零售成本" width="108" />
+                    <el-table-column prop="零售综合成本" label="零售综合成本" width="108" />
                     <el-table-column prop="拼多多定价" label="拼多多定价" width="96" />
-                    <el-table-column prop="拼多多控价" label="拼多多控价" width="96" />
-                    <el-table-column prop="PDD控价下限价格" label="下限" width="88" />
-                    <el-table-column prop="PDD控价上限价格" label="上限" width="88" />
+                    <el-table-column prop="PDD控价" label="PDD控价" width="96" />
                   </el-table>
                 </div>
               </template>
             </el-table-column>
             <el-table-column prop="query_code" label="查询编码" min-width="148" show-overflow-tooltip />
-            <el-table-column label="综合零售成本" width="108">
+            <el-table-column label="零售综合成本" width="108">
               <template #default="{ row }">
-                <span :class="{ 'feishu-cell-empty': !row.parsed?.['综合零售成本'] && !row.catalog_retail_cost }">
-                  {{ row.parsed?.['综合零售成本'] || row.catalog_retail_cost || '—' }}
+                <span :class="{ 'feishu-cell-empty': !row.parsed?.['零售综合成本'] && !row.catalog_retail_cost }">
+                  {{ row.parsed?.['零售综合成本'] || row.catalog_retail_cost || '—' }}
                 </span>
               </template>
             </el-table-column>
             <el-table-column label="拼多多定价" width="96">
               <template #default="{ row }">{{ row.parsed?.拼多多定价 || '—' }}</template>
             </el-table-column>
-            <el-table-column label="拼多多控价" width="96">
-              <template #default="{ row }">{{ row.parsed?.拼多多控价 || '—' }}</template>
+            <el-table-column label="PDD控价" width="96">
+              <template #default="{ row }">{{ row.parsed?.PDD控价 || '—' }}</template>
             </el-table-column>
-            <el-table-column label="下限" width="80">
-              <template #default="{ row }">{{ row.parsed?.PDD控价下限价格 || '—' }}</template>
-            </el-table-column>
-            <el-table-column label="上限" width="80">
-              <template #default="{ row }">
-                <span :class="{ 'feishu-cell-empty': !row.parsed?.PDD控价上限价格 }">
-                  {{ row.parsed?.PDD控价上限价格 || '空' }}
-                </span>
-              </template>
-            </el-table-column>
-            <el-table-column label="全表上限" width="88">
-              <template #default="{ row }">{{ row.catalog_range_max || '—' }}</template>
-            </el-table-column>
-            <el-table-column label="快照上限" width="88">
-              <template #default="{ row }">{{ row.snapshot_range_max || '—' }}</template>
+            <el-table-column label="快照零售成本" width="108">
+              <template #default="{ row }">{{ row.snapshot_retail_cost || '—' }}</template>
             </el-table-column>
             <el-table-column label="区间诊断" min-width="120" show-overflow-tooltip>
               <template #default="{ row }">

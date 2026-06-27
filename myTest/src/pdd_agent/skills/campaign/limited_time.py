@@ -3839,7 +3839,6 @@ def _filter_activity_products_by_price(
         elif isinstance(rule, dict):
             ok, fail_reason = evaluate_campaign_activity_price(
                 check_price=check_price,
-                min_price=rule.get("min_price"),
                 retail_cost=rule.get("retail_cost"),
                 require_retail_cost=require_retail_cost,
             )

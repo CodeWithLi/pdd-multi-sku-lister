@@ -94,6 +94,57 @@ def _resolve_mirror_field_name(
     return configured_name or "处理状态镜像"
 
 
+def resolve_failure_log_account_field_name(
+    configured: str,
+    table_fields: list[dict[str, Any]],
+) -> str:
+    """解析失败日志「店铺」列名（配置名优先，兼容 店铺 / 店铺名称）。"""
+    configured_name = str(configured or "").strip()
+    field_names = [str(f.get("field_name") or "") for f in table_fields]
+    if configured_name and configured_name in field_names:
+        return configured_name
+
+    for alias in ("店铺", "店铺名称"):
+        if alias in field_names:
+            return alias
+
+    for item in table_fields:
+        name = str(item.get("field_name") or "")
+        field_type = int(item.get("type") or 0)
+        if "店铺" in name and field_type in (1, 2, 15):
+            return name
+
+    return configured_name or "店铺"
+
+
+def resolve_failure_log_account_id_field_name(
+    configured: str,
+    table_fields: list[dict[str, Any]],
+) -> str:
+    configured_name = str(configured or "").strip()
+    if not configured_name:
+        return ""
+    field_names = [str(f.get("field_name") or "") for f in table_fields]
+    if configured_name in field_names:
+        return configured_name
+    for alias in ("店铺ID", "account_id", "Account ID"):
+        if alias in field_names:
+            return alias
+    return ""
+
+
+def read_failure_log_account(
+    fields: dict[str, Any],
+    *,
+    account_name_field: str,
+    account_id_field: str = "",
+) -> tuple[str, str]:
+    """从飞书 fields 读取店铺展示名与 account_id（若有）。"""
+    account_name = format_plain_text(fields.get(account_name_field))
+    account_id = format_plain_text(fields.get(account_id_field)) if account_id_field else ""
+    return account_name, account_id
+
+
 def resolve_cycle_relist_field_name(
     configured: str,
     table_fields: list[dict[str, Any]],
@@ -156,6 +207,14 @@ def list_pdd_failure_logs(
         str(names.cycle_relist or ""),
         table_fields,
     )
+    account_name_field = resolve_failure_log_account_field_name(
+        str(names.account_name or ""),
+        table_fields,
+    )
+    account_id_field = resolve_failure_log_account_id_field_name(
+        str(getattr(names, "account_id", "") or ""),
+        table_fields,
+    )
 
     max_items = max(1, min(int(limit), 500))
     raw_records = list_all_records(api, app_token, table_id, page_size=max_items)
@@ -169,6 +228,11 @@ def list_pdd_failure_logs(
         processor_names = format_user_names(fields.get(names.processor))
         processed_at = format_datetime_ms(fields.get(names.processed_at))
         status = resolve_process_status(mirror_text=mirror_text)
+        account_name, account_id = read_failure_log_account(
+            fields,
+            account_name_field=account_name_field,
+            account_id_field=account_id_field,
+        )
 
         items.append(
             {
@@ -176,7 +240,8 @@ def list_pdd_failure_logs(
                 "date": format_datetime_ms(fields.get(names.date)) or str(fields.get(names.date) or ""),
                 "merchant_code": str(fields.get(names.merchant_code) or ""),
                 "report_platform": format_single_select(fields.get(names.report_platform)),
-                "account_name": str(fields.get(names.account_name) or ""),
+                "account_name": account_name,
+                "account_id": account_id,
                 "record_type": format_single_select(fields.get(names.record_type)),
                 "failure_reason": str(fields.get(names.failure_reason) or ""),
                 "publish_start": format_datetime_ms(fields.get(names.publish_start)),
@@ -208,6 +273,8 @@ def list_pdd_failure_logs(
         "table_name": table_name,
         "resolve_method": resolve_method,
         "mirror_field_name": mirror_field_name,
+        "account_name_field": account_name_field,
+        "account_id_field": account_id_field,
         "cycle_relist_field_name": cycle_relist_field_name,
         "mirror_api_readable": mirror_readable,
         "total": len(items),

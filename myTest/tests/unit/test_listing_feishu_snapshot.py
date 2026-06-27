@@ -35,10 +35,8 @@ def test_warm_listing_feishu_snapshot_fetches_each_code_once(monkeypatch):
                     "商品类型": "笔袋",
                     "可用库存": 10,
                     "拼多多定价": 20.0,
-                    "拼多多控价": 18.0,
-                    "PDD控价下限价格": 15.0,
-                    "PDD控价上限价格": 25.0,
-                    "综合零售成本": 10.0,
+                    "PDD控价": 18.0,
+                    "零售综合成本": 10.0,
                 }
             }
             for code in values
@@ -54,7 +52,7 @@ def test_warm_listing_feishu_snapshot_fetches_each_code_once(monkeypatch):
     )
     monkeypatch.setattr(
         "pdd_agent.integrations.feishu.listing_feishu_snapshot._resolve_price_range_field_names",
-        lambda api, app_token, table_id, names: ("商品编码", "PDD控价下限价格", "PDD控价上限价格", "综合零售成本"),
+        lambda api, app_token, table_id, names: ("商品编码", "零售综合成本"),
     )
     monkeypatch.setattr(
         "pdd_agent.integrations.feishu.listing_feishu_snapshot.resolve_table_field_name",
@@ -113,10 +111,8 @@ def test_warm_listing_feishu_snapshot_fuzzy_matches_code_prefix(monkeypatch):
                     "商品类型": "笔袋",
                     "可用库存": 10,
                     "拼多多定价": 10.0,
-                    "拼多多控价": 9.0,
-                    "PDD控价下限价格": 9.7,
-                    "PDD控价上限价格": 11.0,
-                    "综合零售成本": 2.0,
+                    "PDD控价": 9.0,
+                    "零售综合成本": 2.0,
                 }
             }
         ]
@@ -135,7 +131,7 @@ def test_warm_listing_feishu_snapshot_fuzzy_matches_code_prefix(monkeypatch):
     )
     monkeypatch.setattr(
         "pdd_agent.integrations.feishu.listing_feishu_snapshot._resolve_price_range_field_names",
-        lambda api, app_token, table_id, names: ("商品编码", "PDD控价下限价格", "PDD控价上限价格", "综合零售成本"),
+        lambda api, app_token, table_id, names: ("商品编码", "零售综合成本"),
     )
     monkeypatch.setattr(
         "pdd_agent.integrations.feishu.listing_feishu_snapshot.resolve_table_field_name",
@@ -173,9 +169,7 @@ def test_warm_snapshot_short_incomplete_row_does_not_poison_long_code(monkeypatc
             {
                 "fields": {
                     "商品编码": "BD025A",
-                    "PDD控价下限价格": 7.45,
-                    "PDD控价上限价格": None,
-                    "综合零售成本": None,
+                    "零售综合成本": None,
                 }
             },
             {
@@ -183,10 +177,8 @@ def test_warm_snapshot_short_incomplete_row_does_not_poison_long_code(monkeypatc
                     "商品编码": "BD025A面包小狗笔袋",
                     "颜色规格": "黄色",
                     "拼多多定价": 8.3,
-                    "拼多多控价": 7.45,
-                    "PDD控价下限价格": 7.45,
-                    "PDD控价上限价格": 9.3,
-                    "综合零售成本": 2.0,
+                    "PDD控价": 7.45,
+                    "零售综合成本": 2.0,
                 }
             },
         ]
@@ -205,7 +197,7 @@ def test_warm_snapshot_short_incomplete_row_does_not_poison_long_code(monkeypatc
     )
     monkeypatch.setattr(
         "pdd_agent.integrations.feishu.listing_feishu_snapshot._resolve_price_range_field_names",
-        lambda api, app_token, table_id, names: ("商品编码", "PDD控价下限价格", "PDD控价上限价格", "综合零售成本"),
+        lambda api, app_token, table_id, names: ("商品编码", "零售综合成本"),
     )
     monkeypatch.setattr(
         "pdd_agent.integrations.feishu.listing_feishu_snapshot.resolve_table_field_name",
@@ -218,7 +210,7 @@ def test_warm_snapshot_short_incomplete_row_does_not_poison_long_code(monkeypatc
     assert snapshot is not None
     row = snapshot.records_by_code.get("BD025A面包小狗笔袋")
     assert row is not None
-    assert row["PDD控价上限价格"] == 9.3
+    assert row["零售综合成本"] == 2.0
     assert snapshot.range_catalog(cfg).ranges.get("BD025A面包小狗笔袋") is not None
     from pdd_agent.integrations.feishu.pdd_price_compare_sync import resolve_feishu_range_aspect
 
@@ -245,9 +237,7 @@ def test_warm_snapshot_prefers_priced_duplicate_row_for_same_code(monkeypatch):
                 "fields": {
                     "商品编码": "BD083A",
                     "颜色规格": "绿色罗宾笔袋",
-                    "PDD控价下限价格": 7.91,
-                    "PDD控价上限价格": 9.40,
-                    "拼多多控价": 7.91,
+                    "PDD控价": 7.91,
                 }
             },
             {
@@ -255,9 +245,7 @@ def test_warm_snapshot_prefers_priced_duplicate_row_for_same_code(monkeypatch):
                     "商品编码": "BD083A",
                     "颜色规格": "绿色罗宾笔袋",
                     "拼多多定价": 8.40,
-                    "拼多多控价": 7.91,
-                    "PDD控价下限价格": 7.91,
-                    "PDD控价上限价格": 9.40,
+                    "PDD控价": 7.91,
                 }
             },
         ]
@@ -276,7 +264,7 @@ def test_warm_snapshot_prefers_priced_duplicate_row_for_same_code(monkeypatch):
     )
     monkeypatch.setattr(
         "pdd_agent.integrations.feishu.listing_feishu_snapshot._resolve_price_range_field_names",
-        lambda api, app_token, table_id, names: ("商品编码", "PDD控价下限价格", "PDD控价上限价格", "综合零售成本"),
+        lambda api, app_token, table_id, names: ("商品编码", "零售综合成本"),
     )
     monkeypatch.setattr(
         "pdd_agent.integrations.feishu.listing_feishu_snapshot.resolve_table_field_name",

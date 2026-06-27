@@ -22,22 +22,19 @@ class CampaignPriceRange:
 def evaluate_campaign_activity_price(
     *,
     check_price: float | int | None,
-    min_price: float | int | None,
+    min_price: float | int | None = None,
     retail_cost: float | int | None = None,
     require_retail_cost: bool = False,
 ) -> tuple[bool, str]:
-    """限时限量购活动价：下限 ≤ 活动价；飞书有综合零售成本时下限须严格大于成本。"""
-    if not isinstance(min_price, (int, float)):
-        return False, "price_out_of_range_or_missing_rule"
+    """限时限量购：页面活动价须严格大于飞书零售综合成本（不再使用控价上下限列）。"""
+    _ = min_price
     if not isinstance(check_price, (int, float)):
         return False, "price_out_of_range_or_missing_rule"
     if require_retail_cost or retail_cost is not None:
         if not isinstance(retail_cost, (int, float)):
             return False, "feishu_data_missing"
-        if float(min_price) <= float(retail_cost):
-            return False, "min_price_not_above_retail_cost"
-    if float(check_price) < float(min_price):
-        return False, "price_below_min"
+        if float(check_price) <= float(retail_cost):
+            return False, "price_below_retail_cost"
     return True, "price_in_range"
 
 

@@ -57,6 +57,10 @@ class PddUploadFailureLogFieldNames(BaseModel):
     merchant_code: str = "商品编码"
     report_platform: str = "报错平台"
     account_name: str = "店铺名称"
+    account_id: str = Field(
+        default="",
+        description="可选：写入系统 account_id（如 store_A）；留空则不写入",
+    )
     record_type: str = "记录类型"
     failure_reason: str = "失败原因"
     system_reason: str = "系统原因"
@@ -121,11 +125,9 @@ class PddPriceCompareFieldNames(BaseModel):
     """拼多多比价定价表列名。"""
 
     merchant_code: str = "商品编码"
-    min_price: str = "PDD控价下限价格"
-    max_price: str = "PDD控价上限价格"
-    retail_cost: str = "综合零售成本"
+    retail_cost: str = "零售综合成本"
     pdd_pricing: str = "拼多多定价"
-    pdd_control_price: str = "拼多多控价"
+    pdd_control_price: str = "PDD控价"
 
 
 class PddPriceCompareConfig(BaseModel):

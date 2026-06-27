@@ -68,6 +68,7 @@ def _claim_payload(
     record_id: str,
     merchant_code: str = "",
     account_name: str = "",
+    account_id: str = "",
     placeholder: str = "",
 ) -> str:
     return json.dumps(
@@ -75,6 +76,7 @@ def _claim_payload(
             "record_id": record_id,
             "merchant_code": merchant_code,
             "account_name": account_name,
+            "account_id": account_id,
             "placeholder": placeholder,
             "claimed_at": _utc_now_iso(),
         },
@@ -109,6 +111,7 @@ def _redis_try_claim(
     *,
     merchant_code: str,
     account_name: str,
+    account_id: str = "",
     placeholder: str,
     ttl_seconds: int,
 ) -> tuple[bool, bool]:
@@ -126,6 +129,7 @@ def _redis_try_claim(
                     record_id=record_id,
                     merchant_code=merchant_code,
                     account_name=account_name,
+                    account_id=account_id,
                     placeholder=placeholder,
                 ),
                 nx=True,
@@ -196,6 +200,7 @@ def try_claim_cycle_relist(
     *,
     merchant_code: str = "",
     account_name: str = "",
+    account_id: str = "",
     config: FeishuConfig | None = None,
     client: FeishuClient | None = None,
     watch: PddFailureCycleRelistWatchConfig | None = None,
@@ -232,6 +237,7 @@ def try_claim_cycle_relist(
         rid,
         merchant_code=merchant_code,
         account_name=account_name,
+        account_id=account_id,
         placeholder=placeholder,
         ttl_seconds=ttl,
     )
@@ -265,9 +271,10 @@ def try_claim_cycle_relist(
         )
 
     logger.info(
-        "cycle relist claimed record_id=%s merchant_code=%s placeholder=%s redis=%s",
+        "cycle relist claimed record_id=%s merchant_code=%s account_id=%s placeholder=%s redis=%s",
         rid,
         merchant_code,
+        account_id,
         placeholder,
         redis_acquired,
     )

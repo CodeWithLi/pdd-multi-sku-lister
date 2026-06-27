@@ -45,19 +45,15 @@ def _row_field_summary(
     code_field: str,
     pricing_field: str,
     control_field: str,
-    min_field: str,
-    max_field: str,
     retail_cost_field: str = "",
-    retail_cost_label: str = "综合零售成本",
+    retail_cost_label: str = "零售综合成本",
     color_field: str = "颜色规格",
 ) -> dict[str, Any]:
     summary = {
         "商品编码": _field_text(fields, code_field),
         "颜色规格": _field_text(fields, color_field),
         "拼多多定价": _format_price(_field_number(fields, pricing_field)),
-        "拼多多控价": _format_price(_field_number(fields, control_field)),
-        "PDD控价下限价格": _format_price(_field_number(fields, min_field)),
-        "PDD控价上限价格": _format_price(_field_number(fields, max_field)),
+        "PDD控价": _format_price(_field_number(fields, control_field)),
     }
     if retail_cost_field:
         summary[retail_cost_label] = _format_price(_field_number(fields, retail_cost_field))
@@ -186,8 +182,6 @@ def inspect_listing_feishu_prices(
     app_token = str(cfg.bitable_app_token or "").strip()
     table_id = ""
     code_field = compare_names.merchant_code
-    min_field = compare_names.min_price
-    max_field = compare_names.max_price
     pricing_field = compare_names.pdd_pricing
     control_field = compare_names.pdd_control_price
     retail_cost_field = compare_names.retail_cost
@@ -195,7 +189,7 @@ def inspect_listing_feishu_prices(
     if app_token and cfg.app_id and cfg.app_secret:
         table_id, _ = resolve_pdd_price_compare_table_id(cfg, api, save_table_id=False)
         if table_id:
-            code_field, min_field, max_field, retail_cost_field = _resolve_price_range_field_names(
+            code_field, retail_cost_field = _resolve_price_range_field_names(
                 api, app_token, table_id, compare_names
             )
             from pdd_agent.integrations.feishu.bitable import resolve_table_field_name
@@ -254,8 +248,6 @@ def inspect_listing_feishu_prices(
                 code_field=code_field,
                 pricing_field=pricing_field,
                 control_field=control_field,
-                min_field=min_field,
-                max_field=max_field,
                 retail_cost_field=retail_cost_field,
                 retail_cost_label=retail_cost_label,
                 color_field=cat_names.color_spec,
@@ -284,8 +276,6 @@ def inspect_listing_feishu_prices(
             code_field=code_field,
             pricing_field=pricing_field,
             control_field=control_field,
-            min_field=min_field,
-            max_field=max_field,
             retail_cost_field=retail_cost_field,
             retail_cost_label=retail_cost_label,
             color_field=cat_names.color_spec,
@@ -301,13 +291,9 @@ def inspect_listing_feishu_prices(
                 "parsed": parsed,
                 "catalog_pricing": _format_price(pricing_price),
                 "catalog_control": _format_price(control_price),
-                "catalog_range_min": _format_price(full_range.min_price if full_range else None),
-                "catalog_range_max": _format_price(full_range.max_price if full_range else None),
                 "catalog_retail_cost": _format_price(
                     full_range.retail_cost if full_range and full_range.retail_cost is not None else None
                 ),
-                "snapshot_range_min": _format_price(snap_range.min_price if snap_range else None),
-                "snapshot_range_max": _format_price(snap_range.max_price if snap_range else None),
                 "snapshot_retail_cost": _format_price(
                     snap_range.retail_cost if snap_range and snap_range.retail_cost is not None else None
                 ),
@@ -328,8 +314,6 @@ def inspect_listing_feishu_prices(
             "product_code": code_field,
             "pricing": pricing_field,
             "control": control_field,
-            "min_price": min_field,
-            "max_price": max_field,
             "retail_cost": retail_cost_field,
             "color_spec": cat_names.color_spec,
         },
