@@ -114,7 +114,7 @@ def test_infer_no_sku_failure_brief_points_to_combo_subcode():
             {
                 "listing_label": "AXBD001A/第一套图",
                 "warnings": [
-                    "[AXBD001A/第一套图] 商品表无子编码[AXBD001B]，不上架 AXBD001B.png",
+                    "[AXBD001A/第一套图] 组合图[AXBD001A+AXBD001B]商品表无子编码[AXBD001B]，不上架 AXBD001B.png",
                 ],
             }
         ]
@@ -124,10 +124,48 @@ def test_infer_no_sku_failure_brief_points_to_combo_subcode():
         listing_label="AXBD001A/第一套图",
         merchant_code="AXBD001A",
     )
-    assert brief == "AXBD001B飞书无此行"
+    assert brief == "AXBD001A下子图AXBD001A+AXBD001B飞书无此行"
 
 
 def test_infer_no_sku_failure_brief_pricing_missing_on_subcode():
+    preflight = {
+        "units": [
+            {
+                "listing_label": "AXBD001A/第一套图",
+                "warnings": [
+                    "[AXBD001A/第一套图] 组合图[AXBD001A+AXBD001B]商品表无编码[AXBD001B]，无法定价",
+                ],
+            }
+        ]
+    }
+    brief = ListingErrors.infer_no_sku_failure_brief(
+        preflight=preflight,
+        listing_label="AXBD001A/第一套图",
+        merchant_code="AXBD001A",
+    )
+    assert brief == "AXBD001A下子图AXBD001A+AXBD001B的定价为空"
+
+
+def test_infer_no_sku_failure_brief_bd349a_combo_subimage():
+    preflight = {
+        "units": [
+            {
+                "listing_label": "BD349A/第一套图",
+                "warnings": [
+                    "[BD349A/第一套图] 组合图[BD349A+PS004A小白鲨]商品表无编码[PS004A小白鲨]，无法定价",
+                ],
+            }
+        ]
+    }
+    brief = ListingErrors.infer_no_sku_failure_brief(
+        preflight=preflight,
+        listing_label="BD349A/第一套图",
+        merchant_code="BD349A",
+    )
+    assert brief == "BD349A下子图BD349A+PS004A小白鲨的定价为空"
+
+
+def test_infer_no_sku_failure_brief_legacy_warning_without_combo_stem():
     preflight = {
         "units": [
             {
@@ -143,7 +181,7 @@ def test_infer_no_sku_failure_brief_pricing_missing_on_subcode():
         listing_label="AXBD001A/第一套图",
         merchant_code="AXBD001A",
     )
-    assert brief == "AXBD001B定价为空"
+    assert brief == "AXBD001A下子图AXBD001B的定价为空"
 
 
 def test_compact_feishu_line_parses_catalog_warning():
@@ -151,7 +189,7 @@ def test_compact_feishu_line_parses_catalog_warning():
         "[BD027A/第一套图] 商品表无子编码[BD027B]，不上架 preview.png",
         merchant_code="BD027A",
     )
-    assert line == "BD027B飞书无此行"
+    assert line == "BD027A下子图BD027B飞书无此行"
 
 
 def test_compact_system_diagnostic_strips_leading_brackets():

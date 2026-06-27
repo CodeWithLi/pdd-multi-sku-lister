@@ -70,6 +70,29 @@ def test_maybe_continue_after_failure_schedules_next_batch(
     assert mock_update.call_args.kwargs.get("status") == "running"
 
 
+@patch("pdd_agent.api.services.pipeline_listing_batch_continue.update_integrated_pipeline")
+@patch("pdd_agent.api.services.pipeline_listing_batch_continue.schedule_next_listing_batch_after_finish")
+@patch("pdd_agent.api.services.pipeline_listing_batch_continue.get_integrated_pipeline")
+def test_maybe_continue_after_empty_success_batch_schedules_next(
+    mock_get,
+    mock_schedule,
+    mock_update,
+):
+    row = _row(batch_index=0, total_batches=3)
+    mock_get.return_value = row
+    mock_schedule.return_value = True
+
+    handled = maybe_continue_listing_batch_after_failure(
+        row,
+        run_id="run_empty",
+        result={"results": [{"status": "listed", "listing_label": "BD004A/第一套图"}]},
+        error="",
+    )
+
+    assert handled is True
+    mock_schedule.assert_called_once()
+
+
 @patch("pdd_agent.api.services.pipeline_listing_batch_continue.schedule_next_listing_batch_after_finish")
 def test_maybe_continue_returns_false_on_last_batch(mock_schedule):
     row = _row(batch_index=1, total_batches=2)

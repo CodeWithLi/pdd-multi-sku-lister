@@ -70,6 +70,7 @@ def _resolve_sku_pricing_or_warn(
     catalog: dict[str, PddProductEntry],
     defaults: dict[str, str],
     bundle_components: list[str] | None = None,
+    combo_stem: str = "",
 ) -> tuple[str, str, str] | None:
     try:
         return resolve_combo_pricing(
@@ -86,9 +87,23 @@ def _resolve_sku_pricing_or_warn(
         )
     except ComboPricingError as exc:
         codes = "、".join(exc.invalid_codes or exc.missing_codes)
+        combo = str(combo_stem or "").strip()
         if exc.reason == "pricing_invalid":
+            if combo:
+                unit.warnings.append(
+                    ListingErrors.Msg.CATALOG_PRICING_INVALID_COMBO.format(
+                        prefix=prefix, combo=combo, codes=codes
+                    )
+                )
+            else:
+                unit.warnings.append(
+                    ListingErrors.Msg.CATALOG_PRICING_INVALID.format(prefix=prefix, codes=codes)
+                )
+        elif combo:
             unit.warnings.append(
-                ListingErrors.Msg.CATALOG_PRICING_INVALID.format(prefix=prefix, codes=codes)
+                ListingErrors.Msg.CATALOG_CODE_PRICING_MISSING_COMBO.format(
+                    prefix=prefix, combo=combo, codes=codes
+                )
             )
         else:
             unit.warnings.append(
@@ -578,13 +593,19 @@ def _append_skus_from_previews(
             if not include_excel_missing_previews:
                 unit.warnings.append(
                     ListingErrors.Msg.SUBCODE_NOT_IN_CATALOG_SKIP.format(
-                        prefix=prefix, model=model_code, name=preview.name
+                        prefix=prefix,
+                        combo=preview.stem,
+                        model=model_code,
+                        name=preview.name,
                     )
                 )
                 continue
             unit.warnings.append(
                 ListingErrors.Msg.SUBCODE_NOT_IN_CATALOG_DISPLAY.format(
-                    prefix=prefix, model=model_code, name=preview.name
+                    prefix=prefix,
+                    combo=preview.stem,
+                    model=model_code,
+                    name=preview.name,
                 )
             )
 
@@ -612,6 +633,7 @@ def _append_skus_from_previews(
             bundle_components=_parse_combo_component_codes(preview.stem, default_style_code)
             if is_bundle
             else None,
+            combo_stem=preview.stem,
         )
         if pricing is None:
             continue
@@ -815,6 +837,7 @@ def parse_legacy_listing_unit(
                 bundle_components=_parse_combo_component_codes(combo_dir.name, style_code)
                 if model_code == BUNDLE_MODEL_CODE
                 else None,
+                combo_stem=combo_dir.name,
             )
             if pricing is None:
                 continue

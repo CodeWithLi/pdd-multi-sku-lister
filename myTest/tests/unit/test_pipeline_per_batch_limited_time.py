@@ -162,6 +162,44 @@ def test_maybe_continue_schedules_next_listing_batch(
     assert mock_enqueue_listing.call_args.kwargs["batch_codes"] == ["BD720/第一套图/BD720A"]
 
 
+@patch("pdd_agent.api.services.pipeline_per_batch_limited_time.enqueue_listing_batch_for_pipeline")
+@patch("pdd_agent.api.services.pipeline_per_batch_limited_time.get_integrated_pipeline")
+@patch("pdd_agent.api.services.pipeline_per_batch_limited_time.update_integrated_pipeline")
+def test_maybe_continue_after_lt_failure_still_schedules_next_listing_batch(
+    mock_update,
+    mock_get,
+    mock_enqueue_listing,
+):
+    meta = _throttle_meta(batch_index=0, total_batches=3)
+    meta["limited_time_run_id"] = "lt_run_1"
+    meta["listing_per_batch_limited_time"] = {
+        "enabled": True,
+        "last_batch_index": 0,
+        "awaiting_final_activity": False,
+        "pending": {
+            "next_batch_index": 1,
+            "next_batch_scheduled_at": (datetime.now() + timedelta(minutes=10)).isoformat(
+                timespec="seconds"
+            ),
+        },
+    }
+    row = _row(meta=meta)
+    mock_get.return_value = row
+
+    handled = maybe_continue_after_per_batch_limited_time(
+        row,
+        run_id="lt_run_1",
+        success=False,
+        error="限时限量购设置失败",
+    )
+
+    assert handled is True
+    mock_enqueue_listing.assert_called_once()
+    assert any(
+        call.kwargs.get("status") == "running" for call in mock_update.call_args_list
+    )
+
+
 def test_maybe_continue_returns_false_for_final_batch():
     meta = _throttle_meta(batch_index=2, total_batches=3)
     meta["limited_time_run_id"] = "lt_run_final"

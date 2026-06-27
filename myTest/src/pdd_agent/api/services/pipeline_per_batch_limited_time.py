@@ -203,25 +203,44 @@ def maybe_continue_after_per_batch_limited_time(
     if not pending:
         return False
 
-    if not success and not _pipeline_continue_after_limited_time_failure(row):
-        failure_message = error or "限时限量购设置失败"
-        update_integrated_pipeline(
-            row.pipeline_id,
-            status="failed",
-            current_step="limited_time_failed",
-            error=failure_message,
-            meta_patch={
-                "limited_time_outcome": "failed",
-                "limited_time_finish_handled": True,
-            },
-        )
-        logger.info(
-            "pipeline %s per-batch limited time failed at batch=%s: %s",
+    failure_message = error or "限时限量购设置失败"
+    lt_failure_meta: dict[str, Any] = {
+        "limited_time_outcome": "failed",
+        "limited_time_finish_handled": True,
+        "per_batch_limited_time_last_error": failure_message,
+    }
+    if not success and not pending:
+        if not _pipeline_continue_after_limited_time_failure(row):
+            update_integrated_pipeline(
+                row.pipeline_id,
+                status="failed",
+                current_step="limited_time_failed",
+                error=failure_message,
+                meta_patch=lt_failure_meta,
+            )
+            logger.info(
+                "pipeline %s per-batch limited time failed at final batch=%s: %s",
+                row.pipeline_id,
+                int(state.get("last_batch_index") or 0) + 1,
+                failure_message,
+            )
+            return True
+        return False
+
+    if not success:
+        logger.warning(
+            "pipeline %s per-batch limited time failed at batch=%s: %s; continuing to next listing batch",
             row.pipeline_id,
             int(state.get("last_batch_index") or 0) + 1,
             failure_message,
         )
-        return True
+        update_integrated_pipeline(
+            row.pipeline_id,
+            status="running",
+            current_step="waiting_limited_time_per_batch",
+            error="",
+            meta_patch=lt_failure_meta,
+        )
 
     refreshed = get_integrated_pipeline(row.pipeline_id) or row
     throttle = _throttle_state(refreshed)

@@ -137,6 +137,17 @@ class ListingErrors:
         "subcode_missing": "飞书无此行",
     }
 
+    # 组合图失败表：{母编码}下子图{组合图文件名}的{字段}为空
+    FEISHU_COMBO_FIELD_NAME: dict[str, str] = {
+        "pricing_missing": "定价",
+        "control_missing": "控价",
+        "range_missing": "零售综合成本",
+        "range_retail_cost_missing": "零售综合成本",
+        "range_min_missing": "零售综合成本",
+        "range_max_missing": "零售综合成本",
+        "color_spec_missing": "颜色规格",
+    }
+
     FEISHU_BRIEF_ASPECT_TEXT: dict[str, str] = {
         "定价数据缺失": "定价为空",
         "定价没数据": "定价为空",
@@ -362,10 +373,12 @@ class ListingErrors:
         STYLE_NOT_IN_CATALOG_SKIP = "{prefix} 商品表无编码[{style}]，不上架 {name}"
         STYLE_NOT_IN_CATALOG_WARN = "{prefix} 商品表无款式编码[{style}]，不上架 {name}"
         STYLE_NOT_IN_CATALOG_DISPLAY = "{prefix} 商品表无款式编码[{style}]，仅后台展示不上架 {name}"
-        SUBCODE_NOT_IN_CATALOG_SKIP = "{prefix} 商品表无子编码[{model}]，不上架 {name}"
-        SUBCODE_NOT_IN_CATALOG_DISPLAY = "{prefix} 商品表无子编码[{model}]，仅后台展示不上架 {name}"
+        SUBCODE_NOT_IN_CATALOG_SKIP = "{prefix} 组合图[{combo}]商品表无子编码[{model}]，不上架 {name}"
+        SUBCODE_NOT_IN_CATALOG_DISPLAY = "{prefix} 组合图[{combo}]商品表无子编码[{model}]，仅后台展示不上架 {name}"
         CATALOG_CODE_PRICING_MISSING = "{prefix} 商品表无编码[{codes}]，无法定价"
+        CATALOG_CODE_PRICING_MISSING_COMBO = "{prefix} 组合图[{combo}]商品表无编码[{codes}]，无法定价"
         CATALOG_PRICING_INVALID = "{prefix} 商品表编码[{codes}]拼多多定价无效"
+        CATALOG_PRICING_INVALID_COMBO = "{prefix} 组合图[{combo}]商品表编码[{codes}]拼多多定价无效"
         NO_NUMBERED_IMAGES = "无任何数字命名图 ({range})"
 
         # 兄弟款规格
@@ -428,14 +441,57 @@ class ListingErrors:
         return raw
 
     @classmethod
+    def _extract_merchant_from_prefix(cls, text: str) -> str:
+        matched = re.match(r"^\[([^/\]]+)", str(text or "").strip())
+        if not matched:
+            return ""
+        return str(matched.group(1) or "").strip().upper()
+
+    @classmethod
+    def feishu_combo_subimage_line(
+        cls,
+        main_code: str,
+        combo_stem: str,
+        aspect: str,
+    ) -> str:
+        """飞书失败表：母商品编码 + 组合图文件名 + 缺失字段。"""
+        main = str(main_code or "").strip().upper()
+        combo = str(combo_stem or "").strip()
+        if not main or not combo:
+            return ""
+        if aspect in {"feishu_row_not_found", "product_row_missing", "subcode_missing"}:
+            return cls.sanitize_feishu_failure_reason(f"{main}下子图{combo}飞书无此行")
+        field = cls.FEISHU_COMBO_FIELD_NAME.get(aspect, "")
+        if field:
+            return cls.sanitize_feishu_failure_reason(f"{main}下子图{combo}的{field}为空")
+        suffix = cls.FEISHU_BRIEF_ASPECT.get(aspect, "数据为空")
+        return cls.sanitize_feishu_failure_reason(f"{main}下子图{combo}的{suffix}")
+
+    @classmethod
     def _catalog_warning_to_brief(cls, text: str) -> str:
         """从商品表/定价类 warning 提取「编码+具体问题」简述。"""
-        clean = cls.compact_system_diagnostic(text)
+        raw = str(text or "").strip()
+        clean = cls.compact_system_diagnostic(raw)
         if not clean:
             return ""
+        merchant = cls._extract_merchant_from_prefix(raw)
+
+        combo_patterns: list[tuple[str, str]] = [
+            (r"组合图\[([^\]]+)\].*商品表编码\[([^\]]+)\].*定价无效", "pricing_missing"),
+            (r"组合图\[([^\]]+)\].*商品表无编码\[([^\]]+)\].*无法定价", "pricing_missing"),
+            (r"组合图\[([^\]]+)\].*商品表无子编码\[([^\]]+)\]", "feishu_row_not_found"),
+        ]
+        for pattern, aspect in combo_patterns:
+            matched = re.search(pattern, clean)
+            if not matched:
+                continue
+            combo = str(matched.group(1) or "").strip()
+            if merchant and combo:
+                return cls.feishu_combo_subimage_line(merchant, combo, aspect)
+
         patterns: list[tuple[str, str]] = [
             (r"商品表无子编码\[([^\]]+)\]", "feishu_row_not_found"),
-            (r"商品表无编码\[([^\]]+)\].*定价无效", "pricing_missing"),
+            (r"商品表编码\[([^\]]+)\].*定价无效", "pricing_missing"),
             (r"商品表无编码\[([^\]]+)\].*无法定价", "pricing_missing"),
             (r"商品表无编码\[([^\]]+)\]", "feishu_row_not_found"),
             (r"商品表无款式编码\[([^\]]+)\]", "feishu_row_not_found"),
@@ -446,8 +502,11 @@ class ListingErrors:
                 continue
             raw_codes = str(matched.group(1) or "").strip()
             code = raw_codes.split("、")[0].strip().upper()
-            if code:
-                return cls.feishu_catalog_line(code, aspect)
+            if not code:
+                continue
+            if merchant and code != merchant:
+                return cls.feishu_combo_subimage_line(merchant, code, aspect)
+            return cls.feishu_catalog_line(code, aspect)
         return ""
 
     @classmethod

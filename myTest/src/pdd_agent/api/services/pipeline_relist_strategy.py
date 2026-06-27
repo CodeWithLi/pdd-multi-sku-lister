@@ -195,6 +195,10 @@ def build_relist_prep_delist_params(targets: list[RelistPrepTarget]) -> dict[str
     }
 
 
+def _relist_prep_already_done(meta: dict[str, Any]) -> bool:
+    return bool(str(meta.get("relist_prep_completed_at") or "").strip())
+
+
 def enqueue_pipeline_relist_prep(
     *,
     pipeline_id: str,
@@ -202,7 +206,26 @@ def enqueue_pipeline_relist_prep(
     targets: list[RelistPrepTarget],
     pending_listing: dict[str, Any],
 ) -> str:
-    """入队下架预备任务，并在 pipeline meta 中保存待上架参数。"""
+    """入队下架预备任务，并在 pipeline meta 中保存待上架参数。每条链路仅允许入队一次。"""
+    pipeline_id = str(pipeline_id or "").strip()
+    existing = get_integrated_pipeline(pipeline_id)
+    if existing:
+        meta = dict(existing.meta or {})
+        if _relist_prep_already_done(meta):
+            logger.warning(
+                "skip duplicate relist prep enqueue pipeline_id=%s (already completed)",
+                pipeline_id,
+            )
+            return str(meta.get("relist_prep_run_id") or "")
+        prep_run_id = str(meta.get("relist_prep_run_id") or "").strip()
+        if prep_run_id and meta.get("pending_listing"):
+            logger.warning(
+                "skip duplicate relist prep enqueue pipeline_id=%s run_id=%s (already queued)",
+                pipeline_id,
+                prep_run_id,
+            )
+            return prep_run_id
+
     delist_run_id = create_delist_run(account_id)
     update_integrated_pipeline(
         pipeline_id,
@@ -300,20 +323,37 @@ def enqueue_pending_listing_after_relist_prep(row) -> None:
     )
 
     meta = dict(row.meta or {})
+    if meta.get("relist_prep_listing_enqueued_at"):
+        logger.warning(
+            "skip duplicate listing enqueue after relist prep pipeline_id=%s",
+            row.pipeline_id,
+        )
+        return
+
     pending = dict(meta.get("pending_listing") or {})
-    all_codes = list(pending.get("product_codes") or row.product_codes or [])
+    archived_pending = dict(meta.get("relist_prep_pending_listing") or pending)
+    all_codes = list(
+        archived_pending.get("product_codes")
+        or pending.get("product_codes")
+        or row.product_codes
+        or []
+    )
     if not all_codes:
         raise ValueError("relist prep 完成但缺少待上架商品列表")
 
     throttle = dict(meta.get("listing_throttle") or {})
-    listing_payload_base = dict(throttle.get("listing_payload_base") or pending)
+    listing_payload_base = dict(throttle.get("listing_payload_base") or archived_pending or pending)
     batch_codes = apply_throttle_to_listing_codes(all_codes, throttle if throttle.get("enabled") else None)
 
+    completed_at = datetime.now().isoformat(timespec="seconds")
     update_integrated_pipeline(
         row.pipeline_id,
         current_step="listing_queued",
         meta_patch={
-            "relist_prep_completed_at": datetime.now().isoformat(timespec="seconds"),
+            "relist_prep_completed_at": completed_at,
+            "relist_prep_listing_enqueued_at": completed_at,
+            "relist_prep_pending_listing": archived_pending,
+            "pending_listing": None,
         },
     )
 
@@ -373,7 +413,16 @@ def handle_pipeline_delist_task_finished(
     meta = dict(row.meta or {})
     if normalize_relist_strategy(meta.get("relist_strategy")) != "delist_and_relist":
         return False
-    if not meta.get("pending_listing"):
+    if _relist_prep_already_done(meta):
+        logger.info(
+            "ignore stale relist prep delist finished pipeline_id=%s run_id=%s (already completed)",
+            pipeline_id,
+            run_id,
+        )
+        return True
+    pending = meta.get("pending_listing")
+    archived_pending = meta.get("relist_prep_pending_listing")
+    if not pending and not archived_pending:
         return False
     prep_run_id = str(meta.get("relist_prep_run_id") or "").strip()
     if prep_run_id and run_id and prep_run_id != str(run_id).strip():

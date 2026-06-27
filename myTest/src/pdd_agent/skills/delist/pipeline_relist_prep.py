@@ -256,6 +256,11 @@ def process_pipeline_relist_prep_delist(
             "scanned": 0,
         }
 
+    _log(
+        account_id,
+        f"整合链路下架预备开始（本链路仅执行一次，共 {len(groups)} 个商品编码）",
+    )
+
     if not open_goods_list_on_sale(page, account_id):
         return {
             "account_id": account_id,
@@ -315,7 +320,7 @@ def process_pipeline_relist_prep_delist(
     if id_delist_from_groups:
         _log(
             account_id,
-            f"本地已记录 {len(id_delist_from_groups)} 个拼多多商品ID，按ID精准下架（不依赖编码搜索）",
+            f"阶段1/2：本地已记录 {len(id_delist_from_groups)} 个拼多多商品ID，按ID精准下架（仍属同一次下架预备）",
         )
         id_results = _delist_verified_product_ids(
             page,
@@ -336,7 +341,7 @@ def process_pipeline_relist_prep_delist(
     if codes_without_local_id:
         _log(
             account_id,
-            f"以下 {len(codes_without_local_id)} 个编码无本地商品ID，改按编码逐个搜索下架："
+            f"阶段2/2：以下 {len(codes_without_local_id)} 个编码无本地商品ID，改按编码逐个搜索下架（仍属同一次下架预备）："
             f"{', '.join(codes_without_local_id)}",
         )
         for code in codes_without_local_id:

@@ -6,7 +6,7 @@ import logging
 from typing import Any
 
 from pdd_agent.integrations.feishu.bitable import find_view_id_by_name, resolve_table_field_name
-from pdd_agent.integrations.feishu.client import FeishuClient
+from pdd_agent.integrations.feishu.client import FeishuAPIError, FeishuClient
 from pdd_agent.integrations.feishu.config import FeishuConfig, load_feishu_config
 from pdd_agent.integrations.feishu.listing_feishu_catalog import codes_match, normalize_listing_code
 from pdd_agent.integrations.feishu.pdd_price_compare_sync import _field_text, resolve_pdd_price_compare_table_id
@@ -113,7 +113,25 @@ def check_product_folders_in_bag_view(
         table_id,
         cfg.pdd_product_catalog.field_names.product_code,
     )
-    rows = _load_view_records(api, app_token, table_id, view_id)
+    try:
+        rows = _load_view_records(api, app_token, table_id, view_id)
+    except FeishuAPIError as exc:
+        if exc.code == 1254005 and view_name:
+            logger.warning(
+                "bag view guard stale view_id=%s, re-resolving view_name=%s",
+                view_id,
+                view_name,
+            )
+            view_id = find_view_id_by_name(api, app_token, table_id, view_name) or ""
+            if not view_id:
+                return {
+                    "skipped": True,
+                    "reason": "required_view_missing",
+                    "error": f"飞书表「{cfg.pdd_price_compare.table_name}」未找到视图：{view_name}",
+                }
+            rows = _load_view_records(api, app_token, table_id, view_id)
+        else:
+            raise
     found_codes: list[str] = []
     for row in rows:
         fields = row.get("fields") if isinstance(row.get("fields"), dict) else {}

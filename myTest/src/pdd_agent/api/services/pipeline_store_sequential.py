@@ -240,12 +240,13 @@ def _start_next_store_from_coordinator(coordinator) -> dict[str, Any] | None:
             },
         )
         logger.info(
-            "store sequential advanced batch_id=%s store=%s pipeline=%s delay=%ss remaining=%s",
+            "store sequential advanced batch_id=%s store=%s pipeline=%s delay=%ss remaining=%s relist=%s",
             batch_id,
             account_id,
             new_pipeline_id,
             delay_seconds,
             len(pending_items),
+            str(common_params.get("relist_strategy") or "ignore"),
         )
         return data
 

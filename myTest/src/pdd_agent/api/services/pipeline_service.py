@@ -1671,6 +1671,24 @@ def _on_listing_finished(row, *, run_id: str, success: bool, result: dict[str, A
             logger.warning("pipeline issue ingest failed pipeline_id=%s", row.pipeline_id, exc_info=True)
         return
     if not pdd_ids:
+        from pdd_agent.api.services.pipeline_listing_batch_continue import (
+            has_remaining_listing_batch,
+            maybe_continue_listing_batch_after_failure,
+        )
+
+        refreshed = get_integrated_pipeline(row.pipeline_id) or row
+        if has_remaining_listing_batch(refreshed) and maybe_continue_listing_batch_after_failure(
+            refreshed,
+            run_id=run_id,
+            result=result,
+            error=error or "本批无成功上架商品",
+        ):
+            logger.info(
+                "pipeline %s listing batch finished with no pdd_ids, scheduled next batch run_id=%s",
+                row.pipeline_id,
+                run_id,
+            )
+            return
         update_integrated_pipeline(
             row.pipeline_id,
             status="failed",
@@ -2081,6 +2099,16 @@ def _reconcile_stuck_pipeline_row(row) -> Any:
         error = str(record.message or "").strip() or default_error
         if run_status == RunStatus.CANCELED:
             error = error or "子任务已取消"
+        if run_id == row.listing_run_id and run_status == RunStatus.FAILED:
+            from pdd_agent.api.services.pipeline_listing_batch_continue import (
+                is_listing_batch_failure_continuing,
+            )
+
+            step = str(row.current_step or "")
+            if step.startswith("waiting_listing_batch_") or is_listing_batch_failure_continuing(
+                row.pipeline_id
+            ):
+                continue
         if (
             run_id == _pipeline_limited_time_run_id(row)
             and run_status == RunStatus.FAILED
