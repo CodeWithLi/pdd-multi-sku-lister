@@ -23,6 +23,7 @@ from pdd_agent.db.repositories import (
     update_integrated_pipeline,
 )
 from pdd_agent.domain.enums import AgentKind
+from pdd_agent.skills.delist.pipeline_relist_prep import NON_BLOCKING_DELIST_ITEM_ERRORS
 
 logger = get_logger(__name__)
 
@@ -179,10 +180,15 @@ def build_pipeline_listing_plan(
     return PipelineListingPlan(action="listing", listing_codes=codes)
 
 
-def build_relist_prep_delist_params(targets: list[RelistPrepTarget]) -> dict[str, Any]:
+def build_relist_prep_delist_params(
+    targets: list[RelistPrepTarget],
+    *,
+    delist_spec_code_search_enabled: bool = False,
+) -> dict[str, Any]:
     return {
         "mode": "pipeline_relist_prep",
         "dry_run": False,
+        "delist_spec_code_search_enabled": bool(delist_spec_code_search_enabled),
         "targets": [
             {
                 "selector": t.selector,
@@ -209,6 +215,7 @@ def enqueue_pipeline_relist_prep(
     """入队下架预备任务，并在 pipeline meta 中保存待上架参数。每条链路仅允许入队一次。"""
     pipeline_id = str(pipeline_id or "").strip()
     existing = get_integrated_pipeline(pipeline_id)
+    meta: dict[str, Any] = {}
     if existing:
         meta = dict(existing.meta or {})
         if _relist_prep_already_done(meta):
@@ -227,6 +234,7 @@ def enqueue_pipeline_relist_prep(
             return prep_run_id
 
     delist_run_id = create_delist_run(account_id)
+    spec_search_enabled = bool(meta.get("delist_spec_code_search_enabled"))
     update_integrated_pipeline(
         pipeline_id,
         current_step="relist_prep_queued",
@@ -251,7 +259,10 @@ def enqueue_pipeline_relist_prep(
         account_id=account_id,
         payload={
             "pipeline_id": pipeline_id,
-            "delist_params": build_relist_prep_delist_params(targets),
+            "delist_params": build_relist_prep_delist_params(
+                targets,
+                delist_spec_code_search_enabled=spec_search_enabled,
+            ),
         },
         scheduled_at=datetime.now(),
     )
@@ -269,10 +280,10 @@ def finalize_relist_prep_after_delist(result: dict[str, Any]) -> tuple[list[str]
     下架预备完成后：删除已成功下架（或平台已不在售）的本地已发布记录。
 
     同一 mapping 可能对应多个拼多多 ID（重复上架），只删一次 DB 记录。
-    返回 (deleted_mapping_ids, errors)。
+    返回 (deleted_mapping_ids, warnings)。下架问题仅记警告，不影响后续上架。
     """
     deleted: list[str] = []
-    errors: list[str] = []
+    warnings: list[str] = []
     grouped: dict[str, list[dict[str, Any]]] = {}
 
     for item in result.get("results") or []:
@@ -283,21 +294,27 @@ def finalize_relist_prep_after_delist(result: dict[str, Any]) -> tuple[list[str]
             grouped.setdefault(mapping_id, []).append(item)
             continue
         err = str(item.get("error") or "").strip()
-        if err and err not in {"", "product_id_not_found_on_sale"}:
+        if err:
             selector = str(item.get("selector") or item.get("merchant_code") or "")
-            errors.append(f"{selector}: {err}" if selector else err)
+            warnings.append(f"{selector}: {err}" if selector else err)
 
     for mapping_id, items in grouped.items():
-        blocking = [
+        item_errors = [
             str(item.get("error") or "").strip()
             for item in items
             if str(item.get("error") or "").strip()
-            not in {"", "product_id_not_found_on_sale"}
+            not in {"", *NON_BLOCKING_DELIST_ITEM_ERRORS}
             and item.get("status") != "delisted"
         ]
-        if blocking:
-            selector = str(items[0].get("selector") or mapping_id)
-            errors.append(f"{selector}: {blocking[0]}")
+        non_blocking = [
+            str(item.get("error") or "").strip()
+            for item in items
+            if str(item.get("error") or "").strip() in NON_BLOCKING_DELIST_ITEM_ERRORS
+            and item.get("status") != "delisted"
+        ]
+        selector = str(items[0].get("selector") or mapping_id)
+        if item_errors:
+            warnings.append(f"{selector}: {item_errors[0]}")
             continue
 
         should_delete = any(
@@ -306,17 +323,19 @@ def finalize_relist_prep_after_delist(result: dict[str, Any]) -> tuple[list[str]
             for item in items
         )
         if not should_delete:
+            for err in non_blocking:
+                warnings.append(f"{selector}: {err}")
             continue
         if delete_published_product(mapping_id):
             deleted.append(mapping_id)
         else:
-            errors.append(f"删除已发布记录失败: {mapping_id}")
+            warnings.append(f"删除已发布记录失败: {mapping_id}")
 
-    return deleted, errors
+    return deleted, warnings
 
 
 def enqueue_pending_listing_after_relist_prep(row) -> None:
-    """下架预备成功后，启动整合链路上架任务。"""
+    """下架预备阶段结束后，启动整合链路上架任务（与下架结果无关）。"""
     from pdd_agent.api.services.pipeline_listing_throttle import (
         apply_throttle_to_listing_codes,
         enqueue_listing_batch_for_pipeline,
@@ -400,8 +419,9 @@ def handle_pipeline_delist_task_finished(
     error: str = "",
 ) -> bool:
     """
-    整合链路 DELIST 任务结束回调。若为本模块触发的 relist prep，则处理并可能入队上架。
+    整合链路 DELIST 任务结束回调。若为本模块触发的 relist prep，则记录下架结果并入队上架。
 
+    下架与上架解耦：无论下架成功与否，均尝试继续上架链路。
     返回 True 表示已消费该事件；False 表示与普通下架任务无关。
     """
     pipeline_id = str(pipeline_id or "").strip()
@@ -429,65 +449,53 @@ def handle_pipeline_delist_task_finished(
         return False
 
     result = result if isinstance(result, dict) else {}
+    meta_patch: dict[str, Any] = {"relist_prep_finished_at": datetime.now().isoformat(timespec="seconds")}
+    all_warnings: list[str] = []
 
     if not success:
-        err = error or "下架预备失败"
-        update_integrated_pipeline(
+        err = str(error or "下架任务失败").strip()
+        meta_patch["relist_prep_delist_run_failed"] = True
+        meta_patch["relist_prep_delist_error"] = err
+        all_warnings.append(err)
+        logger.warning(
+            "relist prep delist run failed, continuing listing pipeline_id=%s error=%s",
             pipeline_id,
-            status="failed",
-            current_step="relist_prep_failed",
-            error=err,
+            err[:200],
         )
-        return True
-
-    if result.get("delist_skipped"):
+    elif result.get("delist_skipped"):
         skip_reason = str(result.get("skip_reason") or "verification_failed")
-        warnings = list(result.get("warnings") or [])
-        warning_text = warnings[0] if warnings else "下架校验未通过，已跳过下架"
-        update_integrated_pipeline(
-            pipeline_id,
-            meta_patch={
-                "relist_prep_skipped": True,
-                "relist_prep_skip_reason": skip_reason,
-                "relist_prep_skip_message": warning_text,
-            },
-        )
-        try:
-            refreshed = get_integrated_pipeline(pipeline_id) or row
-            enqueue_pending_listing_after_relist_prep(refreshed)
-        except Exception as exc:
-            update_integrated_pipeline(
-                pipeline_id,
-                status="failed",
-                current_step="relist_prep_failed",
-                error=str(exc),
-            )
-        return True
+        warning_text = str((result.get("warnings") or [""])[0] or "下架校验未通过，已跳过下架")
+        meta_patch["relist_prep_skipped"] = True
+        meta_patch["relist_prep_skip_reason"] = skip_reason
+        meta_patch["relist_prep_skip_message"] = warning_text
+        all_warnings.extend(str(w) for w in (result.get("warnings") or []) if str(w).strip())
 
-    deleted, finalize_errors = finalize_relist_prep_after_delist(result)
-    if finalize_errors:
-        err = "；".join(finalize_errors)
-        update_integrated_pipeline(
-            pipeline_id,
-            status="failed",
-            current_step="relist_prep_failed",
-            error=err,
-            meta_patch={"relist_prep_deleted_mapping_ids": deleted},
-        )
-        return True
+    run_warnings = [str(w) for w in (result.get("warnings") or []) if str(w).strip()]
+    legacy_errors = [str(e) for e in (result.get("errors") or []) if str(e).strip()]
+    all_warnings.extend(run_warnings)
+    all_warnings.extend(legacy_errors)
 
-    update_integrated_pipeline(
-        pipeline_id,
-        meta_patch={"relist_prep_deleted_mapping_ids": deleted},
-    )
+    if result.get("results"):
+        deleted, relist_warnings = finalize_relist_prep_after_delist(result)
+        meta_patch["relist_prep_deleted_mapping_ids"] = deleted
+        all_warnings.extend(relist_warnings)
+
+    if all_warnings:
+        meta_patch["relist_prep_warnings"] = list(dict.fromkeys(all_warnings))
+
+    update_integrated_pipeline(pipeline_id, meta_patch=meta_patch)
     try:
         refreshed = get_integrated_pipeline(pipeline_id) or row
         enqueue_pending_listing_after_relist_prep(refreshed)
     except Exception as exc:
+        logger.exception(
+            "listing enqueue failed after relist prep pipeline_id=%s",
+            pipeline_id,
+        )
         update_integrated_pipeline(
             pipeline_id,
             status="failed",
-            current_step="relist_prep_failed",
+            current_step="listing_enqueue_failed",
             error=str(exc),
         )
     return True

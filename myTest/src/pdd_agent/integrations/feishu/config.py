@@ -163,6 +163,21 @@ class PddPriceCompareConfig(BaseModel):
     field_names: PddPriceCompareFieldNames = Field(default_factory=PddPriceCompareFieldNames)
 
 
+class JushuitanErpInventoryFieldNames(BaseModel):
+    """聚水潭 ERP 商品列表飞书表列名。"""
+
+    product_code: str = "商品编码"
+    available_qty: str = "可用数"
+
+
+class JushuitanErpInventoryConfig(BaseModel):
+    enabled: bool = Field(default=True, description="上架库存是否从飞书「聚水潭ERP商品列表」读取")
+    table_id: str = Field(default="", description="聚水潭ERP商品列表 table_id")
+    table_name: str = Field(default="聚水潭ERP商品列表", description="聚水潭 ERP 库存表名")
+    cache_seconds: int = Field(default=300, ge=0, le=3600, description="全表库存缓存秒数")
+    field_names: JushuitanErpInventoryFieldNames = Field(default_factory=JushuitanErpInventoryFieldNames)
+
+
 class PddProductCatalogFieldNames(BaseModel):
     """拼多多所有商品飞书表列名。"""
 
@@ -589,6 +604,7 @@ class FeishuYamlConfig(BaseModel):
     pdd_promotion_log: PddPromotionLogConfig = Field(default_factory=PddPromotionLogConfig)
     pdd_price_compare: PddPriceCompareConfig = Field(default_factory=PddPriceCompareConfig)
     pdd_product_catalog: PddProductCatalogConfig = Field(default_factory=PddProductCatalogConfig)
+    jushuitan_erp_inventory: JushuitanErpInventoryConfig = Field(default_factory=JushuitanErpInventoryConfig)
     pipeline: PipelineIntegrationConfig = Field(default_factory=PipelineIntegrationConfig)
 
 
@@ -618,6 +634,7 @@ class FeishuConfig(BaseModel):
     pdd_promotion_log: PddPromotionLogConfig = Field(default_factory=PddPromotionLogConfig)
     pdd_price_compare: PddPriceCompareConfig = Field(default_factory=PddPriceCompareConfig)
     pdd_product_catalog: PddProductCatalogConfig = Field(default_factory=PddProductCatalogConfig)
+    jushuitan_erp_inventory: JushuitanErpInventoryConfig = Field(default_factory=JushuitanErpInventoryConfig)
     pipeline: PipelineIntegrationConfig = Field(default_factory=PipelineIntegrationConfig)
 
 
@@ -674,6 +691,10 @@ def load_feishu_config(path: Path | None = None) -> FeishuConfig:
     if "pdd_product_catalog" in raw and isinstance(raw.get("pdd_product_catalog"), dict):
         pdd_product_catalog = PddProductCatalogConfig.model_validate(raw["pdd_product_catalog"])
 
+    jushuitan_erp_inventory = yaml_cfg.jushuitan_erp_inventory
+    if "jushuitan_erp_inventory" in raw and isinstance(raw.get("jushuitan_erp_inventory"), dict):
+        jushuitan_erp_inventory = JushuitanErpInventoryConfig.model_validate(raw["jushuitan_erp_inventory"])
+
     pipeline = yaml_cfg.pipeline
     if "pipeline" in raw and isinstance(raw.get("pipeline"), dict):
         pipeline = PipelineIntegrationConfig.model_validate(raw["pipeline"])
@@ -702,6 +723,7 @@ def load_feishu_config(path: Path | None = None) -> FeishuConfig:
         pdd_promotion_log=pdd_promotion_log,
         pdd_price_compare=pdd_price_compare,
         pdd_product_catalog=pdd_product_catalog,
+        jushuitan_erp_inventory=jushuitan_erp_inventory,
         pipeline=pipeline,
     )
 
@@ -820,6 +842,22 @@ def save_pdd_product_catalog_table_id_to_config(table_id: str, path: Path | None
         catalog_raw = {}
     catalog_raw["table_id"] = table_id
     data["pdd_product_catalog"] = catalog_raw
+    cfg_path.parent.mkdir(parents=True, exist_ok=True)
+    with open(cfg_path, "w", encoding="utf-8") as f:
+        yaml.dump(data, f, allow_unicode=True, default_flow_style=False, sort_keys=False)
+
+
+def save_jushuitan_erp_table_id_to_config(table_id: str, path: Path | None = None) -> None:
+    cfg_path = path or Path(os.getenv("FEISHU_CONFIG_PATH", DEFAULT_FEISHU_CONFIG_PATH))
+    data: dict = {}
+    if cfg_path.is_file():
+        with open(cfg_path, encoding="utf-8") as f:
+            data = yaml.safe_load(f) or {}
+    inv_raw = data.get("jushuitan_erp_inventory")
+    if not isinstance(inv_raw, dict):
+        inv_raw = {}
+    inv_raw["table_id"] = table_id
+    data["jushuitan_erp_inventory"] = inv_raw
     cfg_path.parent.mkdir(parents=True, exist_ok=True)
     with open(cfg_path, "w", encoding="utf-8") as f:
         yaml.dump(data, f, allow_unicode=True, default_flow_style=False, sort_keys=False)

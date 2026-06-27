@@ -55,6 +55,7 @@ async def delist_browser_node(state: DelistState) -> dict:
                 account_dict,
                 targets,
                 dry_run=bool(raw.get("dry_run", False)),
+                delist_spec_code_search_enabled=bool(raw.get("delist_spec_code_search_enabled")),
             )
         if target_product_id:
             return process_single_product_delist(
@@ -79,13 +80,33 @@ async def delist_browser_node(state: DelistState) -> dict:
                     "finished": True,
                 }
             if stats.get("errors"):
-                return {"errors": list(stats.get("errors") or []), "results": stats.get("results") or [], "finished": True}
-            return {"phase": "delist_done", "results": stats.get("results") or [], "finished": True}
+                fatal = [str(e) for e in (stats.get("errors") or []) if str(e).strip()]
+                return {
+                    "phase": "delist_done",
+                    "results": stats.get("results") or [],
+                    "warnings": [*list(stats.get("warnings") or []), *fatal],
+                    "delist_issues": fatal,
+                    "finished": True,
+                }
+            return {
+                "phase": "delist_done",
+                "results": stats.get("results") or [],
+                "warnings": list(stats.get("warnings") or []),
+                "finished": True,
+            }
         if stats.get("error"):
             return {"errors": [stats["error"]], "results": [stats], "finished": True}
         return {"phase": "delist_done", "results": [stats], "finished": True}
     except Exception as exc:
         logger.exception("delist failed")
+        if mode == "pipeline_relist_prep":
+            return {
+                "phase": "delist_done",
+                "results": [],
+                "warnings": [str(exc)],
+                "delist_issues": [str(exc)],
+                "finished": True,
+            }
         return {"errors": [str(exc)], "finished": True}
 
 

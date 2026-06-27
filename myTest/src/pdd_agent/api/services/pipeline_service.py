@@ -1075,6 +1075,7 @@ def start_integrated_pipeline(
     listing_batch_interval_minutes: int = 30,
     listing_per_batch_limited_time_enabled: bool = False,
     listing_per_batch_campaign_enabled: bool = False,
+    delist_spec_code_search_enabled: bool = False,
     extra_meta: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     account_id = str(account_id or "").strip()
@@ -1128,6 +1129,7 @@ def start_integrated_pipeline(
         "campaign_activity_index": 0,
         "campaign_results": [],
         "relist_strategy": strategy,
+        "delist_spec_code_search_enabled": bool(delist_spec_code_search_enabled),
         **listing_input_meta,
     }
     if batch_id:
@@ -1352,6 +1354,7 @@ def start_integrated_pipeline_batch(
     listing_per_batch_limited_time_enabled: bool = False,
     listing_per_batch_campaign_enabled: bool = False,
     store_sequential_enabled: bool = False,
+    delist_spec_code_search_enabled: bool = False,
 ) -> dict[str, Any]:
     """批量创建整合链路；默认各店按启动间隔错开并行入队；串行模式下一家跑完再跑下一家。"""
     from pdd_agent.api.services.pipeline_store_sequential import (
@@ -1393,6 +1396,7 @@ def start_integrated_pipeline_batch(
         listing_batch_interval_minutes=listing_batch_interval_minutes,
         listing_per_batch_limited_time_enabled=listing_per_batch_limited_time_enabled,
         listing_per_batch_campaign_enabled=listing_per_batch_campaign_enabled,
+        delist_spec_code_search_enabled=delist_spec_code_search_enabled,
     )
 
     if store_sequential_enabled:
@@ -1475,6 +1479,7 @@ def start_integrated_pipeline_batch(
             listing_batch_interval_minutes=listing_batch_interval_minutes,
             listing_per_batch_limited_time_enabled=listing_per_batch_limited_time_enabled,
             listing_per_batch_campaign_enabled=listing_per_batch_campaign_enabled,
+            delist_spec_code_search_enabled=delist_spec_code_search_enabled,
         )
         pipelines.append(
             {
@@ -1621,18 +1626,159 @@ def _listing_failure_meta(result: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _on_listing_finished(row, *, run_id: str, success: bool, result: dict[str, Any], error: str) -> None:
-    if not success:
-        from pdd_agent.api.services.pipeline_listing_batch_continue import (
-            maybe_continue_listing_batch_after_failure,
-        )
+def _continue_pipeline_after_listing(
+    row,
+    *,
+    run_id: str,
+    result: dict[str, Any],
+    pdd_ids: list[str],
+    mapping_ids: list[str],
+    error_hint: str = "",
+) -> bool:
+    """
+    用当前批 + 分批累计的成功商品继续限时限量/活动；有商品可继续时返回 True。
+    单套/单批失败不阻断其余已成功商品及后续批次。
+    """
+    refreshed = get_integrated_pipeline(row.pipeline_id) or row
+    pdd_ids, mapping_ids, missing = _merge_skipped_listing_products(
+        refreshed,
+        pdd_ids=pdd_ids,
+        mapping_ids=mapping_ids,
+    )
+    if missing:
+        return False
 
+    from pdd_agent.api.services.pipeline_listing_throttle import (
+        has_more_listing_batches,
+        resolve_listing_products_after_batches,
+        schedule_next_listing_batch_after_finish,
+    )
+    from pdd_agent.api.services.pipeline_per_batch_limited_time import (
+        maybe_run_per_batch_limited_time_after_listing,
+    )
+    from pdd_agent.api.services.pipeline_per_batch_campaign import (
+        maybe_run_per_batch_campaign_after_listing,
+    )
+
+    listing_meta = {
+        "listing_summary": _summarize_run_message(run_id),
+    }
+    listing_meta.update(_listing_failure_meta(result))
+    if error_hint:
+        listing_meta["listing_batch_last_error"] = error_hint
+        if not listing_meta.get("listing_outcome"):
+            listing_meta["listing_outcome"] = LISTING_PARTIAL_OUTCOME
+
+    if maybe_run_per_batch_limited_time_after_listing(
+        refreshed,
+        pdd_ids=pdd_ids,
+        mapping_ids=mapping_ids,
+        listing_meta=listing_meta,
+    ):
+        return True
+
+    if maybe_run_per_batch_campaign_after_listing(
+        refreshed,
+        pdd_ids=pdd_ids,
+        mapping_ids=mapping_ids,
+        listing_meta=listing_meta,
+    ):
+        return True
+
+    if schedule_next_listing_batch_after_finish(
+        refreshed,
+        pdd_ids=pdd_ids,
+        mapping_ids=mapping_ids,
+        listing_meta=listing_meta,
+    ):
+        logger.info(
+            "pipeline %s listing batch finished, next batch scheduled run_id=%s",
+            row.pipeline_id,
+            run_id,
+        )
+        return True
+
+    pdd_ids, mapping_ids = resolve_listing_products_after_batches(refreshed, pdd_ids, mapping_ids)
+    if not pdd_ids:
+        return False
+
+    refreshed = get_integrated_pipeline(row.pipeline_id) or refreshed
+    throttle = dict((refreshed.meta or {}).get("listing_throttle") or {})
+    if throttle.get("enabled") and not has_more_listing_batches(throttle):
+        listing_meta["listing_throttle"] = {**throttle, "completed": True}
+
+    if _pipeline_auto_limited_time(refreshed):
+        limited_time_at = datetime.now() + timedelta(seconds=LIMITED_TIME_POST_LISTING_DELAY_SECONDS)
+        _enqueue_pipeline_limited_time(
+            refreshed,
+            pdd_ids=pdd_ids,
+            mapping_ids=mapping_ids,
+            meta_patch=listing_meta,
+            scheduled_at=limited_time_at,
+        )
+        logger.info(
+            "pipeline %s listing done (partial ok), limited time scheduled at %s pdd_ids=%s",
+            row.pipeline_id,
+            limited_time_at,
+            pdd_ids,
+        )
+        return True
+
+    scheduled_at = resolve_activity_scheduled_at(
+        demo_mode=bool(refreshed.demo_mode),
+        activity_delay_hours=float(refreshed.activity_delay_hours or 24.0),
+    )
+    base_at = datetime.now() + _resolve_activity_delay(
+        demo_mode=bool(refreshed.demo_mode),
+        activity_delay_hours=float(refreshed.activity_delay_hours or 24.0),
+    )
+    activity_jitter_seconds = max(0, int((scheduled_at - base_at).total_seconds()))
+    listing_meta["activity_jitter_seconds"] = activity_jitter_seconds
+    _schedule_pipeline_campaign(
+        refreshed,
+        activity_index=0,
+        scheduled_at=scheduled_at,
+        pdd_ids=pdd_ids,
+        mapping_ids=mapping_ids,
+        meta_patch=listing_meta,
+    )
+    logger.info(
+        "pipeline %s listing done (partial ok), activity scheduled at %s pdd_ids=%s",
+        row.pipeline_id,
+        scheduled_at,
+        pdd_ids,
+    )
+    return True
+
+
+def _on_listing_finished(row, *, run_id: str, success: bool, result: dict[str, Any], error: str) -> None:
+    from pdd_agent.api.services.pipeline_listing_batch_continue import (
+        has_remaining_listing_batch,
+        maybe_continue_listing_batch_after_failure,
+    )
+
+    if not success:
         if maybe_continue_listing_batch_after_failure(
             row,
             run_id=run_id,
             result=result,
             error=error,
         ):
+            return
+        pdd_ids, mapping_ids = _extract_listing_products(result)
+        if _continue_pipeline_after_listing(
+            row,
+            run_id=run_id,
+            result=result,
+            pdd_ids=pdd_ids,
+            mapping_ids=mapping_ids,
+            error_hint=error or "上架失败",
+        ):
+            logger.info(
+                "pipeline %s listing batch failed but continuing with accumulated products run_id=%s",
+                row.pipeline_id,
+                run_id,
+            )
             return
         err = error or "上架失败"
         update_integrated_pipeline(
@@ -1671,11 +1817,6 @@ def _on_listing_finished(row, *, run_id: str, success: bool, result: dict[str, A
             logger.warning("pipeline issue ingest failed pipeline_id=%s", row.pipeline_id, exc_info=True)
         return
     if not pdd_ids:
-        from pdd_agent.api.services.pipeline_listing_batch_continue import (
-            has_remaining_listing_batch,
-            maybe_continue_listing_batch_after_failure,
-        )
-
         refreshed = get_integrated_pipeline(row.pipeline_id) or row
         if has_remaining_listing_batch(refreshed) and maybe_continue_listing_batch_after_failure(
             refreshed,
@@ -1685,6 +1826,20 @@ def _on_listing_finished(row, *, run_id: str, success: bool, result: dict[str, A
         ):
             logger.info(
                 "pipeline %s listing batch finished with no pdd_ids, scheduled next batch run_id=%s",
+                row.pipeline_id,
+                run_id,
+            )
+            return
+        if _continue_pipeline_after_listing(
+            row,
+            run_id=run_id,
+            result=result,
+            pdd_ids=[],
+            mapping_ids=[],
+            error_hint=error or "本批无成功上架商品",
+        ):
+            logger.info(
+                "pipeline %s listing batch empty but continuing with accumulated products run_id=%s",
                 row.pipeline_id,
                 run_id,
             )
@@ -1712,97 +1867,21 @@ def _on_listing_finished(row, *, run_id: str, success: bool, result: dict[str, A
             logger.warning("pipeline issue ingest failed pipeline_id=%s", row.pipeline_id, exc_info=True)
         return
 
-    listing_meta = {
-        "listing_summary": _summarize_run_message(run_id),
-    }
-    listing_meta.update(_listing_failure_meta(result))
-    refreshed = get_integrated_pipeline(row.pipeline_id) or row
-
-    from pdd_agent.api.services.pipeline_listing_throttle import (
-        resolve_listing_products_after_batches,
-        schedule_next_listing_batch_after_finish,
-    )
-    from pdd_agent.api.services.pipeline_per_batch_limited_time import (
-        maybe_run_per_batch_limited_time_after_listing,
-    )
-    from pdd_agent.api.services.pipeline_per_batch_campaign import (
-        maybe_run_per_batch_campaign_after_listing,
-    )
-
-    if maybe_run_per_batch_limited_time_after_listing(
-        refreshed,
-        pdd_ids=pdd_ids,
-        mapping_ids=mapping_ids,
-        listing_meta=listing_meta,
-    ):
-        return
-
-    if maybe_run_per_batch_campaign_after_listing(
-        refreshed,
-        pdd_ids=pdd_ids,
-        mapping_ids=mapping_ids,
-        listing_meta=listing_meta,
-    ):
-        return
-
-    if schedule_next_listing_batch_after_finish(
-        refreshed,
-        pdd_ids=pdd_ids,
-        mapping_ids=mapping_ids,
-        listing_meta=listing_meta,
-    ):
-        logger.info(
-            "pipeline %s listing batch finished, next batch scheduled run_id=%s",
-            row.pipeline_id,
-            run_id,
-        )
-        return
-
-    pdd_ids, mapping_ids = resolve_listing_products_after_batches(refreshed, pdd_ids, mapping_ids)
-    refreshed = get_integrated_pipeline(row.pipeline_id) or refreshed
-
-    if _pipeline_auto_limited_time(refreshed):
-        limited_time_at = datetime.now() + timedelta(seconds=LIMITED_TIME_POST_LISTING_DELAY_SECONDS)
-        _enqueue_pipeline_limited_time(
-            refreshed,
-            pdd_ids=pdd_ids,
-            mapping_ids=mapping_ids,
-            meta_patch=listing_meta,
-            scheduled_at=limited_time_at,
-        )
-        logger.info(
-            "pipeline %s listing done, limited time scheduled at %s pdd_ids=%s activities=%s",
-            row.pipeline_id,
-            limited_time_at,
-            pdd_ids,
-            _pipeline_activity_ids(row),
-        )
-        return
-
-    scheduled_at = resolve_activity_scheduled_at(
-        demo_mode=bool(row.demo_mode),
-        activity_delay_hours=float(row.activity_delay_hours or 24.0),
-    )
-    base_at = datetime.now() + _resolve_activity_delay(
-        demo_mode=bool(row.demo_mode),
-        activity_delay_hours=float(row.activity_delay_hours or 24.0),
-    )
-    activity_jitter_seconds = max(0, int((scheduled_at - base_at).total_seconds()))
-    listing_meta["activity_jitter_seconds"] = activity_jitter_seconds
-    _schedule_pipeline_campaign(
+    if _continue_pipeline_after_listing(
         row,
-        activity_index=0,
-        scheduled_at=scheduled_at,
+        run_id=run_id,
+        result=result,
         pdd_ids=pdd_ids,
         mapping_ids=mapping_ids,
-        meta_patch=listing_meta,
-    )
-    logger.info(
-        "pipeline %s listing done, activity scheduled at %s pdd_ids=%s activities=%s",
+    ):
+        return
+
+    err = "上架完成但未获取到拼多多商品 ID"
+    update_integrated_pipeline(
         row.pipeline_id,
-        scheduled_at,
-        pdd_ids,
-        _pipeline_activity_ids(row),
+        status="failed",
+        current_step="listing_failed",
+        error=err,
     )
 
 

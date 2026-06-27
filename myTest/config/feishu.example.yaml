@@ -191,6 +191,16 @@ pdd_product_catalog:
     available_inventory: 可用库存
     pricing: 拼多多定价
 
+# 上架库存：聚水潭 ERP 可用数（按商品编码匹配）
+jushuitan_erp_inventory:
+  enabled: true
+  table_id: ""
+  table_name: 聚水潭ERP商品列表
+  cache_seconds: 300
+  field_names:
+    product_code: 商品编码
+    available_qty: 可用数
+
 # pdd.xls 控价区间 → 飞书「拼多多比价定价」
 pdd_price_compare:
   enabled: true

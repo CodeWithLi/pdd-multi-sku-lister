@@ -797,6 +797,7 @@ export interface IntegratedPipelineStartPayload {
   listing_batch_interval_minutes?: number
   listing_per_batch_limited_time_enabled?: boolean
   listing_per_batch_campaign_enabled?: boolean
+  delist_spec_code_search_enabled?: boolean
 }
 
 export interface IntegratedPipelineBatchStartPayload {
@@ -826,6 +827,7 @@ export interface IntegratedPipelineBatchStartPayload {
   listing_per_batch_limited_time_enabled?: boolean
   listing_per_batch_campaign_enabled?: boolean
   store_sequential_enabled?: boolean
+  delist_spec_code_search_enabled?: boolean
 }
 
 export interface IntegratedPipelineBatchRunItem {

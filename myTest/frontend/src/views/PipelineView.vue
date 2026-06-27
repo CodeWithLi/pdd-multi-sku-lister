@@ -18,12 +18,14 @@ import {
   loadListingThrottleEnabled,
   loadListingPerBatchLimitedTimeEnabled,
   loadListingPerBatchCampaignEnabled,
+  loadDelistSpecCodeSearchEnabled,
   loadPipelineRelistStrategy,
   saveListingBatchIntervalMinutes,
   saveListingBatchSetCount,
   saveListingThrottleEnabled,
   saveListingPerBatchLimitedTimeEnabled,
   saveListingPerBatchCampaignEnabled,
+  saveDelistSpecCodeSearchEnabled,
   savePipelineRelistStrategy,
 } from '@/utils/pipelinePreferences'
 import {
@@ -78,6 +80,7 @@ const listingBatchSetCount = ref(loadListingBatchSetCount())
 const listingBatchIntervalMinutes = ref(loadListingBatchIntervalMinutes())
 const listingPerBatchLimitedTimeEnabled = ref(loadListingPerBatchLimitedTimeEnabled())
 const listingPerBatchCampaignEnabled = ref(loadListingPerBatchCampaignEnabled())
+const delistSpecCodeSearchEnabled = ref(loadDelistSpecCodeSearchEnabled())
 const excelFallbackEnabled = ref(false)
 const excelFallbackSaving = ref(false)
 const logSpecSkuRowsEnabled = ref(false)
@@ -931,6 +934,7 @@ async function startPipeline() {
         listing_per_batch_limited_time_enabled: listingPerBatchLimitedTimeEnabled.value,
         listing_per_batch_campaign_enabled: listingPerBatchCampaignEnabled.value,
         store_sequential_enabled: storeSequentialEnabled.value,
+        delist_spec_code_search_enabled: delistSpecCodeSearchEnabled.value,
       })
       success.value = `批量整合链路已提交：${result.total} 家店铺${
         result.store_sequential_enabled
@@ -970,6 +974,7 @@ async function startPipeline() {
         listing_batch_interval_minutes: listingBatchIntervalMinutes.value,
         listing_per_batch_limited_time_enabled: listingPerBatchLimitedTimeEnabled.value,
         listing_per_batch_campaign_enabled: listingPerBatchCampaignEnabled.value,
+        delist_spec_code_search_enabled: delistSpecCodeSearchEnabled.value,
       })
       pipelinePage.value = 1
       activePipeline.value = result
@@ -1059,6 +1064,10 @@ watch(listingPerBatchLimitedTimeEnabled, (value) => {
 
 watch(listingPerBatchCampaignEnabled, (value) => {
   saveListingPerBatchCampaignEnabled(value)
+})
+
+watch(delistSpecCodeSearchEnabled, (value) => {
+  saveDelistSpecCodeSearchEnabled(value)
 })
 
 watch(resolvedListingSelectors, () => {
@@ -1414,6 +1423,18 @@ onUnmounted(() => {
                 </div>
                 <div v-else-if="relistStrategy === 'delist_and_relist'" class="form-tip form-tip-highlight">
                   上架前一次性将全部商品编码原样填入搜索框，逐页勾选校验后批量下架；全部完成后才进入上架（不是每个商品上架前单独下架）。
+                </div>
+                <div
+                  v-if="relistStrategy === 'delist_and_relist'"
+                  class="option-row delist-spec-search-row"
+                >
+                  <div class="switch-row">
+                    <span class="switch-label">商品编码未命中时尝试规格编码搜索</span>
+                    <el-switch v-model="delistSpecCodeSearchEnabled" />
+                  </div>
+                  <div class="form-tip">
+                    默认关闭：仅按商品编码搜索，可节省每批约 20–40 秒。开启后商品编码无结果时会再搜规格编码。
+                  </div>
                 </div>
               </el-form-item>
 

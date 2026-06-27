@@ -102,7 +102,7 @@ def test_finalize_relist_prep_deletes_mapping_once_for_duplicate_ids():
         "pdd_agent.api.services.pipeline_relist_strategy.delete_published_product",
         return_value=True,
     ) as delete_mock:
-        deleted, errors = finalize_relist_prep_after_delist(
+        deleted, warnings = finalize_relist_prep_after_delist(
             {
                 "results": [
                     {"mapping_id": "m1", "status": "delisted", "target_product_id": "970099768599"},
@@ -112,7 +112,7 @@ def test_finalize_relist_prep_deletes_mapping_once_for_duplicate_ids():
         )
 
     assert deleted == ["m1"]
-    assert errors == []
+    assert warnings == []
     delete_mock.assert_called_once_with("m1")
 
 
@@ -121,7 +121,7 @@ def test_finalize_relist_prep_deletes_delisted_and_not_found():
         "pdd_agent.api.services.pipeline_relist_strategy.delete_published_product",
         return_value=True,
     ) as delete_mock:
-        deleted, errors = finalize_relist_prep_after_delist(
+        deleted, warnings = finalize_relist_prep_after_delist(
             {
                 "results": [
                     {"mapping_id": "m1", "status": "delisted"},
@@ -132,5 +132,28 @@ def test_finalize_relist_prep_deletes_delisted_and_not_found():
         )
 
     assert deleted == ["m1", "m2"]
-    assert errors == ["BD713A: confirm_delist_failed"]
+    assert warnings == ["BD713A: confirm_delist_failed"]
     assert delete_mock.call_count == 2
+
+
+def test_finalize_relist_prep_treats_search_no_hit_as_warning():
+    with patch(
+        "pdd_agent.api.services.pipeline_relist_strategy.delete_published_product",
+        return_value=True,
+    ) as delete_mock:
+        deleted, warnings = finalize_relist_prep_after_delist(
+            {
+                "results": [
+                    {
+                        "mapping_id": "m1",
+                        "selector": "BD001/第一套/BD001A",
+                        "error": "merchant_code_search_no_hit",
+                    },
+                    {"mapping_id": "m2", "status": "delisted"},
+                ]
+            }
+        )
+
+    assert deleted == ["m2"]
+    assert warnings == ["BD001/第一套/BD001A: merchant_code_search_no_hit"]
+    delete_mock.assert_called_once_with("m2")

@@ -6,6 +6,7 @@ const LISTING_BATCH_SET_COUNT_KEY = 'pdd_agent.pipeline.listing_batch_set_count'
 const LISTING_BATCH_INTERVAL_KEY = 'pdd_agent.pipeline.listing_batch_interval_minutes'
 const LISTING_PER_BATCH_LIMITED_TIME_KEY = 'pdd_agent.pipeline.listing_per_batch_limited_time_enabled'
 const LISTING_PER_BATCH_CAMPAIGN_KEY = 'pdd_agent.pipeline.listing_per_batch_campaign_enabled'
+const DELIST_SPEC_CODE_SEARCH_KEY = 'pdd_agent.pipeline.delist_spec_code_search_enabled'
 const MINIO_MATERIAL_REFRESH_PAUSED_KEY = 'pdd_agent.minio_material_refresh_paused'
 
 const VALID_RELIST_STRATEGIES = new Set<RelistStrategy>([
@@ -116,6 +117,22 @@ export function loadListingPerBatchCampaignEnabled(): boolean {
 export function saveListingPerBatchCampaignEnabled(enabled: boolean): void {
   try {
     localStorage.setItem(LISTING_PER_BATCH_CAMPAIGN_KEY, enabled ? '1' : '0')
+  } catch {
+    // ignore
+  }
+}
+
+export function loadDelistSpecCodeSearchEnabled(): boolean {
+  try {
+    return localStorage.getItem(DELIST_SPEC_CODE_SEARCH_KEY) === '1'
+  } catch {
+    return false
+  }
+}
+
+export function saveDelistSpecCodeSearchEnabled(enabled: boolean): void {
+  try {
+    localStorage.setItem(DELIST_SPEC_CODE_SEARCH_KEY, enabled ? '1' : '0')
   } catch {
     // ignore
   }

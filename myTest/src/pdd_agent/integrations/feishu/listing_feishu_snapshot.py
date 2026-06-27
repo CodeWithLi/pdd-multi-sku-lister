@@ -14,6 +14,10 @@ from pdd_agent.integrations.feishu.bitable import (
 )
 from pdd_agent.integrations.feishu.client import FeishuClient
 from pdd_agent.integrations.feishu.config import FeishuConfig, load_feishu_config
+from pdd_agent.integrations.feishu.jushuitan_erp_inventory import (
+    apply_jushuitan_inventory_to_catalog,
+    load_jushuitan_inventory_map,
+)
 from pdd_agent.integrations.feishu.pdd_product_catalog_sync import _entry_from_feishu_fields
 from pdd_agent.integrations.feishu.listing_feishu_catalog import (
     feishu_snapshot_alias_allowed,
@@ -49,6 +53,7 @@ class ListingFeishuSnapshot:
     _color_spec_field: str = ""
     _product_type_field: str = ""
     _inventory_field: str = ""
+    _jushuitan_inventory: dict[str, int] = field(default_factory=dict)
 
     def record_items(self) -> list[dict[str, Any]]:
         return [{"fields": fields} for fields in self.records_by_code.values()]
@@ -84,7 +89,11 @@ class ListingFeishuSnapshot:
             entry = _entry_from_feishu_fields(row, names, resolved_fields=resolved_fields)
             if entry:
                 catalog[entry.code] = entry
-        return catalog
+        return apply_jushuitan_inventory_to_catalog(
+            catalog,
+            self._jushuitan_inventory,
+            enabled=cfg.jushuitan_erp_inventory.enabled,
+        )
 
     def pricing_catalog(self, cfg: FeishuConfig) -> CodePriceCatalog:
         if not self._code_field:
@@ -285,10 +294,21 @@ def warm_listing_feishu_snapshot(
 
     snapshot.mark_queried(to_fetch)
     snapshot.source = "feishu" if snapshot.records_by_code else "feishu_empty"
+    if cfg.jushuitan_erp_inventory.enabled:
+        try:
+            inv_map = load_jushuitan_inventory_map(
+                codes=to_fetch,
+                config=cfg,
+                client=api,
+            )
+            snapshot._jushuitan_inventory.update(inv_map)
+        except Exception:
+            logger.exception("load jushuitan inventory for listing snapshot failed codes=%s", to_fetch)
     logger.info(
-        "feishu listing snapshot warmed requested=%s fetched_rows=%s unique_codes=%s",
+        "feishu listing snapshot warmed requested=%s fetched_rows=%s unique_codes=%s jushuitan=%s",
         len(to_fetch),
         len(records),
         len(found),
+        len(snapshot._jushuitan_inventory),
     )
     return snapshot

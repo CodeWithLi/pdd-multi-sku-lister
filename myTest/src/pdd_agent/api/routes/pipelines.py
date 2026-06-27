@@ -206,6 +206,7 @@ def start_integrated(body: IntegratedPipelineStartRequest):
             listing_batch_interval_minutes=body.listing_batch_interval_minutes,
             listing_per_batch_limited_time_enabled=body.listing_per_batch_limited_time_enabled,
             listing_per_batch_campaign_enabled=body.listing_per_batch_campaign_enabled,
+            delist_spec_code_search_enabled=body.delist_spec_code_search_enabled,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -261,6 +262,7 @@ def start_integrated_batch(body: IntegratedPipelineBatchStartRequest):
             listing_per_batch_limited_time_enabled=body.listing_per_batch_limited_time_enabled,
             listing_per_batch_campaign_enabled=body.listing_per_batch_campaign_enabled,
             store_sequential_enabled=body.store_sequential_enabled,
+            delist_spec_code_search_enabled=body.delist_spec_code_search_enabled,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc

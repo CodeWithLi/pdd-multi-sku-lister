@@ -579,6 +579,7 @@ def _ensure_style_size_row_visible(page, style_name: str, size_name: str) -> int
 def wait_multi_sku_rows(page, account_id: str, skus: list, max_wait: int = 15) -> list:
     """等待价格表生成，返回已定位的行元素列表。"""
     need = len(skus)
+    max_wait = max(max_wait, min(30, need // 2 + 12))
     print(f"[{account_id}] 等待价格表生成（共需 {need} 行）...", flush=True)
     rows: list = []
     for attempt in range(max_wait):
@@ -637,7 +638,42 @@ def _safe_preview_js(page, js: str, index: int, default=False):
         return default
 
 
-def _resolve_preview_upload_input(page, index: int, style_name: str = "", size_name: str = ""):
+def _resolve_preview_upload_input(
+    page,
+    index: int,
+    style_name: str = "",
+    size_name: str = "",
+    *,
+    spec_marker: str = "",
+):
+    if style_name and size_name:
+        _ensure_style_size_row_visible(page, style_name, size_name)
+        marker = str(spec_marker or index)
+        try:
+            raw = page.run_js(_RESOLVE_PREVIEW_INPUT_BY_SPEC_JS, style_name, size_name, marker) or "{}"
+            info = json.loads(raw) if isinstance(raw, str) else raw
+            if isinstance(info, dict):
+                if info.get("uploaded"):
+                    return None
+                if info.get("ready"):
+                    marker_key = str(info.get("marker") or marker)
+                    upload_input = page.ele(
+                        f"css:input[data-pdd-preview-spec-idx='{marker_key}']",
+                        timeout=0.5,
+                    )
+                    if upload_input:
+                        return upload_input
+                    cell = page.ele(
+                        f"css:td[data-pdd-preview-spec-idx='{marker_key}']",
+                        timeout=0.3,
+                    )
+                    if cell:
+                        upload_input = cell.ele("xpath:.//input[@type='file']", timeout=0.5)
+                        if upload_input:
+                            return upload_input
+        except Exception:
+            pass
+
     if style_name and size_name:
         found_idx = _ensure_style_size_row_visible(page, style_name, size_name)
         if found_idx is not None:
@@ -683,6 +719,9 @@ def _resolve_preview_upload_input(page, index: int, style_name: str = "", size_n
     if _preview_is_uploaded(page, index, style_name=style_name, size_name=size_name):
         return None
 
+    if style_name and size_name:
+        return None
+
     inputs = page.eles("css:.sku-table input[type='file']", timeout=0.5)
     return inputs[index] if index < len(inputs) else None
 
@@ -695,6 +734,11 @@ def _preview_is_uploaded(
     size_name: str = "",
 ) -> bool:
     if style_name and size_name:
+        try:
+            if page.run_js(_PREVIEW_CHECK_BY_SPEC_JS, style_name, size_name):
+                return True
+        except Exception:
+            pass
         try:
             _remark_sku_rows(page)
             raw = page.run_js(_SCROLL_FIND_STYLE_SIZE_ROW_JS, style_name, size_name)
@@ -769,7 +813,11 @@ def upload_row_preview(
 
             t = _now()
             upload_input = _resolve_preview_upload_input(
-                page, index, style_name=style_name, size_name=size_name
+                page,
+                index,
+                style_name=style_name,
+                size_name=size_name,
+                spec_marker=str(index),
             )
             _log_step(
                 account_id,
@@ -1114,13 +1162,13 @@ function scrollFindStyleSizeRow(style, size) {
     }
 
     for (const t of targets) t.scrollTop = 0;
-    for (let step = 0; step < 48; step++) {
+    for (let step = 0; step < 72; step++) {
         hit = tryFind();
         if (hit) return hit;
         let moved = false;
         for (const t of targets) {
             const before = t.scrollTop;
-            t.scrollTop += Math.max(120, Math.floor(t.clientHeight * 0.55));
+            t.scrollTop += Math.max(80, Math.floor(t.clientHeight * 0.45));
             if (t.scrollTop > before) moved = true;
         }
         if (!moved) break;
@@ -1131,6 +1179,39 @@ function scrollFindStyleSizeRow(style, size) {
 
 function countStyleSizeRows() {
     return Object.keys(buildStyleSizeRowMap()).length;
+}
+
+function getRowBySpec(style, size) {
+    const ns = normSpecLabel(style);
+    const nm = normSpecLabel(size);
+    for (const tr of document.querySelectorAll('tr[data-pdd-spec-style]')) {
+        if (normSpecLabel(tr.getAttribute('data-pdd-spec-style') || '') === ns
+            && normSpecLabel(tr.getAttribute('data-pdd-spec-size') || '') === nm) {
+            return tr;
+        }
+    }
+    const hit = findStyleSizeHit(style, size);
+    return hit && hit.tr ? hit.tr : null;
+}
+
+function stampGlobalRowIndices(styleNames, sizeNames) {
+    let stamped = 0;
+    for (let si = 0; si < styleNames.length; si++) {
+        for (let zi = 0; zi < sizeNames.length; zi++) {
+            const style = styleNames[si];
+            const size = sizeNames[zi];
+            const found = scrollFindStyleSizeRow(style, size);
+            if (!found || !found.found) continue;
+            const hit = findStyleSizeHit(style, size);
+            if (!hit || !hit.tr) continue;
+            const globalIdx = si * sizeNames.length + zi;
+            hit.tr.setAttribute('data-pdd-sku-row', String(globalIdx));
+            hit.tr.setAttribute('data-pdd-spec-style', style);
+            hit.tr.setAttribute('data-pdd-spec-size', size);
+            stamped++;
+        }
+    }
+    return stamped;
 }
 """
 )
@@ -1158,12 +1239,12 @@ if (!targets.length) {
 }
 for (const t of targets) t.scrollTop = 0;
 best = Math.max(best, countStyleSizeRows());
-for (let step = 0; step < 48; step++) {
+for (let step = 0; step < 72; step++) {
     if (expected > 0 && best >= expected) break;
     let moved = false;
     for (const t of targets) {
         const before = t.scrollTop;
-        t.scrollTop += Math.max(120, Math.floor(t.clientHeight * 0.55));
+        t.scrollTop += Math.max(80, Math.floor(t.clientHeight * 0.45));
         if (t.scrollTop > before) moved = true;
     }
     best = Math.max(best, countStyleSizeRows());
@@ -1261,7 +1342,77 @@ return JSON.stringify({
 )
 
 
+_STAMP_GLOBAL_ROW_INDICES_JS = (
+    _SKU_TABLE_SCROLL_JS
+    + """
+const styleNames = JSON.parse(arguments[0]);
+const sizeNames = JSON.parse(arguments[1]);
+return stampGlobalRowIndices(styleNames, sizeNames);
+"""
+)
+
+_RESOLVE_PREVIEW_INPUT_BY_SPEC_JS = (
+    _SKU_TABLE_SCROLL_JS
+    + _JS_PREVIEW_ROW_HELPERS
+    + """
+const style = arguments[0] || '';
+const size = arguments[1] || '';
+const marker = String(arguments[2] || '');
+const tr = getRowBySpec(style, size);
+if (!tr) return JSON.stringify({ready: false, uploaded: false});
+try {
+    tr.scrollIntoView({block: 'center', behavior: 'instant'});
+} catch (e) {
+    tr.scrollIntoView({block: 'center'});
+}
+const cell = tr.querySelector('.sku-preview-cell, td[class*="sku-preview"]');
+if (!cell) return JSON.stringify({ready: false, uploaded: false});
+if (checkPreviewCellUploaded(cell)) {
+    return JSON.stringify({ready: true, uploaded: true});
+}
+let inp = cell.querySelector('input[type="file"]');
+if (!inp) {
+    const uploadBtn = cell.querySelector(
+        '[class*="upload"], [class*="Upload"], .ant-upload, svg'
+    );
+    (uploadBtn || cell).click();
+    inp = cell.querySelector('input[type="file"]');
+}
+if (inp) {
+    inp.setAttribute('data-pdd-preview-spec-idx', marker);
+    return JSON.stringify({ready: true, uploaded: false, marker: marker});
+}
+cell.setAttribute('data-pdd-preview-spec-idx', marker);
+return JSON.stringify({ready: true, uploaded: false, marker: marker});
+"""
+)
+
+_PREVIEW_CHECK_BY_SPEC_JS = (
+    _SKU_TABLE_SCROLL_JS
+    + _JS_PREVIEW_ROW_HELPERS
+    + """
+const style = arguments[0] || '';
+const size = arguments[1] || '';
+const tr = getRowBySpec(style, size);
+if (!tr) return false;
+const cell = tr.querySelector('.sku-preview-cell, td[class*="sku-preview"]');
+return checkPreviewCellUploaded(cell);
+"""
+)
+
 _DUMP_STYLE_SIZE_MAP_JS = _SKU_TABLE_SCROLL_JS + "return dumpStyleSizeMap();"
+
+
+def _stamp_global_row_indices(page, style_names: list[str], size_names: list[str]) -> int:
+    """虚拟滚动表格：按款式×尺寸逐行滚动并打上全局稳定索引。"""
+    if not style_names or not size_names:
+        return 0
+    try:
+        payload_styles = json.dumps(list(style_names), ensure_ascii=False)
+        payload_sizes = json.dumps(list(size_names), ensure_ascii=False)
+        return int(page.run_js(_STAMP_GLOBAL_ROW_INDICES_JS, payload_styles, payload_sizes) or 0)
+    except Exception:
+        return 0
 
 
 def _spec_order_row_index(
@@ -1344,7 +1495,7 @@ def _fill_skus_by_spec_order(
             f"库存={row_data['inventory']} 拼团={row_data['group_price']} 单买={row_data['single_price']}",
             flush=True,
         )
-        success = _fill_row_by_index(page, idx, row_data)
+        success = _fill_row_by_style_size(page, sku.style_name, sku.model_name, row_data)
         if success:
             ok += 1
             print(f"[{account_id}]    → 文字字段填写成功", flush=True)
@@ -1541,6 +1692,13 @@ def fill_multi_spec_rows(
     t = _now()
     _scroll_sku_table_to_load(page, unique_rows)
     _remark_sku_rows(page)
+    if style_names and size_names:
+        stamped = _stamp_global_row_indices(page, style_names, size_names)
+        if stamped:
+            print(
+                f"[{account_id}] 虚拟表格已标记 {stamped}/{unique_rows} 行规格索引",
+                flush=True,
+            )
     time.sleep(0.35)
     _log_price_table_spec_map(page, account_id, style_names or [], size_names or [])
 
@@ -1608,15 +1766,13 @@ def fill_multi_spec_rows(
             }
             try:
                 t = _now()
-                ok = False
-                if style_names and size_names:
+                ok = _fill_row_by_style_size(page, sku.style_name, sku.model_name, row_data)
+                if not ok and style_names and size_names:
                     idx = _spec_order_row_index(
                         sku.style_name, sku.model_name, style_names, size_names
                     )
                     if idx is not None:
                         ok = _fill_row_by_index(page, idx, row_data)
-                if not ok:
-                    ok = _fill_row_by_style_size(page, sku.style_name, sku.model_name, row_data)
                 if ok:
                     if (sku.style_name, sku.model_name) in failed_keys:
                         refilled += 1
@@ -1631,9 +1787,11 @@ def fill_multi_spec_rows(
     print(f"[{account_id}] 文字字段填完，开始上传预览图...", flush=True)
     t = _now()
     _scroll_sku_table_to_load(page, len(skus))
+    if style_names and size_names:
+        _stamp_global_row_indices(page, style_names, size_names)
     _remark_sku_rows(page)
     preview_count = _mark_preview_inputs(page)
-    _log_step(account_id, f"预览图上传位 {preview_count} 个", t)
+    _log_step(account_id, f"预览图上传位 {preview_count} 个（虚拟滚动下可能少于 SKU 数）", t)
 
     uploaded = 0
     need_upload = len(
@@ -1645,12 +1803,17 @@ def fill_multi_spec_rows(
     )
     for i, sku in enumerate(skus):
         label = f"{sku.style_name} / {sku.model_name}"
-        row_idx = row_indices[i] if i < len(row_indices) else i
-        if not (style_names and size_names):
-            if sku.style_name and sku.model_name:
-                found_idx = _ensure_style_size_row_visible(page, sku.style_name, sku.model_name)
-                if found_idx is not None:
-                    row_idx = found_idx
+        row_idx = (
+            _spec_order_row_index(sku.style_name, sku.model_name, style_names, size_names)
+            if style_names and size_names
+            else (row_indices[i] if i < len(row_indices) else i)
+        )
+        if row_idx is None:
+            row_idx = i
+        if sku.style_name and sku.model_name:
+            found_idx = _ensure_style_size_row_visible(page, sku.style_name, sku.model_name)
+            if found_idx is not None and not (style_names and size_names):
+                row_idx = found_idx
         if not sku.preview_image:
             continue
         sku_start = _now()

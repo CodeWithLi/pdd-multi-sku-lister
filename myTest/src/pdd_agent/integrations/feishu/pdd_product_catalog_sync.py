@@ -29,6 +29,7 @@ from pdd_agent.integrations.feishu.config import (
 )
 from pdd_agent.integrations.feishu.pdd_price_compare_sync import _field_number, _field_text
 from pdd_agent.integrations.feishu.pdd_upload_sync import _resolve_or_create_pdd_table_id
+from pdd_agent.integrations.feishu.jushuitan_erp_inventory import enrich_catalog_with_jushuitan_inventory
 from pdd_agent.paths import PROJECT_ROOT
 from pdd_agent.skills.listing.pdd_product_catalog import (
     PddProductEntry,
@@ -303,9 +304,14 @@ def load_pdd_product_catalog_from_feishu(
         if entry:
             catalog[entry.code] = entry
 
+    enriched = enrich_catalog_with_jushuitan_inventory(
+        catalog,
+        config=cfg,
+        client=api,
+    )
     return ProductCatalogLoadResult(
-        catalog=catalog,
-        source="feishu" if catalog else "feishu_empty",
+        catalog=enriched,
+        source="feishu" if enriched else "feishu_empty",
     )
 
 
@@ -808,6 +814,7 @@ def load_unified_pdd_product_catalog(
             path = _catalog_excel_path(cfg)
         catalog = load_pdd_product_catalog(path)
         if catalog:
+            catalog = enrich_catalog_with_jushuitan_inventory(catalog, config=cfg, client=client)
             _CACHE["loaded_at"] = time.time()
             _CACHE["catalog"] = catalog
             _CACHE["source"] = "excel"

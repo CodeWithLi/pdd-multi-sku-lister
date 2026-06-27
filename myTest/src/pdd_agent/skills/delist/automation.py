@@ -34,6 +34,8 @@ GOODS_LIST_URLS = (
 
 MAX_PAGES = 50
 GOODS_LIST_PAGE_SIZE = 10
+DELIST_MERCHANT_CODE_SEARCH_BATCH_SIZE = 5
+_LAST_GOODS_LIST_SEARCH_FIELD = ""
 
 
 @dataclass
@@ -127,11 +129,32 @@ def open_goods_list_on_sale(page, account_id: str) -> bool:
 
 
 def _get_table_rows(page):
-    rows = page.eles("css:tbody tr")
-    if rows:
-        return [r for r in rows if (r.text or "").strip()]
-    rows = page.eles("tag:tr")
-    return [r for r in rows if (r.text or "").strip() and "创建时间" not in (r.text or "")]
+    """定位商品列表数据行（兼容 beast-core-table / tbody）。"""
+    best: list = []
+    for sel in (
+        "css:tr[data-testid='beast-core-table-body-tr']",
+        "css:tbody tr",
+        "tag:tr",
+    ):
+        try:
+            rows = page.eles(sel, timeout=0.8)
+        except Exception:
+            rows = []
+        filtered = [r for r in rows if _is_goods_list_data_row(r)]
+        if len(filtered) > len(best):
+            best = filtered
+    return best
+
+
+def _is_goods_list_data_row(row) -> bool:
+    text = (row.text or "").strip()
+    if not text or "创建时间" in text:
+        return False
+    if extract_product_id_from_text(text):
+        return True
+    if "商品编码" in text or "商品ID" in text or "ID:" in text:
+        return True
+    return len(text) > 40
 
 
 def _row_passes_merchant_filter(row_text: str, code_filter: str) -> bool:
@@ -722,7 +745,7 @@ def _log_search_result_diagnostics(
             snippet = re.sub(r"\s+", " ", str(item.get("row_text") or ""))[:80]
             _log(account_id, f"  #{idx} ID={product_id} 商品编码=<未解析> 摘要={snippet}")
             continue
-        matched = merchant_code_matches_expected(display_code, expected)
+        matched = _match_code_in_row_text(str(item.get("row_text") or ""), expected) or merchant_code_matches_expected(display_code, expected)
         if matched:
             _log(account_id, f"  #{idx} ID={product_id} 商品编码={display_code} → 命中目标")
             continue
@@ -768,6 +791,19 @@ def _normalize_merchant_code_list(codes: list[str]) -> list[str]:
     return out
 
 
+def chunk_merchant_codes_for_search(
+    codes: list[str],
+    *,
+    batch_size: int | None = None,
+) -> list[list[str]]:
+    """将商品编码按批切分，供筛选框空格分隔批量查询。"""
+    normalized = _normalize_merchant_code_list(codes)
+    if not normalized:
+        return []
+    size = max(1, int(batch_size or DELIST_MERCHANT_CODE_SEARCH_BATCH_SIZE))
+    return [normalized[index : index + size] for index in range(0, len(normalized), size)]
+
+
 def _search_code_matches_row(row_code: str, search_code: str) -> bool:
     """行内商品编码与搜索编码必须完全一致（不截短、不前缀匹配）。"""
     row_code = str(row_code or "").strip()
@@ -784,6 +820,116 @@ def extract_merchant_code_from_row_text(row_text: str) -> str:
     return ""
 
 
+def extract_spec_codes_from_row_text(row_text: str) -> list[str]:
+    """从行文本解析「规格编码: xxx」（可能有多个）。"""
+    text = str(row_text or "")
+    codes: list[str] = []
+    for match in re.finditer(r"规格编码[：:=]\s*([^\s\n\r]+)", text):
+        code = str(match.group(1) or "").strip()
+        if code and code not in codes:
+            codes.append(code)
+    return codes
+
+
+def match_row_merchant_code(
+    row_text: str,
+    expected_codes: set[str],
+    *,
+    allow_spec_filter_match: bool = False,
+) -> str:
+    """按行内「商品编码」或「规格编码」精确匹配目标编码（字符级相等）。"""
+    if not expected_codes:
+        return ""
+    product_code = extract_merchant_code_from_row_text(row_text)
+    if product_code and product_code in expected_codes:
+        return product_code
+    for spec_code in extract_spec_codes_from_row_text(row_text):
+        if spec_code in expected_codes:
+            return spec_code
+    return ""
+
+
+def goods_list_search_field() -> str:
+    return str(_LAST_GOODS_LIST_SEARCH_FIELD or "").strip()
+
+
+def _goods_list_table_loading(page) -> bool:
+    try:
+        return bool(
+            page.run_js(
+                """
+                const text = (document.body?.innerText || '').replace(/\\s+/g, '');
+                if (text.includes('加载中') || text.includes('正在加载')) return true;
+                for (const el of document.querySelectorAll('[class*="loading"], [class*="Loading"], [class*="spin"]')) {
+                    const s = window.getComputedStyle(el);
+                    if (s.display === 'none' || s.visibility === 'hidden') continue;
+                    const r = el.getBoundingClientRect();
+                    if (r.width > 8 && r.height > 8) return true;
+                }
+                return false;
+                """
+            )
+        )
+    except Exception:
+        return False
+
+
+def _goods_list_empty_state(page) -> bool:
+    try:
+        return bool(
+            page.run_js(
+                """
+                const text = (document.body?.innerText || '').replace(/\\s+/g, '');
+                const markers = ['暂无数据', '没有找到', '无符合条件', '未找到相关商品', '暂无商品'];
+                return markers.some((m) => text.includes(m));
+                """
+            )
+        )
+    except Exception:
+        return False
+
+
+def _wait_goods_list_search_settled(page, account_id: str, *, timeout: float = 20.0) -> str:
+    """等待商品列表搜索刷新。返回 ready / empty / timeout。"""
+    deadline = time.time() + timeout
+    last_count = -1
+    stable = 0
+    while time.time() < deadline:
+        if _goods_list_table_loading(page):
+            time.sleep(0.35)
+            continue
+        if _goods_list_empty_state(page):
+            return "empty"
+        rows = _get_table_rows(page)
+        count = len(rows)
+        if count > 0:
+            if count == last_count:
+                stable += 1
+                if stable >= 2:
+                    return "ready"
+            else:
+                stable = 0
+            last_count = count
+        time.sleep(0.45)
+    if _goods_list_empty_state(page):
+        return "empty"
+    return "ready" if _get_table_rows(page) else "timeout"
+
+
+def _search_has_matching_rows(page, codes: list[str], *, filter_label: str) -> bool:
+    expected = {str(code or "").strip() for code in codes if str(code or "").strip()}
+    if not expected:
+        return False
+    rows = _scan_filtered_rows_on_page(page)
+    if not rows:
+        return False
+    for item in rows:
+        row_text = str(item.get("row_text") or "")
+        if match_row_merchant_code(row_text, expected):
+            return True
+    return False
+
+
 def verify_row_safe_to_delist(
     row,
     *,
@@ -793,11 +939,10 @@ def verify_row_safe_to_delist(
     known_product_ids: set[str] | None = None,
 ) -> tuple[bool, str]:
     """
-    点击「下架」前二次校验，防止误下架：
-    1. 行内商品 ID 必须与目标一致
-    2. 行内商品编码必须与目标编码完全一致（字符级相等）
-    3. 若本地有已知商品 ID，则只允许下架该 ID
+    点击「下架」前二次校验：行内商品编码必须与目标编码完全一致（字符级相等）。
+    product_id 仅用于确认操作的是同一行，不限制「同编码多链接」是否下架。
     """
+    _ = known_product_ids
     product_id = str(product_id or "").strip()
     matched_code = str(matched_code or "").strip()
     if not product_id or not matched_code:
@@ -813,17 +958,22 @@ def verify_row_safe_to_delist(
     if row_pid != product_id:
         return False, f"product_id_mismatch:{row_pid}!={product_id}"
 
-    row_code = extract_merchant_code_from_row_text(text)
-    if not row_code:
-        return False, "merchant_code_unparsed"
-    if row_code != matched_code:
+    if goods_list_search_field() == "规格编码":
+        spec_codes = extract_spec_codes_from_row_text(text)
+        if matched_code in spec_codes:
+            return True, "ok"
+        return False, f"spec_code_mismatch:expected={matched_code},row={spec_codes}"
+
+    row_matched = _match_code_in_row_text(text, {matched_code})
+    if not row_matched:
+        row_code = extract_merchant_code_from_row_text(text)
+        if not row_code:
+            return False, "merchant_code_unparsed"
         return False, f"merchant_code_mismatch:{row_code}!={matched_code}"
+    if row_matched != matched_code:
+        return False, f"merchant_code_mismatch:{row_matched}!={matched_code}"
     if matched_code not in expected_codes:
         return False, f"code_not_in_expected:{matched_code}"
-
-    known = {str(pid or "").strip() for pid in (known_product_ids or set()) if str(pid or "").strip()}
-    if known and product_id not in known:
-        return False, f"product_id_not_in_known_records:{product_id}"
 
     return True, "ok"
 
@@ -838,13 +988,14 @@ def merchant_code_matches_expected(row_code: str, expected_codes: set[str]) -> s
     return ""
 
 
+def _match_code_in_row_text(row_text: str, expected_codes: set[str]) -> str:
+    return match_row_merchant_code(row_text, expected_codes)
+
+
 def _match_merchant_code_in_row(row_text: str, merchant_codes: list[str]) -> str:
-    """行文本匹配商品编码（基于「商品编码:」字段精确匹配）。"""
-    row_code = extract_merchant_code_from_row_text(row_text)
-    if not row_code:
-        return ""
+    """行文本匹配商品编码（商品编码 / 规格编码）。"""
     expected = {str(c or "").strip() for c in merchant_codes if str(c or "").strip()}
-    return merchant_code_matches_expected(row_code, expected)
+    return _match_code_in_row_text(row_text, expected)
 
 
 def _scan_filtered_rows_on_page(page) -> list[dict[str, str]]:
@@ -1140,12 +1291,11 @@ def batch_delist_by_verified_checkboxes(
     known_product_ids_by_code: dict[str, set[str]] | None = None,
 ) -> dict[str, object]:
     """
-    整合链路上架前一次性下架：搜索框原样填入全部编码 → 逐页精准匹配 → 逐条点「下架」。
+    整合链路上架前下架：搜索框填入本批编码（空格分隔）→ 逐页逐行校验编码 → 逐条下架。
 
     安全策略：
-    - 行内商品编码须与目标编码字符级完全一致（BD014A ≠ BD014A印花KT笔袋）
-    - 点击「下架」前二次读取行内 ID + 编码再校验
-    - 若本地有 pdd_product_id 记录，只下架该 ID，同编码其它链接跳过
+    - 行内商品编码须与目标编码字符级完全一致
+    - 同编码多链接：编码一致即下架，不校验本地商品 ID
     """
     expected_list = _normalize_merchant_code_list(merchant_codes)
     expected = set(expected_list)
@@ -1164,11 +1314,8 @@ def batch_delist_by_verified_checkboxes(
 
     _log(
         account_id,
-        f"一次性下架：已搜索 {len(expected_list)} 个编码，逐页精准匹配（完全一致才下架）",
+        f"本批下架：{len(expected_list)} 个编码已搜索，逐页匹配（编码完全一致才下架）",
     )
-    if known_product_ids_by_code:
-        bound = sum(len(v) for v in known_product_ids_by_code.values())
-        _log(account_id, f"本地商品ID约束：{bound} 个 ID 已绑定，未记录的同编码链接不会下架")
 
     total_delisted = 0
     delisted_items: list[dict[str, str]] = []
@@ -1176,7 +1323,6 @@ def batch_delist_by_verified_checkboxes(
     pages_processed = 0
     found_codes: set[str] = set()
     skipped_non_target = 0
-    skipped_unknown_id = 0
 
     for page_num in range(1, MAX_PAGES + 1):
         page_rows = _scan_filtered_rows_on_page(page)
@@ -1187,28 +1333,22 @@ def batch_delist_by_verified_checkboxes(
         targets: list[dict[str, str]] = []
         _log(account_id, f"第 {page_num} 页共 {len(page_rows)} 行，开始逐行校验")
         for item in page_rows:
-            row_code = str(item.get("merchant_code") or "").strip()
-            matched_code = merchant_code_matches_expected(row_code, expected)
+            row_text = str(item.get("row_text") or "")
+            matched_code = _match_code_in_row_text(row_text, expected)
+            if not matched_code:
+                row_code = str(item.get("merchant_code") or "").strip()
+                matched_code = merchant_code_matches_expected(row_code, expected)
             if not matched_code:
                 skipped_non_target += 1
                 continue
             product_id = str(item.get("product_id") or "").strip()
-            known_for_code = (known_product_ids_by_code or {}).get(matched_code) or set()
-            if known_for_code and product_id not in known_for_code:
-                skipped_unknown_id += 1
-                _log(
-                    account_id,
-                    f"  跳过 ID={product_id} 商品编码={matched_code}"
-                    f"（本地无此商品ID，防误下架）",
-                )
-                continue
             found_codes.add(matched_code)
+            row_code = str(item.get("merchant_code") or "").strip() or extract_merchant_code_from_row_text(row_text)
             targets.append(
                 {
                     "product_id": product_id,
                     "merchant_code": row_code,
                     "matched_code": matched_code,
-                    "known_product_ids": known_for_code,
                 }
             )
             _log(
@@ -1251,13 +1391,11 @@ def batch_delist_by_verified_checkboxes(
                 _log(account_id, f"  下架前未找到行 ID={product_id} 商品编码={matched_code}")
                 continue
 
-            known_for_code = set(target.get("known_product_ids") or [])
             ok, reason = verify_row_safe_to_delist(
                 row_data["row"],
                 product_id=product_id,
                 matched_code=matched_code,
                 expected_codes=expected,
-                known_product_ids=known_for_code or None,
             )
             if not ok:
                 _log(
@@ -1275,7 +1413,6 @@ def batch_delist_by_verified_checkboxes(
                 product_id,
                 matched_code=matched_code,
                 expected_codes=expected,
-                known_product_ids=known_for_code or None,
             ):
                 total_delisted += 1
                 delisted_items.append(
@@ -1312,11 +1449,6 @@ def batch_delist_by_verified_checkboxes(
         )
     if skipped_non_target:
         _log(account_id, f"已跳过 {skipped_non_target} 行非目标商品（编码不一致）")
-    if skipped_unknown_id:
-        _log(
-            account_id,
-            f"已跳过 {skipped_unknown_id} 行同编码但未在本地记录的商品ID（防误下架）",
-        )
     _log(
         account_id,
         f"分页下架完成：搜索命中 {len(found_codes)} 个编码，成功下架 {total_delisted} 条，"
@@ -1530,71 +1662,129 @@ def batch_delist_filtered_goods(
     return total, errors
 
 
-def filter_goods_by_merchant_codes(page, account_id: str, merchant_codes: list[str]) -> bool:
+def filter_goods_by_merchant_codes(
+    page,
+    account_id: str,
+    merchant_codes: list[str],
+    *,
+    try_spec_code_search: bool = False,
+) -> bool:
     from pdd_agent.skills.listing.upload import (
         _click_goods_search as click_search,
         _fill_goods_merchant_code_filter,
     )
 
+    global _LAST_GOODS_LIST_SEARCH_FIELD
+
     codes = _normalize_merchant_code_list(merchant_codes)
     if not codes:
         return False
     filter_value = " ".join(codes)
+
+    def _run_query(filter_label: str, *, filled: bool, filled_value: str, method: str) -> bool:
+        if not filled:
+            return False
+        _LAST_GOODS_LIST_SEARCH_FIELD = filter_label
+        _log(
+            account_id,
+            f"{filter_label}已写入筛选框：{filled_value[:200]}（{method}）",
+        )
+        search_result = click_search(page)
+        if not search_result.get("clicked"):
+            _log(account_id, f"未点击到「查询」按钮（{filter_label}），中止本编码搜索")
+            return False
+        _log(account_id, f"已点击「查询」按钮（{search_result.get('method')}）")
+        state = _wait_goods_list_search_settled(page, account_id)
+        row_count = len(_get_table_rows(page))
+        _log(
+            account_id,
+            f"已执行{filter_label}搜索（{len(codes)} 个）：{filter_value[:200]}；"
+            f"列表状态={state}，可见行={row_count}",
+        )
+        if state == "empty" or row_count <= 0:
+            return False
+        if _search_has_matching_rows(page, codes, filter_label=filter_label):
+            return True
+        _log_search_result_diagnostics(page, account_id, _scan_filtered_rows_on_page(page), set(codes), page_num=1)
+        return False
+
     _clear_goods_filters(page)
     fill_result = _fill_goods_merchant_code_filter(page, filter_value)
-    if not fill_result.get("filled"):
-        _log(
-            account_id,
-            f"商品编码写入筛选框失败：{filter_value[:200]}"
-            f"（读回={fill_result.get('value') or '<空>'}）",
-        )
-        return False
-    _log(
-        account_id,
-        f"商品编码已写入筛选框：{str(fill_result.get('value') or filter_value)[:200]}"
-        f"（{fill_result.get('method')}）",
-    )
+    if _run_query(
+        "商品编码",
+        filled=bool(fill_result.get("filled")),
+        filled_value=str(fill_result.get("value") or filter_value),
+        method=str(fill_result.get("method") or ""),
+    ):
+        return True
 
-    search_result = click_search(page)
-    if not search_result.get("clicked"):
-        _log(account_id, "未点击到「查询」按钮，列表可能仍是全部商品，中止本编码搜索")
+    if not try_spec_code_search:
+        _LAST_GOODS_LIST_SEARCH_FIELD = ""
+        _log(account_id, f"商品编码未搜索到（未开启规格编码搜索）：{filter_value[:200]}")
         return False
-    _log(account_id, f"已点击「查询」按钮（{search_result.get('method')}）")
-    time.sleep(1.5)
 
-    applied = _read_goods_merchant_code_filter(page)
-    _log(
-        account_id,
-        f"已执行商品编码搜索（{len(codes)} 个）：{filter_value[:200]}"
-        + (f"；筛选框读回：{applied[:200]}" if applied else "；筛选框读回为空"),
-    )
-    if applied and applied != filter_value and filter_value not in applied and applied not in filter_value:
-        _log(
-            account_id,
-            f"警告：筛选框值与期望不一致（期望 {len(filter_value)} 字，实际 {len(applied)} 字）",
-        )
-    return True
+    _log(account_id, f"商品编码搜索无命中，尝试按「规格编码」搜索：{filter_value[:200]}")
+    _clear_goods_filters(page)
+    from pdd_agent.skills.listing.upload import _fill_goods_spec_code_filter
+
+    spec_fill = _fill_goods_spec_code_filter(page, filter_value)
+    if _run_query(
+        "规格编码",
+        filled=bool(spec_fill.get("filled")),
+        filled_value=str(spec_fill.get("value") or filter_value),
+        method=str(spec_fill.get("method") or ""),
+    ):
+        return True
+
+    _LAST_GOODS_LIST_SEARCH_FIELD = ""
+    _log(account_id, f"商品编码与规格编码均未搜索到：{filter_value[:200]}")
+    return False
 
 
 def filter_goods_by_product_ids(page, account_id: str, product_ids: list[str]) -> bool:
-    from pdd_agent.skills.listing.upload import _click_goods_search as click_search
+    global _LAST_GOODS_LIST_SEARCH_FIELD
+    from pdd_agent.skills.listing.upload import (
+        _click_goods_search as click_search,
+        _fill_goods_id_filter,
+        _read_goods_id_filter,
+    )
 
     ids = [str(pid or "").strip() for pid in product_ids if str(pid or "").strip()]
     if not ids:
         return False
     filter_value = " ".join(ids)
     _clear_goods_filters(page)
-    if not _set_goods_filter(page, "商品ID", filter_value):
-        _log(account_id, f"商品ID批量筛选失败：{filter_value[:120]}")
+    fill_result = _fill_goods_id_filter(page, filter_value)
+    if not fill_result.get("filled"):
+        current = _read_goods_id_filter(page)
+        _log(
+            account_id,
+            f"商品ID筛选框写入失败（期望 {filter_value[:120]}，当前 {current[:120]}）",
+        )
         return False
+    _LAST_GOODS_LIST_SEARCH_FIELD = "商品ID"
     search_result = click_search(page)
     if not search_result.get("clicked"):
         _log(account_id, "未点击到「查询」按钮，商品ID筛选可能未生效")
         return False
+    _log(
+        account_id,
+        f"商品ID已写入筛选框：{str(fill_result.get('value') or filter_value)[:120]}"
+        f"（{fill_result.get('method')}）",
+    )
     _log(account_id, f"已点击「查询」按钮（{search_result.get('method')}）")
-    time.sleep(1.5)
-    _log(account_id, f"已按 {len(ids)} 个商品ID批量筛选")
-    return True
+    state = _wait_goods_list_search_settled(page, account_id)
+    row_count = len(_get_table_rows(page))
+    _log(account_id, f"已按 {len(ids)} 个商品ID筛选；列表状态={state}，可见行={row_count}")
+    if state == "empty" or row_count <= 0:
+        return False
+    expected = set(ids)
+    for item in _scan_filtered_rows_on_page(page):
+        row_pid = str(item.get("product_id") or "").strip()
+        if row_pid in expected:
+            return True
+    _log(account_id, f"商品ID筛选后未找到目标行：{filter_value[:120]}")
+    return False
 
 
 def process_single_product_delist(
@@ -1603,50 +1793,90 @@ def process_single_product_delist(
     *,
     product_id: str,
     mapping_id: str = "",
+    merchant_code: str = "",
     dry_run: bool = False,
     list_already_open: bool = False,
 ) -> dict:
-    """精准下架单个已发布商品：只按拼多多商品ID匹配，ID不一致绝不下架。"""
+    """精准下架：优先按商品编码搜索；有商品ID时须行内 ID 与编码同时匹配才下架。"""
     account_id = account_config.get("account_id", "")
     product_id = (product_id or "").strip()
+    merchant_code = str(merchant_code or "").strip()
     stats = {
         "account_id": account_id,
         "mapping_id": mapping_id,
         "target_product_id": product_id,
+        "merchant_code": merchant_code,
         "scanned": 0,
         "hit": 0,
         "dry_run": dry_run,
     }
-    if not product_id:
-        stats["error"] = "missing_product_id"
+    if not product_id and not merchant_code:
+        stats["error"] = "missing_product_id_and_merchant_code"
         return stats
 
     try:
-        _log(account_id, f"开始精准下架商品ID={product_id}")
+        global _LAST_GOODS_LIST_SEARCH_FIELD
+
+        label = f"商品编码={merchant_code}" if merchant_code else f"商品ID={product_id}"
+        _log(account_id, f"开始精准下架 {label}")
         if not list_already_open:
             if not open_goods_list_on_sale(page, account_id):
                 stats["error"] = "open_list_failed"
                 return stats
 
         _clear_goods_filters(page)
-        if not _set_goods_filter(page, "商品ID", product_id):
-            stats["error"] = "set_product_id_filter_failed"
-            return stats
+        if merchant_code:
+            from pdd_agent.skills.listing.upload import _fill_goods_merchant_code_filter
+
+            fill_result = _fill_goods_merchant_code_filter(page, merchant_code)
+            if not fill_result.get("filled"):
+                stats["error"] = "set_merchant_code_filter_failed"
+                return stats
+            _LAST_GOODS_LIST_SEARCH_FIELD = "商品编码"
+        elif product_id:
+            from pdd_agent.skills.listing.upload import _fill_goods_id_filter
+
+            fill_result = _fill_goods_id_filter(page, product_id)
+            if not fill_result.get("filled"):
+                stats["error"] = "set_product_id_filter_failed"
+                return stats
+            _LAST_GOODS_LIST_SEARCH_FIELD = "商品ID"
         _click_goods_search(page)
+        _wait_goods_list_search_settled(page, account_id)
 
         rows = _get_table_rows(page)
         stats["scanned"] = len(rows)
-        row = _find_exact_product_row(page, product_id)
+        row = None
+        if product_id:
+            row = _find_exact_product_row(page, product_id)
+        elif merchant_code:
+            for candidate in _scan_filtered_rows_on_page(page):
+                row_text = str(candidate.get("row_text") or "")
+                if merchant_code_matches_expected(
+                    extract_merchant_code_from_row_text(row_text),
+                    {merchant_code},
+                ):
+                    row = candidate.get("row")
+                    product_id = str(candidate.get("product_id") or "").strip()
+                    break
         if not row:
             stats["error"] = "product_id_not_found_on_sale"
-            _log(account_id, f"在售中未找到商品ID={product_id}")
+            _log(account_id, f"在售中未找到目标：{label}")
             return stats
 
         text = row.text or ""
         matched_id = extract_product_id_from_text(text) or ""
-        if matched_id != product_id:
+        if product_id and matched_id != product_id:
             stats["error"] = f"product_id_mismatch:{matched_id}"
             return stats
+        if merchant_code:
+            row_code = extract_merchant_code_from_row_text(text)
+            if row_code != merchant_code:
+                stats["error"] = f"merchant_code_mismatch:{row_code}!={merchant_code}"
+                _log(account_id, f"行内商品编码={row_code} 与目标 {merchant_code} 不一致，中止下架")
+                return stats
+            stats["merchant_code"] = row_code
+        stats["target_product_id"] = product_id or matched_id
 
         if dry_run:
             stats["hit"] = 1

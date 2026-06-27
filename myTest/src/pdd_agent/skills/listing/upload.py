@@ -725,6 +725,77 @@ def _fill_goods_merchant_code_filter(page: DpPage, merchant_code: str) -> dict[s
     return {"filled": False, "method": "", "value": _read_goods_merchant_code_filter(page)}
 
 
+def _read_goods_spec_code_filter(page: DpPage) -> str:
+    """读取商品列表筛选区「规格编码」输入框（仅限 .goods-search-wrap）。"""
+    try:
+        value = page.run_js(
+            """
+            function isVisible(el) {
+                if (!el || !el.getBoundingClientRect) return false;
+                const r = el.getBoundingClientRect();
+                const s = window.getComputedStyle(el);
+                return r.width > 4 && r.height > 4
+                    && s.display !== 'none'
+                    && s.visibility !== 'hidden';
+            }
+            const wrap = document.querySelector('.goods-search-wrap');
+            if (!wrap) return '';
+            for (const node of wrap.querySelectorAll('label, span, div')) {
+                const text = (node.innerText || node.textContent || '').trim();
+                if (text !== '规格编码' || !isVisible(node)) continue;
+                let cur = node;
+                for (let depth = 0; depth < 7 && cur; depth++, cur = cur.parentElement) {
+                    const input = Array.from(cur.querySelectorAll?.('input') || []).find(isVisible);
+                    if (input) return String(input.value || '').trim();
+                }
+            }
+            return '';
+            """
+        )
+        return str(value or "").strip()
+    except Exception:
+        return ""
+
+
+def _fill_goods_spec_code_filter(page: DpPage, spec_code: str) -> dict[str, Any]:
+    """填写商品列表筛选区「规格编码」，并校验值已写入。"""
+    spec_code = str(spec_code or "").strip()
+    if not spec_code:
+        return {"filled": False, "method": "", "value": ""}
+
+    raw = page._page
+    try:
+        wrap = raw.locator(".goods-search-wrap")
+        if wrap.count() > 0:
+            label = wrap.get_by_text("规格编码", exact=True).first
+            if label.is_visible(timeout=1500):
+                container = label.locator(
+                    "xpath=ancestor::*[contains(@class,'form') or contains(@class,'Form') "
+                    "or contains(@class,'item') or contains(@class,'Item')][1]"
+                )
+                if container.count() <= 0:
+                    container = label.locator("xpath=..")
+                inp = container.locator('input[data-testid="beast-core-input-htmlInput"], input').first
+                if inp.is_visible(timeout=1500):
+                    inp.scroll_into_view_if_needed(timeout=3000)
+                    inp.click(timeout=3000)
+                    inp.fill("", timeout=3000)
+                    inp.fill(spec_code, timeout=3000)
+                    time.sleep(0.3)
+                    current = str(inp.input_value(timeout=1000) or "").strip()
+                    if spec_code in current or current in spec_code:
+                        return {"filled": True, "method": "playwright_goods_search_wrap_spec", "value": current}
+    except Exception:
+        pass
+
+    if _set_goods_filter(page, "规格编码", spec_code):
+        current = _read_goods_spec_code_filter(page)
+        if spec_code in current or current in spec_code:
+            return {"filled": True, "method": "set_goods_filter_spec_fallback", "value": current}
+
+    return {"filled": False, "method": "", "value": _read_goods_spec_code_filter(page)}
+
+
 def _click_goods_search(page: DpPage) -> dict[str, Any]:
     """点击商品列表筛选区的「查询」按钮。"""
     raw = page._page
