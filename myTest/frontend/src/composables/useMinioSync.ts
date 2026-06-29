@@ -33,6 +33,8 @@ export function useMinioSync() {
           ElMessage.success(
             `MinIO 同步完成：${job.completed_sets} 套图，新下载 ${job.downloaded_files} 张，跳过 ${job.skipped_files} 张${
               job.pruned_dirs ? `，清理多余文件夹 ${job.pruned_dirs} 个` : ''
+            }${
+              job.pruned_files ? `，清理已删图片 ${job.pruned_files} 张` : ''
             }`,
           )
         } else if (job.status === 'failed') {

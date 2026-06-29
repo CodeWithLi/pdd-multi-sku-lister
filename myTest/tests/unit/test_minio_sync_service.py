@@ -73,7 +73,7 @@ def test_run_sync_job_updates_progress(monkeypatch):
     monkeypatch.setattr(
         minio_sync_service,
         "stage_minio_image_set",
-        lambda **kwargs: (3, 2, 1),
+        lambda **kwargs: (3, 2, 1, 4, []),
     )
 
     job = minio_sync_service.MinioSyncJob(
@@ -94,3 +94,4 @@ def test_run_sync_job_updates_progress(monkeypatch):
     assert result.downloaded_files == 6
     assert result.skipped_files == 4
     assert result.pruned_dirs == 2
+    assert result.pruned_files == 8

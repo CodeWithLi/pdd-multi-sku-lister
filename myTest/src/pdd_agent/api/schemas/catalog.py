@@ -118,6 +118,7 @@ class MinioSyncJobOut(BaseModel):
     downloaded_files: int = 0
     skipped_files: int = 0
     pruned_dirs: int = 0
+    pruned_files: int = 0
     error: str = ""
     progress_percent: float = 0.0
     started_at: float = 0.0

@@ -30,6 +30,7 @@ class MinioSyncJob:
     downloaded_files: int = 0
     skipped_files: int = 0
     pruned_dirs: int = 0
+    pruned_files: int = 0
     error: str = ""
     started_at: float = 0.0
     finished_at: float = 0.0
@@ -52,6 +53,7 @@ class MinioSyncJob:
             "downloaded_files": self.downloaded_files,
             "skipped_files": self.skipped_files,
             "pruned_dirs": self.pruned_dirs,
+            "pruned_files": self.pruned_files,
             "error": self.error,
             "progress_percent": percent,
             "started_at": self.started_at,
@@ -133,7 +135,7 @@ def _run_sync_job(job_id: str) -> None:
                 if job.status == "failed":
                     return
                 job.current_label = f"{family_code}/{image_set}"
-            downloaded, skipped, pruned = stage_minio_image_set(
+            downloaded, skipped, pruned_dirs, pruned_files, mismatches = stage_minio_image_set(
                 family_code=family_code,
                 image_set=image_set,
                 config=cfg,
@@ -142,18 +144,25 @@ def _run_sync_job(job_id: str) -> None:
                 job.completed_sets = index
                 job.downloaded_files += downloaded
                 job.skipped_files += skipped
-                job.pruned_dirs += pruned
+                job.pruned_dirs += pruned_dirs
+                job.pruned_files += pruned_files
+            if mismatches:
+                preview = "；".join(mismatches[:3])
+                if len(mismatches) > 3:
+                    preview += f" 等 {len(mismatches)} 项"
+                raise RuntimeError(f"MinIO 与本地缓存图片数量不一致：{preview}")
         with _JOB_LOCK:
             job.status = "success"
             job.current_label = ""
             job.finished_at = time.time()
         logger.info(
-            "minio sync job %s done sets=%s downloaded=%s skipped=%s pruned_dirs=%s",
+            "minio sync job %s done sets=%s downloaded=%s skipped=%s pruned_dirs=%s pruned_files=%s",
             job_id,
             job.total_sets,
             job.downloaded_files,
             job.skipped_files,
             job.pruned_dirs,
+            job.pruned_files,
         )
     except Exception as exc:
         logger.exception("minio sync job %s failed", job_id)

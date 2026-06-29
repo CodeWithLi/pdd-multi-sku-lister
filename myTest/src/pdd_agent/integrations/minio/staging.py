@@ -13,6 +13,7 @@ from pdd_agent.integrations.minio.catalog import (
     extract_product_code,
     list_minio_listing_targets,
 )
+from pdd_agent.skills.listing.catalog import IMAGE_EXTS
 from pdd_agent.integrations.minio.index import find_sets_for_product_code, resolve_minio_set_prefix
 from pdd_agent.skills.listing.catalog import (
     _parse_listing_target_product_selector,
@@ -55,6 +56,62 @@ def _prune_stale_local_product_folders(
                 image_set,
                 name,
             )
+    return removed
+
+
+def _local_image_filenames(dest_dir: Path) -> set[str]:
+    if not dest_dir.is_dir():
+        return set()
+    return {
+        child.name
+        for child in dest_dir.iterdir()
+        if child.is_file() and child.suffix.lower() in IMAGE_EXTS
+    }
+
+
+def _format_sync_mismatch(
+    *,
+    family_code: str,
+    image_set: str,
+    product_code: str,
+    remote_filenames: set[str],
+    dest_dir: Path,
+) -> str | None:
+    """同步后校验单商品目录；一致返回 None，否则返回可读差异说明。"""
+    local = _local_image_filenames(dest_dir)
+    remote = set(remote_filenames)
+    if local == remote:
+        return None
+    missing = sorted(remote - local)
+    extra = sorted(local - remote)
+    parts = [
+        f"{family_code}/{image_set}/{product_code}: MinIO {len(remote)} 张，本地 {len(local)} 张",
+    ]
+    if missing:
+        parts.append(f"缺 {', '.join(missing)}")
+    if extra:
+        parts.append(f"多 {', '.join(extra)}")
+    return "；".join(parts)
+
+
+def _prune_stale_local_image_files(
+    dest_dir: Path,
+    remote_filenames: set[str],
+) -> int:
+    """删除商品目录下 MinIO 已不存在的图片文件，使本地与远端文件列表一致。"""
+    if not dest_dir.is_dir() or not remote_filenames:
+        return 0
+    removed = 0
+    for child in dest_dir.iterdir():
+        if not child.is_file():
+            continue
+        if child.suffix.lower() not in IMAGE_EXTS:
+            continue
+        if child.name in remote_filenames:
+            continue
+        child.unlink(missing_ok=True)
+        removed += 1
+        logger.info("minio pruned stale local file %s", child)
     return removed
 
 
@@ -138,11 +195,11 @@ def stage_minio_image_set(
     image_set: str,
     config: MinioConfig | None = None,
     cache_root: Path | None = None,
-) -> tuple[int, int, int]:
-    """下载某套图下全部兄弟商品文件夹到本地缓存，返回 (downloaded, skipped, pruned_dirs)。"""
+) -> tuple[int, int, int, int, list[str]]:
+    """下载某套图下全部兄弟商品文件夹到本地缓存，返回 (downloaded, skipped, pruned_dirs, pruned_files, mismatches)。"""
     cfg = config or load_minio_config()
     if not minio_configured(cfg):
-        return 0, 0, 0
+        return 0, 0, 0, 0, []
 
     client = get_minio_client(cfg)
     dest_root = cache_root or minio_cache_root(cfg)
@@ -171,12 +228,15 @@ def stage_minio_image_set(
 
     written = 0
     skipped = 0
+    pruned_files = 0
+    mismatches: list[str] = []
     for product_folder, keys in grouped.items():
         product_code = extract_product_code(product_folder)
         if not product_code:
             continue
         dest_dir = dest_root / family_code / image_set / product_code
         dest_dir.mkdir(parents=True, exist_ok=True)
+        remote_filenames = {key.split("/")[-1] for key in keys}
         for key in keys:
             filename = key.split("/")[-1]
             dest_path = dest_dir / filename
@@ -185,6 +245,24 @@ def stage_minio_image_set(
                 written += 1
             else:
                 skipped += 1
+        pruned_files += _prune_stale_local_image_files(dest_dir, remote_filenames)
+        mismatch = _format_sync_mismatch(
+            family_code=family_code,
+            image_set=image_set,
+            product_code=product_code,
+            remote_filenames=remote_filenames,
+            dest_dir=dest_dir,
+        )
+        if mismatch:
+            mismatches.append(mismatch)
+        else:
+            logger.info(
+                "minio sync verified %s/%s/%s images=%s",
+                family_code,
+                image_set,
+                product_code,
+                len(remote_filenames),
+            )
 
     remote_folders = {
         folder_name
@@ -197,16 +275,18 @@ def stage_minio_image_set(
         image_set=image_set,
         remote_product_folders=remote_folders,
     )
-    if written or skipped or pruned_dirs:
+    if written or skipped or pruned_dirs or pruned_files or mismatches:
         logger.info(
-            "minio staged set %s/%s -> downloaded=%s skipped=%s pruned_dirs=%s",
+            "minio staged set %s/%s -> downloaded=%s skipped=%s pruned_dirs=%s pruned_files=%s mismatches=%s",
             family_code,
             image_set,
             written,
             skipped,
             pruned_dirs,
+            pruned_files,
+            len(mismatches),
         )
-    return written, skipped, pruned_dirs
+    return written, skipped, pruned_dirs, pruned_files, mismatches
 
 
 def stage_minio_for_product_codes(product_codes: list[str], config: MinioConfig | None = None) -> Path:
@@ -219,8 +299,10 @@ def stage_minio_for_product_codes(product_codes: list[str], config: MinioConfig 
     downloaded = 0
     skipped = 0
     pruned_dirs = 0
+    pruned_files = 0
+    mismatches: list[str] = []
     for family_code, image_set in sorted(sets):
-        d, s, p = stage_minio_image_set(
+        d, s, p, f, batch_mismatches = stage_minio_image_set(
             family_code=family_code,
             image_set=image_set,
             config=cfg,
@@ -229,12 +311,21 @@ def stage_minio_for_product_codes(product_codes: list[str], config: MinioConfig 
         downloaded += d
         skipped += s
         pruned_dirs += p
+        pruned_files += f
+        mismatches.extend(batch_mismatches)
     logger.info(
-        "minio staged product_codes=%s sets=%s downloaded=%s skipped=%s pruned_dirs=%s",
+        "minio staged product_codes=%s sets=%s downloaded=%s skipped=%s pruned_dirs=%s pruned_files=%s mismatches=%s",
         product_codes,
         len(sets),
         downloaded,
         skipped,
         pruned_dirs,
+        pruned_files,
+        len(mismatches),
     )
+    if mismatches:
+        preview = "；".join(mismatches[:3])
+        if len(mismatches) > 3:
+            preview += f" 等 {len(mismatches)} 项"
+        raise RuntimeError(f"MinIO 与本地缓存图片数量不一致：{preview}")
     return cache_root

@@ -187,6 +187,7 @@ export interface MinioSyncJob {
   downloaded_files: number
   skipped_files: number
   pruned_dirs?: number
+  pruned_files?: number
   error: string
   progress_percent: number
   started_at: number
