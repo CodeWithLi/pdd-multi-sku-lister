@@ -7,6 +7,7 @@ import type { LoginStatus } from '@/types'
 
 const loading = ref(false)
 const checking = ref(false)
+const scraping = ref(false)
 const statuses = ref<LoginStatus[]>([])
 const selectedAccounts = ref<string[]>([])
 const delayMin = ref(30)
@@ -68,6 +69,51 @@ async function checkOne(accountId: string) {
   }
 }
 
+async function scrapeShopNamesBatch() {
+  const account_ids = selectedAccounts.value.length ? selectedAccounts.value : accountOptions.value
+  if (!account_ids.length) {
+    ElMessage.warning('没有可抓取的店铺')
+    return
+  }
+  scraping.value = true
+  try {
+    await api.scrapeShopNamesBatch({
+      account_ids,
+      delay_min_seconds: delayMin.value,
+      delay_max_seconds: delayMax.value,
+    })
+    ElMessage.info(
+      `已提交 ${account_ids.length} 家店铺名称抓取。将依次弹出浏览器窗口，未登录会自动填账号密码；出现验证码请在窗口内完成。`,
+      { duration: 8000 },
+    )
+    await load()
+    startPolling()
+  } catch (e) {
+    ElMessage.error(e instanceof Error ? e.message : '抓取店铺名称失败')
+    scraping.value = false
+  }
+}
+
+async function scrapeShopNameOne(accountId: string) {
+  loading.value = true
+  ElMessage.info(`${accountId}：正在打开浏览器，请完成登录或验证码（最多约 3 分钟）`, {
+    duration: 6000,
+  })
+  try {
+    const row = await api.scrapeShopName(accountId)
+    await load()
+    if (row.ok) {
+      ElMessage.success(`${accountId} 店铺名：${row.shop_display_name}`)
+    } else {
+      ElMessage.warning(`${accountId} 抓取失败：${row.reason}`)
+    }
+  } catch (e) {
+    ElMessage.error(e instanceof Error ? e.message : '抓取失败')
+  } finally {
+    loading.value = false
+  }
+}
+
 async function checkBatch() {
   const account_ids = selectedAccounts.value.length ? selectedAccounts.value : accountOptions.value
   if (!account_ids.length) {
@@ -114,6 +160,7 @@ function startPolling() {
     const busy = statuses.value.some((s) => s.status === 'pending' || s.status === 'checking')
     if (!busy) {
       checking.value = false
+      scraping.value = false
       stopPolling()
     }
   }, 5000)
@@ -165,6 +212,15 @@ onUnmounted(stopPolling)
       </el-form>
     </el-card>
 
+    <div class="scrape-bar">
+      <el-button type="primary" plain :loading="scraping" @click="scrapeShopNamesBatch">
+        抓取店铺名称
+      </el-button>
+      <span class="section-tip scrape-tip">
+        按所选店铺依次打开可见浏览器：自动登录（含验证码等待），从商家后台右上角读取店铺名并写入数据库。
+      </span>
+    </div>
+
     <el-card shadow="never" class="stat-card">
       <el-table :data="statuses" stripe>
         <el-table-column prop="account_id" label="店铺 ID" width="110" />
@@ -183,9 +239,10 @@ onUnmounted(stopPolling)
         </el-table-column>
         <el-table-column prop="reason" label="原因" min-width="220" show-overflow-tooltip />
         <el-table-column prop="current_url" label="当前地址" min-width="260" show-overflow-tooltip />
-        <el-table-column label="操作" width="220" fixed="right">
+        <el-table-column label="操作" width="280" fixed="right">
           <template #default="{ row }">
             <el-button link type="primary" @click="checkOne(row.account_id)">检查</el-button>
+            <el-button link type="success" @click="scrapeShopNameOne(row.account_id)">抓店铺名</el-button>
             <el-button link type="warning" @click="openLogin(row.account_id)">打开登录窗口</el-button>
           </template>
         </el-table-column>
@@ -198,5 +255,19 @@ onUnmounted(stopPolling)
 <style scoped>
 .settings-card {
   margin-bottom: 16px;
+}
+
+.scrape-bar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-bottom: 16px;
+}
+
+.scrape-tip {
+  margin: 0;
+  flex: 1;
+  min-width: 240px;
 }
 </style>

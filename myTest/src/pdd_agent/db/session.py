@@ -65,6 +65,35 @@ def _ensure_task_queue_claim_index(engine: Engine) -> None:
         return
 
 
+def _ensure_accounts_columns(engine: Engine) -> None:
+    """为 accounts 表补充拼多多后台店铺展示名（右上角红框，如「指尖上的美好时光」）。"""
+    try:
+        inspector = inspect(engine)
+        if "accounts" not in inspector.get_table_names():
+            return
+        existing = {col["name"] for col in inspector.get_columns("accounts")}
+        with engine.begin() as conn:
+            if "shop_display_name" not in existing:
+                conn.execute(
+                    text(
+                        "ALTER TABLE accounts "
+                        "ADD COLUMN shop_display_name VARCHAR(128) NOT NULL DEFAULT ''"
+                    )
+                )
+            if "login_statuses" in inspector.get_table_names():
+                conn.execute(
+                    text(
+                        "UPDATE accounts a "
+                        "INNER JOIN login_statuses l ON a.account_id = l.account_id "
+                        "SET a.shop_display_name = l.shop_display_name "
+                        "WHERE TRIM(l.shop_display_name) <> '' "
+                        "AND TRIM(a.shop_display_name) = ''"
+                    )
+                )
+    except Exception:
+        return
+
+
 def _ensure_login_statuses_columns(engine: Engine) -> None:
     try:
         inspector = inspect(engine)
@@ -161,6 +190,7 @@ def init_database() -> bool:
         )
         Base.metadata.create_all(engine)
         _ensure_task_queue_claim_index(engine)
+        _ensure_accounts_columns(engine)
         _ensure_login_statuses_columns(engine)
         _ensure_published_products_columns(engine)
         _ensure_listed_folders_backfill(engine)

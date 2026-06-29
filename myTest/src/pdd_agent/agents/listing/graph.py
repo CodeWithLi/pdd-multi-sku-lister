@@ -209,6 +209,7 @@ async def browser_listing_node(state: ListingState) -> dict:
     defaults = settings.multi_spec.defaults
     run_id = str(state.get("run_id") or "")
     slot_alignment_test = bool(state.get("slot_alignment_test"))
+    category_next_burst_demo = bool(state.get("category_next_burst_demo", True))
 
     def _job(dp):
         return run_listing_uploads(
@@ -221,6 +222,7 @@ async def browser_listing_node(state: ListingState) -> dict:
             defaults=defaults,
             run_id=run_id,
             slot_alignment_test=slot_alignment_test,
+            category_next_burst_demo=category_next_burst_demo,
         )
 
     try:

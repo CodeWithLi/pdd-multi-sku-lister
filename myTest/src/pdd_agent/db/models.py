@@ -19,6 +19,7 @@ class AccountORM(Base):
     account_id: Mapped[str] = mapped_column(String(64), primary_key=True)
     enabled: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     username: Mapped[str] = mapped_column(String(255), default="", nullable=False)
+    shop_display_name: Mapped[str] = mapped_column(String(128), default="", nullable=False)
     password: Mapped[str] = mapped_column(Text, default="", nullable=False)
     product_codes: Mapped[list[str]] = mapped_column(MySQLJSON, default=list, nullable=False)
     created_at: Mapped[datetime] = mapped_column(

@@ -124,6 +124,7 @@ pdd_activity_log:
   seed_on_listing: true
   immediate_find_retries: 2
   limited_time_status_options:
+  - 成功
   - 进行中
   - 失败
   - 未执行

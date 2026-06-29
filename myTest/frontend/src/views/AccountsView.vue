@@ -134,14 +134,15 @@ onMounted(load)
     </PageHeader>
 
     <div class="section-tip" style="margin-bottom: 16px">
-      <strong>店铺名称</strong> 用于区分不同拼多多店（如 store_A、store_B）。
-      <strong>登录账号</strong> 填拼多多商家后台的手机号或账号名。
+      <strong>店铺 ID</strong> 用于区分不同拼多多店（如 store_A、store_B）。
+      <strong>登录账号</strong> 填拼多多商家后台的手机号或账号名（如「多多青提2601」）。
+      <strong>拼多多店铺名</strong> 登录后自动从商家后台右上角抓取（如「指尖上的美好时光」），可在「登录体检」触发刷新。
       <strong>默认商品</strong> 在上架时会自动选中。
     </div>
 
     <el-card shadow="never" class="stat-card">
       <el-table :data="accounts" stripe>
-        <el-table-column prop="account_id" label="店铺名称" width="120" />
+        <el-table-column prop="account_id" label="店铺 ID" width="120" />
         <el-table-column label="状态" width="90">
           <template #default="{ row }">
             <el-tag :type="row.enabled ? 'success' : 'info'" size="small">
@@ -149,7 +150,13 @@ onMounted(load)
             </el-tag>
           </template>
         </el-table-column>
-        <el-table-column prop="username" label="登录账号" min-width="140" />
+        <el-table-column prop="username" label="登录账号" min-width="120" />
+        <el-table-column label="拼多多店铺名" min-width="140">
+          <template #default="{ row }">
+            <span v-if="row.shop_display_name">{{ row.shop_display_name }}</span>
+            <span v-else class="muted">登录后自动获取</span>
+          </template>
+        </el-table-column>
         <el-table-column label="密码" width="90">
           <template #default="{ row }">
             <el-tag :type="row.has_password ? 'success' : 'warning'" size="small">

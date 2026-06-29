@@ -134,7 +134,9 @@ def test_validate_slot_structure_hints_preview_vs_sku(tmp_path, monkeypatch):
 
     errors = validate_slot_structure(unit)
     assert len(errors) == 1
-    assert errors[0] == "兄弟款规格不齐：BD716A缺YKL004（应为5个）"
+    assert "BD716A缺YKL004" in errors[0]
+    assert "BD716B多1个" in errors[0]
+    assert "应为5个" in errors[0]
 
 
 def test_slot_alignment_matches_signature_not_alphabetical_index(tmp_path):

@@ -39,6 +39,7 @@ from pdd_agent.db.repositories import (
     db_accounts_enabled,
     delete_account_config,
     get_account_config,
+    get_cached_shop_display_name,
     list_account_configs,
     update_account_config,
 )
@@ -46,11 +47,13 @@ from pdd_agent.db.session import database_status
 
 
 def _to_account_out(acc: AccountConfig) -> AccountOut:
+    shop_name = get_cached_shop_display_name(acc.account_id)
     return AccountOut(
         account_id=acc.account_id,
         enabled=acc.enabled,
         username=acc.username,
-        display_name=resolve_account_display_name(acc.account_id),
+        shop_display_name=shop_name,
+        display_name=shop_name or resolve_account_display_name(acc.account_id),
         has_password=bool(acc.password),
         product_codes=acc.product_codes,
     )

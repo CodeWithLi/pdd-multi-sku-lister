@@ -37,6 +37,83 @@ def _read_title_from_input(page) -> str:
     return ""
 
 
+def _find_ai_generate_button(page):
+    """查找标题输入框右侧的「AI生成」按钮（分支 C 常见）。"""
+    candidates = (
+        page.ele('text:AI生成', timeout=0.5),
+        page.ele('xpath://*[normalize-space(text())="AI生成"]', timeout=0.5),
+        page.ele(
+            'xpath://input[contains(@placeholder,"商品标题")]/following::*[normalize-space(text())="AI生成"][1]',
+            timeout=0.5,
+        ),
+        page.ele(
+            'xpath://*[contains(text(),"商品标题")]/following::*[normalize-space(text())="AI生成"][1]',
+            timeout=0.5,
+        ),
+    )
+    for ele in candidates:
+        if ele:
+            return ele
+    return None
+
+
+def _click_ai_generate_via_js(page) -> bool:
+    return bool(
+        page.run_js(
+            """
+            function isVisible(el) {
+                if (!el) return false;
+                const r = el.getBoundingClientRect();
+                const s = window.getComputedStyle(el);
+                return r.width > 2 && r.height > 2
+                    && s.display !== 'none' && s.visibility !== 'hidden';
+            }
+            const titleInput = document.querySelector(
+                'input[placeholder*="商品标题"], input[placeholder*="标题"]'
+            );
+            const nodes = document.querySelectorAll('a, span, button, div');
+            for (const n of nodes) {
+                const t = (n.innerText || n.textContent || '').trim();
+                if (t !== 'AI生成' || !isVisible(n)) continue;
+                if (titleInput) {
+                    const ir = titleInput.getBoundingClientRect();
+                    const nr = n.getBoundingClientRect();
+                    if (Math.abs(nr.top - ir.top) > 80) continue;
+                }
+                n.click();
+                return true;
+            }
+            return false;
+            """
+        )
+    )
+
+
+def _try_click_ai_generate_title(page, account_id: str) -> str:
+    """点击「AI生成」并等待标题填入。"""
+    btn = _find_ai_generate_button(page)
+    clicked = False
+    if btn:
+        try:
+            page.run_js('arguments[0].scrollIntoView({block:"center"});', btn)
+            btn.click()
+            clicked = True
+        except Exception:
+            clicked = _click_ai_generate_via_js(page)
+    else:
+        clicked = _click_ai_generate_via_js(page)
+    if not clicked:
+        return ""
+    _log(account_id, "已点击「AI生成」，等待标题生成…")
+    for _ in range(12):
+        time.sleep(1)
+        title = _read_title_from_input(page)
+        if title:
+            _log(account_id, f"AI生成标题成功：{title}")
+            return title
+    return _read_title_from_input(page)
+
+
 def _find_use_now_button(page):
     """查找「立即使用」链接/按钮（需在 AI 推荐栏附近）。"""
     candidates = (
@@ -107,7 +184,13 @@ def wait_and_apply_page_ai_title(
     _log(account_id, "标题模式：页面 AI 推荐（上传图片后等待「立即使用」）")
     time.sleep(initial_wait)
 
+    ai_generate_tried = False
     for sec in range(max_wait):
+        title = _read_title_from_input(page)
+        if title:
+            _log(account_id, f"标题已就绪：{title}")
+            return title
+
         bar = page.ele("text:AI智能推荐标题", timeout=0.5)
         use_btn = _find_use_now_button(page)
 
@@ -138,9 +221,19 @@ def wait_and_apply_page_ai_title(
                     return title
                 _log(account_id, "已点击「立即使用」，但标题输入框仍为空，继续等待…")
 
+        if not ai_generate_tried and sec >= 2:
+            ai_generate_tried = True
+            title = _try_click_ai_generate_title(page, account_id)
+            if title:
+                return title
+
         if sec == 0 or (sec + 1) % 5 == 0:
             _log(account_id, f"等待 AI 推荐标题栏出现… ({sec + 1 + initial_wait}/{initial_wait + max_wait}s)")
         time.sleep(1)
+
+    title = _try_click_ai_generate_title(page, account_id)
+    if title:
+        return title
 
     raise RuntimeError(
         f"[{account_id}] 超时未出现可点击的「立即使用」，页面 AI 标题填充失败"
@@ -187,9 +280,20 @@ def apply_title_after_cover_upload(
     - 其它模式：填入 resolved_title
     """
     if is_page_ai_title_mode(product_info):
-        return wait_and_apply_page_ai_title(
-            page, account_id, initial_wait=initial_wait, max_wait=max_wait
-        )
+        existing = _read_title_from_input(page)
+        if existing:
+            _log(account_id, f"标题已存在，跳过 AI 等待：{existing}")
+            return existing
+        try:
+            return wait_and_apply_page_ai_title(
+                page, account_id, initial_wait=initial_wait, max_wait=max_wait
+            )
+        except RuntimeError:
+            existing = _read_title_from_input(page)
+            if existing:
+                _log(account_id, f"AI 等待超时但标题已填入：{existing}")
+                return existing
+            raise
 
     if not (resolved_title or "").strip():
         raise ValueError(f"[{account_id}] 标题为空，无法填入")

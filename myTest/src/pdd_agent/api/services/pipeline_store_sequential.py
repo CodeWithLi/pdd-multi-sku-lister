@@ -12,6 +12,8 @@ from pdd_agent.db.repositories import get_integrated_pipeline, list_integrated_p
 logger = get_logger(__name__)
 
 STORE_SEQUENTIAL_META_KEY = "store_sequential"
+LISTING_LIMITED_TIME_PHASE_KEY = "listing_limited_time_phase_completed"
+STORE_SEQUENTIAL_ADVANCE_TRIGGERED_KEY = "store_sequential_advance_triggered"
 TERMINAL_PIPELINE_STATUSES = frozenset({"completed", "failed", "canceled"})
 
 
@@ -34,6 +36,7 @@ def build_store_sequential_common_params(
     demo_mode: bool,
     platform_listing_code: str,
     slot_alignment_test: bool,
+    category_next_burst_demo: bool = True,
     skip_listing: bool,
     listing_skip_selectors: list[str] | None,
     material_source: str,
@@ -57,6 +60,7 @@ def build_store_sequential_common_params(
         "demo_mode": demo_mode,
         "platform_listing_code": platform_listing_code,
         "slot_alignment_test": slot_alignment_test,
+        "category_next_burst_demo": category_next_burst_demo,
         "skip_listing": skip_listing,
         "listing_skip_selectors": list(listing_skip_selectors or []),
         "material_source": material_source,
@@ -137,12 +141,8 @@ def _resolve_inter_store_delay_seconds(seq: dict[str, Any]) -> int:
     return random.randint(delay_min, delay_max)
 
 
-def maybe_advance_sequential_store(finished_row) -> dict[str, Any] | None:
-    """
-    当前店铺链路进入终态后，启动下一家店铺（成功/失败/取消均继续）。
-
-    返回新启动的 pipeline dict；无待启动店铺时返回 None。
-    """
+def _should_attempt_sequential_advance(finished_row):
+    """解析串行协调器；若当前 pipeline 不是 active 店铺则返回 None。"""
     if not finished_row:
         return None
     meta = finished_row.meta if isinstance(finished_row.meta, dict) else {}
@@ -152,9 +152,6 @@ def maybe_advance_sequential_store(finished_row) -> dict[str, Any] | None:
 
     seq_on_row = _sequential_state(meta)
     if not seq_on_row.get("enabled"):
-        return None
-
-    if str(finished_row.status or "") not in TERMINAL_PIPELINE_STATUSES:
         return None
 
     coordinator_id = _resolve_coordinator_pipeline_id(finished_row)
@@ -179,6 +176,63 @@ def maybe_advance_sequential_store(finished_row) -> dict[str, Any] | None:
     if active_pipeline_id and active_pipeline_id != finished_pipeline_id:
         return None
 
+    return coordinator_id, coordinator
+
+
+def maybe_advance_sequential_store_after_listing_limited_time(row) -> dict[str, Any] | None:
+    """
+    当前店铺「上架 + 限时限量购」全部完成后启动下一家。
+
+    活动/推广仍在后台按预约时间执行，不阻塞下一家店铺。
+    """
+    if not row:
+        return None
+    meta = row.meta if isinstance(row.meta, dict) else {}
+    if meta.get(STORE_SEQUENTIAL_ADVANCE_TRIGGERED_KEY):
+        return None
+
+    resolved = _should_attempt_sequential_advance(row)
+    if not resolved:
+        return None
+    coordinator_id, coordinator = resolved
+
+    finished_pipeline_id = str(row.pipeline_id or "").strip()
+    update_integrated_pipeline(
+        finished_pipeline_id,
+        meta_patch={
+            LISTING_LIMITED_TIME_PHASE_KEY: True,
+            STORE_SEQUENTIAL_ADVANCE_TRIGGERED_KEY: True,
+        },
+    )
+    logger.info(
+        "store sequential listing+limited-time phase done pipeline=%s coordinator=%s",
+        finished_pipeline_id,
+        coordinator_id,
+    )
+    return _start_next_store_from_coordinator(coordinator)
+
+
+def maybe_advance_sequential_store(finished_row) -> dict[str, Any] | None:
+    """
+    当前店铺链路进入终态后，启动下一家店铺（成功/失败/取消均继续）。
+
+    若已在「上架+限时限量购」阶段交接过下一家，则不再重复启动。
+
+    返回新启动的 pipeline dict；无待启动店铺时返回 None。
+    """
+    if not finished_row:
+        return None
+    meta = finished_row.meta if isinstance(finished_row.meta, dict) else {}
+    if meta.get(STORE_SEQUENTIAL_ADVANCE_TRIGGERED_KEY):
+        return None
+
+    if str(finished_row.status or "") not in TERMINAL_PIPELINE_STATUSES:
+        return None
+
+    resolved = _should_attempt_sequential_advance(finished_row)
+    if not resolved:
+        return None
+    _, coordinator = resolved
     return _start_next_store_from_coordinator(coordinator)
 
 

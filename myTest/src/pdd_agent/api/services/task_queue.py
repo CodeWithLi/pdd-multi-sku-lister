@@ -192,6 +192,7 @@ class TaskQueueWorker:
                     platform_listing_code=str(payload.get("platform_listing_code") or ""),
                     retry_item=dict(payload.get("retry_item") or {}),
                     slot_alignment_test=bool(payload.get("slot_alignment_test")),
+                    category_next_burst_demo=bool(payload.get("category_next_burst_demo", True)),
                     material_source=str(payload.get("material_source") or ""),
                 )
             elif row.agent == AgentKind.DELIST.value:

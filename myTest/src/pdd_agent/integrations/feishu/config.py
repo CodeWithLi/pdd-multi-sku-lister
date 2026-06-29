@@ -263,7 +263,7 @@ class PddActivityLogConfig(BaseModel):
         description="限时限量购回写时查活动表已有行的重试次数（上架后紧接执行，行应已预建）",
     )
     limited_time_status_options: list[str] = Field(
-        default_factory=lambda: ["进行中", "失败", "未执行", "程序异常"],
+        default_factory=lambda: ["成功", "进行中", "失败", "未执行", "程序异常"],
         description="「参加状态」单选选项（须与飞书表一致）",
     )
     activity_register_status_options: list[str] = Field(

@@ -27,13 +27,19 @@ def _init_playwright_thread() -> None:
     asyncio.set_event_loop(loop)
 
 
-def _launch_persistent(settings: YamlSettings, account_id: str):
+def _launch_persistent(
+    settings: YamlSettings,
+    account_id: str,
+    *,
+    headless: bool | None = None,
+):
     _init_playwright_thread()
     env = get_env_settings()
     user_data_dir = settings.paths.resolve("profiles_root") / account_id / "user_data"
     user_data_dir.mkdir(parents=True, exist_ok=True)
 
-    headless = env.playwright_headless or settings.browser.headless
+    if headless is None:
+        headless = env.playwright_headless or settings.browser.headless
     slow_mo = env.playwright_slow_mo or settings.browser.slow_mo
     channel = (env.playwright_channel or settings.browser.channel or "").strip()
 

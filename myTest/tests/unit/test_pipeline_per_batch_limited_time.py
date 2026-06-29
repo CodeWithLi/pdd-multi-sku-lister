@@ -143,9 +143,7 @@ def test_maybe_continue_schedules_next_listing_batch(
         "awaiting_final_activity": False,
         "pending": {
             "next_batch_index": 1,
-            "next_batch_scheduled_at": (datetime.now() + timedelta(minutes=10)).isoformat(
-                timespec="seconds"
-            ),
+            "interval_minutes": 15,
         },
     }
     row = _row(meta=meta)
@@ -165,6 +163,43 @@ def test_maybe_continue_schedules_next_listing_batch(
 @patch("pdd_agent.api.services.pipeline_per_batch_limited_time.enqueue_listing_batch_for_pipeline")
 @patch("pdd_agent.api.services.pipeline_per_batch_limited_time.get_integrated_pipeline")
 @patch("pdd_agent.api.services.pipeline_per_batch_limited_time.update_integrated_pipeline")
+def test_maybe_continue_ignores_stale_pending_time_uses_interval_after_lt(
+    mock_update,
+    mock_get,
+    mock_enqueue_listing,
+):
+    meta = _throttle_meta(batch_index=0, total_batches=3)
+    meta["limited_time_run_id"] = "lt_run_1"
+    meta["listing_per_batch_limited_time"] = {
+        "enabled": True,
+        "last_batch_index": 0,
+        "awaiting_final_activity": False,
+        "pending": {
+            "next_batch_index": 1,
+            "interval_minutes": 15,
+            "next_batch_scheduled_at": (datetime.now() - timedelta(minutes=30)).isoformat(
+                timespec="seconds"
+            ),
+        },
+    }
+    row = _row(meta=meta)
+    mock_get.return_value = row
+    before = datetime.now()
+
+    handled = maybe_continue_after_per_batch_limited_time(
+        row,
+        run_id="lt_run_1",
+        success=True,
+    )
+
+    assert handled is True
+    scheduled_at = mock_enqueue_listing.call_args.kwargs["scheduled_at"]
+    assert scheduled_at >= before + timedelta(minutes=14)
+
+
+@patch("pdd_agent.api.services.pipeline_per_batch_limited_time.enqueue_listing_batch_for_pipeline")
+@patch("pdd_agent.api.services.pipeline_per_batch_limited_time.get_integrated_pipeline")
+@patch("pdd_agent.api.services.pipeline_per_batch_limited_time.update_integrated_pipeline")
 def test_maybe_continue_after_lt_failure_still_schedules_next_listing_batch(
     mock_update,
     mock_get,
@@ -178,9 +213,7 @@ def test_maybe_continue_after_lt_failure_still_schedules_next_listing_batch(
         "awaiting_final_activity": False,
         "pending": {
             "next_batch_index": 1,
-            "next_batch_scheduled_at": (datetime.now() + timedelta(minutes=10)).isoformat(
-                timespec="seconds"
-            ),
+            "interval_minutes": 15,
         },
     }
     row = _row(meta=meta)

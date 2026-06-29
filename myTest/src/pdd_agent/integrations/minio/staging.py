@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import shutil
 from collections import defaultdict
 from pathlib import Path
 
@@ -21,6 +22,40 @@ from pdd_agent.integrations.minio.client import get_minio_client
 from pdd_agent.integrations.minio.config import MinioConfig, load_minio_config, minio_cache_root, minio_configured
 
 logger = get_logger(__name__)
+
+_IGNORED_LOCAL_DIR_NAMES = frozenset({".alist", ".__jianying_export_temp_folder__"})
+
+
+def _prune_stale_local_product_folders(
+    *,
+    dest_root: Path,
+    family_code: str,
+    image_set: str,
+    remote_product_folders: set[str],
+) -> int:
+    """删除本地套图下 MinIO 已不存在的商品文件夹，使目录结构与 MinIO 一致。"""
+    if not remote_product_folders:
+        return 0
+    set_dir = dest_root / family_code / image_set
+    if not set_dir.is_dir():
+        return 0
+    removed = 0
+    for child in set_dir.iterdir():
+        if not child.is_dir():
+            continue
+        name = child.name
+        if name.startswith(".") or name in _IGNORED_LOCAL_DIR_NAMES:
+            continue
+        if name not in remote_product_folders:
+            shutil.rmtree(child, ignore_errors=True)
+            removed += 1
+            logger.info(
+                "minio pruned stale local product folder %s/%s/%s",
+                family_code,
+                image_set,
+                name,
+            )
+    return removed
 
 
 def _resolve_image_set_folder(object_name: str) -> tuple[str, str, str] | None:
@@ -103,11 +138,11 @@ def stage_minio_image_set(
     image_set: str,
     config: MinioConfig | None = None,
     cache_root: Path | None = None,
-) -> tuple[int, int]:
-    """下载某套图下全部兄弟商品文件夹到本地缓存，返回 (downloaded, skipped)。"""
+) -> tuple[int, int, int]:
+    """下载某套图下全部兄弟商品文件夹到本地缓存，返回 (downloaded, skipped, pruned_dirs)。"""
     cfg = config or load_minio_config()
     if not minio_configured(cfg):
-        return 0
+        return 0, 0, 0
 
     client = get_minio_client(cfg)
     dest_root = cache_root or minio_cache_root(cfg)
@@ -150,15 +185,28 @@ def stage_minio_image_set(
                 written += 1
             else:
                 skipped += 1
-    if written or skipped:
+
+    remote_folders = {
+        folder_name
+        for folder_name in grouped.keys()
+        if extract_product_code(folder_name)
+    }
+    pruned_dirs = _prune_stale_local_product_folders(
+        dest_root=dest_root,
+        family_code=family_code,
+        image_set=image_set,
+        remote_product_folders=remote_folders,
+    )
+    if written or skipped or pruned_dirs:
         logger.info(
-            "minio staged set %s/%s -> downloaded=%s skipped=%s",
+            "minio staged set %s/%s -> downloaded=%s skipped=%s pruned_dirs=%s",
             family_code,
             image_set,
             written,
             skipped,
+            pruned_dirs,
         )
-    return written, skipped
+    return written, skipped, pruned_dirs
 
 
 def stage_minio_for_product_codes(product_codes: list[str], config: MinioConfig | None = None) -> Path:
@@ -170,8 +218,9 @@ def stage_minio_for_product_codes(product_codes: list[str], config: MinioConfig 
     sets = _sets_for_product_inputs(inputs, cfg)
     downloaded = 0
     skipped = 0
+    pruned_dirs = 0
     for family_code, image_set in sorted(sets):
-        d, s = stage_minio_image_set(
+        d, s, p = stage_minio_image_set(
             family_code=family_code,
             image_set=image_set,
             config=cfg,
@@ -179,11 +228,13 @@ def stage_minio_for_product_codes(product_codes: list[str], config: MinioConfig 
         )
         downloaded += d
         skipped += s
+        pruned_dirs += p
     logger.info(
-        "minio staged product_codes=%s sets=%s downloaded=%s skipped=%s",
+        "minio staged product_codes=%s sets=%s downloaded=%s skipped=%s pruned_dirs=%s",
         product_codes,
         len(sets),
         downloaded,
         skipped,
+        pruned_dirs,
     )
     return cache_root

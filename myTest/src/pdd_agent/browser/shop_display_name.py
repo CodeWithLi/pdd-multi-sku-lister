@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import time
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from pdd_agent.db.repositories import get_cached_shop_display_name, update_shop_display_name
+from pdd_agent.db.session import is_database_available
 
 if TYPE_CHECKING:
     from pdd_agent.browser.dp_compat_sync import DpPage
@@ -126,6 +128,35 @@ def maybe_refresh_shop_display_name(
             update_shop_display_name(aid, scraped)
         return scraped
     return cached
+
+
+def refresh_shop_display_name(
+    account_id: str,
+    dp: DpPage,
+    *,
+    login_username: str = "",
+    retries: int = 8,
+    retry_sleep: float = 1.2,
+) -> str:
+    """登录后强制抓取店铺名并写入数据库（多次重试等待页面渲染）。"""
+    aid = str(account_id or "").strip()
+    if not aid:
+        return ""
+    if not is_database_available():
+        print(f"[{aid}] [警告] 数据库未启用，店铺名无法持久化", flush=True)
+
+    last = ""
+    for attempt in range(max(1, retries)):
+        scraped = scrape_shop_display_name(dp, login_username=login_username)
+        if scraped:
+            update_shop_display_name(aid, scraped)
+            print(f"[{aid}] 店铺名已写入数据库：{scraped}", flush=True)
+            return scraped
+        last = scraped
+        if attempt + 1 < retries:
+            time.sleep(retry_sleep)
+    cached = get_cached_shop_display_name(aid)
+    return cached or last
 
 
 @dataclass(frozen=True)

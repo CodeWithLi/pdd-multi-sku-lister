@@ -83,25 +83,42 @@ def format_slot_mismatch_message(unit: ListingUnit) -> str:
     if len(style_codes) < 2:
         return ""
 
-    counts = {code: len(_skus_for_style(unit, code)) for code in style_codes}
-    target = max(counts.values())
-    if len(set(counts.values())) == 1:
+    display_code: dict[str, str] = {}
+    for sku in unit.skus:
+        key = sku.style_code.strip().upper()
+        display_code.setdefault(key, sku.style_code.strip())
+
+    sku_counts = {code: len(_skus_for_style(unit, code)) for code in style_codes}
+    preview_counts = {
+        code: count_style_preview_files(unit, display_code.get(code, code))
+        for code in style_codes
+    }
+    target = max(sku_counts.values())
+    if len(set(sku_counts.values())) == 1:
         return ""
 
-    parts: list[str] = []
+    count_parts: list[str] = []
     for code in style_codes:
-        if counts[code] >= target:
-            continue
-        missing = _missing_sku_labels(unit, code)
+        label = display_code.get(code, code)
+        parsed = sku_counts[code]
+        previews = preview_counts[code]
+        missing = _missing_sku_labels(unit, label) if parsed < target else []
         if missing:
-            parts.append(f"{code}缺{'/'.join(missing)}")
+            count_parts.append(f"{label}缺{'/'.join(missing)}")
+        elif previews != parsed:
+            count_parts.append(f"{label}解析{parsed}个/图{previews}张")
         else:
-            parts.append(f"{code}{counts[code]}个")
+            count_parts.append(f"{label}{parsed}个")
 
-    if not parts:
-        detail = "，".join(f"{code}{counts[code]}个" for code in style_codes)
-        return ListingErrors.format_slot_mismatch(detail, target)
-    return ListingErrors.format_slot_mismatch("，".join(parts), target)
+    max_count = max(sku_counts.values())
+    min_count = min(sku_counts.values())
+    heavy = [display_code.get(c, c) for c in style_codes if sku_counts[c] == max_count]
+    light = [display_code.get(c, c) for c in style_codes if sku_counts[c] == min_count]
+    detail = "，".join(count_parts)
+    if max_count > min_count and heavy and light:
+        detail += f"（{'/'.join(heavy)}多{max_count - min_count}个）"
+
+    return ListingErrors.format_slot_mismatch(detail, target)
 
 
 @dataclass
@@ -186,15 +203,41 @@ def apply_slot_alignment(unit: ListingUnit, *, account_id: str = "") -> SlotAlig
     for code, skus in groups.items():
         if code == reference:
             continue
+        used_labels: set[str] = set()
+        unmatched: list[SkuCombo] = []
         for sku in skus:
             sig = combo_slot_signature(sku.combo_folder, code)
             target_label = sig_to_label.get(sig)
-            if not target_label:
-                idx = skus.index(sku)
-                target_label = slot_labels[idx] if idx < len(slot_labels) else sku.model_name
+            if target_label and target_label not in used_labels:
+                old = sku.model_name
+                sku.model_name = target_label
+                used_labels.add(target_label)
+                if prefix and old != sku.model_name:
+                    print(
+                        f"{prefix}[{unit.listing_label}] 槽位对齐 {code} [{sig}]："
+                        f"{sku.combo_folder} {old} → {sku.model_name}",
+                        flush=True,
+                    )
+            else:
+                unmatched.append(sku)
+
+        remaining_labels = [label for label in slot_labels if label not in used_labels]
+        unmatched_sorted = _sort_skus_by_slot(unmatched, code)
+        if len(unmatched_sorted) > len(remaining_labels):
+            return SlotAlignmentResult(
+                ok=False,
+                errors=[
+                    ListingErrors.Msg.SLOT_MISMATCH_FALLBACK.format(
+                        code=code, reference=reference, count=slot_count
+                    )
+                ],
+            )
+        for sku, target_label in zip(unmatched_sorted, remaining_labels):
             old = sku.model_name
             sku.model_name = target_label
+            used_labels.add(target_label)
             if prefix and old != sku.model_name:
+                sig = combo_slot_signature(sku.combo_folder, code)
                 print(
                     f"{prefix}[{unit.listing_label}] 槽位对齐 {code} [{sig}]："
                     f"{sku.combo_folder} {old} → {sku.model_name}",

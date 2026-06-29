@@ -449,6 +449,23 @@ def _enqueue_pipeline_limited_time(
     )
 
 
+def _try_advance_store_sequential_after_listing_limited_time(row) -> None:
+    """上架+限时限量购阶段完成后尝试启动串行队列中的下一家店铺。"""
+    if not row:
+        return
+    try:
+        from pdd_agent.api.services.pipeline_store_sequential import (
+            maybe_advance_sequential_store_after_listing_limited_time,
+        )
+
+        maybe_advance_sequential_store_after_listing_limited_time(row)
+    except Exception:
+        logger.exception(
+            "advance sequential store after listing+limited-time failed pipeline_id=%s",
+            row.pipeline_id,
+        )
+
+
 def _schedule_pipeline_activity_after_limited_time(
     row,
     *,
@@ -477,6 +494,8 @@ def _schedule_pipeline_activity_after_limited_time(
         scheduled_at,
         _pipeline_activity_ids(row),
     )
+    refreshed = get_integrated_pipeline(row.pipeline_id) or row
+    _try_advance_store_sequential_after_listing_limited_time(refreshed)
 
 
 def _enqueue_pipeline_traffic(row, *, meta_patch: dict[str, Any] | None = None) -> None:
@@ -837,6 +856,7 @@ def _derive_campaign_status(row, campaign_results: list[dict[str, Any]], activit
 def _step_infos(row) -> list[dict[str, Any]]:
     pipeline_canceled = row.status == "canceled"
     meta = dict(row.meta or {})
+    listing_lt_phase_done = bool(meta.get("listing_limited_time_phase_completed"))
     campaign_outcome = str(meta.get("campaign_outcome") or "")
     campaign_skip_reason = str(meta.get("campaign_skip_reason") or "")
     listing_outcome = str(meta.get("listing_outcome") or "")
@@ -882,6 +902,8 @@ def _step_infos(row) -> list[dict[str, Any]]:
     limited_time_skip_reason = str((row.meta or {}).get("limited_time_skip_reason") or "")
 
     activity_detail = "等待限时限量购完成后预约"
+    if listing_lt_phase_done and row.current_step in {"waiting_activity", "campaign_queued"}:
+        activity_detail = "上架与限时限量购已完成，活动按预约时间执行"
     if row.scheduled_activity_at and campaign_status == "scheduled":
         activity_detail = f"计划于 {row.scheduled_activity_at:%Y-%m-%d %H:%M} 自动报名"
     elif _limited_time_completed(row) and campaign_status == "pending" and not row.scheduled_activity_at:
@@ -920,6 +942,8 @@ def _step_infos(row) -> list[dict[str, Any]]:
         limited_time_detail = "即将启动限时限量购（先于活动报名）"
     elif limited_time_outcome == "failed" and _pipeline_continue_after_limited_time_failure(row):
         limited_time_detail = limited_time_skip_reason or "限时限量购失败，仍将继续活动报名"
+    elif listing_lt_phase_done:
+        limited_time_detail = "已完成（活动已预约，不阻塞下一家店铺）"
 
     listing_detail = "将素材上架到拼多多"
     if listing_outcome == LISTING_SKIPPED_OUTCOME:
@@ -1002,6 +1026,7 @@ def pipeline_to_dict(row) -> dict[str, Any]:
         "activity_delay_hours": float(row.activity_delay_hours or 24.0),
         "demo_mode": bool(row.demo_mode),
         "slot_alignment_test": bool((row.meta or {}).get("slot_alignment_test")),
+        "category_next_burst_demo": bool((row.meta or {}).get("category_next_burst_demo", True)),
         "batch_id": str((row.meta or {}).get("batch_id") or ""),
         "activity_jitter_seconds": int((row.meta or {}).get("activity_jitter_seconds") or 0),
         "listing_run_id": row.listing_run_id or "",
@@ -1015,6 +1040,10 @@ def pipeline_to_dict(row) -> dict[str, Any]:
         "campaign_skip_reason": str((row.meta or {}).get("campaign_skip_reason") or ""),
         "listing_outcome": str((row.meta or {}).get("listing_outcome") or ""),
         "listing_skip_reason": str((row.meta or {}).get("listing_skip_reason") or ""),
+        "listing_limited_time_phase_completed": bool(
+            (row.meta or {}).get("listing_limited_time_phase_completed")
+        ),
+        "store_sequential": dict((row.meta or {}).get("store_sequential") or {}),
         "listing_unit_statuses": build_listing_unit_statuses(row),
         "campaign_results": _campaign_results(row),
         "steps": _step_infos(row),
@@ -1063,6 +1092,7 @@ def start_integrated_pipeline(
     demo_mode: bool = False,
     platform_listing_code: str = "",
     slot_alignment_test: bool = False,
+    category_next_burst_demo: bool = True,
     listing_scheduled_at: datetime | None = None,
     batch_id: str = "",
     skip_listing: bool = False,
@@ -1121,6 +1151,7 @@ def start_integrated_pipeline(
         "category_keyword": category_keyword,
         "platform_listing_code": platform_listing_code,
         "slot_alignment_test": bool(slot_alignment_test),
+        "category_next_burst_demo": bool(category_next_burst_demo),
         "material_source": str(material_source or ""),
         "auto_limited_time_setup": bool(normalized_activity_ids),
         "continue_after_limited_time_failure": bool(continue_after_limited_time_failure),
@@ -1244,6 +1275,7 @@ def start_integrated_pipeline(
             "category_keyword": category_keyword,
             "platform_listing_code": platform_listing_code,
             "slot_alignment_test": bool(slot_alignment_test),
+            "category_next_burst_demo": bool(category_next_burst_demo),
             "material_source": str(material_source or ""),
         },
     )
@@ -1253,6 +1285,7 @@ def start_integrated_pipeline(
         "category_keyword": category_keyword,
         "platform_listing_code": platform_listing_code,
         "slot_alignment_test": bool(slot_alignment_test),
+        "category_next_burst_demo": bool(category_next_burst_demo),
         "material_source": str(material_source or ""),
     }
     throttle_state = build_listing_throttle_state(
@@ -1312,6 +1345,7 @@ def start_integrated_pipeline(
                 "platform_listing_code": platform_listing_code,
                 "pipeline_id": pipeline_id,
                 "slot_alignment_test": bool(slot_alignment_test),
+                "category_next_burst_demo": bool(category_next_burst_demo),
                 "material_source": str(material_source or ""),
             },
             scheduled_at=listing_scheduled_at or datetime.now(),
@@ -1341,6 +1375,7 @@ def start_integrated_pipeline_batch(
     demo_mode: bool = False,
     platform_listing_code: str = "",
     slot_alignment_test: bool = False,
+    category_next_burst_demo: bool = True,
     store_start_delay_min_seconds: int | None = None,
     store_start_delay_max_seconds: int | None = None,
     max_concurrent_stores: int | None = None,
@@ -1387,6 +1422,7 @@ def start_integrated_pipeline_batch(
         demo_mode=demo_mode,
         platform_listing_code=platform_listing_code,
         slot_alignment_test=slot_alignment_test,
+        category_next_burst_demo=category_next_burst_demo,
         skip_listing=skip_listing,
         listing_skip_selectors=listing_skip_selectors,
         material_source=material_source,
@@ -1468,6 +1504,7 @@ def start_integrated_pipeline_batch(
             demo_mode=demo_mode,
             platform_listing_code=platform_listing_code,
             slot_alignment_test=slot_alignment_test,
+            category_next_burst_demo=category_next_burst_demo,
             listing_scheduled_at=scheduled_at,
             batch_id=batch_id,
             skip_listing=skip_listing,
@@ -1748,6 +1785,8 @@ def _continue_pipeline_after_listing(
         scheduled_at,
         pdd_ids,
     )
+    refreshed = get_integrated_pipeline(row.pipeline_id) or row
+    _try_advance_store_sequential_after_listing_limited_time(refreshed)
     return True
 
 

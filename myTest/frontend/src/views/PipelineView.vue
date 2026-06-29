@@ -74,6 +74,7 @@ const continueAfterActivityFailure = ref(false)
 const demoMode = ref(true)
 const activityDelayHours = ref(24)
 const slotAlignmentTest = ref(true)
+const categoryNextBurstDemo = ref(true)
 const relistStrategy = ref<RelistStrategy>(loadPipelineRelistStrategy())
 const listingThrottleEnabled = ref(loadListingThrottleEnabled())
 const listingBatchSetCount = ref(loadListingBatchSetCount())
@@ -922,6 +923,7 @@ async function startPipeline() {
         activity_delay_hours: demoMode.value ? 0 : activityDelayHours.value,
         demo_mode: demoMode.value,
         slot_alignment_test: slotAlignmentTest.value,
+        category_next_burst_demo: categoryNextBurstDemo.value,
         store_start_delay_min_seconds: startDelayMin.value,
         store_start_delay_max_seconds: startDelayMax.value,
         skip_listing: skipListing,
@@ -938,7 +940,7 @@ async function startPipeline() {
       })
       success.value = `批量整合链路已提交：${result.total} 家店铺${
         result.store_sequential_enabled
-          ? `（串行：当前已启动第 1 家，其余 ${result.pending_stores ?? 0} 家待前店完成后自动启动；店间间隔 ${result.store_start_delay_min_seconds}-${result.store_start_delay_max_seconds} 秒）`
+          ? `（串行：第 1 家已启动，其余 ${result.pending_stores ?? 0} 家待前店上架+限时限量购完成后自动启动；店间间隔 ${result.store_start_delay_min_seconds}-${result.store_start_delay_max_seconds} 秒；活动次日执行）`
           : `，批次 ${result.batch_id}，启动间隔 ${result.store_start_delay_min_seconds}-${result.store_start_delay_max_seconds} 秒`
       }，活动 ${activityIds.value.length} 个${
         listingThrottleEnabled.value
@@ -965,6 +967,7 @@ async function startPipeline() {
         activity_delay_hours: demoMode.value ? 0 : activityDelayHours.value,
         demo_mode: demoMode.value,
         slot_alignment_test: slotAlignmentTest.value,
+        category_next_burst_demo: categoryNextBurstDemo.value,
         skip_listing: skipListing,
         listing_skip_selectors: listingSkipSelectors,
         material_source: materialSource.value,
@@ -1134,7 +1137,7 @@ onUnmounted(() => {
                 <div v-if="pipelineBatchEnabled" class="form-tip">
                   {{
                     storeSequentialEnabled
-                      ? '串行模式：第一家店整条链路（含全部分批上架、限时限量、活动、推广）全部结束后，再按间隔启动第二家；某店失败或取消不影响后续店铺'
+                      ? '串行模式：每家店「上架 + 限时限量购（含全部分批）」全部完成后立即启动下一家；活动次日按预约执行，推广在活动之后，均不阻塞下一家'
                       : '多店共用下方素材选择，各店按启动间隔错开入队（可并行）'
                   }}
                 </div>
@@ -1546,6 +1549,9 @@ onUnmounted(() => {
                   <el-checkbox v-model="slotAlignmentTest" class="slot-align-test">
                     槽位对齐（试验）
                   </el-checkbox>
+                  <el-checkbox v-model="categoryNextBurstDemo" class="category-burst-demo">
+                    分类页下一步连点（演示）
+                  </el-checkbox>
                   <div class="switch-row">
                     <span class="switch-label">自动推广</span>
                     <el-switch v-model="autoPromotion" />
@@ -1586,6 +1592,9 @@ onUnmounted(() => {
                       @change="onPlatformSkipDedupeChange"
                     />
                   </div>
+                </div>
+                <div v-if="categoryNextBurstDemo" class="form-tip">
+                  演示拼多多分类页渲染延迟：随机等待 20–45 秒（5 秒步长）后点击「下一步」；未跳转则随机连点 3–5 次并监听 30 秒。关闭后仅单次点击（便于对比复现 bug）。
                 </div>
                 <div v-if="continueAfterLimitedTimeFailure" class="form-tip">
                   限时限量购失败时仍继续活动报名；若同时开启自动推广，活动全部处理完后仍会创建推广。

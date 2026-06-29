@@ -9,9 +9,103 @@ from datetime import datetime
 from pdd_agent.browser.dp_compat_sync import DpPage
 from pdd_agent.browser.profile_lock import AccountProfileBusy, account_profile_lock
 from pdd_agent.browser.sync_job import _launch_persistent
-from pdd_agent.browser.sync_login import HOME_URL, _click_login_button
+from pdd_agent.browser.sync_login import HOME_URL, _click_login_button, ensure_login_sync, is_login_url
 from pdd_agent.core.config import AccountConfig, YamlSettings
 from pdd_agent.db.repositories import upsert_login_status
+
+
+@dataclass
+class ShopNameScrapeResult:
+    account_id: str
+    shop_display_name: str = ""
+    ok: bool = False
+    reason: str = ""
+
+
+def scrape_shop_display_name_sync(
+    settings: YamlSettings,
+    account: AccountConfig,
+) -> ShopNameScrapeResult:
+    """打开可见浏览器、自动登录（含验证码等待），抓取店铺名并写入数据库。"""
+    account_id = account.account_id
+    print(f"[{account_id}] 开始抓取店铺名称（将打开浏览器窗口）...", flush=True)
+    current_url = ""
+    try:
+        with account_profile_lock(
+            settings,
+            account_id,
+            reason="scrape_shop_name",
+            wait_seconds=60,
+        ):
+            # 抓取店铺名必须可见窗口，便于人工过验证码/滑块
+            pw, context, page = _launch_persistent(
+                settings, account_id, headless=False
+            )
+            try:
+                dp = ensure_login_sync(account, page)
+                current_url = str(dp.url or "")
+                if is_login_url(current_url):
+                    return ShopNameScrapeResult(
+                        account_id=account_id,
+                        ok=False,
+                        reason="仍在登录页，请检查账号密码或完成验证码",
+                    )
+
+                from pdd_agent.browser.shop_display_name import refresh_shop_display_name
+
+                name = refresh_shop_display_name(
+                    account_id,
+                    dp,
+                    login_username=account.username,
+                )
+                if name:
+                    print(f"[{account_id}] 抓取店铺名成功：{name}", flush=True)
+                    time.sleep(1.5)
+                    return ShopNameScrapeResult(
+                        account_id=account_id,
+                        shop_display_name=name,
+                        ok=True,
+                        reason="scraped",
+                    )
+                print(
+                    f"[{account_id}] 页面已登录但未识别到店铺名，url={current_url}",
+                    flush=True,
+                )
+                return ShopNameScrapeResult(
+                    account_id=account_id,
+                    ok=False,
+                    reason="shop display name not found on page",
+                )
+            finally:
+                try:
+                    page.evaluate("window.onbeforeunload = null;")
+                except Exception:
+                    pass
+                try:
+                    context.close()
+                finally:
+                    pw.stop()
+    except AccountProfileBusy as exc:
+        print(f"[{account_id}] 抓取店铺名失败：{exc}", flush=True)
+        return ShopNameScrapeResult(
+            account_id=account_id,
+            ok=False,
+            reason=str(exc),
+        )
+    except RuntimeError as exc:
+        print(f"[{account_id}] 抓取店铺名登录失败：{exc}", flush=True)
+        return ShopNameScrapeResult(
+            account_id=account_id,
+            ok=False,
+            reason=str(exc),
+        )
+    except Exception as exc:
+        print(f"[{account_id}] 抓取店铺名异常：{exc}", flush=True)
+        return ShopNameScrapeResult(
+            account_id=account_id,
+            ok=False,
+            reason=str(exc),
+        )
 
 
 @dataclass
@@ -166,6 +260,32 @@ def _run_manual_login_window(
     )
     _persist(result)
     return result
+
+
+def _persist_scrape_result(result: ShopNameScrapeResult) -> None:
+    if result.ok:
+        status = "logged_in"
+        reason = f"shop name scraped: {result.shop_display_name}"
+    elif "登录" in (result.reason or "") or result.reason in {
+        "not logged in",
+        "仍在登录页，请检查账号密码或完成验证码",
+    }:
+        status = "needs_login"
+        reason = result.reason or "not logged in"
+    else:
+        status = "failed"
+        reason = result.reason or "shop name scrape failed"
+    upsert_login_status(
+        account_id=result.account_id,
+        status=status,
+        reason=reason,
+        current_url="",
+        checked_at=datetime.now(),
+    )
+    if result.ok and result.shop_display_name:
+        from pdd_agent.db.repositories import update_shop_display_name
+
+        update_shop_display_name(result.account_id, result.shop_display_name)
 
 
 def mark_checking(account_id: str, reason: str) -> None:

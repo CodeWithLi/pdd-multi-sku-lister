@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from pdd_agent.api.services.task_runner import (
+    _extract_limited_time_price_filter_errors,
     _extract_per_product_activity_errors,
     _normalize_terminal_failure_result,
     _summarize_campaign_message,
@@ -47,6 +48,30 @@ def test_extract_per_product_activity_errors_maps_partial_not_eligible():
         product_ids=["968628035598"],
     )
     assert errors["968628035598"] == "商品需过24h后才可以报活动"
+
+
+def test_extract_limited_time_price_filter_errors_on_partial_success():
+    result = {
+        "results": [
+            {
+                "status": "success",
+                "price_filter": {
+                    "status": "success",
+                    "kept_product_ids": ["111", "222"],
+                    "deleted_product_ids": ["333", "444"],
+                    "decisions": [
+                        {"product_id": "111", "keep": True},
+                        {"product_id": "222", "keep": True},
+                        {"product_id": "333", "keep": False, "reason": "price_out_of_range_or_missing_rule"},
+                        {"product_id": "444", "keep": False, "reason": "price_out_of_range_or_missing_rule"},
+                    ],
+                },
+            }
+        ]
+    }
+    errors = _extract_limited_time_price_filter_errors(result)
+    assert set(errors) == {"333", "444"}
+    assert "价格区间" in errors["333"]
 
 
 def test_extract_per_product_activity_errors_from_eligibility():

@@ -63,7 +63,7 @@ def activity_cfg() -> FeishuConfig:
 
 
 def test_map_activity_status_values():
-    assert map_limited_time_activity_status(success=True) == "进行中"
+    assert map_limited_time_activity_status(success=True) == "成功"
     assert map_limited_time_activity_status(success=False) == "失败"
     assert map_limited_time_activity_status(success=False, error="cannot import name 'x'") == "程序异常"
     assert map_activity_register_activity_status(success=True) == "报名成功"
@@ -274,7 +274,40 @@ def test_push_pdd_activity_log_limited_time_creates_row(monkeypatch, activity_cf
     assert captured[0]["product_id"] == "968277091707"
     assert captured[0]["account_name"] == "测试店"
     assert captured[0]["identity_mode"] == "immediate"
-    assert captured[0]["patch_fields"][names.limited_time_status] == "进行中"
+    assert captured[0]["patch_fields"][names.limited_time_status] == "成功"
+    assert captured[0]["patch_fields"][names.limited_time_failure_reason] == ""
+
+
+def test_push_pdd_activity_log_limited_time_partial_success_marks_failures(monkeypatch, activity_cfg):
+    from pdd_agent.integrations.feishu import pdd_activity_log_sync
+
+    captured: list[dict] = []
+
+    def fake_upsert(**kwargs):
+        captured.append(kwargs)
+        return {"updated": True, "record_id": "rec1"}
+
+    monkeypatch.setattr(pdd_activity_log_sync, "upsert_pdd_activity_log_fields", fake_upsert)
+
+    names = activity_cfg.pdd_activity_log.field_names
+    push_pdd_activity_log_limited_time(
+        account_id="store_A",
+        product_ids=["111", "222", "333"],
+        success=True,
+        product_errors={
+            "222": "活动价格不符合价格区间，不继续创建活动",
+            "333": "活动价格不符合价格区间，不继续创建活动",
+        },
+        account_name="测试店",
+        config=activity_cfg,
+    )
+
+    by_pid = {row["product_id"]: row["patch_fields"] for row in captured}
+    assert by_pid["111"][names.limited_time_status] == "成功"
+    assert by_pid["111"][names.limited_time_failure_reason] == ""
+    assert by_pid["222"][names.limited_time_status] == "失败"
+    assert "价格区间" in by_pid["222"][names.limited_time_failure_reason]
+    assert by_pid["333"][names.limited_time_status] == "失败"
 
 
 def test_push_pdd_activity_log_limited_time_failure_writes_reason(monkeypatch, activity_cfg):

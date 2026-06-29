@@ -2,6 +2,8 @@
 import json
 import time
 
+from pdd_agent.skills.listing import _sku_table_debug as sku_dbg
+
 
 def _now() -> float:
     return time.perf_counter()
@@ -59,6 +61,42 @@ def _wait_inputs_count(box, count: int, account_id: str, label: str, max_wait: i
     return False
 
 
+def _react_fill_spec_input(page, inp, value: str) -> bool:
+    """规格名输入：触发 React input/change/Enter，避免「框里有字但未生效」。"""
+    try:
+        return bool(
+            page.run_js(
+                """
+                const el = arguments[0];
+                const val = String(arguments[1] || '').trim();
+                if (!el || !val) return false;
+                try { el.focus(); } catch (e) {}
+                const setter = Object.getOwnPropertyDescriptor(
+                    window.HTMLInputElement.prototype, 'value'
+                )?.set;
+                if (setter) setter.call(el, val);
+                else el.value = val;
+                el.dispatchEvent(new InputEvent('input', {
+                    bubbles: true, data: val, inputType: 'insertText'
+                }));
+                el.dispatchEvent(new Event('change', { bubbles: true }));
+                el.dispatchEvent(new KeyboardEvent('keydown', {
+                    key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true
+                }));
+                el.dispatchEvent(new KeyboardEvent('keyup', {
+                    key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true
+                }));
+                try { el.blur(); } catch (e) {}
+                return (el.value || '').trim() === val;
+                """,
+                inp,
+                value,
+            )
+        )
+    except Exception:
+        return False
+
+
 def _add_values_to_spec_box(page, box, account_id: str, label: str, names: list[str]):
     """向单个规格维度（款式或型号）逐个录入名称。"""
     if not names:
@@ -76,10 +114,11 @@ def _add_values_to_spec_box(page, box, account_id: str, label: str, names: list[
         current = inputs[-1]
         current.click()
         time.sleep(0.15)
-        current.input(name, clear=True)
-        time.sleep(0.2)
-        current.input("\n")
-        time.sleep(0.2)
+        if not _react_fill_spec_input(page, current, name):
+            current.input(name, clear=True)
+            time.sleep(0.2)
+            current.input("\n")
+        time.sleep(0.35)
         page.run_js("arguments[0].blur();", current)
         _click_blank_area(page)
         print(f"[{account_id}] 已录入{label} ({i + 1}/{len(names)})：{name}")
@@ -101,20 +140,156 @@ def _ensure_second_spec_box(page, account_id: str):
 
 
 def _select_spec_type(box, type_name: str, page, account_id: str) -> bool:
-    """在规格组下拉框中选择「款式」或「尺寸」。"""
+    """在规格组下拉框中选择「款式」或「尺寸」；选项限定在当前规格组/可见下拉内。"""
     if not box:
         return False
     trigger = box.ele("css:.ant-select-selector", timeout=1) or box.ele("tag:select", timeout=1)
-    if trigger:
+    if not trigger:
+        return False
+    try:
         trigger.click()
-        time.sleep(0.5)
-        option = page.ele(f"text:{type_name}", timeout=2)
+    except Exception:
+        page.run_js("arguments[0].click();", trigger)
+    time.sleep(0.5)
+
+    candidates = (
+        f"css:.ant-select-dropdown:not(.ant-select-dropdown-hidden) .ant-select-item-option:has-text('{type_name}')",
+        f"css:[class*='select-dropdown']:not([class*='hidden']) [class*='option']:has-text('{type_name}')",
+    )
+    for locator in candidates:
+        option = page.ele(locator, timeout=1)
         if option:
-            option.click()
+            try:
+                option.click()
+            except Exception:
+                page.run_js("arguments[0].click();", option)
             time.sleep(0.5)
-            print(f"[{account_id}] 已选择规格类型：{type_name}")
+            print(f"[{account_id}] 已选择规格类型：{type_name}", flush=True)
             return True
+
+    try:
+        picked = page.run_js(
+            """
+            const typeName = arguments[0];
+            for (const panel of document.querySelectorAll(
+                '.ant-select-dropdown:not(.ant-select-dropdown-hidden), [class*="select-dropdown"]:not([class*="hidden"])'
+            )) {
+                for (const el of panel.querySelectorAll('[class*="option"], li, div, span')) {
+                    const t = (el.innerText || el.textContent || '').trim();
+                    if (t !== typeName && !t.startsWith(typeName)) continue;
+                    const r = el.getBoundingClientRect();
+                    if (r.width < 2 || r.height < 2) continue;
+                    el.click();
+                    return true;
+                }
+            }
+            return false;
+            """,
+            type_name,
+        )
+        if picked:
+            time.sleep(0.5)
+            print(f"[{account_id}] 已选择规格类型（下拉）：{type_name}", flush=True)
+            return True
+    except Exception:
+        pass
     return False
+
+
+def _count_spec_price_rows(page) -> int:
+    try:
+        return int(page.run_js(_FIND_MARK_SKU_ROWS_JS) or 0)
+    except Exception:
+        return len(_sku_price_table_rows(page, scroll=False))
+
+
+def _spec_lists_json(
+    style_names: list[str] | None,
+    size_names: list[str] | None,
+) -> tuple[str, str]:
+    return (
+        json.dumps(list(style_names or []), ensure_ascii=False),
+        json.dumps(list(size_names or []), ensure_ascii=False),
+    )
+
+
+def _activate_spec_price_table(
+    page,
+    style_names: list[str],
+    size_names: list[str],
+    *,
+    account_id: str = "",
+) -> None:
+    """规格录入后滚动价格表容器，促使虚拟滚动矩阵渲染完整。"""
+    styles_json, sizes_json = _spec_lists_json(style_names, size_names)
+    _scroll_to_price_table(page)
+    _click_blank_area(page)
+    try:
+        page.run_js(_SCROLL_LOAD_ALL_ROWS_JS, str(len(style_names) * len(size_names)), styles_json, sizes_json)
+    except Exception:
+        pass
+    time.sleep(0.4)
+    if account_id:
+        _sku_table_debug_snapshot(
+            page, account_id, "after_activate_price_table", style_names, size_names
+        )
+
+
+def _wait_spec_matrix_rows(
+    page,
+    account_id: str,
+    style_names: list[str],
+    model_names: list[str],
+    *,
+    max_wait: int = 25,
+) -> int:
+    """规格录入后等待价格表行数 = 款式数 × 尺寸数。"""
+    expected = len(style_names) * len(model_names)
+    if expected <= 0:
+        return 0
+    styles_json, sizes_json = _spec_lists_json(style_names, model_names)
+    for attempt in range(max_wait):
+        _click_blank_area(page)
+        try:
+            count = int(
+                page.run_js(_SCROLL_LOAD_ALL_ROWS_JS, str(expected), styles_json, sizes_json) or 0
+            )
+        except Exception:
+            count = _count_spec_price_rows(page)
+        if count >= expected:
+            print(
+                f"[{account_id}] 规格矩阵已生成 {count}/{expected} 行",
+                flush=True,
+            )
+            _sku_table_debug_snapshot(
+                page, account_id, "matrix_ready", style_names, model_names
+            )
+            return count
+        if attempt == 0 or (attempt + 1) % 5 == 0:
+            print(
+                f"[{account_id}] 等待规格矩阵行数 ({count}/{expected}) "
+                f"({attempt + 1}/{max_wait})",
+                flush=True,
+            )
+        if attempt % 3 == 2:
+            _activate_spec_price_table(
+                page, style_names, model_names, account_id=account_id
+            )
+        time.sleep(0.6)
+    try:
+        count = int(
+            page.run_js(_SCROLL_LOAD_ALL_ROWS_JS, str(expected), styles_json, sizes_json) or 0
+        )
+    except Exception:
+        count = _count_spec_price_rows(page)
+    print(
+        f"[{account_id}] 规格矩阵行数未齐 ({count}/{expected})，继续尝试填表",
+        flush=True,
+    )
+    _sku_table_debug_snapshot(
+        page, account_id, "matrix_timeout", style_names, model_names
+    )
+    return count
 
 
 def add_style_and_model_specs(
@@ -134,8 +309,11 @@ def add_style_and_model_specs(
 
     _select_spec_type(boxes[0], "款式", page, account_id)
     _add_values_to_spec_box(page, boxes[0], account_id, "款式", style_names)
+    _click_blank_area(page)
+    time.sleep(0.5)
 
     boxes = _ensure_second_spec_box(page, account_id)
+    _, boxes = _spec_row_boxes(page)
     second_label = "尺寸"
     if len(boxes) < 2:
         print(f"[{account_id}] 未能创建第二个规格组（尺寸），仍将尝试继续")
@@ -147,6 +325,10 @@ def add_style_and_model_specs(
         _select_spec_type(boxes[1], "型号", page, account_id)
     _add_values_to_spec_box(page, boxes[1], account_id, second_label, model_names)
     _click_blank_area(page)
+    _wait_spec_matrix_rows(page, account_id, style_names, model_names)
+    _activate_spec_price_table(
+        page, style_names, model_names, account_id=account_id
+    )
     print(f"[{account_id}] 款式、尺寸已全部录入，准备填写下方价格表...", flush=True)
     page.run_js("document.querySelector('.sku-table,.sku-list')?.scrollIntoView({block:'center'});")
     time.sleep(0.8)
@@ -553,62 +735,121 @@ def _remark_sku_rows(page) -> int:
         return 0
 
 
-def _scroll_sku_table_to_load(page, expected: int) -> int:
+def _scroll_sku_table_to_load(
+    page,
+    expected: int,
+    *,
+    style_names: list[str] | None = None,
+    size_names: list[str] | None = None,
+) -> int:
+    styles_json, sizes_json = _spec_lists_json(style_names, size_names)
     try:
-        _remark_sku_rows(page)
-        return int(page.run_js(_SCROLL_LOAD_ALL_ROWS_JS, str(expected)) or 0)
+        return int(page.run_js(_SCROLL_LOAD_ALL_ROWS_JS, str(expected), styles_json, sizes_json) or 0)
     except Exception:
         return 0
 
 
-def _ensure_style_size_row_visible(page, style_name: str, size_name: str) -> int | None:
+def _ensure_style_size_row_visible(
+    page,
+    style_name: str,
+    size_name: str,
+    *,
+    style_names: list[str] | None = None,
+    size_names: list[str] | None = None,
+) -> int | None:
     """滚动虚拟表格，按款式+尺寸定位行并返回 data-pdd-sku-row 索引。"""
     if not style_name or not size_name:
         return None
+    styles_json, sizes_json = _spec_lists_json(style_names, size_names)
     try:
-        _remark_sku_rows(page)
-        raw = page.run_js(_SCROLL_FIND_STYLE_SIZE_ROW_JS, style_name, size_name)
-        idx = _parse_scroll_find_result(raw)
-        if idx is not None:
-            _remark_sku_rows(page)
-        return idx
+        raw = page.run_js(_SCROLL_FIND_STYLE_SIZE_ROW_JS, style_name, size_name, styles_json, sizes_json)
+        return _parse_scroll_find_result(raw)
     except Exception:
         return None
 
 
-def wait_multi_sku_rows(page, account_id: str, skus: list, max_wait: int = 15) -> list:
+def _count_loaded_spec_rows(
+    page,
+    expected: int,
+    *,
+    style_names: list[str] | None = None,
+    size_names: list[str] | None = None,
+) -> int:
+    """虚拟滚动表格：滚遍视口后统计「款式+尺寸」规格行数。"""
+    return _scroll_sku_table_to_load(
+        page,
+        expected,
+        style_names=style_names,
+        size_names=size_names,
+    )
+
+
+def wait_multi_sku_rows(
+    page,
+    account_id: str,
+    skus: list,
+    max_wait: int = 15,
+    *,
+    style_names: list[str] | None = None,
+    size_names: list[str] | None = None,
+) -> list:
     """等待价格表生成，返回已定位的行元素列表。"""
     need = len(skus)
-    max_wait = max(max_wait, min(30, need // 2 + 12))
-    print(f"[{account_id}] 等待价格表生成（共需 {need} 行）...", flush=True)
+    matrix_need = (
+        len(style_names) * len(size_names)
+        if style_names and size_names
+        else need
+    )
+    unique_pairs = _unique_sku_spec_pairs(skus)
+    target = max(need, unique_pairs, matrix_need)
+    max_wait = max(max_wait, min(60, target // 2 + 18))
+    print(
+        f"[{account_id}] 等待价格表生成（共需 {target} 行，"
+        f"虚拟滚动下 DOM 可见行可能更少）...",
+        flush=True,
+    )
     rows: list = []
+    spec_count = 0
     for attempt in range(max_wait):
-        if attempt == 0 or attempt % 2 == 1:
-            _scroll_sku_table_to_load(page, need)
-        rows = _sku_price_table_rows(page, scroll=(attempt == 0))
-        unique_pairs = len(
-            {
-                (
-                    getattr(sku, "style_name", "") or "",
-                    getattr(sku, "model_name", "") or "",
-                )
-                for sku in skus
-            }
+        spec_count = _count_loaded_spec_rows(
+            page,
+            matrix_need or target,
+            style_names=style_names,
+            size_names=size_names,
         )
-        ready = len(rows) >= need or len(rows) >= unique_pairs
+        rows = _sku_price_table_rows(page, scroll=(attempt == 0))
+        ready = spec_count >= target or spec_count >= unique_pairs
         if ready:
-            print(f"[{account_id}] 价格表就绪：{len(rows)} 行", flush=True)
+            print(
+                f"[{account_id}] 价格表就绪：规格行 {spec_count}（DOM 可见 {len(rows)} 行）",
+                flush=True,
+            )
             return rows
         if attempt == 0 or (attempt + 1) % 5 == 0:
             print(
-                f"[{account_id}] 等待价格表 ({len(rows)}/{need}) "
-                f"({attempt + 1}/{max_wait})...",
+                f"[{account_id}] 等待价格表 规格={spec_count}/{target} "
+                f"可见={len(rows)} ({attempt + 1}/{max_wait})...",
                 flush=True,
             )
-        time.sleep(0.5)
-    _scroll_sku_table_to_load(page, need)
+        if attempt % 4 == 3:
+            _click_blank_area(page)
+            if style_names and size_names:
+                _activate_spec_price_table(
+                    page, style_names, size_names, account_id=account_id
+                )
+        time.sleep(0.6)
+    spec_count = _count_loaded_spec_rows(
+        page,
+        matrix_need or target,
+        style_names=style_names,
+        size_names=size_names,
+    )
     rows = _sku_price_table_rows(page, scroll=False)
-    print(f"[{account_id}] 价格表未完全生成（{len(rows)}/{need}），继续尝试填写", flush=True)
+    print(
+        f"[{account_id}] 价格表未完全生成（规格 {spec_count}/{target}，"
+        f"可见 {len(rows)} 行），继续尝试填写",
+        flush=True,
+    )
     return rows
 
 
@@ -645,12 +886,28 @@ def _resolve_preview_upload_input(
     size_name: str = "",
     *,
     spec_marker: str = "",
+    style_names: list[str] | None = None,
+    size_names: list[str] | None = None,
 ):
+    styles_json, sizes_json = _spec_lists_json(style_names, size_names)
     if style_name and size_name:
-        _ensure_style_size_row_visible(page, style_name, size_name)
+        _ensure_style_size_row_visible(
+            page,
+            style_name,
+            size_name,
+            style_names=style_names,
+            size_names=size_names,
+        )
         marker = str(spec_marker or index)
         try:
-            raw = page.run_js(_RESOLVE_PREVIEW_INPUT_BY_SPEC_JS, style_name, size_name, marker) or "{}"
+            raw = page.run_js(
+                _RESOLVE_PREVIEW_INPUT_BY_SPEC_JS,
+                style_name,
+                size_name,
+                marker,
+                styles_json,
+                sizes_json,
+            ) or "{}"
             info = json.loads(raw) if isinstance(raw, str) else raw
             if isinstance(info, dict):
                 if info.get("uploaded"):
@@ -675,11 +932,24 @@ def _resolve_preview_upload_input(
             pass
 
     if style_name and size_name:
-        found_idx = _ensure_style_size_row_visible(page, style_name, size_name)
+        found_idx = _ensure_style_size_row_visible(
+            page,
+            style_name,
+            size_name,
+            style_names=style_names,
+            size_names=size_names,
+        )
         if found_idx is not None:
             index = found_idx
 
-    if _preview_is_uploaded(page, index, style_name=style_name, size_name=size_name):
+    if _preview_is_uploaded(
+        page,
+        index,
+        style_name=style_name,
+        size_name=size_name,
+        style_names=style_names,
+        size_names=size_names,
+    ):
         return None
 
     upload_input = page.ele(f"css:input[{_PREVIEW_IDX_ATTR}='{index}']", timeout=0.2)
@@ -688,7 +958,14 @@ def _resolve_preview_upload_input(
 
     _safe_preview_js(page, _CLICK_PREVIEW_CELL_JS, index, default=False)
     time.sleep(0.45)
-    if _preview_is_uploaded(page, index, style_name=style_name, size_name=size_name):
+    if _preview_is_uploaded(
+        page,
+        index,
+        style_name=style_name,
+        size_name=size_name,
+        style_names=style_names,
+        size_names=size_names,
+    ):
         return None
     _safe_preview_js(page, _AFTER_CLICK_FIND_PREVIEW_INPUT_JS, index, default=False)
 
@@ -703,20 +980,41 @@ def _resolve_preview_upload_input(
             timeout=0.3,
         )
     if cell:
-        if _preview_is_uploaded(page, index, style_name=style_name, size_name=size_name):
+        if _preview_is_uploaded(
+            page,
+            index,
+            style_name=style_name,
+            size_name=size_name,
+            style_names=style_names,
+            size_names=size_names,
+        ):
             return None
         try:
             cell.click(by_js=True)
             time.sleep(0.35)
         except Exception:
             pass
-        if _preview_is_uploaded(page, index, style_name=style_name, size_name=size_name):
+        if _preview_is_uploaded(
+            page,
+            index,
+            style_name=style_name,
+            size_name=size_name,
+            style_names=style_names,
+            size_names=size_names,
+        ):
             return None
         upload_input = cell.ele("xpath:.//input[@type='file']", timeout=0.5)
         if upload_input:
             return upload_input
 
-    if _preview_is_uploaded(page, index, style_name=style_name, size_name=size_name):
+    if _preview_is_uploaded(
+        page,
+        index,
+        style_name=style_name,
+        size_name=size_name,
+        style_names=style_names,
+        size_names=size_names,
+    ):
         return None
 
     if style_name and size_name:
@@ -732,17 +1030,30 @@ def _preview_is_uploaded(
     *,
     style_name: str = "",
     size_name: str = "",
+    style_names: list[str] | None = None,
+    size_names: list[str] | None = None,
 ) -> bool:
+    styles_json, sizes_json = _spec_lists_json(style_names, size_names)
     if style_name and size_name:
         try:
-            if page.run_js(_PREVIEW_CHECK_BY_SPEC_JS, style_name, size_name):
+            if page.run_js(
+                _PREVIEW_CHECK_BY_SPEC_JS,
+                style_name,
+                size_name,
+                styles_json,
+                sizes_json,
+            ):
                 return True
         except Exception:
             pass
         try:
-            _remark_sku_rows(page)
-            raw = page.run_js(_SCROLL_FIND_STYLE_SIZE_ROW_JS, style_name, size_name)
-            found_idx = _parse_scroll_find_result(raw)
+            found_idx = _ensure_style_size_row_visible(
+                page,
+                style_name,
+                size_name,
+                style_names=style_names,
+                size_names=size_names,
+            )
             if found_idx is not None:
                 index = found_idx
         except Exception:
@@ -771,13 +1082,29 @@ def _wait_preview_uploaded(
     *,
     style_name: str = "",
     size_name: str = "",
+    style_names: list[str] | None = None,
+    size_names: list[str] | None = None,
 ) -> bool:
     deadline = _now() + timeout
     while _now() < deadline:
-        if _preview_is_uploaded(page, index, style_name=style_name, size_name=size_name):
+        if _preview_is_uploaded(
+            page,
+            index,
+            style_name=style_name,
+            size_name=size_name,
+            style_names=style_names,
+            size_names=size_names,
+        ):
             return True
         time.sleep(interval)
-    return _preview_is_uploaded(page, index, style_name=style_name, size_name=size_name)
+    return _preview_is_uploaded(
+        page,
+        index,
+        style_name=style_name,
+        size_name=size_name,
+        style_names=style_names,
+        size_names=size_names,
+    )
 
 
 def upload_row_preview(
@@ -789,16 +1116,31 @@ def upload_row_preview(
     *,
     style_name: str = "",
     size_name: str = "",
+    style_names: list[str] | None = None,
+    size_names: list[str] | None = None,
     max_retries: int = _MAX_PREVIEW_RETRIES,
 ) -> bool:
     total_t = _now()
     try:
         if style_name and size_name:
-            found_idx = _ensure_style_size_row_visible(page, style_name, size_name)
+            found_idx = _ensure_style_size_row_visible(
+                page,
+                style_name,
+                size_name,
+                style_names=style_names,
+                size_names=size_names,
+            )
             if found_idx is not None:
                 index = found_idx
 
-        if _preview_is_uploaded(page, index, style_name=style_name, size_name=size_name):
+        if _preview_is_uploaded(
+            page,
+            index,
+            style_name=style_name,
+            size_name=size_name,
+            style_names=style_names,
+            size_names=size_names,
+        ):
             print(f"[{account_id}] 预览图已存在，跳过 [{label}]", flush=True)
             _log_step(account_id, f"  预览图合计 #{index + 1}", total_t)
             return True
@@ -818,6 +1160,8 @@ def upload_row_preview(
                 style_name=style_name,
                 size_name=size_name,
                 spec_marker=str(index),
+                style_names=style_names,
+                size_names=size_names,
             )
             _log_step(
                 account_id,
@@ -825,7 +1169,14 @@ def upload_row_preview(
                 t,
             )
             if not upload_input:
-                if _preview_is_uploaded(page, index, style_name=style_name, size_name=size_name):
+                if _preview_is_uploaded(
+                    page,
+                    index,
+                    style_name=style_name,
+                    size_name=size_name,
+                    style_names=style_names,
+                    size_names=size_names,
+                ):
                     _log_step(
                         account_id,
                         f"  预览图校验通过 #{index + 1} (第{attempt}次，补检)",
@@ -862,7 +1213,12 @@ def upload_row_preview(
 
             t = _now()
             if _wait_preview_uploaded(
-                page, index, style_name=style_name, size_name=size_name
+                page,
+                index,
+                style_name=style_name,
+                size_name=size_name,
+                style_names=style_names,
+                size_names=size_names,
             ):
                 _log_step(
                     account_id,
@@ -878,7 +1234,14 @@ def upload_row_preview(
                 f"  预览图校验未通过 #{index + 1} (第{attempt}次)",
                 t,
             )
-            if _preview_is_uploaded(page, index, style_name=style_name, size_name=size_name):
+            if _preview_is_uploaded(
+                page,
+                index,
+                style_name=style_name,
+                size_name=size_name,
+                style_names=style_names,
+                size_names=size_names,
+            ):
                 _log_step(
                     account_id,
                     f"  预览图校验通过 #{index + 1} (第{attempt}次，延迟补检)",
@@ -961,6 +1324,7 @@ function getRow(idx) {
 }
 
 function fillRow(idx, vals) {
+    scrollRowIndexIntoView(idx);
     const tr = getRow(idx);
     if (!tr) return 0;
     return fillRowReliable(tr, vals);
@@ -1053,12 +1417,212 @@ function normCellText(td) {
     return normSpecLabel(raw) || raw;
 }
 
+function parseSpecLists(styleNamesJson, sizeNamesJson) {
+    let styleNames = [];
+    let sizeNames = [];
+    try {
+        if (styleNamesJson) styleNames = JSON.parse(styleNamesJson) || [];
+        if (sizeNamesJson) sizeNames = JSON.parse(sizeNamesJson) || [];
+    } catch (e) {}
+    return {
+        styleNames: styleNames.map(normSpecLabel).filter(Boolean),
+        sizeNames: sizeNames.map(normSpecLabel).filter(Boolean),
+    };
+}
+
+function globalSpecIndex(style, size, styleNames, sizeNames) {
+    const ns = normSpecLabel(style);
+    const nm = normSpecLabel(size);
+    const si = styleNames.indexOf(ns);
+    const zi = sizeNames.indexOf(nm);
+    if (si < 0 || zi < 0) return -1;
+    return si * sizeNames.length + zi;
+}
+
 function styleSizeKey(style, size) {
     return normSpecLabel(style) + '\\0' + normSpecLabel(size);
 }
 
-function findStyleSizeHit(style, size) {
-    const map = buildStyleSizeRowMap();
+function parseRowStyleSize(tr, styleNames, sizeNames, currentStyle) {
+    if (!tr || !styleNames.length || !sizeNames.length) return null;
+    let foundStyle = '';
+    let foundSize = '';
+    let carryStyle = normSpecLabel(currentStyle || '');
+    for (const td of tr.querySelectorAll('td')) {
+        if (cellHasDataInput(td)) break;
+        const text = normCellText(td);
+        if (!text) continue;
+        if (styleNames.includes(text)) {
+            foundStyle = text;
+            if (td.getAttribute('rowspan')) carryStyle = text;
+        } else if (sizeNames.includes(text)) {
+            foundSize = text;
+        }
+    }
+    if (!foundStyle && carryStyle && styleNames.includes(carryStyle)) {
+        foundStyle = carryStyle;
+    }
+    if (foundStyle && foundSize && foundStyle !== foundSize) {
+        return { style: foundStyle, size: foundSize, nextStyle: foundStyle };
+    }
+    return carryStyle ? { style: '', size: '', nextStyle: carryStyle } : null;
+}
+
+function collectSkuDataRowElements() {
+    const out = [];
+    const sels = [
+        '.sku-table tr[data-testid="beast-core-table-body-tr"]',
+        '.sku-list tr[data-testid="beast-core-table-body-tr"]',
+    ];
+    for (const sel of sels) {
+        for (const tr of document.querySelectorAll(sel)) {
+            if (isSkuDataRow(tr)) out.push(tr);
+        }
+    }
+    return out;
+}
+
+function scanVisibleSpecPairs(pairMap, ctx, doStamp) {
+    const parsed = parseRowsWithRowspanContext(
+        collectSkuDataRowElements(),
+        ctx.styleNames,
+        ctx.sizeNames
+    );
+    let added = 0;
+    for (const item of parsed) {
+        const key = styleSizeKey(item.style, item.size);
+        if (pairMap[key]) continue;
+        pairMap[key] = item.tr;
+        added++;
+        if (doStamp) {
+            stampRowSpec(item.tr, item.style, item.size, ctx.styleNames, ctx.sizeNames);
+        }
+    }
+    return added;
+}
+
+function orderedTrsFromPairMap(pairMap, ctx) {
+    const ordered = [];
+    for (const s of ctx.styleNames) {
+        for (const z of ctx.sizeNames) {
+            const tr = pairMap[styleSizeKey(s, z)];
+            if (tr) ordered.push(tr);
+        }
+    }
+    return ordered;
+}
+
+function collectAllSkuRowsByScrolling(styleNamesJson, sizeNamesJson) {
+    const ctx = parseSpecLists(styleNamesJson, sizeNamesJson);
+    const expected = ctx.styleNames.length * ctx.sizeNames.length;
+    const pairMap = {};
+
+    scrollSkuTableToTop();
+    scanVisibleSpecPairs(pairMap, ctx, false);
+
+    const targets = getSkuScrollTargets();
+    const stepPx = targets.length
+        ? Math.max(36, Math.floor((targets[0].clientHeight || 200) * 0.2))
+        : 72;
+
+    for (let step = 0; step < 160; step++) {
+        if (expected > 0 && Object.keys(pairMap).length >= expected) break;
+        const moved = scrollSkuTableStep(stepPx);
+        const added = scanVisibleSpecPairs(pairMap, ctx, false);
+        if (!moved && added === 0) break;
+    }
+
+    for (const t of getSkuScrollTargets()) {
+        t.scrollTop = t.scrollHeight;
+        fireSkuTableScroll(t);
+    }
+    scanVisibleSpecPairs(pairMap, ctx, false);
+    scrollSkuTableToTop();
+    return orderedTrsFromPairMap(pairMap, ctx);
+}
+
+function parseRowsWithRowspanContext(rows, styleNames, sizeNames) {
+    const out = [];
+    let currentStyle = '';
+    for (const tr of rows) {
+        let rowStyle = '';
+        let rowSize = '';
+        for (const td of tr.querySelectorAll('td')) {
+            if (cellHasDataInput(td)) break;
+            const text = normCellText(td);
+            if (!text) continue;
+            if (styleNames.includes(text)) {
+                rowStyle = text;
+                if (td.getAttribute('rowspan')) currentStyle = text;
+            } else if (sizeNames.includes(text)) {
+                rowSize = text;
+            }
+        }
+        const style = rowStyle || currentStyle;
+        if (style && rowSize && style !== rowSize) {
+            out.push({ tr, style, size: rowSize });
+        }
+    }
+    return out;
+}
+
+function stampRowSpec(tr, style, size, styleNames, sizeNames) {
+    if (!tr) return -1;
+    const gi = globalSpecIndex(style, size, styleNames, sizeNames);
+    tr.setAttribute('data-pdd-spec-style', style);
+    tr.setAttribute('data-pdd-spec-size', size);
+    if (gi >= 0) tr.setAttribute('data-pdd-sku-row', String(gi));
+    return gi;
+}
+
+function findVisibleSpecRow(style, size, styleNames, sizeNames) {
+    const ns = normSpecLabel(style);
+    const nm = normSpecLabel(size);
+    const parsed = parseRowsWithRowspanContext(
+        collectSkuDataRowElements(),
+        styleNames,
+        sizeNames
+    );
+    for (const item of parsed) {
+        if (normSpecLabel(item.style) === ns && normSpecLabel(item.size) === nm) {
+            try {
+                item.tr.scrollIntoView({block: 'center', behavior: 'instant'});
+            } catch (e) {
+                item.tr.scrollIntoView({block: 'center'});
+            }
+            const gi = stampRowSpec(item.tr, item.style, item.size, styleNames, sizeNames);
+            return { tr: item.tr, idx: gi };
+        }
+    }
+    return null;
+}
+
+function buildStyleSizeRowMap(styleNamesJson, sizeNamesJson) {
+    const ctx = parseSpecLists(styleNamesJson, sizeNamesJson);
+    const styleNames = ctx.styleNames;
+    const sizeNames = ctx.sizeNames;
+    const map = {};
+    for (const tr of document.querySelectorAll('tr[data-pdd-spec-style][data-pdd-spec-size]')) {
+        const style = tr.getAttribute('data-pdd-spec-style') || '';
+        const size = tr.getAttribute('data-pdd-spec-size') || '';
+        if (!style || !size) continue;
+        const marked = tr.getAttribute('data-pdd-sku-row');
+        const rowIdx = marked !== null && marked !== '' ? parseInt(marked, 10) : -1;
+        map[styleSizeKey(style, size)] = { tr: tr, idx: Number.isFinite(rowIdx) ? rowIdx : -1 };
+    }
+    if (!styleNames.length || !sizeNames.length) return map;
+    const rows = collectAllSkuRowsByScrolling(styleNamesJson, sizeNamesJson);
+    for (const item of parseRowsWithRowspanContext(rows, styleNames, sizeNames)) {
+        const key = styleSizeKey(item.style, item.size);
+        if (map[key]) continue;
+        const gi = globalSpecIndex(item.style, item.size, styleNames, sizeNames);
+        map[key] = { tr: item.tr, idx: gi >= 0 ? gi : -1 };
+    }
+    return map;
+}
+
+function findStyleSizeHit(style, size, styleNamesJson, sizeNamesJson) {
+    const map = buildStyleSizeRowMap(styleNamesJson, sizeNamesJson);
     const key = styleSizeKey(style, size);
     if (map[key]) return map[key];
     const ns = normSpecLabel(style);
@@ -1070,38 +1634,8 @@ function findStyleSizeHit(style, size) {
     return null;
 }
 
-function buildStyleSizeRowMap() {
-    const rows = getAllDataRows();
-    const map = {};
-    let currentStyle = '';
-    for (let i = 0; i < rows.length; i++) {
-        const tr = rows[i];
-        const marked = tr.getAttribute('data-pdd-sku-row');
-        const rowIdx = marked !== null && marked !== '' ? parseInt(marked, 10) : i;
-        const texts = [];
-        for (const td of tr.querySelectorAll('td')) {
-            if (cellHasDataInput(td)) break;
-            const text = normCellText(td);
-            if (!text) continue;
-            texts.push(text);
-            if (td.getAttribute('rowspan')) currentStyle = text;
-        }
-        let model = '';
-        if (texts.length >= 2) {
-            currentStyle = texts[0];
-            model = texts[1];
-        } else if (texts.length === 1) {
-            model = texts[0];
-        }
-        if (currentStyle && model) {
-            map[styleSizeKey(currentStyle, model)] = { tr: tr, idx: rowIdx };
-        }
-    }
-    return map;
-}
-
-function dumpStyleSizeMap() {
-    const map = buildStyleSizeRowMap();
+function dumpStyleSizeMap(styleNamesJson, sizeNamesJson) {
+    const map = buildStyleSizeRowMap(styleNamesJson, sizeNamesJson);
     const out = [];
     for (const k of Object.keys(map)) {
         const parts = k.split('\\0');
@@ -1122,96 +1656,327 @@ _SKU_TABLE_SCROLL_JS = (
     + """
 function getSkuScrollTargets() {
     const targets = [];
-    const roots = [...document.querySelectorAll('.sku-table, .sku-list')];
-    for (const root of roots) {
-        const nodes = [root, ...root.querySelectorAll('*')];
-        for (const el of nodes) {
-            const st = getComputedStyle(el);
-            const oy = st.overflowY || st.overflow;
-            if ((oy === 'auto' || oy === 'scroll')
-                && el.scrollHeight > el.clientHeight + 8) {
-                targets.push(el);
-            }
+    const seen = new Set();
+
+    function isScrollable(el) {
+        if (!el) return false;
+        const st = getComputedStyle(el);
+        const oy = st.overflowY || st.overflow;
+        return (oy === 'auto' || oy === 'scroll' || oy === 'overlay')
+            && el.scrollHeight > el.clientHeight + 4;
+    }
+
+    function add(el) {
+        if (!el || seen.has(el) || !isScrollable(el)) return;
+        seen.add(el);
+        targets.push(el);
+    }
+
+    const sampleRow = document.querySelector(
+        '.sku-table tr[data-testid="beast-core-table-body-tr"], '
+        + '.sku-list tr[data-testid="beast-core-table-body-tr"]'
+    );
+    if (sampleRow) {
+        let el = sampleRow.parentElement;
+        while (el && el !== document.documentElement) {
+            add(el);
+            el = el.parentElement;
         }
     }
-    return [...new Set(targets)];
+
+    const extraSels = [
+        '[data-testid="beast-core-table-middle-body"]',
+        '[data-testid="beast-core-table-body"]',
+        '[data-testid="beast-core-table-middle-tbody"]',
+        '.beast-core-table-body',
+        '.sku-table',
+        '.sku-list',
+    ];
+    for (const sel of extraSels) {
+        for (const el of document.querySelectorAll(sel)) add(el);
+    }
+
+    const roots = [...document.querySelectorAll('.sku-table, .sku-list')];
+    for (const root of roots) {
+        for (const el of root.querySelectorAll('*')) add(el);
+    }
+
+    targets.sort((a, b) => {
+        const aHas = a.querySelector('tr[data-testid="beast-core-table-body-tr"]') ? 0 : 1;
+        const bHas = b.querySelector('tr[data-testid="beast-core-table-body-tr"]') ? 0 : 1;
+        if (aHas !== bHas) return aHas - bHas;
+        return (a.scrollHeight - a.clientHeight) - (b.scrollHeight - b.clientHeight);
+    });
+    return targets;
 }
 
-function scrollFindStyleSizeRow(style, size) {
-    function tryFind() {
-        const hit = findStyleSizeHit(style, size);
-        if (!hit || !hit.tr) return null;
-        try {
-            hit.tr.scrollIntoView({block: 'center', behavior: 'instant'});
-        } catch (e) {
-            hit.tr.scrollIntoView({block: 'center'});
+function fireSkuTableScroll(el) {
+    if (!el) return;
+    try {
+        el.dispatchEvent(new Event('scroll', { bubbles: true }));
+    } catch (e) {}
+}
+
+function scrollSkuTableStep(delta) {
+    const targets = getSkuScrollTargets();
+    let moved = false;
+    for (const t of targets) {
+        const before = t.scrollTop;
+        const maxTop = Math.max(0, t.scrollHeight - t.clientHeight);
+        t.scrollTop = Math.max(0, Math.min(before + delta, maxTop));
+        if (t.scrollTop !== before) {
+            moved = true;
+            fireSkuTableScroll(t);
         }
-        const marked = hit.tr.getAttribute('data-pdd-sku-row');
-        const idx = marked !== null && marked !== '' ? parseInt(marked, 10) : hit.idx;
-        return {found: true, idx: Number.isFinite(idx) ? idx : hit.idx};
+    }
+    return moved;
+}
+
+function scrollSkuTableToTop() {
+    const targets = getSkuScrollTargets();
+    for (const t of targets) {
+        t.scrollTop = 0;
+        fireSkuTableScroll(t);
+    }
+    return targets;
+}
+
+function scrollFindStyleSizeRow(style, size, styleNamesJson, sizeNamesJson) {
+    const ctx = parseSpecLists(styleNamesJson, sizeNamesJson);
+    const gi = globalSpecIndex(style, size, ctx.styleNames, ctx.sizeNames);
+    if (gi < 0) return {found: false, idx: -1};
+
+    let tr = getRowBySpec(style, size, styleNamesJson, sizeNamesJson);
+    if (tr) {
+        try {
+            tr.scrollIntoView({block: 'center', behavior: 'instant'});
+        } catch (e) {
+            tr.scrollIntoView({block: 'center'});
+        }
+        return {found: true, idx: gi};
+    }
+
+    const expected = ctx.styleNames.length * ctx.sizeNames.length;
+    const targets = getSkuScrollTargets();
+    const stepPx = targets.length
+        ? Math.max(36, Math.floor((targets[0].clientHeight || 200) * 0.2))
+        : 72;
+
+    function tryFind() {
+        const hit = findVisibleSpecRow(style, size, ctx.styleNames, ctx.sizeNames);
+        if (hit) return {found: true, idx: hit.idx >= 0 ? hit.idx : gi};
+        return null;
     }
 
     let hit = tryFind();
     if (hit) return hit;
 
-    const targets = getSkuScrollTargets();
-    if (!targets.length) {
-        window.scrollBy(0, 500);
-        hit = tryFind();
-        return hit || {found: false, idx: -1};
-    }
+    scrollSkuTableToTop();
+    hit = tryFind();
+    if (hit) return hit;
 
-    for (const t of targets) t.scrollTop = 0;
-    for (let step = 0; step < 72; step++) {
+    if (targets.length && expected > 1) {
+        const ratio = gi / (expected - 1);
+        for (const t of targets) {
+            t.scrollTop = ratio * Math.max(0, t.scrollHeight - t.clientHeight);
+            fireSkuTableScroll(t);
+        }
         hit = tryFind();
         if (hit) return hit;
-        let moved = false;
-        for (const t of targets) {
-            const before = t.scrollTop;
-            t.scrollTop += Math.max(80, Math.floor(t.clientHeight * 0.45));
-            if (t.scrollTop > before) moved = true;
-        }
+    }
+
+    for (let step = 0; step < 160; step++) {
+        hit = tryFind();
+        if (hit) return hit;
+        const moved = scrollSkuTableStep(stepPx);
+        hit = tryFind();
+        if (hit) return hit;
         if (!moved) break;
+    }
+
+    for (const t of targets) {
+        t.scrollTop = t.scrollHeight;
+        fireSkuTableScroll(t);
     }
     hit = tryFind();
     return hit || {found: false, idx: -1};
 }
 
-function countStyleSizeRows() {
-    return Object.keys(buildStyleSizeRowMap()).length;
+function countStyleSizeRows(styleNamesJson, sizeNamesJson) {
+    return Object.keys(buildStyleSizeRowMap(styleNamesJson, sizeNamesJson)).length;
 }
 
-function getRowBySpec(style, size) {
+function countKnownSpecRows(styleNamesJson, sizeNamesJson) {
+    const ctx = parseSpecLists(styleNamesJson, sizeNamesJson);
+    const expected = ctx.styleNames.length * ctx.sizeNames.length;
+    if (!expected) return countStyleSizeRows(styleNamesJson, sizeNamesJson);
+    const pairMap = {};
+    scrollSkuTableToTop();
+    scanVisibleSpecPairs(pairMap, ctx, false);
+    const targets = getSkuScrollTargets();
+    const stepPx = targets.length
+        ? Math.max(36, Math.floor((targets[0].clientHeight || 200) * 0.2))
+        : 72;
+    for (let step = 0; step < 160; step++) {
+        if (Object.keys(pairMap).length >= expected) break;
+        const moved = scrollSkuTableStep(stepPx);
+        const added = scanVisibleSpecPairs(pairMap, ctx, false);
+        if (!moved && added === 0) break;
+    }
+    for (const t of getSkuScrollTargets()) {
+        t.scrollTop = t.scrollHeight;
+        fireSkuTableScroll(t);
+    }
+    scanVisibleSpecPairs(pairMap, ctx, false);
+    scrollSkuTableToTop();
+    return Math.min(Object.keys(pairMap).length, expected);
+}
+
+function getRowBySpec(style, size, styleNamesJson, sizeNamesJson) {
+    const ctx = parseSpecLists(styleNamesJson, sizeNamesJson);
     const ns = normSpecLabel(style);
     const nm = normSpecLabel(size);
-    for (const tr of document.querySelectorAll('tr[data-pdd-spec-style]')) {
+    const visible = parseRowsWithRowspanContext(
+        collectSkuDataRowElements(),
+        ctx.styleNames,
+        ctx.sizeNames
+    );
+    for (const item of visible) {
+        if (normSpecLabel(item.style) === ns && normSpecLabel(item.size) === nm) {
+            stampRowSpec(item.tr, item.style, item.size, ctx.styleNames, ctx.sizeNames);
+            return item.tr;
+        }
+    }
+    for (const tr of document.querySelectorAll('tr[data-pdd-spec-style][data-pdd-spec-size]')) {
         if (normSpecLabel(tr.getAttribute('data-pdd-spec-style') || '') === ns
             && normSpecLabel(tr.getAttribute('data-pdd-spec-size') || '') === nm) {
             return tr;
         }
     }
-    const hit = findStyleSizeHit(style, size);
-    return hit && hit.tr ? hit.tr : null;
+    return null;
 }
 
-function stampGlobalRowIndices(styleNames, sizeNames) {
-    let stamped = 0;
-    for (let si = 0; si < styleNames.length; si++) {
-        for (let zi = 0; zi < sizeNames.length; zi++) {
-            const style = styleNames[si];
-            const size = sizeNames[zi];
-            const found = scrollFindStyleSizeRow(style, size);
-            if (!found || !found.found) continue;
-            const hit = findStyleSizeHit(style, size);
-            if (!hit || !hit.tr) continue;
-            const globalIdx = si * sizeNames.length + zi;
-            hit.tr.setAttribute('data-pdd-sku-row', String(globalIdx));
-            hit.tr.setAttribute('data-pdd-spec-style', style);
-            hit.tr.setAttribute('data-pdd-spec-size', size);
-            stamped++;
+function stampGlobalRowIndices(styleNamesJson, sizeNamesJson) {
+    const ctx = parseSpecLists(styleNamesJson, sizeNamesJson);
+    const expected = ctx.styleNames.length * ctx.sizeNames.length;
+    if (!expected) return 0;
+    const pairMap = {};
+
+    scrollSkuTableToTop();
+    scanVisibleSpecPairs(pairMap, ctx, true);
+
+    const targets = getSkuScrollTargets();
+    const stepPx = targets.length
+        ? Math.max(36, Math.floor((targets[0].clientHeight || 200) * 0.2))
+        : 72;
+
+    for (let step = 0; step < 160; step++) {
+        if (Object.keys(pairMap).length >= expected) break;
+        const moved = scrollSkuTableStep(stepPx);
+        scanVisibleSpecPairs(pairMap, ctx, true);
+        if (!moved && Object.keys(pairMap).length >= expected) break;
+        if (!moved) break;
+    }
+
+    for (const t of getSkuScrollTargets()) {
+        t.scrollTop = t.scrollHeight;
+        fireSkuTableScroll(t);
+    }
+    scanVisibleSpecPairs(pairMap, ctx, true);
+    scrollSkuTableToTop();
+    return Math.min(Object.keys(pairMap).length, expected);
+}
+
+function stampAllRowsByScroll(styleNamesJson, sizeNamesJson) {
+    return stampGlobalRowIndices(styleNamesJson, sizeNamesJson);
+}
+
+function scrollRowIndexIntoView(idx, styleNamesJson, sizeNamesJson) {
+    const ctx = parseSpecLists(styleNamesJson, sizeNamesJson);
+    if (ctx.styleNames.length && ctx.sizeNames.length && idx >= 0) {
+        const zi = idx % ctx.sizeNames.length;
+        const si = Math.floor(idx / ctx.sizeNames.length);
+        const style = ctx.styleNames[si];
+        const size = ctx.sizeNames[zi];
+        if (style && size) {
+            const found = scrollFindStyleSizeRow(style, size, styleNamesJson, sizeNamesJson);
+            return !!(found && found.found);
         }
     }
-    return stamped;
+    let tr = getRow(idx);
+    if (tr) {
+        try {
+            tr.scrollIntoView({block: 'center', behavior: 'instant'});
+        } catch (e) {
+            tr.scrollIntoView({block: 'center'});
+        }
+        return true;
+    }
+    const targets = getSkuScrollTargets();
+    for (const t of targets) {
+        if (t.scrollHeight > t.clientHeight + 8) {
+            const ratio = idx / Math.max(1, (ctx.styleNames.length * ctx.sizeNames.length) - 1);
+            t.scrollTop = ratio * (t.scrollHeight - t.clientHeight);
+            fireSkuTableScroll(t);
+        }
+    }
+    tr = getRow(idx);
+    if (tr) {
+        try {
+            tr.scrollIntoView({block: 'center', behavior: 'instant'});
+        } catch (e) {
+            tr.scrollIntoView({block: 'center'});
+        }
+        return true;
+    }
+    return false;
+}
+
+function rowHasRequiredValues(tr) {
+    const inputs = rowInputs(tr);
+    if (inputs.length < 4) return false;
+    for (let i = 0; i < 4; i++) {
+        if (!String(inputs[i].value || '').trim()) return false;
+    }
+    return true;
+}
+
+function verifyRowFilled(idx, styleNamesJson, sizeNamesJson) {
+    const ctx = parseSpecLists(styleNamesJson, sizeNamesJson);
+    if (ctx.styleNames.length && ctx.sizeNames.length && idx >= 0) {
+        const zi = idx % ctx.sizeNames.length;
+        const si = Math.floor(idx / ctx.sizeNames.length);
+        const style = ctx.styleNames[si];
+        const size = ctx.sizeNames[zi];
+        if (style && size) {
+            scrollFindStyleSizeRow(style, size, styleNamesJson, sizeNamesJson);
+            const tr = getRowBySpec(style, size, styleNamesJson, sizeNamesJson);
+            return tr ? rowHasRequiredValues(tr) : false;
+        }
+    }
+    scrollRowIndexIntoView(idx, styleNamesJson, sizeNamesJson);
+    const tr = getRow(idx);
+    return tr ? rowHasRequiredValues(tr) : false;
+}
+
+function verifyRowFilledBySpec(style, size, styleNamesJson, sizeNamesJson) {
+    scrollFindStyleSizeRow(style, size, styleNamesJson, sizeNamesJson);
+    const tr = getRowBySpec(style, size, styleNamesJson, sizeNamesJson);
+    return tr ? rowHasRequiredValues(tr) : false;
+}
+
+function prepareSkuTableForFill(styleNamesJson, sizeNamesJson) {
+    return stampGlobalRowIndices(styleNamesJson, sizeNamesJson);
+}
+
+function _clickBlankInTable() {
+    for (const el of document.querySelectorAll('span,div,label,p')) {
+        const t = (el.textContent || '').trim();
+        if (t === '价格及库存' || t === '价格与库存') {
+            el.click();
+            return;
+        }
+    }
 }
 """
 )
@@ -1221,7 +1986,9 @@ _SCROLL_FIND_STYLE_SIZE_ROW_JS = (
     + """
 const style = arguments[0] || '';
 const size = arguments[1] || '';
-const result = scrollFindStyleSizeRow(style, size);
+const styleNamesJson = arguments[2] || '[]';
+const sizeNamesJson = arguments[3] || '[]';
+const result = scrollFindStyleSizeRow(style, size, styleNamesJson, sizeNamesJson);
 return JSON.stringify(result);
 """
 )
@@ -1230,28 +1997,41 @@ _SCROLL_LOAD_ALL_ROWS_JS = (
     _SKU_TABLE_SCROLL_JS
     + """
 const expected = parseInt(arguments[0], 10) || 0;
+const styleNamesJson = arguments[1] || '[]';
+const sizeNamesJson = arguments[2] || '[]';
+const ctx = parseSpecLists(styleNamesJson, sizeNamesJson);
+if (ctx.styleNames.length && ctx.sizeNames.length) {
+    return countKnownSpecRows(styleNamesJson, sizeNamesJson);
+}
 const targets = getSkuScrollTargets();
-let best = countStyleSizeRows();
+const pairMap = {};
+scanVisibleSpecPairs(pairMap, ctx, false);
+let best = Object.keys(pairMap).length;
 if (!targets.length) {
     window.scrollTo(0, document.body.scrollHeight);
-    best = Math.max(best, countStyleSizeRows());
+    scanVisibleSpecPairs(pairMap, ctx, false);
+    best = Math.max(best, Object.keys(pairMap).length);
     return best;
 }
-for (const t of targets) t.scrollTop = 0;
-best = Math.max(best, countStyleSizeRows());
-for (let step = 0; step < 72; step++) {
+scrollSkuTableToTop();
+scanVisibleSpecPairs(pairMap, ctx, false);
+best = Math.max(best, Object.keys(pairMap).length);
+const stepPx = targets.length
+    ? Math.max(60, Math.floor((targets[0].clientHeight || 200) * 0.35))
+    : 80;
+for (let step = 0; step < 96; step++) {
     if (expected > 0 && best >= expected) break;
-    let moved = false;
-    for (const t of targets) {
-        const before = t.scrollTop;
-        t.scrollTop += Math.max(80, Math.floor(t.clientHeight * 0.45));
-        if (t.scrollTop > before) moved = true;
-    }
-    best = Math.max(best, countStyleSizeRows());
+    const moved = scrollSkuTableStep(stepPx);
+    scanVisibleSpecPairs(pairMap, ctx, false);
+    best = Object.keys(pairMap).length;
     if (!moved) break;
 }
-for (const t of targets) t.scrollTop = t.scrollHeight;
-best = Math.max(best, countStyleSizeRows());
+for (const t of getSkuScrollTargets()) {
+    t.scrollTop = t.scrollHeight;
+    fireSkuTableScroll(t);
+}
+scanVisibleSpecPairs(pairMap, ctx, false);
+best = Math.max(best, Object.keys(pairMap).length);
 return best;
 """
 )
@@ -1262,14 +2042,11 @@ _FILL_ONE_BY_STYLE_SIZE_JS = (
 const style = arguments[0] || '';
 const size = arguments[1] || '';
 const vals = JSON.parse(arguments[2]);
-let hit = findStyleSizeHit(style, size);
-if (!hit || !hit.tr) {
-    const found = scrollFindStyleSizeRow(style, size);
-    if (!found || !found.found) return 0;
-    hit = findStyleSizeHit(style, size);
-}
-if (!hit || !hit.tr) return 0;
-return fillRowReliable(hit.tr, vals);
+const styleNamesJson = arguments[3] || '[]';
+const sizeNamesJson = arguments[4] || '[]';
+const tr = getRowBySpec(style, size, styleNamesJson, sizeNamesJson);
+if (!tr) return 0;
+return fillRowReliable(tr, vals);
 """
 )
 
@@ -1277,21 +2054,18 @@ _FILL_SKUS_BY_STYLE_SIZE_JS = (
     _SKU_TABLE_SCROLL_JS
     + """
 const items = JSON.parse(arguments[0]);
+const styleNamesJson = arguments[1] || '[]';
+const sizeNamesJson = arguments[2] || '[]';
 let ok = 0;
 const failed = [];
 for (const item of items) {
-    let hit = findStyleSizeHit(item.style, item.size);
-    if (!hit || !hit.tr) {
-        const found = scrollFindStyleSizeRow(item.style, item.size);
-        if (found && found.found) {
-            hit = findStyleSizeHit(item.style, item.size);
-        }
-    }
-    if (!hit || !hit.tr) {
+    scrollFindStyleSizeRow(item.style, item.size, styleNamesJson, sizeNamesJson);
+    const tr = getRowBySpec(item.style, item.size, styleNamesJson, sizeNamesJson);
+    if (!tr) {
         failed.push({style: item.style || '', size: item.size || '', reason: 'row_not_found'});
         continue;
     }
-    if (fillRowReliable(hit.tr, item.vals) >= 4) ok++;
+    if (fillRowReliable(tr, item.vals) >= 4) ok++;
     else failed.push({style: item.style || '', size: item.size || '', reason: 'fill_failed'});
 }
 return JSON.stringify({ok: ok, failed: failed});
@@ -1302,16 +2076,13 @@ _BUILD_STYLE_SIZE_ROW_MAP_JS = (
     _SKU_TABLE_SCROLL_JS
     + """
 const pairs = JSON.parse(arguments[0]);
+const styleNamesJson = arguments[1] || '[]';
+const sizeNamesJson = arguments[2] || '[]';
 const out = [];
 for (let i = 0; i < pairs.length; i++) {
     const p = pairs[i];
-    let hit = findStyleSizeHit(p.style, p.size);
-    if (!hit || !hit.tr) {
-        const found = scrollFindStyleSizeRow(p.style, p.size);
-        if (found && found.found) {
-            hit = findStyleSizeHit(p.style, p.size);
-        }
-    }
+    scrollFindStyleSizeRow(p.style, p.size, styleNamesJson, sizeNamesJson);
+    const hit = findStyleSizeHit(p.style, p.size, styleNamesJson, sizeNamesJson);
     out.push(hit ? hit.idx : i);
 }
 return JSON.stringify(out);
@@ -1319,9 +2090,10 @@ return JSON.stringify(out);
 )
 
 _DIAGNOSE_FILL_JS = (
-    _JS_FILL_HELPERS
-    + _STYLE_SIZE_MAP_JS
+    _SKU_TABLE_SCROLL_JS
     + """
+const styleNamesJson = arguments[0] || '[]';
+const sizeNamesJson = arguments[1] || '[]';
 let inputsInFirst = 0;
 const rows = getAllDataRows();
 if (rows[0]) {
@@ -1331,12 +2103,14 @@ const trs = document.querySelectorAll(
     '.sku-table tr[data-testid="beast-core-table-body-tr"]'
 );
 const marked = document.querySelectorAll('tr[data-pdd-sku-row]');
+const specMarked = document.querySelectorAll('tr[data-pdd-spec-style]');
 return JSON.stringify({
     tableRows: trs.length,
     markedRows: marked.length,
+    specMarkedRows: specMarked.length,
     dataRows: rows.length,
     inputsInFirst: inputsInFirst,
-    pageSpecs: JSON.parse(dumpStyleSizeMap())
+    pageSpecs: JSON.parse(dumpStyleSizeMap(styleNamesJson, sizeNamesJson))
 });
 """
 )
@@ -1345,9 +2119,33 @@ return JSON.stringify({
 _STAMP_GLOBAL_ROW_INDICES_JS = (
     _SKU_TABLE_SCROLL_JS
     + """
-const styleNames = JSON.parse(arguments[0]);
-const sizeNames = JSON.parse(arguments[1]);
-return stampGlobalRowIndices(styleNames, sizeNames);
+return prepareSkuTableForFill(arguments[0], arguments[1]);
+"""
+)
+
+_STAMP_ROWS_BY_SCROLL_JS = (
+    _SKU_TABLE_SCROLL_JS
+    + """
+return stampGlobalRowIndices(arguments[0], arguments[1]);
+"""
+)
+
+_VERIFY_ROW_FILLED_JS = (
+    _SKU_TABLE_SCROLL_JS
+    + """
+return verifyRowFilled(parseInt(arguments[0], 10), arguments[1] || '[]', arguments[2] || '[]');
+"""
+)
+
+_VERIFY_ROW_FILLED_BY_SPEC_JS = (
+    _SKU_TABLE_SCROLL_JS
+    + """
+return verifyRowFilledBySpec(
+    arguments[0] || '',
+    arguments[1] || '',
+    arguments[2] || '[]',
+    arguments[3] || '[]'
+);
 """
 )
 
@@ -1358,7 +2156,10 @@ _RESOLVE_PREVIEW_INPUT_BY_SPEC_JS = (
 const style = arguments[0] || '';
 const size = arguments[1] || '';
 const marker = String(arguments[2] || '');
-const tr = getRowBySpec(style, size);
+const styleNamesJson = arguments[3] || '[]';
+const sizeNamesJson = arguments[4] || '[]';
+scrollFindStyleSizeRow(style, size, styleNamesJson, sizeNamesJson);
+const tr = getRowBySpec(style, size, styleNamesJson, sizeNamesJson);
 if (!tr) return JSON.stringify({ready: false, uploaded: false});
 try {
     tr.scrollIntoView({block: 'center', behavior: 'instant'});
@@ -1393,26 +2194,296 @@ _PREVIEW_CHECK_BY_SPEC_JS = (
     + """
 const style = arguments[0] || '';
 const size = arguments[1] || '';
-const tr = getRowBySpec(style, size);
+const styleNamesJson = arguments[2] || '[]';
+const sizeNamesJson = arguments[3] || '[]';
+scrollFindStyleSizeRow(style, size, styleNamesJson, sizeNamesJson);
+const tr = getRowBySpec(style, size, styleNamesJson, sizeNamesJson);
 if (!tr) return false;
 const cell = tr.querySelector('.sku-preview-cell, td[class*="sku-preview"]');
 return checkPreviewCellUploaded(cell);
 """
 )
 
-_DUMP_STYLE_SIZE_MAP_JS = _SKU_TABLE_SCROLL_JS + "return dumpStyleSizeMap();"
+_DUMP_STYLE_SIZE_MAP_JS = (
+    _SKU_TABLE_SCROLL_JS
+    + "return dumpStyleSizeMap(arguments[0] || '[]', arguments[1] || '[]');"
+)
+
+# 临时诊断：配合 _sku_table_debug.py，稳定后整段删除
+_SKU_TABLE_DEBUG_SNAPSHOT_JS = (
+    _SKU_TABLE_SCROLL_JS
+    + """
+function rowTextSample(tr) {
+    const parts = [];
+    for (const td of tr.querySelectorAll('td')) {
+        if (cellHasDataInput(td)) break;
+        const t = normCellText(td);
+        if (t) parts.push(t);
+    }
+    return parts.join(' | ');
+}
+
+function skuTableDebugSnapshot(styleNamesJson, sizeNamesJson) {
+    const ctx = parseSpecLists(styleNamesJson, sizeNamesJson);
+    const expected = ctx.styleNames.length * ctx.sizeNames.length;
+    const targets = getSkuScrollTargets();
+    const visibleRows = collectSkuDataRowElements();
+    const collectedRows = collectAllSkuRowsByScrolling(styleNamesJson, sizeNamesJson);
+    const parsed = parseRowsWithRowspanContext(
+        collectedRows, ctx.styleNames, ctx.sizeNames
+    );
+    const map = buildStyleSizeRowMap(styleNamesJson, sizeNamesJson);
+    const missing = [];
+    for (const s of ctx.styleNames) {
+        for (const z of ctx.sizeNames) {
+            const k = styleSizeKey(s, z);
+            if (!map[k]) missing.push({style: s, size: z});
+        }
+    }
+    const scrollTargets = targets.slice(0, 8).map((t) => ({
+        tag: t.tagName,
+        className: String(t.className || '').slice(0, 100),
+        scrollTop: Math.round(t.scrollTop || 0),
+        scrollHeight: Math.round(t.scrollHeight || 0),
+        clientHeight: Math.round(t.clientHeight || 0),
+    }));
+    const collectedSamples = [];
+    const head = collectedRows.slice(0, 5);
+    const tail = collectedRows.length > 8 ? collectedRows.slice(-3) : [];
+    for (let i = 0; i < head.length; i++) {
+        collectedSamples.push({i: i, text: rowTextSample(head[i])});
+    }
+    for (let j = 0; j < tail.length; j++) {
+        collectedSamples.push({
+            i: collectedRows.length - tail.length + j,
+            text: rowTextSample(tail[j]),
+        });
+    }
+    const unparsedSamples = [];
+    for (let ri = 0; ri < collectedRows.length && unparsedSamples.length < 15; ri++) {
+        const tr = collectedRows[ri];
+        const cells = [];
+        for (const td of tr.querySelectorAll('td')) {
+            if (cellHasDataInput(td)) break;
+            const t = normCellText(td);
+            if (t) cells.push(t);
+        }
+        const hit = parsed.some((p) => p.tr === tr);
+        if (!hit) {
+            unparsedSamples.push({i: ri, cells: cells, text: rowTextSample(tr)});
+        }
+    }
+    const visibleSamples = visibleRows.slice(0, 8).map((tr, i) => ({
+        i: i,
+        text: rowTextSample(tr),
+    }));
+    const domLabels = [];
+    const labelSet = new Set();
+    for (const tr of collectedRows) {
+        for (const td of tr.querySelectorAll('td')) {
+            if (cellHasDataInput(td)) break;
+            const t = normCellText(td);
+            if (!t || labelSet.has(t)) continue;
+            labelSet.add(t);
+            domLabels.push({
+                text: t,
+                isStyle: ctx.styleNames.includes(t),
+                isSize: ctx.sizeNames.includes(t),
+            });
+        }
+    }
+    return JSON.stringify({
+        expected: expected,
+        styleNames: ctx.styleNames,
+        sizeNames: ctx.sizeNames,
+        scrollTargetCount: targets.length,
+        scrollTargets: scrollTargets,
+        visibleDataRowCount: visibleRows.length,
+        collectedRowCount: collectedRows.length,
+        parsedSpecPairCount: parsed.length,
+        mappedSpecPairCount: Object.keys(map).length,
+        stampedAttrCount: document.querySelectorAll('tr[data-pdd-spec-style]').length,
+        domMarkedRowCount: document.querySelectorAll('tr[data-pdd-sku-row]').length,
+        missingPairCount: missing.length,
+        missingPairs: missing.slice(0, 40),
+        parsedPairs: parsed.slice(0, 40).map((p, i) => ({
+            i: i,
+            style: p.style,
+            size: p.size,
+            idx: globalSpecIndex(p.style, p.size, ctx.styleNames, ctx.sizeNames),
+        })),
+        mapEntries: Object.keys(map).slice(0, 40).map((k) => {
+            const parts = k.split('\\0');
+            return {
+                style: parts[0] || '',
+                size: parts[1] || '',
+                idx: map[k].idx,
+            };
+        }),
+        collectedRowTextSamples: collectedSamples,
+        visibleRowTextSamples: visibleSamples,
+        unparsedRowSamples: unparsedSamples,
+        domSpecLabels: domLabels.slice(0, 60),
+    });
+}
+return skuTableDebugSnapshot(arguments[0] || '[]', arguments[1] || '[]');
+"""
+)
+
+_SKU_TABLE_DEBUG_PROBE_JS = (
+    _SKU_TABLE_SCROLL_JS
+    + """
+function probeStyleSizeRow(style, size, styleNamesJson, sizeNamesJson) {
+    const ctx = parseSpecLists(styleNamesJson, sizeNamesJson);
+    const map = buildStyleSizeRowMap(styleNamesJson, sizeNamesJson);
+    const key = styleSizeKey(style, size);
+    const mapEntry = map[key] || null;
+    const scrollResult = scrollFindStyleSizeRow(style, size, styleNamesJson, sizeNamesJson);
+    const tr = getRowBySpec(style, size, styleNamesJson, sizeNamesJson);
+    let rowText = '';
+    let inputCount = 0;
+    if (tr) {
+        const parts = [];
+        for (const td of tr.querySelectorAll('td')) {
+            if (cellHasDataInput(td)) break;
+            const t = normCellText(td);
+            if (t) parts.push(t);
+        }
+        rowText = parts.join(' | ');
+        inputCount = rowInputs(tr).length;
+    }
+    const idx = globalSpecIndex(style, size, ctx.styleNames, ctx.sizeNames);
+    return JSON.stringify({
+        style: style,
+        size: size,
+        expectedIdx: idx,
+        inStyleList: ctx.styleNames.includes(style),
+        inSizeList: ctx.sizeNames.includes(size),
+        mapHasEntry: !!mapEntry,
+        mapIdx: mapEntry ? mapEntry.idx : null,
+        scrollFound: !!(scrollResult && scrollResult.found),
+        scrollIdx: scrollResult ? scrollResult.idx : null,
+        rowFound: !!tr,
+        inputCount: inputCount,
+        verifyFilled: tr ? rowHasRequiredValues(tr) : false,
+        rowText: rowText.slice(0, 240),
+    });
+}
+return probeStyleSizeRow(
+    arguments[0] || '',
+    arguments[1] || '',
+    arguments[2] || '[]',
+    arguments[3] || '[]'
+);
+"""
+)
+
+
+def _sku_table_debug_snapshot(
+    page,
+    account_id: str,
+    phase: str,
+    style_names: list[str] | None,
+    size_names: list[str] | None,
+) -> dict | None:
+    """临时诊断快照；见 _sku_table_debug.py。"""
+    if not sku_dbg.enabled() or not style_names or not size_names:
+        return None
+    styles_json, sizes_json = _spec_lists_json(style_names, size_names)
+    return sku_dbg.log_snapshot(
+        page,
+        account_id,
+        phase,
+        _SKU_TABLE_DEBUG_SNAPSHOT_JS,
+        styles_json,
+        sizes_json,
+    )
+
+
+def _sku_table_debug_probe(
+    page,
+    account_id: str,
+    phase: str,
+    style: str,
+    size: str,
+    style_names: list[str],
+    size_names: list[str],
+) -> None:
+    """单行填表失败时探测 DOM 状态；见 _sku_table_debug.py。"""
+    if not sku_dbg.enabled():
+        return
+    styles_json, sizes_json = _spec_lists_json(style_names, size_names)
+    try:
+        raw = page.run_js(
+            _SKU_TABLE_DEBUG_PROBE_JS,
+            style,
+            size,
+            styles_json,
+            sizes_json,
+        ) or "{}"
+        probe = json.loads(raw) if isinstance(raw, str) else raw
+        if not isinstance(probe, dict):
+            probe = None
+    except Exception as exc:
+        sku_dbg.log(account_id, phase, "row_probe_error", style=style, size=size, error=str(exc))
+        return
+    sku_dbg.log_row_probe(account_id, phase, style, size, probe)
 
 
 def _stamp_global_row_indices(page, style_names: list[str], size_names: list[str]) -> int:
     """虚拟滚动表格：按款式×尺寸逐行滚动并打上全局稳定索引。"""
     if not style_names or not size_names:
         return 0
+    expected = len(style_names) * len(size_names)
     try:
         payload_styles = json.dumps(list(style_names), ensure_ascii=False)
         payload_sizes = json.dumps(list(size_names), ensure_ascii=False)
-        return int(page.run_js(_STAMP_GLOBAL_ROW_INDICES_JS, payload_styles, payload_sizes) or 0)
+        stamped = int(page.run_js(_STAMP_GLOBAL_ROW_INDICES_JS, payload_styles, payload_sizes) or 0)
+        if stamped < expected:
+            scroll_stamped = int(
+                page.run_js(_STAMP_ROWS_BY_SCROLL_JS, payload_styles, payload_sizes) or 0
+            )
+            stamped = max(stamped, scroll_stamped)
+        return stamped
     except Exception:
         return 0
+
+
+def _verify_row_filled(
+    page,
+    index: int,
+    *,
+    style_names: list[str] | None = None,
+    size_names: list[str] | None = None,
+) -> bool:
+    styles_json, sizes_json = _spec_lists_json(style_names, size_names)
+    try:
+        return bool(page.run_js(_VERIFY_ROW_FILLED_JS, str(index), styles_json, sizes_json))
+    except Exception:
+        return False
+
+
+def _verify_row_filled_by_spec(
+    page,
+    style_name: str,
+    size_name: str,
+    *,
+    style_names: list[str] | None = None,
+    size_names: list[str] | None = None,
+) -> bool:
+    styles_json, sizes_json = _spec_lists_json(style_names, size_names)
+    try:
+        return bool(
+            page.run_js(
+                _VERIFY_ROW_FILLED_BY_SPEC_JS,
+                style_name,
+                size_name,
+                styles_json,
+                sizes_json,
+            )
+        )
+    except Exception:
+        return False
 
 
 def _spec_order_row_index(
@@ -1426,6 +2497,72 @@ def _spec_order_row_index(
     return style_names.index(style_name) * len(size_names) + size_names.index(model_name)
 
 
+def _audit_sku_spec_coverage(
+    account_id: str,
+    skus: list,
+    style_names: list[str],
+    size_names: list[str],
+) -> list[dict]:
+    """检查 SKU 与规格矩阵是否一一对应；重复映射会导致某些格永远填不到。"""
+    issues: list[dict] = []
+    cell_to_skus: dict[tuple[str, str], list] = {}
+    for sku in skus:
+        style = getattr(sku, "style_name", "") or ""
+        size = getattr(sku, "model_name", "") or ""
+        if not style or not size:
+            continue
+        key = (style, size)
+        cell_to_skus.setdefault(key, []).append(sku)
+
+    for key, dup in cell_to_skus.items():
+        if len(dup) > 1:
+            codes = [getattr(s, "combo_folder", "") for s in dup]
+            issues.append(
+                {
+                    "style": key[0],
+                    "size": key[1],
+                    "reason": "duplicate_sku_mapping",
+                    "combo_folders": codes,
+                }
+            )
+            print(
+                f"[{account_id}] [警告] 规格 {key[0]} / {key[1]} 对应 {len(dup)} 个 SKU："
+                f"{codes}（后填会覆盖前填，其它格可能缺 SKU）",
+                flush=True,
+            )
+
+    for style in style_names:
+        for size in size_names:
+            if (style, size) not in cell_to_skus:
+                issues.append(
+                    {"style": style, "size": size, "reason": "no_sku_for_cell"}
+                )
+                print(
+                    f"[{account_id}] [警告] 规格矩阵 {style} / {size} 无对应 SKU",
+                    flush=True,
+                )
+    return issues
+
+
+def _count_filled_matrix_cells(
+    page,
+    style_names: list[str],
+    size_names: list[str],
+) -> tuple[int, list[dict]]:
+    """按页面规格矩阵格计数，而非 SKU 条数。"""
+    ok = 0
+    empty: list[dict] = []
+    for style in style_names:
+        for size in size_names:
+            if _verify_row_filled_by_spec(
+                page, style, size, style_names=style_names, size_names=size_names
+            ):
+                ok += 1
+            else:
+                empty.append({"style": style, "size": size, "reason": "matrix_cell_empty"})
+    return ok, empty
+
+
 def _log_price_table_spec_map(
     page,
     account_id: str,
@@ -1437,7 +2574,8 @@ def _log_price_table_spec_map(
         flush=True,
     )
     try:
-        raw = page.run_js(_DUMP_STYLE_SIZE_MAP_JS) or "[]"
+        styles_json, sizes_json = _spec_lists_json(style_names, size_names)
+        raw = page.run_js(_DUMP_STYLE_SIZE_MAP_JS, styles_json, sizes_json) or "[]"
         rows = json.loads(raw) if isinstance(raw, str) else raw
         if isinstance(rows, list):
             print(f"[{account_id}] 价格表页面读到的规格行（共 {len(rows)} 行）：", flush=True)
@@ -1449,6 +2587,7 @@ def _log_price_table_spec_map(
                     f"{row.get('style', '')} / {row.get('size', '')}",
                     flush=True,
                 )
+            sku_dbg.log_spec_map(account_id, "price_table_spec_map", rows)
     except Exception as exc:
         print(f"[{account_id}] 价格表规格行读取失败：{_safe_exc(exc)}", flush=True)
 
@@ -1464,6 +2603,7 @@ def _fill_skus_by_spec_order(
     """按录入规格顺序（款式×尺寸）用行号填表，与预览图索引一致。"""
     ok = 0
     failed: list[dict] = []
+    probe_budget = 5
     print(
         f"[{account_id}] 填表策略：按录入顺序索引（{len(style_names)} 款 × {len(size_names)} 尺寸）",
         flush=True,
@@ -1495,7 +2635,22 @@ def _fill_skus_by_spec_order(
             f"库存={row_data['inventory']} 拼团={row_data['group_price']} 单买={row_data['single_price']}",
             flush=True,
         )
-        success = _fill_row_by_style_size(page, sku.style_name, sku.model_name, row_data)
+        success = _fill_row_by_style_size(
+            page,
+            sku.style_name,
+            sku.model_name,
+            row_data,
+            style_names=style_names,
+            size_names=size_names,
+        )
+        if success:
+            success = _verify_row_filled_by_spec(
+                page,
+                sku.style_name,
+                sku.model_name,
+                style_names=style_names,
+                size_names=size_names,
+            )
         if success:
             ok += 1
             print(f"[{account_id}]    → 文字字段填写成功", flush=True)
@@ -1508,7 +2663,32 @@ def _fill_skus_by_spec_order(
                     "reason": "fill_by_index_failed",
                 }
             )
-    return ok, failed
+            if probe_budget > 0:
+                _sku_table_debug_probe(
+                    page,
+                    account_id,
+                    "spec_order_fail",
+                    sku.style_name,
+                    sku.model_name,
+                    style_names,
+                    size_names,
+                )
+                probe_budget -= 1
+    matrix_need = len(style_names) * len(size_names)
+    matrix_ok, matrix_empty = _count_filled_matrix_cells(page, style_names, size_names)
+    if matrix_empty:
+        for item in matrix_empty:
+            if not any(
+                f.get("style") == item["style"] and f.get("size") == item["size"]
+                for f in failed
+            ):
+                failed.append(item)
+        print(
+            f"[{account_id}] 矩阵校验：{matrix_ok}/{matrix_need} 格已填，"
+            f"未填 {[f'{x['style']}/{x['size']}' for x in matrix_empty]}",
+            flush=True,
+        )
+    return matrix_ok, failed
 
 
 def _sku_fill_items(skus: list, defaults: dict) -> list[dict]:
@@ -1527,11 +2707,19 @@ def _sku_fill_items(skus: list, defaults: dict) -> list[dict]:
     ]
 
 
-def _fill_skus_by_style_size(page, skus: list, defaults: dict) -> tuple[int, list[dict]]:
+def _fill_skus_by_style_size(
+    page,
+    skus: list,
+    defaults: dict,
+    *,
+    style_names: list[str] | None = None,
+    size_names: list[str] | None = None,
+) -> tuple[int, list[dict]]:
     """按「款式+尺寸」定位行并填写，返回 (成功数, 失败列表)。"""
     payload = json.dumps(_sku_fill_items(skus, defaults), ensure_ascii=False)
+    styles_json, sizes_json = _spec_lists_json(style_names, size_names)
     try:
-        raw = page.run_js(_FILL_SKUS_BY_STYLE_SIZE_JS, payload) or "{}"
+        raw = page.run_js(_FILL_SKUS_BY_STYLE_SIZE_JS, payload, styles_json, sizes_json) or "{}"
         result = json.loads(raw) if isinstance(raw, str) else raw
         if not isinstance(result, dict):
             return 0, []
@@ -1540,33 +2728,103 @@ def _fill_skus_by_style_size(page, skus: list, defaults: dict) -> tuple[int, lis
         return 0, []
 
 
-def _diagnose_fill_state(page, account_id: str):
+def _diagnose_fill_state(
+    page,
+    account_id: str,
+    *,
+    style_names: list[str] | None = None,
+    size_names: list[str] | None = None,
+):
+    styles_json, sizes_json = _spec_lists_json(style_names, size_names)
     try:
-        raw = page.run_js(_DIAGNOSE_FILL_JS) or "{}"
+        raw = page.run_js(_DIAGNOSE_FILL_JS, styles_json, sizes_json) or "{}"
         info = json.loads(raw) if isinstance(raw, str) else raw
         print(
             f"[{account_id}] 填表诊断：表格行={info.get('tableRows')} "
-            f"标记行={info.get('markedRows')} 数据行={info.get('dataRows')} "
-            f"首行输入框={info.get('inputsInFirst')}",
+            f"标记行={info.get('markedRows')} 规格标记={info.get('specMarkedRows')} "
+            f"数据行={info.get('dataRows')} 首行输入框={info.get('inputsInFirst')}",
             flush=True,
         )
+        if isinstance(info, dict):
+            sku_dbg.log_diagnose(account_id, "fill_state", info)
     except Exception as exc:
         print(f"[{account_id}] 填表诊断失败：{_safe_exc(exc)}", flush=True)
 
 
-def _fill_all_rows_batch(page, skus: list, defaults: dict) -> int:
+def _fill_all_rows_batch(
+    page,
+    skus: list,
+    defaults: dict,
+    *,
+    style_names: list[str] | None = None,
+    size_names: list[str] | None = None,
+) -> int:
     """一次 JS 填完所有行的库存/价格/编码（参数用 JSON 传递）。"""
-    filled, _failed = _fill_skus_by_style_size(page, skus, defaults)
+    filled, _failed = _fill_skus_by_style_size(
+        page,
+        skus,
+        defaults,
+        style_names=style_names,
+        size_names=size_names,
+    )
     return filled
 
 
-def _fill_rows_mapped_batch(page, skus: list, row_indices: list[int], defaults: dict) -> int:
+def _fill_rows_mapped_batch(
+    page,
+    skus: list,
+    row_indices: list[int],
+    defaults: dict,
+    *,
+    style_names: list[str] | None = None,
+    size_names: list[str] | None = None,
+) -> int:
     """按「款式+尺寸」一次 JS 填完（row_indices 仅用于预览图，填表以 style+size 为准）。"""
-    filled, _failed = _fill_skus_by_style_size(page, skus, defaults)
+    filled, _failed = _fill_skus_by_style_size(
+        page,
+        skus,
+        defaults,
+        style_names=style_names,
+        size_names=size_names,
+    )
     return filled
 
 
-def _fill_row_by_index(page, index: int, row_data: dict) -> bool:
+def _scroll_spec_row_into_view(
+    page,
+    style_name: str,
+    size_name: str,
+    *,
+    style_names: list[str] | None = None,
+    size_names: list[str] | None = None,
+) -> bool:
+    styles_json, sizes_json = _spec_lists_json(style_names, size_names)
+    try:
+        raw = page.run_js(
+            _SCROLL_FIND_STYLE_SIZE_ROW_JS,
+            style_name,
+            size_name,
+            styles_json,
+            sizes_json,
+        ) or "{}"
+        result = json.loads(raw) if isinstance(raw, str) else raw
+        if isinstance(result, dict) and result.get("found"):
+            time.sleep(0.12)
+            return True
+    except Exception:
+        pass
+    return False
+
+
+def _fill_row_by_style_size(
+    page,
+    style_name: str,
+    size_name: str,
+    row_data: dict,
+    *,
+    style_names: list[str] | None = None,
+    size_names: list[str] | None = None,
+) -> bool:
     vals = json.dumps(
         [
             str(row_data.get("inventory", "")),
@@ -1576,31 +2834,36 @@ def _fill_row_by_index(page, index: int, row_data: dict) -> bool:
         ],
         ensure_ascii=False,
     )
+    styles_json, sizes_json = _spec_lists_json(style_names, size_names)
     try:
-        count = page.run_js(_FILL_ROW_AT_INDEX_JS, str(index), vals) or 0
+        _scroll_spec_row_into_view(
+            page,
+            style_name,
+            size_name,
+            style_names=style_names,
+            size_names=size_names,
+        )
+        count = page.run_js(
+            _FILL_ONE_BY_STYLE_SIZE_JS,
+            style_name,
+            size_name,
+            vals,
+            styles_json,
+            sizes_json,
+        ) or 0
         return count >= 4
     except Exception:
         return False
 
 
-def _fill_row_by_style_size(page, style_name: str, size_name: str, row_data: dict) -> bool:
-    vals = json.dumps(
-        [
-            str(row_data.get("inventory", "")),
-            str(row_data.get("group_price", "")),
-            str(row_data.get("single_price", "")),
-            str(row_data.get("sku_code", "")),
-        ],
-        ensure_ascii=False,
-    )
-    try:
-        count = page.run_js(_FILL_ONE_BY_STYLE_SIZE_JS, style_name, size_name, vals) or 0
-        return count >= 4
-    except Exception:
-        return False
-
-
-def _compute_row_indices(skus: list, marked_rows: list | None = None, page=None) -> list[int]:
+def _compute_row_indices(
+    skus: list,
+    marked_rows: list | None = None,
+    page=None,
+    *,
+    style_names: list[str] | None = None,
+    size_names: list[str] | None = None,
+) -> list[int]:
     """按款式+尺寸匹配价格表行索引。"""
     if page is not None:
         pairs = [
@@ -1610,8 +2873,14 @@ def _compute_row_indices(skus: list, marked_rows: list | None = None, page=None)
             }
             for sku in skus
         ]
+        styles_json, sizes_json = _spec_lists_json(style_names, size_names)
         try:
-            raw = page.run_js(_BUILD_STYLE_SIZE_ROW_MAP_JS, json.dumps(pairs, ensure_ascii=False))
+            raw = page.run_js(
+                _BUILD_STYLE_SIZE_ROW_MAP_JS,
+                json.dumps(pairs, ensure_ascii=False),
+                styles_json,
+                sizes_json,
+            )
             if raw:
                 indices = json.loads(raw) if isinstance(raw, str) else raw
                 if isinstance(indices, list) and len(indices) == len(skus):
@@ -1676,12 +2945,21 @@ def fill_multi_spec_rows(
 
     if not rows:
         t = _now()
-        _scroll_sku_table_to_load(page, unique_rows)
+        _scroll_sku_table_to_load(
+            page,
+            unique_rows,
+            style_names=style_names,
+            size_names=size_names,
+        )
         rows = _sku_price_table_rows(page)
         _log_step(account_id, f"定位价格表 {len(rows)} 行", t)
     else:
-        _scroll_sku_table_to_load(page, unique_rows)
-        _remark_sku_rows(page)
+        _scroll_sku_table_to_load(
+            page,
+            unique_rows,
+            style_names=style_names,
+            size_names=size_names,
+        )
 
     print(
         f"[{account_id}] 开始填写 {len(skus)} 个 SKU（已定位 {len(rows)} 行，"
@@ -1690,17 +2968,48 @@ def fill_multi_spec_rows(
     )
 
     t = _now()
-    _scroll_sku_table_to_load(page, unique_rows)
-    _remark_sku_rows(page)
+    matrix_need = (
+        len(style_names) * len(size_names)
+        if style_names and size_names
+        else unique_rows
+    )
+    for warm in range(3):
+        loaded = _count_loaded_spec_rows(
+            page,
+            matrix_need,
+            style_names=style_names,
+            size_names=size_names,
+        )
+        if loaded >= matrix_need:
+            break
+        if warm < 2:
+            _click_blank_area(page)
+            if style_names and size_names:
+                _activate_spec_price_table(
+                    page, style_names, size_names, account_id=account_id
+                )
+            time.sleep(0.8)
     if style_names and size_names:
         stamped = _stamp_global_row_indices(page, style_names, size_names)
         if stamped:
             print(
-                f"[{account_id}] 虚拟表格已标记 {stamped}/{unique_rows} 行规格索引",
+                f"[{account_id}] 虚拟表格已标记 {stamped}/{matrix_need} 行规格索引",
                 flush=True,
             )
+        elif matrix_need:
+            print(
+                f"[{account_id}] 虚拟表格标记不足 {stamped}/{matrix_need}，将按滚动顺序填表",
+                flush=True,
+            )
+        _sku_table_debug_snapshot(
+            page, account_id, "after_stamp", style_names, size_names
+        )
     time.sleep(0.35)
     _log_price_table_spec_map(page, account_id, style_names or [], size_names or [])
+    _sku_table_debug_snapshot(
+        page, account_id, "before_fill", style_names, size_names
+    )
+    _audit_sku_spec_coverage(account_id, skus, style_names, size_names)
 
     t = _now()
     if style_names and size_names:
@@ -1708,20 +3017,41 @@ def fill_multi_spec_rows(
             page, account_id, skus, style_names, size_names, defaults
         )
     else:
-        filled, failed = _fill_skus_by_style_size(page, skus, defaults)
+        filled, failed = _fill_skus_by_style_size(
+            page,
+            skus,
+            defaults,
+            style_names=style_names,
+            size_names=size_names,
+        )
     if failed:
+        sku_dbg.log_fill_failures(account_id, "spec_order", failed)
         for item in failed:
             print(
                 f"[{account_id}] 按序填表未命中：{item.get('style')} / {item.get('size')} "
                 f"({item.get('reason')})",
                 flush=True,
             )
-    _log_step(account_id, f"按序填写库存/价格/编码 {filled}/{len(skus)} 行", t)
+    _log_step(account_id, f"按序填写库存/价格/编码 {filled}/{matrix_need} 格", t)
+    sku_dbg.log_fill_progress(
+        account_id,
+        "after_spec_order",
+        filled=filled,
+        total=matrix_need,
+        failed_count=len(failed),
+    )
 
     if failed:
         t = _now()
-        text_filled, text_failed = _fill_skus_by_style_size(page, skus, defaults)
+        text_filled, text_failed = _fill_skus_by_style_size(
+            page,
+            skus,
+            defaults,
+            style_names=style_names,
+            size_names=size_names,
+        )
         if text_failed:
+            sku_dbg.log_fill_failures(account_id, "style_size_retry", text_failed)
             for item in text_failed:
                 print(
                     f"[{account_id}] 文字匹配补填未命中：{item.get('style')} / {item.get('size')} "
@@ -1730,8 +3060,10 @@ def fill_multi_spec_rows(
                 )
         if text_filled > filled:
             filled = text_filled
-        _log_step(account_id, f"文字匹配补填后 {filled}/{len(skus)} 行", t)
-        failed = text_failed
+        filled, matrix_empty = _count_filled_matrix_cells(page, style_names, size_names)
+        if matrix_empty:
+            failed = matrix_empty
+        _log_step(account_id, f"文字匹配补填后 {filled}/{matrix_need} 格", t)
 
     row_indices = (
         [
@@ -1744,18 +3076,31 @@ def fill_multi_spec_rows(
     if style_names and size_names:
         row_indices = [i if i is not None else j for j, i in enumerate(row_indices)]
     else:
-        row_indices = _compute_row_indices(skus, rows, page=page)
+        row_indices = _compute_row_indices(
+            skus,
+            rows,
+            page=page,
+            style_names=style_names,
+            size_names=size_names,
+        )
     _log_step(account_id, "匹配价格表行索引", t)
 
-    if failed or filled < len(skus):
-        _diagnose_fill_state(page, account_id)
-        failed_keys = {(f.get("style"), f.get("size")) for f in failed}
-        retry_skus = (
-            [sku for sku in skus if (sku.style_name, sku.model_name) in failed_keys]
-            if failed_keys
-            else list(skus)
+    if failed or filled < matrix_need:
+        _diagnose_fill_state(
+            page,
+            account_id,
+            style_names=style_names,
+            size_names=size_names,
         )
-        refilled = filled
+        _sku_table_debug_snapshot(
+            page, account_id, "fill_incomplete", style_names, size_names
+        )
+        failed_keys = {(f.get("style"), f.get("size")) for f in failed}
+        retry_skus = [
+            sku
+            for sku in skus
+            if (sku.style_name, sku.model_name) in failed_keys
+        ]
         for sku in retry_skus:
             label = f"{sku.style_name} / {sku.model_name}"
             row_data = {
@@ -1766,30 +3111,72 @@ def fill_multi_spec_rows(
             }
             try:
                 t = _now()
-                ok = _fill_row_by_style_size(page, sku.style_name, sku.model_name, row_data)
-                if not ok and style_names and size_names:
-                    idx = _spec_order_row_index(
-                        sku.style_name, sku.model_name, style_names, size_names
-                    )
-                    if idx is not None:
-                        ok = _fill_row_by_index(page, idx, row_data)
+                ok = _fill_row_by_style_size(
+                    page,
+                    sku.style_name,
+                    sku.model_name,
+                    row_data,
+                    style_names=style_names,
+                    size_names=size_names,
+                )
                 if ok:
-                    if (sku.style_name, sku.model_name) in failed_keys:
-                        refilled += 1
+                    ok = _verify_row_filled_by_spec(
+                        page,
+                        sku.style_name,
+                        sku.model_name,
+                        style_names=style_names,
+                        size_names=size_names,
+                    )
+                if ok:
                     _log_step(account_id, f"补填 {label}", t)
                 else:
                     print(f"[{account_id}] 补填失败：{label}", flush=True)
             except Exception as exc:
                 print(f"[{account_id}] 补填异常 [{label}]：{_safe_exc(exc)}", flush=True)
-        filled = min(refilled, len(skus))
-        _log_step(account_id, f"补填后合计 {filled}/{len(skus)} 行", t)
+        for style, size in failed_keys:
+            if any(s.style_name == style and s.model_name == size for s in skus):
+                continue
+            print(
+                f"[{account_id}] 补填跳过：{style} / {size}（无对应 SKU，请检查槽位对齐）",
+                flush=True,
+            )
+        if style_names and size_names:
+            filled, failed = _count_filled_matrix_cells(page, style_names, size_names)
+        _log_step(account_id, f"补填后合计 {filled}/{matrix_need} 格（已校验）", t)
+        sku_dbg.log_fill_progress(
+            account_id,
+            "after_retry",
+            filled=filled,
+            total=matrix_need,
+            failed_count=len(failed),
+        )
+        _sku_table_debug_snapshot(
+            page, account_id, "after_retry", style_names, size_names
+        )
+
+    if filled < matrix_need:
+        sku_dbg.log(
+            account_id,
+            "fill_summary",
+            "仍有未填完规格格",
+            filled=filled,
+            total=matrix_need,
+            gap=matrix_need - filled,
+        )
+        _sku_table_debug_snapshot(
+            page, account_id, "fill_final", style_names, size_names
+        )
 
     print(f"[{account_id}] 文字字段填完，开始上传预览图...", flush=True)
     t = _now()
-    _scroll_sku_table_to_load(page, len(skus))
+    _scroll_sku_table_to_load(
+        page,
+        len(skus),
+        style_names=style_names,
+        size_names=size_names,
+    )
     if style_names and size_names:
         _stamp_global_row_indices(page, style_names, size_names)
-    _remark_sku_rows(page)
     preview_count = _mark_preview_inputs(page)
     _log_step(account_id, f"预览图上传位 {preview_count} 个（虚拟滚动下可能少于 SKU 数）", t)
 
@@ -1811,7 +3198,13 @@ def fill_multi_spec_rows(
         if row_idx is None:
             row_idx = i
         if sku.style_name and sku.model_name:
-            found_idx = _ensure_style_size_row_visible(page, sku.style_name, sku.model_name)
+            found_idx = _ensure_style_size_row_visible(
+                page,
+                sku.style_name,
+                sku.model_name,
+                style_names=style_names,
+                size_names=size_names,
+            )
             if found_idx is not None and not (style_names and size_names):
                 row_idx = found_idx
         if not sku.preview_image:
@@ -1827,6 +3220,8 @@ def fill_multi_spec_rows(
                 label,
                 style_name=sku.style_name or "",
                 size_name=sku.model_name or "",
+                style_names=style_names,
+                size_names=size_names,
             ):
                 uploaded += 1
         except Exception as exc:
@@ -1846,10 +3241,23 @@ def fill_multi_spec_rows(
             continue
         seen_keys.add(key)
         row_idx = row_indices[i] if i < len(row_indices) else i
-        found_idx = _ensure_style_size_row_visible(page, key[0], key[1])
+        found_idx = _ensure_style_size_row_visible(
+            page,
+            key[0],
+            key[1],
+            style_names=style_names,
+            size_names=size_names,
+        )
         if found_idx is not None:
             row_idx = found_idx
-        if _preview_is_uploaded(page, row_idx, style_name=key[0], size_name=key[1]):
+        if _preview_is_uploaded(
+            page,
+            row_idx,
+            style_name=key[0],
+            size_name=key[1],
+            style_names=style_names,
+            size_names=size_names,
+        ):
             verified += 1
     print(
         f"[{account_id}] 预览图结果：上传成功 {uploaded}/{need_upload}，"

@@ -29,6 +29,7 @@ class MinioSyncJob:
     current_label: str = ""
     downloaded_files: int = 0
     skipped_files: int = 0
+    pruned_dirs: int = 0
     error: str = ""
     started_at: float = 0.0
     finished_at: float = 0.0
@@ -50,6 +51,7 @@ class MinioSyncJob:
             "current_label": self.current_label,
             "downloaded_files": self.downloaded_files,
             "skipped_files": self.skipped_files,
+            "pruned_dirs": self.pruned_dirs,
             "error": self.error,
             "progress_percent": percent,
             "started_at": self.started_at,
@@ -131,7 +133,7 @@ def _run_sync_job(job_id: str) -> None:
                 if job.status == "failed":
                     return
                 job.current_label = f"{family_code}/{image_set}"
-            downloaded, skipped = stage_minio_image_set(
+            downloaded, skipped, pruned = stage_minio_image_set(
                 family_code=family_code,
                 image_set=image_set,
                 config=cfg,
@@ -140,16 +142,18 @@ def _run_sync_job(job_id: str) -> None:
                 job.completed_sets = index
                 job.downloaded_files += downloaded
                 job.skipped_files += skipped
+                job.pruned_dirs += pruned
         with _JOB_LOCK:
             job.status = "success"
             job.current_label = ""
             job.finished_at = time.time()
         logger.info(
-            "minio sync job %s done sets=%s downloaded=%s skipped=%s",
+            "minio sync job %s done sets=%s downloaded=%s skipped=%s pruned_dirs=%s",
             job_id,
             job.total_sets,
             job.downloaded_files,
             job.skipped_files,
+            job.pruned_dirs,
         )
     except Exception as exc:
         logger.exception("minio sync job %s failed", job_id)

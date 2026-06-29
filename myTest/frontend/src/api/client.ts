@@ -619,6 +619,17 @@ export const api = {
     delay_max_seconds?: number
   }) => http.post<LoginBatchCheckResponse>('/login/check-batch', body).then((r) => r.data),
 
+  scrapeShopNamesBatch: (body: {
+    account_ids?: string[]
+    delay_min_seconds?: number
+    delay_max_seconds?: number
+  }) => http.post<LoginBatchCheckResponse>('/login/scrape-shop-names-batch', body).then((r) => r.data),
+
+  scrapeShopName: (accountId: string) =>
+    http.post<{ account_id: string; shop_display_name: string; ok: boolean; reason: string }>(
+      `/login/scrape-shop-name/${accountId}`,
+    ).then((r) => r.data),
+
   openLoginWindow: (accountId: string, keep_open_seconds = 300) =>
     http.post<LoginStatus>(`/login/open/${accountId}`, { keep_open_seconds }).then((r) => r.data),
 

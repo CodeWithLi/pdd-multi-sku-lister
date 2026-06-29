@@ -398,6 +398,9 @@ def enqueue_pending_listing_after_relist_prep(row) -> None:
                 "platform_listing_code": str(listing_payload_base.get("platform_listing_code") or ""),
                 "pipeline_id": row.pipeline_id,
                 "slot_alignment_test": bool(listing_payload_base.get("slot_alignment_test")),
+                "category_next_burst_demo": bool(
+                    listing_payload_base.get("category_next_burst_demo", True)
+                ),
                 "material_source": str(listing_payload_base.get("material_source") or ""),
             },
             scheduled_at=datetime.now(),

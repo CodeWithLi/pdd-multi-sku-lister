@@ -63,6 +63,7 @@ export interface Account {
   account_id: string
   enabled: boolean
   username: string
+  shop_display_name?: string
   display_name?: string
   has_password: boolean
   product_codes: string[]
@@ -185,6 +186,7 @@ export interface MinioSyncJob {
   current_label: string
   downloaded_files: number
   skipped_files: number
+  pruned_dirs?: number
   error: string
   progress_percent: number
   started_at: number
@@ -725,6 +727,7 @@ export interface IntegratedPipeline {
   activity_delay_hours: number
   demo_mode: boolean
   slot_alignment_test?: boolean
+  category_next_burst_demo?: boolean
   batch_id?: string
   listing_run_id: string
   campaign_run_id: string
@@ -788,6 +791,7 @@ export interface IntegratedPipelineStartPayload {
   demo_mode?: boolean
   platform_listing_code?: string
   slot_alignment_test?: boolean
+  category_next_burst_demo?: boolean
   skip_listing?: boolean
   listing_skip_selectors?: string[]
   material_source?: 'local' | 'minio'
@@ -814,6 +818,7 @@ export interface IntegratedPipelineBatchStartPayload {
   demo_mode?: boolean
   platform_listing_code?: string
   slot_alignment_test?: boolean
+  category_next_burst_demo?: boolean
   store_start_delay_min_seconds?: number
   store_start_delay_max_seconds?: number
   max_concurrent_stores?: number

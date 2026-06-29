@@ -125,7 +125,6 @@ def maybe_run_per_batch_limited_time_after_listing(
     )
     more_batches = has_more_listing_batches(throttle)
     interval_minutes = max(1, int(throttle.get("interval_minutes") or 1))
-    next_batch_scheduled_at = datetime.now() + timedelta(minutes=interval_minutes)
 
     meta_patch = dict(listing_meta or {})
     meta_patch["listing_throttle"] = {
@@ -142,7 +141,7 @@ def maybe_run_per_batch_limited_time_after_listing(
     if more_batches:
         per_batch_patch["pending"] = {
             "next_batch_index": batch_index + 1,
-            "next_batch_scheduled_at": next_batch_scheduled_at.isoformat(timespec="seconds"),
+            "interval_minutes": interval_minutes,
         }
     else:
         per_batch_patch.pop("pending", None)
@@ -254,13 +253,16 @@ def maybe_continue_after_per_batch_limited_time(
         )
         return False
 
-    scheduled_raw = str(pending.get("next_batch_scheduled_at") or "").strip()
-    try:
-        scheduled_at = datetime.fromisoformat(scheduled_raw) if scheduled_raw else datetime.now()
-    except ValueError:
-        scheduled_at = datetime.now()
-    if scheduled_at < datetime.now():
-        scheduled_at = datetime.now()
+    interval_minutes = max(
+        1,
+        int(
+            pending.get("interval_minutes")
+            or throttle.get("interval_minutes")
+            or 1
+        ),
+    )
+    # 下一批上架必须在「本批限时限量购完成之后」再等待 interval，不能在上批上架结束时提前计时。
+    scheduled_at = datetime.now() + timedelta(minutes=interval_minutes)
 
     payload_base = dict(throttle.get("listing_payload_base") or {})
     meta_patch: dict[str, Any] = {

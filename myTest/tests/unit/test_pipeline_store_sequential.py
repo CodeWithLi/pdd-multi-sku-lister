@@ -3,13 +3,12 @@
 from __future__ import annotations
 
 from types import SimpleNamespace
-from unittest.mock import MagicMock
-
-import pytest
 
 from pdd_agent.api.services.pipeline_store_sequential import (
+    STORE_SEQUENTIAL_ADVANCE_TRIGGERED_KEY,
     build_coordinator_sequential_meta,
     maybe_advance_sequential_store,
+    maybe_advance_sequential_store_after_listing_limited_time,
 )
 
 
@@ -135,5 +134,76 @@ def test_maybe_advance_ignores_running_pipeline(monkeypatch):
             total_stores=2,
             active_pipeline_id="pipe-coord",
         ),
+    )
+    assert maybe_advance_sequential_store(finished) is None
+
+
+def test_maybe_advance_after_listing_limited_time_starts_next_while_running(monkeypatch):
+    coordinator_id = "pipe-coord"
+    store_a = _row(
+        pipeline_id=coordinator_id,
+        status="waiting_activity",
+        meta={
+            **build_coordinator_sequential_meta(
+                pending_items=[{"account_id": "store_B", "product_codes": ["BD001/第一套图/BD001A"]}],
+                common_params={"activity_ids": ["20981"], "category_keyword": "玩偶"},
+                delay_min_seconds=0,
+                delay_max_seconds=0,
+                total_stores=2,
+                active_pipeline_id=coordinator_id,
+            ),
+        },
+    )
+    store_a.meta["store_sequential"]["active_pipeline_id"] = coordinator_id
+    store_a.meta["store_sequential"]["started_pipeline_ids"] = [coordinator_id]
+
+    coordinator = _row(
+        pipeline_id=coordinator_id,
+        status="waiting_activity",
+        meta=dict(store_a.meta),
+    )
+
+    monkeypatch.setattr(
+        "pdd_agent.api.services.pipeline_store_sequential.get_integrated_pipeline",
+        lambda pipeline_id: coordinator if pipeline_id == coordinator_id else None,
+    )
+    monkeypatch.setattr(
+        "pdd_agent.api.services.pipeline_store_sequential.update_integrated_pipeline",
+        lambda pipeline_id, **kwargs: coordinator,
+    )
+    monkeypatch.setattr(
+        "pdd_agent.api.services.pipeline_store_sequential._call_start_integrated_pipeline",
+        lambda **kwargs: {
+            "pipeline_id": "pipe-store-b",
+            "account_id": kwargs["account_id"],
+            "listing_run_id": "run-b",
+        },
+    )
+
+    result = maybe_advance_sequential_store_after_listing_limited_time(store_a)
+    assert result is not None
+    assert result["pipeline_id"] == "pipe-store-b"
+
+
+def test_maybe_advance_after_listing_limited_time_is_idempotent():
+    finished = _row(
+        pipeline_id="pipe-a",
+        status="waiting_activity",
+        meta={
+            "store_sequential": {
+                "enabled": True,
+                "coordinator_pipeline_id": "pipe-coord",
+            },
+            STORE_SEQUENTIAL_ADVANCE_TRIGGERED_KEY: True,
+        },
+    )
+    assert maybe_advance_sequential_store_after_listing_limited_time(finished) is None
+
+
+def test_terminal_advance_skips_when_listing_phase_already_handoff():
+    finished = _row(
+        pipeline_id="pipe-a",
+        status="completed",
+        meta={STORE_SEQUENTIAL_ADVANCE_TRIGGERED_KEY: True},
     )
     assert maybe_advance_sequential_store(finished) is None

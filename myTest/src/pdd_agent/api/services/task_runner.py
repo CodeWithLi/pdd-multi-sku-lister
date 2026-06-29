@@ -305,6 +305,42 @@ def _extract_per_product_activity_errors(
     return errors
 
 
+def _extract_limited_time_price_filter_errors(result: dict[str, Any] | None) -> dict[str, str]:
+    """限时限量购价格筛选：被剔除的商品仍应记失败（整批创建成功时）。"""
+    from pdd_agent.skills.campaign.limited_time import (
+        FEISHU_DATA_MISSING_MESSAGE,
+        _price_filter_failure_message,
+    )
+
+    errors: dict[str, str] = {}
+    for item in (result or {}).get("results") or []:
+        if not isinstance(item, dict):
+            continue
+        price_filter = item.get("price_filter") if isinstance(item.get("price_filter"), dict) else {}
+        if not price_filter:
+            continue
+        default_reason = _price_filter_failure_message(price_filter)
+        reason_by_pid: dict[str, str] = {}
+        for decision in price_filter.get("decisions") or []:
+            if not isinstance(decision, dict) or decision.get("keep"):
+                continue
+            pid = str(decision.get("product_id") or "").strip()
+            if not pid:
+                continue
+            reason_code = str(decision.get("reason") or "").strip()
+            if reason_code == "feishu_data_missing":
+                reason_by_pid[pid] = FEISHU_DATA_MISSING_MESSAGE
+            else:
+                reason_by_pid[pid] = default_reason
+        for pid in price_filter.get("deleted_product_ids") or []:
+            pid = str(pid or "").strip()
+            if pid:
+                errors[pid] = reason_by_pid.get(pid) or default_reason
+        for pid, reason in reason_by_pid.items():
+            errors.setdefault(pid, reason)
+    return errors
+
+
 def _schedule_feishu_limited_time_status(
     *,
     account_id: str,
@@ -336,11 +372,15 @@ def _schedule_feishu_limited_time_status(
             product_ids,
             account_name=account_name,
         )
-        product_errors = None if status == RunStatus.SUCCESS else _extract_per_product_activity_errors(
+        product_errors = _extract_per_product_activity_errors(
             result,
             fallback_error=error,
             product_ids=product_ids,
         )
+        if status == RunStatus.SUCCESS:
+            product_errors = _extract_limited_time_price_filter_errors(result) or None
+        elif not product_errors:
+            product_errors = None
         schedule_pdd_upload_limited_time_status(
             account_id=account_id,
             product_ids=product_ids,
@@ -1174,6 +1214,7 @@ async def execute_listing(
     platform_listing_code: str = "",
     retry_item: dict[str, Any] | None = None,
     slot_alignment_test: bool = False,
+    category_next_burst_demo: bool = True,
     material_source: str | None = None,
 ) -> dict[str, Any]:
     """执行 listing 子图，更新 RunRecord。"""
@@ -1362,6 +1403,7 @@ async def execute_listing(
                 "retry_item": retry_item or {},
                 "run_id": run_id,
                 "slot_alignment_test": slot_alignment_test,
+                "category_next_burst_demo": category_next_burst_demo,
                 "material_source": resolved_source,
                 "assets_root": str(assets_root_path) if assets_root_path else "",
             }

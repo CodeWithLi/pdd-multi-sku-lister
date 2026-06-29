@@ -171,6 +171,7 @@ def enqueue_listing_batch_for_pipeline(
             "platform_listing_code": str(payload_base.get("platform_listing_code") or ""),
             "pipeline_id": pipeline_id,
             "slot_alignment_test": bool(payload_base.get("slot_alignment_test")),
+            "category_next_burst_demo": bool(payload_base.get("category_next_burst_demo", True)),
             "material_source": str(payload_base.get("material_source") or ""),
         },
         scheduled_at=scheduled_at or datetime.now(),

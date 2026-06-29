@@ -26,9 +26,13 @@ from pdd_agent.skills.listing.multi_spec_page import (
     fill_multi_spec_rows,
     wait_multi_sku_rows,
 )
-from pdd_agent.skills.listing.page_ai_title import apply_title_after_cover_upload
+from pdd_agent.skills.listing.category_page_flow import (
+    click_category_next_and_advance,
+    wait_category_section_ready,
+)
 from pdd_agent.skills.listing.listing_publish_settings import apply_listing_publish_settings
 from pdd_agent.skills.listing.listing_spec_pipeline import apply_unit_listing_specs
+from pdd_agent.skills.listing.page_ai_title import apply_title_after_cover_upload
 from pdd_agent.skills.listing.spec_labels import ordered_style_names
 from pdd_agent.skills.listing.title import resolve_listing_title
 from pdd_agent.skills.published.pdd_spec_format import listing_unit_sku_metadata
@@ -1332,20 +1336,296 @@ def _category_page_body_text(page: DpPage) -> str:
         return ""
 
 
+DEFAULT_CATEGORY_RENDER_WAIT = 45
+
+
+def _category_section_is_ready(page: DpPage) -> bool:
+    """商品分类区块已渲染：推荐类目卡片、或「暂无推荐/选择分类」手动入口。"""
+    body = _category_page_body_text(page)
+    if "商品分类" not in body:
+        return False
+    if "暂无推荐的分类" in body:
+        return True
+    if "暂无推荐" in body and "手动选择" in body:
+        return True
+    if "查看更多推荐" in body and body.count(">") >= 2:
+        return True
+    try:
+        ready = page.run_js(
+            """
+            function isVisible(el) {
+                if (!el) return false;
+                const r = el.getBoundingClientRect();
+                const s = window.getComputedStyle(el);
+                return r.width > 40 && r.height > 16
+                    && s.display !== 'none' && s.visibility !== 'hidden'
+                    && parseFloat(s.opacity || '1') > 0.05;
+            }
+            const bodyText = document.body?.innerText || '';
+            if (bodyText.includes('暂无推荐的分类')) return true;
+            if (bodyText.includes('暂无推荐') && bodyText.includes('手动选择')) return true;
+            for (const el of document.querySelectorAll('div, span, li, button, a')) {
+                const t = (el.innerText || el.textContent || '').replace(/\\s+/g, ' ').trim();
+                if (!t.includes('>')) continue;
+                if (t.split('>').filter(p => p.trim()).length < 2) continue;
+                if (!isVisible(el)) continue;
+                return true;
+            }
+            for (const el of document.querySelectorAll('button, a, span, div')) {
+                const t = (el.innerText || el.textContent || '').trim();
+                if (t !== '选择分类') continue;
+                if (isVisible(el)) return true;
+            }
+            return false;
+            """
+        )
+        return bool(ready)
+    except Exception:
+        return body.count(">") >= 2
+
+
+def _wait_for_category_section_ready(
+    page: DpPage,
+    account_id: str,
+    label: str,
+    *,
+    max_wait: int = DEFAULT_CATEGORY_RENDER_WAIT,
+) -> bool:
+    """主图/标题完成后等待「商品分类」区块渲染，再判定手动选类或点下一步。"""
+    if _category_section_is_ready(page):
+        return True
+    print(
+        f"[{account_id}] [{label}] 等待商品分类区块渲染…",
+        flush=True,
+    )
+    for sec in range(max_wait):
+        time.sleep(1)
+        if _category_section_is_ready(page):
+            print(
+                f"[{account_id}] [{label}] 商品分类已渲染 ({sec + 1}s)",
+                flush=True,
+            )
+            return True
+        if (sec + 1) % 5 == 0:
+            print(
+                f"[{account_id}] [{label}] 仍在等待商品分类渲染… ({sec + 1}/{max_wait}s)",
+                flush=True,
+            )
+    print(
+        f"[{account_id}] [{label}] 商品分类渲染等待超时 ({max_wait}s)，继续尝试后续步骤",
+        flush=True,
+    )
+    return False
+
+
+DEFAULT_CATEGORY_ADVANCE_WAIT = 30
+CATEGORY_NEXT_BURST_MIN = 3
+CATEGORY_NEXT_BURST_MAX = 5
+DEFAULT_CATEGORY_SUBMIT_READY_WAIT = 60
+
+
+def _blur_page_focus(page: DpPage) -> None:
+    try:
+        page.run_js(
+            """
+            const ae = document.activeElement;
+            if (ae && ae !== document.body && typeof ae.blur === 'function') ae.blur();
+            """
+        )
+    except Exception:
+        pass
+
+
+def _playwright_mouse_at(page: DpPage, x: float, y: float) -> bool:
+    """Playwright 底层鼠标坐标点击（isTrusted），与人工点击最接近。"""
+    raw = getattr(page, "_page", None)
+    if raw is None:
+        return False
+    try:
+        raw.mouse.move(x, y)
+        time.sleep(random.uniform(0.06, 0.14))
+        raw.mouse.down()
+        time.sleep(random.uniform(0.04, 0.10))
+        raw.mouse.up()
+        return True
+    except Exception:
+        return False
+
+
+def _playwright_mouse_click_element(page: DpPage, el: Any) -> bool:
+    try:
+        el._loc.scroll_into_view_if_needed(timeout=3000)
+    except Exception:
+        pass
+    try:
+        box = el._loc.bounding_box(timeout=3000)
+    except Exception:
+        box = None
+    if box and box.get("width") and box.get("height"):
+        x = box["x"] + box["width"] * random.uniform(0.35, 0.65)
+        y = box["y"] + box["height"] * random.uniform(0.35, 0.65)
+        if _playwright_mouse_at(page, x, y):
+            return True
+    try:
+        el._loc.click(timeout=5000)
+        return True
+    except Exception:
+        pass
+    try:
+        el._loc.click(timeout=5000, force=True)
+        return True
+    except Exception:
+        return False
+
+
+_HUMAN_CLICK_JS = """
+function isVisible(el) {
+    if (!el) return false;
+    const r = el.getBoundingClientRect();
+    const s = window.getComputedStyle(el);
+    return r.width > 4 && r.height > 4
+        && s.display !== 'none' && s.visibility !== 'hidden'
+        && parseFloat(s.opacity || '1') > 0.05;
+}
+function humanClick(el) {
+    if (!el || !isVisible(el)) return false;
+    try { el.scrollIntoView({ block: 'center', behavior: 'instant' }); } catch (e) {}
+    const r = el.getBoundingClientRect();
+    const cx = r.left + r.width / 2;
+    const cy = r.top + r.height / 2;
+    const base = { bubbles: true, cancelable: true, view: window, clientX: cx, clientY: cy };
+    const ptrDown = Object.assign({}, base, { pointerId: 1, pointerType: 'mouse', isPrimary: true });
+    const ptrUp = Object.assign({}, base, { pointerId: 1, pointerType: 'mouse', isPrimary: true });
+    el.dispatchEvent(new PointerEvent('pointerdown', ptrDown));
+    el.dispatchEvent(new MouseEvent('mousedown', base));
+    el.dispatchEvent(new PointerEvent('pointerup', ptrUp));
+    el.dispatchEvent(new MouseEvent('mouseup', base));
+    el.dispatchEvent(new MouseEvent('click', base));
+    if (typeof el.click === 'function') el.click();
+    return true;
+}
+return humanClick(arguments[0]);
+"""
+
+
+def _is_still_on_category_publish_step(page: DpPage) -> bool:
+    """仍在分类页「下一步，完善商品信息」步骤（未进入规格/详情页）。"""
+    if page.ele("#spec", timeout=0.3):
+        return False
+    if page.ele('css:input[data-tracking-click-viewid="detail_img_localfile_upload"]', timeout=0.3):
+        return False
+    body = _category_page_body_text(page)
+    if ("商品规格" in body or "规格类型" in body) and "完善商品信息" not in body.replace(" ", ""):
+        return False
+    if page.ele("#bottomSubmitBtnId", timeout=0.3):
+        return True
+    compact = body.replace(" ", "")
+    if "下一步" in compact and "完善商品信息" in compact:
+        return True
+    return "商品分类" in body and "商品主图" in body
+
+
+def _wait_for_category_page_advance(
+    page: DpPage,
+    account_id: str,
+    label: str,
+    *,
+    max_wait: int = DEFAULT_CATEGORY_ADVANCE_WAIT,
+) -> bool:
+    """连续点击后等待跳转到完善商品信息页；已跳转则立即返回。"""
+    if not _is_still_on_category_publish_step(page):
+        return True
+
+    print(
+        f"[{account_id}] [{label}] 继续监听页面跳转，最多 {max_wait}s…",
+        flush=True,
+    )
+    for sec in range(max_wait):
+        time.sleep(1)
+        if not _is_still_on_category_publish_step(page):
+            print(
+                f"[{account_id}] [{label}] 已跳转到完善商品信息页 ({sec + 1}s)",
+                flush=True,
+            )
+            return True
+        if (sec + 1) % 10 == 0:
+            print(
+                f"[{account_id}] [{label}] 仍在等待页面跳转… ({sec + 1}/{max_wait}s)",
+                flush=True,
+            )
+            _click_branch_c_category_recommendation(page, account_id, label)
+            _mouse_click_category_next_button(page, account_id, label)
+
+    advanced = not _is_still_on_category_publish_step(page)
+    if not advanced:
+        print(
+            f"[{account_id}] [{label}] 等待跳转超时 ({max_wait}s)，仍在分类页",
+            flush=True,
+        )
+    return advanced
+
+
 def _category_page_needs_manual_selection(page: DpPage) -> bool:
     """图二：暂无推荐分类，需点击「选择分类」后在搜索框选类目。"""
+    if _branch_c_category_already_selected(page):
+        return False
     body = _category_page_body_text(page)
     if "暂无推荐的分类" in body:
         return True
     if "暂无推荐" in body and "手动选择" in body:
         return True
+    if "暂无推荐" in body:
+        return True
+    # 已有推荐类目路径（图一）→ 不必手动选类
+    if "商品分类" in body and body.count(">") >= 2:
+        if page.ele("#bottomSubmitBtnId", timeout=0.5) or page.ele("text:下一步", timeout=0.5):
+            return False
     if page.ele("text:选择分类", timeout=0.5):
         if "确认发布该类商品" in body:
             return False
-        if body.count(">") >= 2 and "玩具" in body and "暂无推荐" not in body:
-            return False
         return True
     return False
+
+
+def _branch_c_category_already_selected(page: DpPage) -> bool:
+    """分支 C：推荐分类已选中（带勾选/路径），可直接点下一步。"""
+    body = _category_page_body_text(page)
+    if "暂无推荐的分类" in body:
+        return False
+    if "暂无推荐" in body:
+        return False
+    has_next = bool(
+        page.ele("#bottomSubmitBtnId", timeout=0.5) or page.ele("text:下一步", timeout=0.5)
+    )
+    if has_next and "商品分类" in body and body.count(">") >= 2:
+        return True
+    try:
+        selected = page.run_js(
+            """
+            function isVisible(el) {
+                if (!el) return false;
+                const r = el.getBoundingClientRect();
+                const s = window.getComputedStyle(el);
+                return r.width > 2 && r.height > 2
+                    && s.display !== 'none' && s.visibility !== 'hidden';
+            }
+            for (const el of document.querySelectorAll(
+                '[class*="selected"], [class*="Selected"], [class*="active"], [class*="checked"], [class*="current"]'
+            )) {
+                if (!isVisible(el)) continue;
+                const t = (el.innerText || el.textContent || '').trim();
+                if (t.includes('>') && t.split('>').length >= 2) return true;
+            }
+            const bodyText = document.body?.innerText || '';
+            if (!bodyText.includes('商品分类')) return false;
+            const pathMatch = bodyText.match(/[^\\n>]{2,30}\\s*>\\s*[^\\n>]{2,30}\\s*>\\s*[^\\n>]{2,30}/);
+            if (pathMatch && !bodyText.includes('暂无推荐的分类') && !bodyText.includes('暂无推荐')) return true;
+            return false;
+            """
+        )
+        return bool(selected)
+    except Exception:
+        return False
 
 
 def _open_category_selector_panel(page: DpPage) -> bool:
@@ -1448,22 +1728,325 @@ def _select_category_by_keyword_search(
     return False
 
 
-def _click_category_next_step(page: DpPage, *, ui_type: str = "C") -> bool:
-    for locator in (
-        "#bottomSubmitBtnId",
-        "text:下一步, 完善商品信息",
-        "text:下一步，完善商品信息",
-    ):
-        btn = page.ele(locator, timeout=1)
-        if btn:
-            btn.click()
+def _human_click_element(page: DpPage, el: Any) -> bool:
+    if _playwright_mouse_click_element(page, el):
+        return True
+    try:
+        return bool(page.run_js(_HUMAN_CLICK_JS, el))
+    except Exception:
+        return False
+
+
+_CATEGORY_RECOMMENDATION_POINT_JS = """
+function isVisible(el) {
+    if (!el) return false;
+    const r = el.getBoundingClientRect();
+    const s = window.getComputedStyle(el);
+    return r.width > 40 && r.height > 20
+        && s.display !== 'none' && s.visibility !== 'hidden'
+        && parseFloat(s.opacity || '1') > 0.05;
+}
+function isCategoryPath(text) {
+    const t = (text || '').replace(/\\s+/g, ' ').trim();
+    if (!t.includes('>')) return false;
+    const parts = t.split('>').map(p => p.trim()).filter(Boolean);
+    return parts.length >= 2 && t.length >= 10 && t.length <= 150;
+}
+function pointOf(el, label) {
+    if (!el || !isVisible(el)) return null;
+    try { el.scrollIntoView({ block: 'center', behavior: 'instant' }); } catch (e) {}
+    const r = el.getBoundingClientRect();
+    return { x: r.left + r.width / 2, y: r.top + r.height / 2, text: label.slice(0, 60) };
+}
+for (const el of document.querySelectorAll(
+    '[class*="selected"], [class*="Selected"], [class*="active"], [class*="checked"], [class*="current"]'
+)) {
+    const t = (el.innerText || el.textContent || '').trim();
+    const pt = pointOf(el, t);
+    if (pt && isCategoryPath(t)) return pt;
+}
+const cards = [];
+for (const el of document.querySelectorAll('div, li, span, button, a')) {
+    const t = (el.innerText || el.textContent || '').replace(/\\s+/g, ' ').trim();
+    if (!isCategoryPath(t)) continue;
+    const r = el.getBoundingClientRect();
+    if (!isVisible(el)) continue;
+    cards.push({ el, score: r.width * r.height, t });
+}
+cards.sort((a, b) => a.score - b.score);
+for (const item of cards) {
+    const pt = pointOf(item.el, item.t);
+    if (pt) return pt;
+}
+return null;
+"""
+
+
+def _click_branch_c_category_recommendation(
+    page: DpPage,
+    account_id: str,
+    label: str,
+) -> bool:
+    """Playwright 坐标点击推荐类目，完成平台分类校验。"""
+    try:
+        point = page.run_js(_CATEGORY_RECOMMENDATION_POINT_JS)
+    except Exception:
+        point = None
+    if not isinstance(point, dict) or not point.get("x") or not point.get("y"):
+        return False
+    if _playwright_mouse_at(page, float(point["x"]), float(point["y"])):
+        print(
+            f"[{account_id}] [{label}] 已点击推荐类目：{point.get('text', '')}",
+            flush=True,
+        )
+        time.sleep(random.uniform(0.5, 1.0))
+        return True
+    return False
+
+
+def _read_category_submit_state(page: DpPage) -> dict[str, Any]:
+    try:
+        state = page.run_js(
+            """
+            const btn = document.getElementById('bottomSubmitBtnId');
+            const body = document.body?.innerText || '';
+            const blocking = body.includes('请选择完整的分类');
+            if (!btn) return { ready: false, reason: 'no_button', blocking };
+            const r = btn.getBoundingClientRect();
+            const s = window.getComputedStyle(btn);
+            const visible = r.width > 8 && r.height > 8
+                && s.display !== 'none' && s.visibility !== 'hidden';
+            const disabled = !!btn.disabled
+                || btn.getAttribute('aria-disabled') === 'true'
+                || (btn.className || '').includes('disabled');
+            return {
+                ready: visible && !disabled && !blocking,
+                blocking,
+                disabled,
+                visible,
+                x: r.left + r.width / 2,
+                y: r.top + r.height / 2,
+            };
+            """
+        )
+        return state if isinstance(state, dict) else {}
+    except Exception:
+        return {}
+
+
+def _wait_category_submit_ready(
+    page: DpPage,
+    account_id: str,
+    label: str,
+    *,
+    max_wait: int = DEFAULT_CATEGORY_SUBMIT_READY_WAIT,
+) -> bool:
+    """等待「请选择完整的分类」消失且下一步按钮可点。"""
+    state = _read_category_submit_state(page)
+    if state.get("ready"):
+        return True
+    print(
+        f"[{account_id}] [{label}] 等待分类校验通过、下一步可点…",
+        flush=True,
+    )
+    for sec in range(max_wait):
+        _click_branch_c_category_recommendation(page, account_id, label)
+        time.sleep(0.8)
+        state = _read_category_submit_state(page)
+        if state.get("ready"):
+            print(
+                f"[{account_id}] [{label}] 分类校验已通过 ({sec + 1}s)",
+                flush=True,
+            )
             return True
+        if (sec + 1) % 10 == 0:
+            reason = "请选择完整的分类" if state.get("blocking") else (
+                "按钮未就绪" if not state.get("visible") else "按钮禁用"
+            )
+            print(
+                f"[{account_id}] [{label}] 仍在等待分类校验… ({sec + 1}/{max_wait}s, {reason})",
+                flush=True,
+            )
+        time.sleep(1)
+    return bool(_read_category_submit_state(page).get("ready"))
+
+
+def _resolve_category_next_click_point(page: DpPage) -> dict[str, Any]:
+    try:
+        point = page.run_js(
+            """
+            function isVisible(el) {
+                if (!el) return false;
+                const r = el.getBoundingClientRect();
+                const s = window.getComputedStyle(el);
+                return r.width > 8 && r.height > 8
+                    && s.display !== 'none' && s.visibility !== 'hidden'
+                    && parseFloat(s.opacity || '1') > 0.05;
+            }
+            function norm(t) {
+                return (t || '').replace(/\\s+/g, '');
+            }
+            function pick(el, method) {
+                if (!el || !isVisible(el)) return null;
+                try { el.scrollIntoView({ block: 'center', behavior: 'instant' }); } catch (e) {}
+                const r = el.getBoundingClientRect();
+                const cx = r.left + r.width / 2;
+                const cy = r.top + r.height / 2;
+                let target = document.elementFromPoint(cx, cy) || el;
+                for (let i = 0; i < 8 && target; i++) {
+                    const tag = (target.tagName || '').toLowerCase();
+                    if (target.id === 'bottomSubmitBtnId' || tag === 'button') break;
+                    const t = norm(target.innerText || target.textContent || '');
+                    if (t.includes('下一步') && t.includes('完善商品信息')) break;
+                    target = target.parentElement;
+                }
+                const tr = (target || el).getBoundingClientRect();
+                return {
+                    x: tr.left + tr.width / 2,
+                    y: tr.top + tr.height / 2,
+                    method,
+                    id: (target || el).id || '',
+                };
+            }
+            const byId = document.getElementById('bottomSubmitBtnId');
+            const fromId = pick(byId, 'bottomSubmitBtnId');
+            if (fromId) return fromId;
+            const candidates = [];
+            for (const el of document.querySelectorAll('button, a, div, span')) {
+                const t = norm(el.innerText || el.textContent || '');
+                if (!t.includes('下一步') || !t.includes('完善商品信息')) continue;
+                if (!isVisible(el)) continue;
+                const r = el.getBoundingClientRect();
+                candidates.push({ el, score: r.width * r.height });
+            }
+            candidates.sort((a, b) => b.score - a.score);
+            if (candidates.length) return pick(candidates[0].el, 'text_match');
+            return null;
+            """
+        )
+        return point if isinstance(point, dict) else {}
+    except Exception:
+        return {}
+
+
+def _mouse_click_category_next_button(
+    page: DpPage,
+    account_id: str,
+    label: str,
+) -> tuple[bool, str]:
+    """用 Playwright 坐标鼠标点击「下一步」按钮。"""
+    prefix = f"[{account_id}] [{label}] "
+    _blur_page_focus(page)
+    try:
+        page.run_js("window.scrollTo(0, document.body.scrollHeight);")
+    except Exception:
+        pass
+    time.sleep(0.35)
+
+    raw = getattr(page, "_page", None)
+    if raw is not None:
+        try:
+            loc = raw.locator("#bottomSubmitBtnId")
+            loc.wait_for(state="visible", timeout=2000)
+            box = loc.bounding_box(timeout=2000)
+            if box:
+                x = box["x"] + box["width"] / 2
+                y = box["y"] + box["height"] / 2
+                if _playwright_mouse_at(page, x, y):
+                    print(f"{prefix}已坐标点击「下一步」(mouse/#bottomSubmitBtnId)", flush=True)
+                    return True, "mouse/#bottomSubmitBtnId"
+        except Exception:
+            pass
+
+    point = _resolve_category_next_click_point(page)
+    if point.get("x") and point.get("y"):
+        if _playwright_mouse_at(page, float(point["x"]), float(point["y"])):
+            method = point.get("method") or "elementFromPoint"
+            print(f"{prefix}已坐标点击「下一步」(mouse/{method})", flush=True)
+            return True, f"mouse/{method}"
+
+    for locator in ("#bottomSubmitBtnId", "text:下一步，完善商品信息"):
+        btn = page.ele(locator, timeout=1)
+        if btn and _playwright_mouse_click_element(page, btn):
+            print(f"{prefix}已点击「下一步」({locator})", flush=True)
+            return True, locator
+
+    return False, ""
+
+
+def _click_category_next_step(
+    page: DpPage,
+    *,
+    ui_type: str = "C",
+    account_id: str = "",
+    label: str = "",
+    quiet: bool = False,
+) -> bool:
+    """点击分类页「下一步，完善商品信息」；优先 Playwright 坐标鼠标。"""
+    if ui_type == "C":
+        _click_branch_c_category_recommendation(page, account_id, label)
+    if not quiet:
+        time.sleep(0.4)
+    else:
+        time.sleep(0.12)
+
+    ok, _method = _mouse_click_category_next_button(page, account_id, label)
+    if ok:
+        time.sleep(0.25 if quiet else 0.8)
+        return True
+
     if ui_type != "C":
         confirm = page.ele("text:确认发布该类商品", timeout=1)
-        if confirm:
-            confirm.click()
+        if confirm and _playwright_mouse_click_element(page, confirm):
             return True
+
+    prefix = f"[{account_id}] [{label}] " if account_id and label else ""
+    if not quiet:
+        print(f"{prefix}未找到「下一步，完善商品信息」按钮", flush=True)
     return False
+
+
+def _click_category_next_step_burst(
+    page: DpPage,
+    *,
+    ui_type: str = "C",
+    account_id: str = "",
+    label: str = "",
+    burst_min: int = CATEGORY_NEXT_BURST_MIN,
+    burst_max: int = CATEGORY_NEXT_BURST_MAX,
+) -> bool:
+    """等待分类可提交 → 坐标点击下一步 → 未跳转则再随机连点。"""
+    if ui_type == "C":
+        _wait_category_submit_ready(page, account_id, label)
+
+    if not _click_category_next_step(
+        page, ui_type=ui_type, account_id=account_id, label=label
+    ):
+        return False
+    if not _is_still_on_category_publish_step(page):
+        return True
+
+    extra = random.randint(burst_min, burst_max)
+    print(
+        f"[{account_id}] [{label}] 首次点击后未跳转，再随机坐标点击 {extra} 次…",
+        flush=True,
+    )
+    for i in range(extra):
+        if not _is_still_on_category_publish_step(page):
+            print(
+                f"[{account_id}] [{label}] 连续点击后已跳转（额外第 {i + 1}/{extra} 次后）",
+                flush=True,
+            )
+            return True
+        print(
+            f"[{account_id}] [{label}] 再次坐标点击「下一步」({i + 1}/{extra})",
+            flush=True,
+        )
+        if ui_type == "C":
+            _click_branch_c_category_recommendation(page, account_id, label)
+        _mouse_click_category_next_button(page, account_id, label)
+        time.sleep(random.uniform(0.45, 0.85))
+    return True
 
 
 def _upload_category_branch_c_covers(
@@ -1497,6 +2080,7 @@ def upload_one_listing(
     platform_listing_code: str = "",
     run_id: str = "",
     slot_alignment_test: bool = False,
+    category_next_burst_demo: bool = True,
 ) -> dict[str, Any]:
     """对单个上架单元执行完整发布流程。"""
     label = unit.listing_label
@@ -1558,8 +2142,16 @@ def upload_one_listing(
             listing_info,
             covers,
         )
+        wait_category_section_ready(
+            page, account_id, label, burst_demo=category_next_burst_demo
+        )
         manual_category = _category_page_needs_manual_selection(page)
-        if manual_category:
+        if _branch_c_category_already_selected(page):
+            print(
+                f"[{account_id}] [{label}] 分支 C：商品分类已选中，直接进入完善商品信息",
+                flush=True,
+            )
+        elif manual_category:
             print(
                 f"[{account_id}] [{label}] 分支 C-手动：暂无推荐分类，点击选择分类后搜索",
                 flush=True,
@@ -1597,21 +2189,41 @@ def upload_one_listing(
                     phase="upload",
                     step="search_category",
                 )
-        if not _click_category_next_step(page, ui_type="C"):
+        next_ok, next_err = click_category_next_and_advance(
+            page,
+            account_id,
+            label,
+            ui_type="C",
+            burst_demo=category_next_burst_demo,
+        )
+        if not next_ok:
             _clear_beforeunload(page)
+            if next_err == "not_found":
+                return _finish_listing(
+                    run_id,
+                    account_id,
+                    unit,
+                    status="retryable",
+                    reason="category_next_step_not_found",
+                    error="未找到「下一步，完善商品信息」按钮",
+                    retryable=True,
+                    legacy_status="skipped",
+                    phase="upload",
+                    step="category_next_step",
+                )
             return _finish_listing(
                 run_id,
                 account_id,
                 unit,
                 status="retryable",
-                reason="category_next_step_not_found",
-                error="未找到「下一步，完善商品信息」按钮",
+                reason="category_next_step_no_advance",
+                error="点击「下一步，完善商品信息」后页面未跳转",
                 retryable=True,
                 legacy_status="skipped",
                 phase="upload",
                 step="category_next_step",
             )
-        time.sleep(5)
+        time.sleep(2)
         page.wait.load_start()
     else:
         if ui_type == "B":
@@ -1639,21 +2251,41 @@ def upload_one_listing(
                 phase="upload",
                 step="search_category",
             )
-        if not _click_category_next_step(page, ui_type=ui_type):
+        next_ok, next_err = click_category_next_and_advance(
+            page,
+            account_id,
+            label,
+            ui_type=ui_type,
+            burst_demo=category_next_burst_demo,
+        )
+        if not next_ok:
             _clear_beforeunload(page)
+            if next_err == "not_found":
+                return _finish_listing(
+                    run_id,
+                    account_id,
+                    unit,
+                    status="retryable",
+                    reason="category_next_step_not_found",
+                    error="未找到分类确认/下一步按钮",
+                    retryable=True,
+                    legacy_status="skipped",
+                    phase="upload",
+                    step="category_next_step",
+                )
             return _finish_listing(
                 run_id,
                 account_id,
                 unit,
                 status="retryable",
-                reason="category_next_step_not_found",
-                error="未找到分类确认/下一步按钮",
+                reason="category_next_step_no_advance",
+                error="点击下一步后页面未跳转",
                 retryable=True,
                 legacy_status="skipped",
                 phase="upload",
                 step="category_next_step",
             )
-        time.sleep(5)
+        time.sleep(2)
         page.wait.load_start()
         if _dismiss_address_required_page(page, account_id, label):
             time.sleep(2)
@@ -1682,7 +2314,9 @@ def upload_one_listing(
     print(f"[{account_id}] [{label}] 正在录入多规格（款式 + 型号）...")
     add_style_and_model_specs(page, account_id, style_names, size_names)
     time.sleep(1)
-    sku_rows = wait_multi_sku_rows(page, account_id, unit.skus)
+    sku_rows = wait_multi_sku_rows(
+        page, account_id, unit.skus, style_names=style_names, size_names=size_names
+    )
 
     print(f"[{account_id}] [{label}] 开始填写价格表...")
     fill_stats = fill_multi_spec_rows(
@@ -1695,6 +2329,46 @@ def upload_one_listing(
         size_names=size_names,
     )
     previews_ok = bool(fill_stats.get("previews_ok"))
+    price_filled = int(fill_stats.get("price_filled") or 0)
+    price_total = int(fill_stats.get("price_total") or len(unit.skus))
+    if price_filled < price_total:
+        print(
+            f"[{account_id}] [{label}] 价格表未填完整（{price_filled}/{price_total}），跳过提交",
+            flush=True,
+        )
+        if run_id:
+            from pdd_agent.api.services.listing_failure_log import record_listing_failure_detail
+
+            record_listing_failure_detail(
+                source_run_id=run_id,
+                account_id=account_id,
+                listing_label=unit.listing_label,
+                product_code=unit.product_code,
+                image_set=unit.image_set,
+                family_code=unit.family_code,
+                merchant_code=unit.merchant_code,
+                phase="upload",
+                step="verify_price_table",
+                severity="error",
+                reason_code="validation_incomplete",
+                message=f"价格表填写 {price_filled}/{price_total} 行未完整",
+                detail=dict(fill_stats),
+            )
+        _clear_beforeunload(page)
+        return _finish_listing(
+            run_id,
+            account_id,
+            unit,
+            status="retryable",
+            reason="validation_incomplete",
+            title=listing_info.get("title", ""),
+            retryable=True,
+            legacy_status="skipped",
+            extra=dict(fill_stats),
+            phase="upload",
+            step="verify_price_table",
+            page_url=str(page.url or ""),
+        )
     if run_id:
         from pdd_agent.api.services.listing_failure_log import (
             record_listing_failure_detail,
@@ -1984,6 +2658,7 @@ def run_listing_uploads(
     defaults: dict[str, str] | None = None,
     run_id: str = "",
     slot_alignment_test: bool = False,
+    category_next_burst_demo: bool = True,
 ) -> list[dict[str, Any]]:
     """顺序上架多个单元；单套失败记日志并继续，手动取消时停止。"""
     from pdd_agent.api.services.run_cancel import is_cancelled
@@ -2013,6 +2688,7 @@ def run_listing_uploads(
                 platform_listing_code=platform_listing_code,
                 run_id=run_id,
                 slot_alignment_test=slot_alignment_test,
+                category_next_burst_demo=category_next_burst_demo,
             )
             results.append(item_result)
             if run_id:

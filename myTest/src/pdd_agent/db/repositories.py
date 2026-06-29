@@ -138,18 +138,31 @@ def get_login_status_row(account_id: str) -> LoginStatusORM | None:
 
 
 def get_cached_shop_display_name(account_id: str) -> str:
-    row = get_login_status_row(account_id)
-    if row and str(row.shop_display_name or "").strip():
-        return str(row.shop_display_name).strip()
+    aid = str(account_id or "").strip()
+    if not aid or not is_database_available():
+        return ""
+    with session_scope() as session:
+        acc = session.get(AccountORM, aid)
+        if acc and str(acc.shop_display_name or "").strip():
+            return str(acc.shop_display_name).strip()
+        row = session.get(LoginStatusORM, aid)
+        if row and str(row.shop_display_name or "").strip():
+            return str(row.shop_display_name).strip()
     return ""
 
 
 def update_shop_display_name(account_id: str, shop_display_name: str) -> None:
     name = str(shop_display_name or "").strip()
     aid = str(account_id or "").strip()
-    if not aid or not name or not is_database_available():
+    if not aid or not name:
+        return
+    if not is_database_available():
+        print(f"[{aid}] [警告] 数据库未连接，跳过写入 shop_display_name={name}", flush=True)
         return
     with session_scope() as session:
+        acc = session.get(AccountORM, aid)
+        if acc:
+            acc.shop_display_name = name
         row = session.get(LoginStatusORM, aid)
         if row:
             row.shop_display_name = name

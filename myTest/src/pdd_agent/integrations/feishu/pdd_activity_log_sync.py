@@ -42,6 +42,7 @@ logger = get_logger(__name__)
 
 _INVALID_FILTER_CODES = frozenset({1254018})
 
+_LIMITED_TIME_SUCCESS = "成功"
 _LIMITED_TIME_ONGOING = "进行中"
 _LIMITED_TIME_FAILURE = "失败"
 _LIMITED_TIME_PENDING = "未执行"
@@ -76,7 +77,7 @@ def _is_program_exception_error(error: str) -> bool:
 
 def map_limited_time_activity_status(*, success: bool, error: str = "") -> str:
     if success:
-        return _LIMITED_TIME_ONGOING
+        return _LIMITED_TIME_SUCCESS
     if _is_program_exception_error(error):
         return _PROGRAM_EXCEPTION
     return _LIMITED_TIME_FAILURE
@@ -723,8 +724,6 @@ def push_pdd_activity_log_limited_time(
 ) -> dict[str, Any]:
     cfg = config or load_feishu_config()
     names = cfg.pdd_activity_log.field_names
-    status_value = map_limited_time_activity_status(success=success, error=error)
-    default_reason = "" if success else _brief_activity_failure_reason(error)
 
     store_name = _account_name_for_push(
         product_contexts=product_contexts,
@@ -735,13 +734,15 @@ def push_pdd_activity_log_limited_time(
 
     results: list[dict[str, Any]] = []
     missing: list[str] = []
+    per_product_errors = product_errors if isinstance(product_errors, dict) else {}
+    last_status_value = map_limited_time_activity_status(success=success, error=error)
     for pid in dict.fromkeys(str(x or "").strip() for x in product_ids if str(x or "").strip()):
-        row_reason = default_reason
-        row_error = error
-        if not success and product_errors:
-            row_error = product_errors.get(pid) or error
-            row_reason = _brief_activity_failure_reason(row_error)
-        status_value = map_limited_time_activity_status(success=success, error=row_error)
+        row_failed = bool(per_product_errors and pid in per_product_errors)
+        row_success = success and not row_failed
+        row_error = per_product_errors.get(pid) or error
+        row_reason = "" if row_success else _brief_activity_failure_reason(row_error)
+        status_value = map_limited_time_activity_status(success=row_success, error=row_error)
+        last_status_value = status_value
         patch = {
             names.limited_time_status: status_value,
             names.limited_time_failure_reason: row_reason,
@@ -763,7 +764,7 @@ def push_pdd_activity_log_limited_time(
     updated = sum(1 for row in results if row.get("updated") or row.get("created"))
     return {
         "updated_count": updated,
-        "status": status_value,
+        "status": last_status_value,
         "product_ids": list(dict.fromkeys(product_ids)),
         "missing_product_ids": missing,
         "results": results,

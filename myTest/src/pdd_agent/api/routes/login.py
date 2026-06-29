@@ -12,11 +12,16 @@ from pdd_agent.api.schemas.login import (
     LoginBatchCheckResponse,
     LoginStatusOut,
     OpenLoginWindowRequest,
+    ShopNameScrapeBatchRequest,
+    ShopNameScrapeBatchResponse,
+    ShopNameScrapeResultOut,
 )
 from pdd_agent.browser.login_health import (
     check_login_status_sync,
     mark_checking,
     open_manual_login_window_sync,
+    scrape_shop_display_name_sync,
+    _persist_scrape_result,
 )
 from pdd_agent.core.account_display import resolve_account_display_name
 from pdd_agent.core.config import AccountConfig, load_yaml_settings
@@ -90,6 +95,44 @@ async def check_login_status_batch(body: LoginBatchCheckRequest, background: Bac
         delay_min_seconds=delay_min,
         delay_max_seconds=delay_max,
         message=f"login check submitted: {len(accounts)} stores, delay {delay_min}-{delay_max}s",
+    )
+
+
+@router.post("/scrape-shop-names-batch", response_model=ShopNameScrapeBatchResponse)
+async def scrape_shop_names_batch(body: ShopNameScrapeBatchRequest, background: BackgroundTasks):
+    settings = load_yaml_settings()
+    accounts = _resolve_accounts(settings, body.account_ids)
+    delay_min, delay_max = _resolve_delay(settings, body.delay_min_seconds, body.delay_max_seconds)
+
+    async def _job():
+        for index, account in enumerate(accounts):
+            mark_checking(account.account_id, "scraping shop display name")
+            result = await asyncio.to_thread(scrape_shop_display_name_sync, settings, account)
+            _persist_scrape_result(result)
+            if index < len(accounts) - 1 and delay_max > 0:
+                await asyncio.sleep(random.randint(delay_min, delay_max))
+
+    background.add_task(_job)
+    return ShopNameScrapeBatchResponse(
+        total=len(accounts),
+        delay_min_seconds=delay_min,
+        delay_max_seconds=delay_max,
+        message=f"shop name scrape submitted: {len(accounts)} stores, delay {delay_min}-{delay_max}s",
+    )
+
+
+@router.post("/scrape-shop-name/{account_id}", response_model=ShopNameScrapeResultOut)
+async def scrape_shop_name_one(account_id: str):
+    settings = load_yaml_settings()
+    account = _get_account_or_404(settings, account_id)
+    mark_checking(account_id, "scraping shop display name")
+    result = await asyncio.to_thread(scrape_shop_display_name_sync, settings, account)
+    _persist_scrape_result(result)
+    return ShopNameScrapeResultOut(
+        account_id=result.account_id,
+        shop_display_name=result.shop_display_name,
+        ok=result.ok,
+        reason=result.reason,
     )
 
 

@@ -29,6 +29,7 @@ class IntegratedPipelineStartRequest(BaseModel):
     demo_mode: bool = False
     platform_listing_code: str = ""
     slot_alignment_test: bool = True
+    category_next_burst_demo: bool = True
     skip_listing: bool = False
     listing_skip_selectors: list[str] = Field(default_factory=list)
     material_source: str = ""
@@ -67,6 +68,7 @@ class IntegratedPipelineBatchStartRequest(BaseModel):
     demo_mode: bool = False
     platform_listing_code: str = ""
     slot_alignment_test: bool = True
+    category_next_burst_demo: bool = True
     skip_listing: bool = False
     listing_skip_selectors: list[str] = Field(default_factory=list)
     material_source: str = ""
@@ -146,6 +148,7 @@ class IntegratedPipelineResponse(BaseModel):
     activity_delay_hours: float
     demo_mode: bool
     slot_alignment_test: bool = False
+    category_next_burst_demo: bool = True
     batch_id: str = ""
     activity_jitter_seconds: int = 0
     listing_run_id: str = ""
