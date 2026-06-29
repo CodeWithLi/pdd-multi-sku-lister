@@ -95,5 +95,71 @@ def test_filter_selectors_skips_all_shops_for_same_code(monkeypatch):
 
 
 def test_is_platform_skip_merchant_code_disabled(monkeypatch):
+    cache_mod._local_entries.clear()
+    monkeypatch.setattr(cache_mod, "_load_entries_from_redis", lambda: set())
     monkeypatch.setattr(cache_mod, "platform_skip_dedupe_enabled", lambda *_args, **_kwargs: False)
     assert cache_mod.is_platform_skip_merchant_code("BD751A") is False
+    assert cache_mod.is_platform_skip_merchant_code("BD751A", require_enabled=False) is False
+
+
+def test_remember_platform_skip_merchant_code_updates_local_and_redis(monkeypatch):
+    cache_mod._local_entries.clear()
+    store: set[str] = set()
+
+    class FakeRedis:
+        def sadd(self, _key, member):
+            store.add(str(member))
+
+        def smembers(self, _key):
+            return set(store)
+
+    monkeypatch.setattr(cache_mod, "get_redis_client", lambda: FakeRedis())
+    monkeypatch.setattr(
+        cache_mod,
+        "load_redis_config",
+        lambda: type("Cfg", (), {"key_prefix": "pdd"})(),
+    )
+
+    cache_mod.remember_platform_skip_merchant_code("bd751a")
+    assert "拼多多|BD751A" in cache_mod._local_entries
+    assert store == {"拼多多|BD751A"}
+    assert cache_mod.is_platform_skip_merchant_code(
+        "BD751A",
+        require_enabled=False,
+    )
+
+
+def test_schedule_platform_skip_failure_log_dedupes_by_merchant_code(monkeypatch):
+    from pdd_agent.integrations.feishu import pdd_upload_sync as sync_mod
+    from pdd_agent.integrations.feishu.listing_feishu_platform_guard import PLATFORM_SKIP_REASON
+
+    pushed: list[dict] = []
+
+    def fake_push(**kwargs):
+        pushed.append(kwargs)
+        return {"created": True, "record_ids": ["rec1"], "table_id": "tbl"}
+
+    monkeypatch.setattr(
+        sync_mod,
+        "load_feishu_config",
+        lambda: type(
+            "Cfg",
+            (),
+            {"pdd_upload_log": type("Log", (), {"failure_log_enabled": True})()},
+        )(),
+    )
+    monkeypatch.setattr(sync_mod, "push_pdd_upload_failure_log", fake_push)
+    monkeypatch.setattr(
+        cache_mod,
+        "is_platform_skip_merchant_code",
+        lambda *args, **kwargs: kwargs.get("require_enabled") is False,
+    )
+    monkeypatch.setattr(cache_mod, "remember_platform_skip_merchant_code", lambda *args, **kwargs: None)
+
+    sync_mod.schedule_pdd_upload_failure_log(
+        account_id="store_A",
+        merchant_code="BD751A",
+        failure_reason=PLATFORM_SKIP_REASON,
+        report_platform="拼多多",
+    )
+    assert pushed == []

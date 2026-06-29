@@ -3,7 +3,10 @@
 from __future__ import annotations
 
 from pdd_agent.core.config import load_yaml_settings
+from pdd_agent.core.logging import get_logger
 from pdd_agent.db.repositories import get_account_config, get_cached_shop_display_name
+
+logger = get_logger(__name__)
 
 
 def resolve_account_display_name(account_id: str) -> str:
@@ -47,6 +50,93 @@ def _account_id_exists(account_id: str) -> bool:
     return False
 
 
+def list_account_ids_by_display_name(display_name: str) -> list[str]:
+    """按店铺展示名 / 登录名 / account_id 列出所有已启用账号（去重、稳定排序）。"""
+    name = str(display_name or "").strip()
+    if not name:
+        return []
+
+    matched: list[str] = []
+    seen: set[str] = set()
+
+    def _add(aid: str) -> None:
+        candidate = str(aid or "").strip()
+        if not candidate or candidate in seen or not _account_id_exists(candidate):
+            return
+        seen.add(candidate)
+        matched.append(candidate)
+
+    try:
+        from pdd_agent.db.repositories import list_login_status_rows
+
+        for row in list_login_status_rows():
+            shop = str(row.shop_display_name or "").strip()
+            if shop and shop == name:
+                _add(str(row.account_id or ""))
+    except Exception:
+        pass
+
+    try:
+        settings = load_yaml_settings()
+        for acc in settings.accounts:
+            if not acc.enabled:
+                continue
+            aid = str(acc.account_id or "").strip()
+            if not aid:
+                continue
+            if resolve_account_display_name(aid) == name:
+                _add(aid)
+            elif str(acc.username or "").strip() == name:
+                _add(aid)
+            elif aid == name:
+                _add(aid)
+    except Exception:
+        pass
+
+    return matched
+
+
+def pick_cycle_relist_account_from_candidates(candidates: list[str]) -> str:
+    """
+    同名多子账号时任选一个可跑账号。
+
+    同一拼多多店铺可有多个子账号（shop_display_name 相同）；循环上架只需
+    任意一个未占用的子账号即可。优先选未跑队列/未锁 Profile 的账号。
+    """
+    items = [str(x).strip() for x in candidates if str(x).strip()]
+    if not items:
+        return ""
+    if len(items) == 1:
+        return items[0]
+
+    busy: set[str] = set()
+    try:
+        from pdd_agent.db.repositories import list_busy_account_ids
+
+        busy = list_busy_account_ids()
+    except Exception:
+        pass
+
+    for aid in items:
+        if aid not in busy:
+            logger.info(
+                "cycle relist: %d accounts share shop name, picked idle %s (candidates=%s)",
+                len(items),
+                aid,
+                items,
+            )
+            return aid
+
+    picked = items[0]
+    logger.info(
+        "cycle relist: %d accounts share shop name, all busy, using %s (candidates=%s)",
+        len(items),
+        picked,
+        items,
+    )
+    return picked
+
+
 def resolve_cycle_relist_account_id(
     *,
     account_name: str = "",
@@ -54,6 +144,9 @@ def resolve_cycle_relist_account_id(
 ) -> tuple[str, str]:
     """
     失败日志循环上架：按飞书「店铺」/ account_id 列解析目标店铺。
+
+    飞书未写 account_id 且多个子账号 shop_display_name 相同时，任选一个
+    未占用子账号即可（同一拼多多 店铺后台等价）。
 
     返回 (account_id, error_message)。成功时 error 为空。
     """
@@ -69,9 +162,9 @@ def resolve_cycle_relist_account_id(
     if name:
         if _account_id_exists(name):
             return name, ""
-        resolved = resolve_account_id_by_display_name(name)
-        if resolved:
-            return resolved, ""
+        candidates = list_account_ids_by_display_name(name)
+        if candidates:
+            return pick_cycle_relist_account_from_candidates(candidates), ""
         return "", f"无法识别店铺「{name}」，请确认飞书「店铺」列与系统店铺名称一致"
 
     if hinted:
@@ -81,34 +174,6 @@ def resolve_cycle_relist_account_id(
 
 def resolve_account_id_by_display_name(display_name: str) -> str:
     """按飞书「店铺名称」反查 account_id（展示名 / 登录名 / account_id）。"""
-    name = str(display_name or "").strip()
-    if not name:
-        return ""
-
-    try:
-        from pdd_agent.db.repositories import list_login_status_rows
-
-        for row in list_login_status_rows():
-            shop = str(row.shop_display_name or "").strip()
-            if shop and shop == name:
-                return str(row.account_id or "").strip()
-    except Exception:
-        pass
-
-    try:
-        settings = load_yaml_settings()
-        for acc in settings.accounts:
-            if not acc.enabled:
-                continue
-            aid = str(acc.account_id or "").strip()
-            if not aid:
-                continue
-            if resolve_account_display_name(aid) == name:
-                return aid
-            if str(acc.username or "").strip() == name:
-                return aid
-            if aid == name:
-                return aid
-    except Exception:
-        pass
-    return ""
+    return pick_cycle_relist_account_from_candidates(
+        list_account_ids_by_display_name(display_name)
+    )

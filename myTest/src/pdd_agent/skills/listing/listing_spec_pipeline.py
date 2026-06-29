@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 from pdd_agent.domain.models import ListingUnit, PreflightIssue
+from pdd_agent.skills.listing.platform_skip_siblings import filter_listing_unit_skus_by_platform_skip
 from pdd_agent.skills.listing.spec_labels import enrich_listing_unit_specs
 
 
@@ -21,6 +22,15 @@ def apply_unit_listing_specs(
     解析单元规格名。返回 error 级消息列表（空表示通过）。
     slot_alignment_test=False 时与原先 enrich_listing_unit_specs 行为一致。
     """
+    removed = filter_listing_unit_skus_by_platform_skip(unit)
+    if removed:
+        from pdd_agent.core.logging import get_logger
+
+        get_logger(__name__).info(
+            "[%s] platform-skipped sibling styles excluded from specs: %s",
+            unit.listing_label,
+            ", ".join(removed),
+        )
     enrich_listing_unit_specs(unit, account_id=account_id, allow_ai=allow_ai)
     if not slot_alignment_test:
         return []

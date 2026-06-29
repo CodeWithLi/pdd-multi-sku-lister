@@ -1908,6 +1908,8 @@ def _push_pdd_upload_failure_log_safe(**kwargs: Any) -> None:
 
 def schedule_pdd_upload_failure_log(**kwargs: Any) -> None:
     """写入 PDD 发布失败/跳过日志（同步写入，确保每条失败都落表）。"""
+    from pdd_agent.integrations.feishu.listing_feishu_platform_guard import PLATFORM_SKIP_REASON
+
     try:
         cfg = load_feishu_config()
     except Exception as exc:
@@ -1916,4 +1918,55 @@ def schedule_pdd_upload_failure_log(**kwargs: Any) -> None:
     if not cfg.pdd_upload_log.failure_log_enabled:
         return
 
-    _push_pdd_upload_failure_log_safe(**kwargs)
+    failure_reason = str(kwargs.get("failure_reason") or "").strip()
+    merchant_code = str(kwargs.get("merchant_code") or "").strip()
+    report_platform = str(kwargs.get("report_platform") or "").strip() or "拼多多"
+    if failure_reason == PLATFORM_SKIP_REASON and merchant_code:
+        from pdd_agent.integrations.feishu.platform_skip_dedupe_cache import (
+            is_platform_skip_merchant_code,
+            remember_platform_skip_merchant_code,
+        )
+
+        if is_platform_skip_merchant_code(
+            merchant_code,
+            platform=report_platform,
+            config=cfg,
+            require_enabled=False,
+        ):
+            logger.info(
+                "platform skip failure log deduped merchant_code=%s platform=%s",
+                merchant_code,
+                report_platform,
+            )
+            return
+
+    account_id = str(kwargs.get("account_id") or "")
+    label = str(kwargs.get("listing_label") or merchant_code or "")
+    try:
+        result = push_pdd_upload_failure_log(**kwargs)
+        if result.get("created"):
+            print(
+                f"[{account_id}] [{label}] 飞书 PDD 发布失败日志已写入 "
+                f"record_id={result.get('record_ids', [''])[0]} "
+                f"table={result.get('table_id')}",
+                flush=True,
+            )
+            if failure_reason == PLATFORM_SKIP_REASON and merchant_code:
+                from pdd_agent.integrations.feishu.platform_skip_dedupe_cache import (
+                    remember_platform_skip_merchant_code,
+                )
+
+                remember_platform_skip_merchant_code(merchant_code, platform=report_platform)
+        elif result.get("skipped"):
+            print(
+                f"[{account_id}] [{label}] 飞书 PDD 发布失败日志跳过：{result.get('reason')}",
+                flush=True,
+            )
+        elif result.get("failed"):
+            print(
+                f"[{account_id}] [{label}] 飞书 PDD 发布失败日志失败：{result.get('message')}",
+                flush=True,
+            )
+    except Exception as exc:
+        logger.exception("feishu pdd upload failure log failed account=%s label=%s", account_id, label)
+        print(f"[{account_id}] [{label}] 飞书 PDD 发布失败日志失败：{exc}", flush=True)

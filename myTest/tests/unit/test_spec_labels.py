@@ -16,6 +16,65 @@ from pdd_agent.skills.listing.spec_labels import apply_spec_labels_to_sku
 from pdd_agent.domain.models import SkuCombo
 
 
+def test_catalog_codes_match_preserves_chinese():
+    from pdd_agent.skills.listing.pdd_product_catalog import catalog_codes_match
+
+    assert catalog_codes_match("BD655A奶油笔袋", "BD655A奶油笔袋")
+    assert catalog_codes_match("BD655A奶油笔袋", "BD655A")
+    assert not catalog_codes_match("BD655A", "BD339A")
+
+
+def test_enrich_single_style_with_chinese_folder_name(monkeypatch):
+    from pdd_agent.domain.models import ListingUnit, SkuCombo
+    from pdd_agent.skills.listing import spec_labels
+    from pdd_agent.skills.listing.pdd_product_catalog import PddProductEntry
+    from pdd_agent.skills.listing.spec_labels import enrich_listing_unit_specs
+
+    folder = "BD655A奶油笔袋"
+    unit = ListingUnit(product_code="BD655A", image_set="第一套图", root=Path("."))
+    unit.style_codes = [folder]
+    unit.skus = [
+        SkuCombo(
+            style_code=folder,
+            style_name=folder,
+            model_code=folder,
+            model_name=folder,
+            combo_folder=folder,
+            preview_image=Path("solo.png"),
+        ),
+        SkuCombo(
+            style_code=folder,
+            style_name=folder,
+            model_code="GJ706A",
+            model_name="GJ706A",
+            combo_folder=f"{folder}+GJ706A",
+            preview_image=Path("combo.png"),
+        ),
+    ]
+    catalog = {
+        "BD655A": PddProductEntry("BD655A", "灰色笔袋", "笔袋"),
+        "GJ706A": PddProductEntry("GJ706A", "厨师挂件", "挂件"),
+    }
+    monkeypatch.setattr(spec_labels, "get_pdd_product_catalog", lambda: catalog)
+    monkeypatch.setattr(spec_labels, "pick_style_reference_image", lambda unit, code: Path("solo.png"))
+    monkeypatch.setattr(
+        spec_labels,
+        "resolve_style_colors",
+        lambda unit, account_id="", allow_ai=True: {folder: "灰色"},
+    )
+    monkeypatch.setattr(spec_labels, "disambiguate_style_colors", lambda colors, catalog: colors)
+    monkeypatch.setattr(spec_labels, "persist_style_color_cache", lambda *args, **kwargs: None)
+    monkeypatch.setattr(spec_labels, "build_sub_category_cache", lambda unit, account_id="", allow_ai=True: {"GJ706A": "挂件"})
+
+    enrich_listing_unit_specs(unit, allow_ai=False)
+
+    assert unit.skus[0].style_name == "灰色"
+    assert unit.skus[0].model_name == "笔袋"
+    assert unit.skus[1].model_name == "笔袋+挂件"
+    assert "BD655A" not in unit.model_codes
+    assert "GJ706A" not in unit.model_codes
+
+
 def test_infer_sub_product_category_keywords():
     assert infer_sub_product_category(PddProductEntry("YKL001N", "睡觉卡皮巴拉挂件", "亚克力")) == "挂件"
     assert infer_sub_product_category(PddProductEntry("YKL008E", "蜡笔小新摇摇乐尺子", "亚克力")) == "尺子"

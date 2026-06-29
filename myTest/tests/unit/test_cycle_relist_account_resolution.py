@@ -13,8 +13,11 @@ from pdd_agent.integrations.feishu.pdd_failure_cycle_relist_trigger import (
 
 def test_resolve_cycle_relist_account_id_by_display_name():
     with patch(
-        "pdd_agent.core.account_display.resolve_account_id_by_display_name",
-        return_value="store_A",
+        "pdd_agent.core.account_display.list_account_ids_by_display_name",
+        return_value=["store_A"],
+    ), patch(
+        "pdd_agent.db.repositories.list_busy_account_ids",
+        return_value=set(),
     ):
         account_id, error = resolve_cycle_relist_account_id(account_name="兔兔潮玩屋")
     assert account_id == "store_A"
@@ -38,12 +41,36 @@ def test_resolve_cycle_relist_account_id_prefers_explicit_account_id():
 
 def test_resolve_cycle_relist_account_id_returns_error_when_unknown():
     with patch(
-        "pdd_agent.core.account_display.resolve_account_id_by_display_name",
-        return_value="",
+        "pdd_agent.core.account_display.list_account_ids_by_display_name",
+        return_value=[],
     ):
         account_id, error = resolve_cycle_relist_account_id(account_name="未知店铺")
     assert account_id == ""
     assert "无法识别店铺" in error
+
+
+def test_resolve_cycle_relist_account_id_picks_idle_sibling_account():
+    with patch(
+        "pdd_agent.core.account_display.list_account_ids_by_display_name",
+        return_value=["store_A", "多多李子2601"],
+    ), patch(
+        "pdd_agent.db.repositories.list_busy_account_ids",
+        return_value={"store_A"},
+    ):
+        account_id, error = resolve_cycle_relist_account_id(account_name="兔兔潮玩屋")
+    assert account_id == "多多李子2601"
+    assert error == ""
+
+
+def test_pick_cycle_relist_account_falls_back_when_all_busy():
+    from pdd_agent.core.account_display import pick_cycle_relist_account_from_candidates
+
+    with patch(
+        "pdd_agent.db.repositories.list_busy_account_ids",
+        return_value={"store_A", "多多李子2601"},
+    ):
+        picked = pick_cycle_relist_account_from_candidates(["store_A", "多多李子2601"])
+    assert picked == "store_A"
 
 
 def test_process_candidate_uses_resolved_store(monkeypatch):

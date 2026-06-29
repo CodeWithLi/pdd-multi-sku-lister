@@ -1,4 +1,4 @@
-"""飞书「平台不适用跳过」Redis 缓存：拼多多 + 商品编码（全店铺共用）。"""
+"""飞书「平台不适用跳过」Redis 缓存：拼多多 + 商品编码（全店铺共用，永不过期）。"""
 
 from __future__ import annotations
 
@@ -65,6 +65,15 @@ def _meta_key(redis_cfg: RedisConfig) -> str:
     return f"{prefix}:platform_skip:meta"
 
 
+def _ensure_platform_skip_keys_persistent(client: Any, redis_cfg: RedisConfig) -> None:
+    """平台跳过编码为长期缓存，显式清除 TTL（永不过期）。"""
+    try:
+        client.persist(_entries_key(redis_cfg))
+        client.persist(_meta_key(redis_cfg))
+    except Exception:
+        logger.exception("persist platform skip redis keys failed")
+
+
 def platform_skip_dedupe_enabled(cfg: Any | None = None) -> bool:
     from pdd_agent.integrations.feishu.config import load_feishu_config
 
@@ -117,6 +126,7 @@ def _save_entries_to_redis(entries: list[PlatformSkipEntry], meta: dict[str, Any
             pipe.sadd(entries_key, *keys)
         pipe.set(meta_key, json.dumps(meta, ensure_ascii=False))
         pipe.execute()
+        _ensure_platform_skip_keys_persistent(client, redis_cfg)
         return True
     except Exception:
         logger.exception("save platform skip entries to redis failed")
@@ -186,15 +196,44 @@ def get_platform_skip_dedupe_status(*, config: Any | None = None) -> dict[str, A
     }
 
 
+def remember_platform_skip_merchant_code(
+    code: str,
+    *,
+    platform: str = PDD_PLATFORM,
+) -> None:
+    """首次写入「平台不适用跳过」后立即记入缓存，避免多子店铺重复写飞书。"""
+    entry = PlatformSkipEntry(
+        merchant_code=str(code or "").strip(),
+        report_platform=str(platform or PDD_PLATFORM).strip() or PDD_PLATFORM,
+    )
+    key = entry.cache_key()
+    if not key:
+        return
+
+    global _local_entries
+    _local_entries.add(key)
+
+    redis_cfg = load_redis_config()
+    client = get_redis_client()
+    if client is None:
+        return
+    try:
+        client.sadd(_entries_key(redis_cfg), key)
+        _ensure_platform_skip_keys_persistent(client, redis_cfg)
+    except Exception:
+        logger.exception("remember platform skip merchant_code failed code=%s", code)
+
+
 def is_platform_skip_merchant_code(
     code: str,
     *,
     platform: str = PDD_PLATFORM,
     config: Any | None = None,
+    require_enabled: bool = True,
     **_kwargs: Any,
 ) -> bool:
     """拼多多 + 商品编码是否在跳过缓存中（全店铺共用）。"""
-    if not platform_skip_dedupe_enabled(config):
+    if require_enabled and not platform_skip_dedupe_enabled(config):
         return False
     norm = normalize_listing_code(code)
     if not norm:

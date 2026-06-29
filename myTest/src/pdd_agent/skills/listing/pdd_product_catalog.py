@@ -58,6 +58,23 @@ def _norm_code(value: str) -> str:
     return str(value or "").strip().upper()
 
 
+def find_catalog_entry(
+    catalog: dict[str, PddProductEntry],
+    code: str,
+) -> PddProductEntry | None:
+    """按飞书商品编码查找（保留英文+中文全名，支持前缀互认）。"""
+    from pdd_agent.integrations.feishu.listing_feishu_catalog import catalog_entry
+
+    return catalog_entry(catalog, code)
+
+
+def catalog_codes_match(left: str, right: str) -> bool:
+    """两侧编码是否同一商品（全名 / 前缀 / 归一化，不截断中文）。"""
+    from pdd_agent.integrations.feishu.listing_feishu_catalog import codes_match
+
+    return codes_match(left, right)
+
+
 def _parse_cell_int(value, default: int = 0) -> int:
     if value is None or value == "":
         return default
@@ -223,7 +240,7 @@ def resolve_combo_pricing(
     scope = str(listing_scope or "").strip()
 
     def _require_entry(code: str) -> PddProductEntry:
-        entry = catalog.get(_norm_code(code))
+        entry = find_catalog_entry(catalog, code)
         if not entry:
             raise ComboPricingError(missing_codes=[code], reason="catalog_code_missing")
         if float(entry.price or 0.0) <= 0:
@@ -244,18 +261,17 @@ def resolve_combo_pricing(
         inv = str(inventory if inventory is not None else style_entry.inventory or fallback_inv)
         return inv, _format_price(gp), _format_price(sp)
 
-    style = catalog.get(_norm_code(style_code))
-    model_norm = _norm_code(model_code)
-    style_norm = _norm_code(style_code)
-    if model_norm == style_norm:
+    if catalog_codes_match(model_code, style_code):
         style_entry = _require_entry(style_code)
         group_price = _component_price(style_entry)
         return _finalize(style_entry, group_price, style_entry.inventory)
 
-    if model_norm == BUNDLE_MODEL_CODE and bundle_components:
-        component_codes = list(
-            dict.fromkeys(_norm_code(code) for code in bundle_components if _norm_code(code))
-        )
+    if _norm_code(model_code) == BUNDLE_MODEL_CODE and bundle_components:
+        component_codes: list[str] = []
+        for code in bundle_components:
+            entry = find_catalog_entry(catalog, code)
+            if entry and entry.code not in component_codes:
+                component_codes.append(entry.code)
         if not component_codes:
             raise ComboPricingError(missing_codes=[style_code], reason="catalog_code_missing")
         entries = [_require_entry(code) for code in component_codes]
@@ -272,16 +288,16 @@ def resolve_combo_pricing(
 
 
 def catalog_has_code(code: str) -> bool:
-    return _norm_code(code) in get_pdd_product_catalog()
+    return find_catalog_entry(get_pdd_product_catalog(), code) is not None
 
 
 def get_catalog_entry(code: str) -> PddProductEntry | None:
-    return get_pdd_product_catalog().get(_norm_code(code))
+    return find_catalog_entry(get_pdd_product_catalog(), code)
 
 
 def lookup_catalog_spec(code: str, catalog: dict[str, PddProductEntry] | None = None) -> str | None:
     """颜色规格（等同原 sku+名称.xlsx 中的名称列）。"""
-    entry = (catalog or get_pdd_product_catalog()).get(_norm_code(code))
+    entry = find_catalog_entry(catalog or get_pdd_product_catalog(), code)
     return entry.color_spec if entry else None
 
 
@@ -353,24 +369,25 @@ def resolve_size_label(
     sub_category_cache: dict[str, str] | None = None,
 ) -> str:
     """第二个规格（尺寸）展示名：{母商品类型} / {母商品类型}+{子类} …"""
-    base = catalog.get(_norm_code(style_code))
+    base = find_catalog_entry(catalog, style_code)
     if not base:
         return model_code
 
-    model_norm = _norm_code(model_code)
-    style_norm = _norm_code(style_code)
-    base_type = base.product_type.strip() or style_code
-    if not model_norm or model_norm == style_norm:
+    if catalog_codes_match(model_code, style_code):
+        base_type = base.product_type.strip() or style_code
         return base_type
-    if model_norm == BUNDLE_MODEL_CODE:
+    if _norm_code(model_code) == BUNDLE_MODEL_CODE:
+        base_type = base.product_type.strip() or style_code
         return f"{base_type}+{BUNDLE_MODEL_CODE}"
 
-    sub = catalog.get(model_norm)
+    sub = find_catalog_entry(catalog, model_code)
     if not sub:
         return model_code
 
+    base_type = base.product_type.strip() or style_code
     cache = sub_category_cache or {}
-    sub_cat = cache.get(model_norm)
+    model_key = _norm_code(sub.code)
+    sub_cat = cache.get(model_key) or cache.get(_norm_code(model_code))
     if not sub_cat:
         sub_cat = infer_sub_product_category(sub)
     return f"{base_type}+{sub_cat}"

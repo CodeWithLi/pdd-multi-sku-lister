@@ -13,16 +13,31 @@ from pdd_agent.llm.vision import (
 from pdd_agent.db.repositories import get_cached_style_color, upsert_cached_style_color
 from pdd_agent.skills.listing.pdd_product_catalog import (
     append_product_type_to_size_label,
+    catalog_codes_match,
+    catalog_has_code,
+    find_catalog_entry,
     get_catalog_entry,
     get_pdd_product_catalog,
     meaningful_product_type_for_label,
     resolve_size_label,
+    _norm_code,
 )
 
 
 def uses_pdd_spec_catalog(style_code: str) -> bool:
-    catalog = get_pdd_product_catalog()
-    return bool(catalog) and style_code.strip().upper() in catalog
+    return catalog_has_code(style_code)
+
+
+def _catalog_codes_match(left: str, right: str) -> bool:
+    return catalog_codes_match(left, right)
+
+
+def _unique_style_codes(unit: ListingUnit) -> list[str]:
+    return list(dict.fromkeys(sku.style_code for sku in unit.skus if sku.style_code))
+
+
+def _unit_has_catalog_styles(unit: ListingUnit) -> bool:
+    return any(catalog_has_code(sku.style_code) for sku in unit.skus if sku.style_code)
 
 
 def catalog_style_label(entry) -> str:
@@ -82,7 +97,7 @@ def disambiguate_style_colors(
         if len(codes) <= 1:
             continue
         for code in codes:
-            entry = catalog.get(code.strip().upper())
+            entry = find_catalog_entry(catalog, code)
             if entry:
                 result[code] = catalog_style_label(entry)
 
@@ -116,38 +131,43 @@ _STYLE_SOLO_EXTS = {".png", ".jpg", ".jpeg", ".webp"}
 
 
 def _find_sibling_code_dir(unit: ListingUnit, style_code: str) -> Path | None:
-    """同套图下某款式编码文件夹（如 .../第一套图/BD716B）。"""
+    """同套图下某款式编码目录（如 .../第一套图/BD716B 或 BD716B灰色笔袋）。"""
     set_dir = unit.root.parent
     if not set_dir.is_dir():
         return None
-    target = style_code.strip().upper()
+    target = str(style_code or "").strip()
+    if not target:
+        return None
     for path in set_dir.iterdir():
-        if path.is_dir() and path.name.upper() == target:
+        if path.is_dir() and catalog_codes_match(path.name, target):
             return path
     return None
 
 
 def _find_style_solo_image(code_dir: Path, style_code: str) -> Path | None:
     """文件夹内与编码同名的单款规格图（BD716A.png），不含组合图。"""
-    target_stem = style_code.strip().upper()
+    target = str(style_code or "").strip()
+    if not target:
+        return None
     for path in sorted(code_dir.iterdir(), key=lambda p: p.name.lower()):
         if not path.is_file():
             continue
         if path.suffix.lower() not in _STYLE_SOLO_EXTS:
             continue
-        if path.stem.strip().upper() == target_stem:
+        if catalog_codes_match(path.stem, target):
             return path
     return None
 
 
 def pick_style_reference_image(unit: ListingUnit, style_code: str) -> Path | None:
     """款式识色专用：仅用 {款式编码}.png，不用组合规格图或主图。"""
-    style_norm = style_code.strip().upper()
+    if not str(style_code or "").strip():
+        return None
 
     for sku in unit.skus:
-        if sku.style_code.strip().upper() != style_norm:
+        if not _catalog_codes_match(sku.style_code, style_code):
             continue
-        if sku.combo_folder.strip().upper() != style_norm:
+        if not _catalog_codes_match(sku.combo_folder, style_code):
             continue
         if sku.preview_image.is_file():
             return sku.preview_image
@@ -183,20 +203,21 @@ def build_sub_category_cache(unit: ListingUnit, account_id: str = "", *, allow_a
     prefix = f"[{account_id}] " if account_id else ""
 
     for sku in unit.skus:
-        model_norm = sku.model_code.strip().upper()
-        style_norm = sku.style_code.strip().upper()
-        if not model_norm or model_norm == style_norm or model_norm in cache:
+        if catalog_codes_match(sku.model_code, sku.style_code):
+            continue
+        model_entry = find_catalog_entry(catalog, sku.model_code)
+        if not model_entry:
+            continue
+        model_key = _norm_code(model_entry.code)
+        if model_key in cache:
             continue
 
-        entry = catalog.get(model_norm)
-        if not entry:
-            continue
-
-        sub_cat = infer_sub_product_category(entry)
-        cache[model_norm] = sub_cat
+        sub_cat = infer_sub_product_category(model_entry)
+        cache[model_key] = sub_cat
+        cache[_norm_code(sku.model_code)] = sub_cat
         if prefix:
             print(
-                f"{prefix}[{unit.listing_label}] 商品表尺寸子类：{model_norm} → {sub_cat}（{entry.color_spec}）",
+                f"{prefix}[{unit.listing_label}] 商品表尺寸子类：{model_key} → {sub_cat}（{model_entry.color_spec}）",
                 flush=True,
             )
 
@@ -207,16 +228,17 @@ def resolve_style_colors(unit: ListingUnit, account_id: str = "", *, allow_ai: b
     catalog = get_pdd_product_catalog()
     colors: dict[str, str] = {}
     prefix = f"[{account_id}] " if account_id else ""
-    for style_code in unit.style_codes:
-        entry = catalog.get(style_code.strip().upper())
+    for style_code in _unique_style_codes(unit):
+        entry = find_catalog_entry(catalog, style_code)
+        cache_code = entry.code if entry else _norm_code(style_code)
         image = pick_style_reference_image(unit, style_code)
         image_str = str(image.resolve()) if image else None
-        cached = get_cached_style_color(style_code, image_str)
+        cached = get_cached_style_color(cache_code or style_code, image_str)
         if cached:
             reconciled, src = reconcile_style_color_with_catalog(cached, entry)
             if reconciled != cached:
                 upsert_cached_style_color(
-                    style_code,
+                    cache_code or style_code,
                     reconciled,
                     source=src,
                     image_path=image_str,
@@ -232,7 +254,7 @@ def resolve_style_colors(unit: ListingUnit, account_id: str = "", *, allow_ai: b
                 color = catalog_style_label(entry)
                 colors[style_code] = color
                 upsert_cached_style_color(
-                    style_code,
+                    cache_code or style_code,
                     color,
                     source="catalog",
                     image_path=image_str,
@@ -255,7 +277,7 @@ def resolve_style_colors(unit: ListingUnit, account_id: str = "", *, allow_ai: b
                 )
             colors[style_code] = color
             upsert_cached_style_color(
-                style_code,
+                cache_code or style_code,
                 color,
                 source=src,
                 image_path=image_str,
@@ -264,7 +286,7 @@ def resolve_style_colors(unit: ListingUnit, account_id: str = "", *, allow_ai: b
             color = catalog_style_label(entry)
             colors[style_code] = color
             upsert_cached_style_color(
-                style_code,
+                cache_code or style_code,
                 color,
                 source="catalog",
                 image_path=image_str,
@@ -274,13 +296,23 @@ def resolve_style_colors(unit: ListingUnit, account_id: str = "", *, allow_ai: b
     return colors
 
 
+def _style_color_name(style_colors: dict[str, str], style_code: str) -> str:
+    if style_code in style_colors:
+        return style_colors[style_code]
+    for code, name in style_colors.items():
+        if catalog_codes_match(code, style_code) and name:
+            return name
+    return ""
+
+
 def apply_spec_labels_to_sku(
     sku: SkuCombo,
     style_colors: dict[str, str],
     catalog: dict,
     sub_category_cache: dict[str, str],
 ) -> None:
-    sku.style_name = style_colors.get(sku.style_code, sku.style_name or sku.style_code)
+    resolved_style = _style_color_name(style_colors, sku.style_code)
+    sku.style_name = resolved_style or sku.style_name or sku.style_code
     sku.model_name = resolve_size_label(
         sku.style_code,
         sku.model_code,
@@ -398,7 +430,7 @@ def enrich_listing_unit_specs(unit: ListingUnit, account_id: str = "", *, allow_
     """将 SKU 的款式/尺寸名改为 AI 颜色 + 商品表分组尺寸（全品类通用）。"""
     if not unit.skus:
         return
-    if not any(uses_pdd_spec_catalog(sku.style_code) for sku in unit.skus):
+    if not _unit_has_catalog_styles(unit):
         return
 
     catalog = get_pdd_product_catalog()

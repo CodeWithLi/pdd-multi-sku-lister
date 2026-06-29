@@ -400,6 +400,22 @@ def _busy_account_ids_for_claim(session) -> set[str]:
     return {acc for acc in running_accounts | paused_accounts if acc}
 
 
+def list_busy_account_ids() -> set[str]:
+    """队列运行中、账号暂停或 Profile 锁未过期的 account_id。"""
+    if not is_database_available():
+        return set()
+    now = datetime.now()
+    with session_scope() as session:
+        busy = _busy_account_ids_for_claim(session)
+        locked = set(
+            session.scalars(
+                select(AccountLockORM.account_id).where(AccountLockORM.expires_at > now)
+            ).all()
+        )
+        busy.update(acc for acc in locked if acc)
+        return busy
+
+
 def claim_due_task(max_concurrent: int) -> TaskQueueORM | None:
     if not is_database_available():
         return None

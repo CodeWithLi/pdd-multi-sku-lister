@@ -474,6 +474,12 @@ def _list_sibling_code_dirs(set_dir: Path) -> list[Path]:
     return sorted(dirs, key=lambda p: p.name.upper())[:26]
 
 
+from pdd_agent.skills.listing.platform_skip_siblings import (
+    filter_sibling_dirs_for_listing_specs,
+    should_include_sibling_spec_code,
+)
+
+
 def collect_feishu_catalog_codes_for_targets(
     targets: list[str],
     assets_root: Path,
@@ -489,6 +495,11 @@ def collect_feishu_catalog_codes_for_targets(
             codes.append(product_code)
             set_dir = assets_root / family_code / image_set
             for sibling_dir in _list_sibling_code_dirs(set_dir):
+                if not should_include_sibling_spec_code(
+                    sibling_dir.name,
+                    listing_product_code=product_code,
+                ):
+                    continue
                 codes.append(sibling_dir.name)
                 previews = _filter_preview_images_for_code_dir(
                     sibling_dir,
@@ -510,6 +521,11 @@ def collect_feishu_catalog_codes_for_targets(
             codes.append(family_code)
             set_dir = assets_root / family_code / image_set
             for sibling_dir in _list_sibling_code_dirs(set_dir):
+                if not should_include_sibling_spec_code(
+                    sibling_dir.name,
+                    listing_product_code="",
+                ):
+                    continue
                 codes.append(sibling_dir.name)
                 previews = _filter_preview_images_for_code_dir(
                     sibling_dir,
@@ -561,12 +577,20 @@ def _append_skus_from_previews(
             continue
         seen_combo_keys.add(combo_key)
 
-        style_key = style_code.strip().upper()
-        model_key = model_code.strip().upper()
-        is_bundle = model_key == BUNDLE_MODEL_CODE
-        is_combo = model_key != style_key
-        style_entry = catalog.get(style_key)
-        model_entry = catalog.get(model_key) if is_combo and not is_bundle else style_entry
+        from pdd_agent.skills.listing.pdd_product_catalog import (
+            BUNDLE_MODEL_CODE,
+            catalog_codes_match,
+            find_catalog_entry,
+        )
+
+        is_bundle = _norm_code(model_code) == BUNDLE_MODEL_CODE
+        is_combo = not catalog_codes_match(model_code, style_code)
+        style_entry = find_catalog_entry(catalog, style_code)
+        model_entry = (
+            find_catalog_entry(catalog, model_code)
+            if is_combo and not is_bundle
+            else style_entry
+        )
 
         if not catalog:
             if not include_excel_missing_previews:
@@ -728,6 +752,12 @@ def parse_new_listing_unit(
     # 规格图：同套图下所有兄弟商品编码文件夹（A-Z），依次合并到当前上架单元。
     set_dir = unit_root.parent if unit_root.parent.name == image_set else unit_root
     sibling_dirs = _list_sibling_code_dirs(set_dir) if set_dir.is_dir() else [unit_root]
+    if not sibling_dirs:
+        sibling_dirs = [unit_root]
+    sibling_dirs = filter_sibling_dirs_for_listing_specs(
+        sibling_dirs,
+        listing_product_code=product_code,
+    )
     if not sibling_dirs:
         sibling_dirs = [unit_root]
 

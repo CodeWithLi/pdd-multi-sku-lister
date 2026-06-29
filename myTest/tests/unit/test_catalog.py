@@ -11,6 +11,8 @@ from pdd_agent.skills.listing.catalog import (
     parse_all_listings,
     parse_listing_target,
 )
+from pdd_agent.skills.listing.platform_skip_siblings import filter_listing_unit_skus_by_platform_skip
+from pdd_agent.domain.models import ListingUnit, SkuCombo
 from pdd_agent.skills.listing.pdd_product_catalog import BUNDLE_MODEL_CODE, PddProductEntry, get_pdd_product_catalog
 
 
@@ -277,6 +279,97 @@ def test_sibling_spec_merge_ignores_misnamed_preview_files(tmp_path, monkeypatch
         "BD046C",
         "BD046C+AXBD001A",
     ]
+
+
+def test_sibling_spec_merge_excludes_platform_skipped_codes(tmp_path, monkeypatch):
+    """已平台跳过的兄弟款不再并入当前上架单元的规格表。"""
+    monkeypatch.setattr("pdd_agent.core.config.PROJECT_ROOT", tmp_path)
+    monkeypatch.setattr("pdd_agent.paths.PROJECT_ROOT", tmp_path)
+    get_pdd_product_catalog.cache_clear()
+    root = tmp_path / "data/assets/商品上架规格文件"
+    for code in ["BD329A", "BD329B", "BD329C"]:
+        unit_root = root / "BD329" / "第一套图" / code
+        unit_root.mkdir(parents=True)
+        for index in range(1, 10):
+            (unit_root / f"{index}.png").write_bytes(b"img")
+        (unit_root / f"{code}.png").write_bytes(b"preview")
+        (unit_root / f"{code}+AXBD001A.png").write_bytes(b"preview")
+
+    def _is_skip(code: str, **kwargs) -> bool:
+        return str(code or "").strip().upper() in {"BD329A", "BD329B"}
+
+    monkeypatch.setattr(
+        "pdd_agent.integrations.feishu.platform_skip_dedupe_cache.is_platform_skip_merchant_code",
+        _is_skip,
+    )
+
+    settings = YamlSettings(
+        paths=PathsConfig(assets_root="data/assets/商品上架规格文件"),
+        multi_spec=MultiSpecConfig(excel="missing.xlsx"),
+    )
+
+    unit_b = parse_listing_target(
+        "BD329/第一套图/BD329B", settings, include_excel_missing_previews=True
+    )[0]
+    assert [sku.combo_folder for sku in unit_b.skus] == [
+        "BD329B",
+        "BD329B+AXBD001A",
+        "BD329C",
+        "BD329C+AXBD001A",
+    ]
+
+    unit_c = parse_listing_target(
+        "BD329/第一套图/BD329C", settings, include_excel_missing_previews=True
+    )[0]
+    assert [sku.combo_folder for sku in unit_c.skus] == [
+        "BD329C",
+        "BD329C+AXBD001A",
+    ]
+
+
+def test_filter_listing_unit_skus_by_platform_skip(tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        "pdd_agent.integrations.feishu.platform_skip_dedupe_cache.is_platform_skip_merchant_code",
+        lambda code, **kwargs: str(code).strip().upper() == "BD329A",
+    )
+    unit = ListingUnit(
+        product_code="BD329B",
+        family_code="BD329",
+        image_set="第一套图",
+        root=tmp_path,
+        skus=[
+            SkuCombo(
+                style_code="BD329A",
+                style_name="蓝",
+                model_code="m1",
+                model_name="笔袋",
+                combo_folder="BD329A",
+                preview_image=tmp_path / "a.png",
+            ),
+            SkuCombo(
+                style_code="BD329B",
+                style_name="粉",
+                model_code="m1",
+                model_name="笔袋",
+                combo_folder="BD329B",
+                preview_image=tmp_path / "b.png",
+            ),
+            SkuCombo(
+                style_code="BD329C",
+                style_name="绿",
+                model_code="m1",
+                model_name="笔袋",
+                combo_folder="BD329C",
+                preview_image=tmp_path / "c.png",
+            ),
+        ],
+        style_codes=["BD329A", "BD329B", "BD329C"],
+        model_codes=["笔袋"],
+    )
+    removed = filter_listing_unit_skus_by_platform_skip(unit)
+    assert removed == ["BD329A"]
+    assert [sku.style_code for sku in unit.skus] == ["BD329B", "BD329C"]
+    assert unit.style_codes == ["BD329B", "BD329C"]
 
 
 def test_minio_style_preview_filenames_with_chinese_suffix(tmp_path, monkeypatch):
