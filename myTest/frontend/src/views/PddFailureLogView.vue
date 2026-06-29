@@ -12,6 +12,7 @@ import type {
   PddFailureCycleRelistWatch,
   PddFailureLogListResponse,
   PddFailureLogRecord,
+  FailureSequentialJob,
 } from '@/types'
 
 const loading = ref(false)
@@ -30,6 +31,9 @@ const pollLogs = ref<PddFailureCycleRelistPollLog[]>([])
 const expandedPollId = ref('')
 const triggeringRecordId = ref('')
 const manualPolling = ref(false)
+const sequentialJobsLoading = ref(false)
+const sequentialJobs = ref<FailureSequentialJob[]>([])
+const sequentialBatchActive = ref(false)
 let watchRefreshTimer: ReturnType<typeof setInterval> | null = null
 
 type ManualTriggerRow = Pick<
@@ -48,6 +52,8 @@ const watchForm = reactive({
   poll_seconds: 60,
   completed_statuses: ['已结束', '已处理完成'] as string[],
   exclude_failure_reason_contains: '',
+  sequential_staged_enabled: false,
+  sequential_activity_delay_minutes: 5,
 })
 
 const items = computed(() => data.value?.items ?? [])
@@ -126,6 +132,40 @@ function applyWatch(data: PddFailureCycleRelistWatch) {
   watchForm.poll_seconds = data.poll_seconds
   watchForm.completed_statuses = [...data.completed_statuses]
   watchForm.exclude_failure_reason_contains = data.exclude_failure_reason_contains
+  watchForm.sequential_staged_enabled = Boolean(data.sequential_staged_enabled)
+  watchForm.sequential_activity_delay_minutes = Number(data.sequential_activity_delay_minutes ?? 5)
+}
+
+function stageStatusLabel(status: string) {
+  const map: Record<string, string> = {
+    pending: '待处理',
+    running: '运行中',
+    success: '成功',
+    failed: '失败',
+    skipped: '已跳过',
+  }
+  return map[status] || status || '—'
+}
+
+function stageStatusType(status: string) {
+  if (status === 'success') return 'success'
+  if (status === 'failed') return 'danger'
+  if (status === 'skipped') return 'warning'
+  if (status === 'running') return 'primary'
+  return 'info'
+}
+
+async function loadSequentialJobs() {
+  sequentialJobsLoading.value = true
+  try {
+    const resp = await api.pddFailureSequentialJobs({ limit: 100 })
+    sequentialJobs.value = resp.items ?? []
+    sequentialBatchActive.value = Boolean(resp.batch_active)
+  } catch (e) {
+    ElMessage.error(e instanceof Error ? e.message : '加载分阶段任务失败')
+  } finally {
+    sequentialJobsLoading.value = false
+  }
 }
 
 async function loadWatch() {
@@ -266,11 +306,17 @@ async function saveWatch() {
       poll_seconds: watchForm.poll_seconds,
       completed_statuses: [...watchForm.completed_statuses],
       exclude_failure_reason_contains: watchForm.exclude_failure_reason_contains,
+      sequential_staged_enabled: watchForm.sequential_staged_enabled,
+      sequential_activity_delay_minutes: watchForm.sequential_activity_delay_minutes,
     })
     applyWatch(cfg)
-    ElMessage.success(watchForm.enabled ? '已启用自动循环上架' : '已关闭自动循环上架')
-    await loadCandidates()
-    await loadPollLogs()
+    const mode = watchForm.sequential_staged_enabled
+      ? '分阶段流水线（上架→限时限量购→活动→推广）'
+      : '整合链路'
+    ElMessage.success(
+      watchForm.enabled ? `已启用自动循环上架（${mode}）` : '已关闭自动循环上架',
+    )
+    await Promise.all([loadCandidates(), loadPollLogs(), loadSequentialJobs()])
     setupWatchRefresh()
   } catch (e) {
     ElMessage.error(e instanceof Error ? e.message : '保存失败')
@@ -295,6 +341,9 @@ function setupWatchRefresh() {
     void loadWatch()
     void loadCandidates()
     void loadPollLogs()
+    if (watchConfig.value?.sequential_staged_enabled) {
+      void loadSequentialJobs()
+    }
   }, interval)
 }
 
@@ -324,7 +373,7 @@ function openDebug(row: PddFailureLogRecord) {
 }
 
 onMounted(async () => {
-  await Promise.all([load(), loadWatch(), loadCandidates(), loadPollLogs()])
+  await Promise.all([load(), loadWatch(), loadCandidates(), loadPollLogs(), loadSequentialJobs()])
   setupWatchRefresh()
 })
 
@@ -370,9 +419,13 @@ onUnmounted(() => {
         <template #title>
           {{
             watchConfig.enabled
-              ? watchConfig.scheduler_running
-                ? `运行中：每 ${watchConfig.poll_seconds} 秒轮询，新候选自动 Redis 占用并跑整合链路`
-                : '已启用但调度未运行，请点保存或重启服务'
+              ? watchConfig.sequential_staged_enabled
+                ? watchConfig.sequential_scheduler_running
+                  ? `分阶段运行中：每 ${watchConfig.poll_seconds} 秒处理一条（上架→限时限量购→618→七折→推广）`
+                  : '分阶段已启用但调度未运行，请点保存或重启服务'
+                : watchConfig.scheduler_running
+                  ? `运行中：每 ${watchConfig.poll_seconds} 秒轮询，新候选自动 Redis 占用并跑整合链路`
+                  : '已启用但调度未运行，请点保存或重启服务'
               : '未启用：仅展示候选，不会自动跑链路'
           }}
         </template>
@@ -380,7 +433,14 @@ onUnmounted(() => {
           <span v-if="watchConfig.last_poll_at">
             上次轮询 {{ watchConfig.last_poll_at }} · 候选 {{ watchConfig.candidate_total }} 条 · 本轮新发现 {{ watchConfig.new_count }} 条
           </span>
+          <span v-if="watchConfig.sequential_staged_enabled && watchConfig.sequential_last_tick_at">
+            · 分阶段上次执行 {{ watchConfig.sequential_last_tick_at }}
+            <template v-if="watchConfig.sequential_batch_active"> · 批次进行中</template>
+          </span>
           <span v-if="watchConfig.last_error" class="error-text"> · {{ watchConfig.last_error }}</span>
+          <span v-if="watchConfig.sequential_last_error" class="error-text">
+            · 分阶段 {{ watchConfig.sequential_last_error }}
+          </span>
           <span> · <router-link to="/daily-stats">按日期查看上架/循环统计 →</router-link></span>
         </template>
       </el-alert>
@@ -388,6 +448,26 @@ onUnmounted(() => {
       <el-form label-width="140px" class="watch-form">
         <el-form-item label="启用">
           <el-switch v-model="watchForm.enabled" @change="onEnabledSwitchChange" />
+        </el-form-item>
+        <el-form-item label="分阶段流水线">
+          <el-switch
+            v-model="watchForm.sequential_staged_enabled"
+            :disabled="!watchForm.enabled"
+            active-text="上架→限时限量购→活动→推广（不走整合链路）"
+            inactive-text="整合链路"
+            @change="onEnabledSwitchChange"
+          />
+        </el-form-item>
+        <el-form-item v-if="watchForm.sequential_staged_enabled" label="活动延迟（分钟）">
+          <el-input-number
+            v-model="watchForm.sequential_activity_delay_minutes"
+            :min="0"
+            :max="10080"
+            :step="1"
+          />
+          <div class="form-hint">
+            每条限时限量购完成（成功或失败）后，等待该分钟数再跑 618/七折；超时未跑也会补跑，整批最后一条推广完成才结束
+          </div>
         </el-form-item>
         <el-form-item label="轮询间隔（秒）">
           <el-input-number v-model="watchForm.poll_seconds" :min="10" :max="3600" :step="10" />
@@ -411,6 +491,72 @@ onUnmounted(() => {
           />
         </el-form-item>
       </el-form>
+
+      <template v-if="watchForm.sequential_staged_enabled">
+        <el-divider content-position="left">分阶段任务进度</el-divider>
+        <el-table
+          v-loading="sequentialJobsLoading"
+          :data="sequentialJobs"
+          stripe
+          border
+          size="small"
+          empty-text="暂无分阶段任务（启用并保存后会自动创建批次）"
+          class="mb-16"
+        >
+          <el-table-column prop="merchant_code" label="商品编码" width="120" show-overflow-tooltip />
+          <el-table-column prop="account_name" label="店铺" width="100" show-overflow-tooltip />
+          <el-table-column prop="pdd_product_id" label="商品ID" width="120" show-overflow-tooltip />
+          <el-table-column label="上架" width="80">
+            <template #default="{ row }: { row: FailureSequentialJob }">
+              <el-tag :type="stageStatusType(row.listing_status)" size="small">
+                {{ stageStatusLabel(row.listing_status) }}
+              </el-tag>
+            </template>
+          </el-table-column>
+          <el-table-column label="限时限量购" width="100">
+            <template #default="{ row }: { row: FailureSequentialJob }">
+              <el-tag :type="stageStatusType(row.limited_time_status)" size="small">
+                {{ stageStatusLabel(row.limited_time_status) }}
+              </el-tag>
+            </template>
+          </el-table-column>
+          <el-table-column prop="limited_time_completed_at" label="限量购完成" width="155" />
+          <el-table-column label="618" width="80">
+            <template #default="{ row }: { row: FailureSequentialJob }">
+              <el-tag :type="stageStatusType(row.activity_618_status)" size="small">
+                {{ stageStatusLabel(row.activity_618_status) }}
+              </el-tag>
+            </template>
+          </el-table-column>
+          <el-table-column label="七折" width="80">
+            <template #default="{ row }: { row: FailureSequentialJob }">
+              <el-tag :type="stageStatusType(row.activity_discount_status)" size="small">
+                {{ stageStatusLabel(row.activity_discount_status) }}
+              </el-tag>
+            </template>
+          </el-table-column>
+          <el-table-column label="推广" width="80">
+            <template #default="{ row }: { row: FailureSequentialJob }">
+              <el-tag :type="stageStatusType(row.promotion_status)" size="small">
+                {{ stageStatusLabel(row.promotion_status) }}
+              </el-tag>
+            </template>
+          </el-table-column>
+          <el-table-column label="最近错误" min-width="160" show-overflow-tooltip>
+            <template #default="{ row }: { row: FailureSequentialJob }">
+              {{
+                row.listing_error ||
+                  row.limited_time_error ||
+                  row.activity_618_error ||
+                  row.activity_discount_error ||
+                  row.promotion_error ||
+                  '—'
+              }}
+            </template>
+          </el-table-column>
+          <el-table-column prop="updated_at" label="更新时间" width="160" />
+        </el-table>
+      </template>
 
       <el-divider content-position="left">最近处理记录</el-divider>
       <el-table
@@ -676,6 +822,19 @@ onUnmounted(() => {
 
 .watch-form {
   max-width: 640px;
+}
+
+.activity-controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  align-items: center;
+}
+
+.form-hint {
+  margin-top: 6px;
+  font-size: 12px;
+  color: var(--el-text-color-secondary);
 }
 
 .error-text {

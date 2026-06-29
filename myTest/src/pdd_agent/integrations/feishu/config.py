@@ -392,6 +392,16 @@ class PddFailureCycleRelistWatchConfig(BaseModel):
     pipeline_demo_mode: bool = False
     pipeline_slot_alignment_test: bool = True
     pipeline_material_source: str = ""
+    sequential_staged_enabled: bool = Field(
+        default=False,
+        description="启用分阶段流水线：上架→限时限量购→活动→推广，不走整合链路",
+    )
+    sequential_activity_delay_minutes: int = Field(
+        default=5,
+        ge=0,
+        le=10080,
+        description="分阶段流水线：每条限时限量购完成后延迟多少分钟再跑活动",
+    )
 
     @model_validator(mode="after")
     def normalize(self) -> "PddFailureCycleRelistWatchConfig":
@@ -410,6 +420,9 @@ class PddFailureCycleRelistWatchConfig(BaseModel):
             str(x).strip() for x in self.pipeline_activity_ids if str(x).strip()
         ]
         self.pipeline_material_source = str(self.pipeline_material_source or "").strip()
+        self.sequential_activity_delay_minutes = max(
+            0, min(int(self.sequential_activity_delay_minutes or 0), 10080)
+        )
         return self
 
 
@@ -1009,6 +1022,8 @@ def save_pdd_failure_cycle_relist_watch_to_config(
     pipeline_demo_mode: bool | None = None,
     pipeline_slot_alignment_test: bool | None = None,
     pipeline_material_source: str | None = None,
+    sequential_staged_enabled: bool | None = None,
+    sequential_activity_delay_minutes: int | None = None,
     path: Path | None = None,
 ) -> None:
     """更新失败日志循环上架轮询配置并写回 feishu.yaml。"""
@@ -1077,6 +1092,12 @@ def save_pdd_failure_cycle_relist_watch_to_config(
         watch_raw["pipeline_slot_alignment_test"] = bool(pipeline_slot_alignment_test)
     if pipeline_material_source is not None:
         watch_raw["pipeline_material_source"] = str(pipeline_material_source or "").strip()
+    if sequential_staged_enabled is not None:
+        watch_raw["sequential_staged_enabled"] = bool(sequential_staged_enabled)
+    if sequential_activity_delay_minutes is not None:
+        watch_raw["sequential_activity_delay_minutes"] = max(
+            0, min(int(sequential_activity_delay_minutes), 10080)
+        )
     pdd_raw["failure_cycle_relist_watch"] = watch_raw
     data["pdd_upload_log"] = pdd_raw
     cfg_path.parent.mkdir(parents=True, exist_ok=True)

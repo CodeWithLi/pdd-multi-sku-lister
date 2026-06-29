@@ -390,6 +390,9 @@ class ListingErrors:
         SLOT_NO_STYLE = "[{label}] 无有效款式编码"
         SLOT_REF_NO_SKU = "[{label}] 主款 {reference} 无 SKU"
         SLOT_COUNT_ABNORMAL = "[{label}] 槽位对齐后 SKU 数异常：期望 {expected}，实际 {actual}"
+        SLOT_SIGNATURE_MISMATCH = (
+            "[{label}] 槽位对齐签名未命中：{code} 的 {combo}（签名 {signature}）"
+        )
 
         # 飞书失败表（编码+短说明，不含套图路径/子编码字样）
         FEISHU_CATALOG_LINE = "{code}{aspect}"

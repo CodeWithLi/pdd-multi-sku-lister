@@ -55,6 +55,24 @@ def _unit_spec_metadata(unit: ListingUnit) -> dict[str, Any]:
     }
 
 
+def _log_unit_spec_snapshot(account_id: str, unit: ListingUnit) -> None:
+    label = unit.listing_label
+    style_names = ordered_style_names(unit)
+    size_names = list(unit.model_codes or [])
+    print(
+        f"[{account_id}] [{label}] 规格快照：style_codes={list(unit.style_codes or [])} | "
+        f"style_names={style_names} | model_codes={size_names}",
+        flush=True,
+    )
+    for idx, sku in enumerate(unit.skus or [], start=1):
+        print(
+            f"[{account_id}] [{label}]  SKU#{idx}: combo={sku.combo_folder} | "
+            f"style_code={sku.style_code} -> style_name={sku.style_name} | "
+            f"model_code={sku.model_code} -> model_name={sku.model_name}",
+            flush=True,
+        )
+
+
 GOODS_LIST_URLS = (
     "https://mms.pinduoduo.com/goods/goods_list",
     "https://mms.pinduoduo.com/goods/goods-list",
@@ -1360,8 +1378,24 @@ def _click_category_section_blank(page: DpPage) -> None:
     time.sleep(0.35)
 
 
+def _detect_category_ui_type(page: DpPage) -> str:
+    """分类页 UI 分支：优先识别以图/搜索发品（C），避免 cate_tree_tab 误判为 B。"""
+    body = _category_page_body_text(page)
+    if "以图发品" in body and "搜索发品" in body:
+        return "C"
+    if page.ele("css:.goodsCarousel_btns__22KMn", timeout=1) or page.ele(
+        'css:input[data-tracking-click-viewid="local_upload"]', timeout=1
+    ):
+        return "C"
+    if page.ele('css:[data-tracking-click-viewid="cate_tree_tab"]', timeout=1):
+        return "B"
+    return "A"
+
+
 def _category_page_is_manual_picker(page: DpPage, ui_type: str = "") -> bool:
-    """图一：分类选择弹层/树已打开，或分支 B 整页选手动选类。"""
+    """分类选择弹层/树已打开；分支 B 仅在尚未直通下一步时走手动选类。"""
+    if ui_type == "B" and _category_direct_next_ready(page):
+        return False
     if ui_type == "B":
         return True
     body = _category_page_body_text(page)
@@ -1378,10 +1412,55 @@ def _resolve_category_page_mode(
     *,
     manual_category: bool = False,
 ) -> CategoryPageMode:
-    """分支 C：暂无推荐→手动选类；有推荐/已选→等待渲染 workaround。"""
-    if ui_type == "B" or manual_category or _category_page_is_manual_picker(page, ui_type):
+    """已选类目直通；暂无推荐手动选类；其余走渲染 workaround。"""
+    if manual_category:
+        return "manual_picker"
+    if _category_direct_next_ready(page):
+        return "direct_next"
+    if ui_type == "B" or _category_page_is_manual_picker(page, ui_type):
         return "manual_picker"
     return "render_wait"
+
+
+def _category_direct_next_ready(page: DpPage) -> bool:
+    """已选完整类目且下一步可点：以图/搜索发品或底部已选分类条。"""
+    if not _branch_c_category_already_selected(page):
+        return False
+    try:
+        ready = page.run_js(
+            """
+            const body = document.body?.innerText || '';
+            const compact = body.replace(/\\s+/g, '');
+            const hasCategoryPath = compact.includes('已选分类')
+                || /[^>\\n]{2,}\\s*>\\s*[^>\\n]{2,}\\s*>\\s*[^>\\n]{2,}/.test(body);
+            if (!hasCategoryPath) return false;
+            function isVisible(el) {
+                if (!el) return false;
+                const r = el.getBoundingClientRect();
+                const s = window.getComputedStyle(el);
+                return r.width > 4 && r.height > 4
+                    && s.display !== 'none' && s.visibility !== 'hidden'
+                    && parseFloat(s.opacity || '1') > 0.05;
+            }
+            function norm(t) { return (t || '').replace(/\\s+/g, ''); }
+            const byId = document.getElementById('bottomSubmitBtnId');
+            if (byId && isVisible(byId) && !byId.disabled) return true;
+            for (const el of document.querySelectorAll('button, a, div, span')) {
+                const t = norm(el.innerText || el.textContent || '');
+                if (!t.includes('下一步') || !t.includes('完善商品信息')) continue;
+                if (isVisible(el) && !el.disabled) return true;
+            }
+            return false;
+            """
+        )
+        return bool(ready)
+    except Exception:
+        return False
+
+
+def _branch_c_direct_next_ready(page: DpPage) -> bool:
+    """兼容旧名：同 _category_direct_next_ready。"""
+    return _category_direct_next_ready(page)
 
 
 _CONFIRM_CATEGORY_PICKER_JS = """
@@ -1995,22 +2074,70 @@ def _read_category_submit_state(page: DpPage) -> dict[str, Any]:
     try:
         state = page.run_js(
             """
-            const btn = document.getElementById('bottomSubmitBtnId');
             const body = document.body?.innerText || '';
+            const compact = body.replace(/\\s+/g, '');
+            function isVisible(el) {
+                if (!el || !el.getBoundingClientRect) return false;
+                const r = el.getBoundingClientRect();
+                const s = window.getComputedStyle(el);
+                return r.width > 4 && r.height > 4
+                    && s.display !== 'none' && s.visibility !== 'hidden'
+                    && parseFloat(s.opacity || '1') > 0.05;
+            }
+            function norm(t) { return (t || '').replace(/\\s+/g, ''); }
+            function isDisabled(el) {
+                return !!el.disabled
+                    || el.getAttribute('aria-disabled') === 'true'
+                    || (el.className || '').includes('disabled');
+            }
             const blocking = body.includes('请选择完整的分类');
+            const manualPickerOpen = !!Array.from(document.querySelectorAll(
+                'input[placeholder="请输入关键词搜索分类"], div, span, li, button'
+            )).find((el) => {
+                const t = (el.innerText || el.textContent || '').replace(/\\s+/g, ' ').trim();
+                if (!isVisible(el)) return false;
+                return t.includes('搜索类目') || t.includes('分类选择');
+            });
+            let selectedPathReady = compact.includes('已选分类') && body.includes('>');
+            if (!selectedPathReady) {
+                for (const el of document.querySelectorAll(
+                    '[class*="selected"], [class*="Selected"], [class*="active"], [class*="checked"], [class*="current"], div, span, li'
+                )) {
+                    if (!isVisible(el)) continue;
+                    const t = (el.innerText || el.textContent || '').replace(/\\s+/g, ' ').trim();
+                    if (!t.includes('>')) continue;
+                    const parts = t.split('>').map((x) => x.trim()).filter(Boolean);
+                    if (parts.length >= 3) {
+                        selectedPathReady = true;
+                        break;
+                    }
+                }
+            }
+            let btn = document.getElementById('bottomSubmitBtnId');
+            let visible = btn ? isVisible(btn) : false;
+            let disabled = btn ? isDisabled(btn) : true;
+            if (!visible) {
+                for (const el of document.querySelectorAll('button, a, div, span')) {
+                    const t = norm(el.innerText || el.textContent || '');
+                    if (!t.includes('下一步') || !t.includes('完善商品信息')) continue;
+                    if (!isVisible(el)) continue;
+                    btn = el;
+                    visible = true;
+                    disabled = isDisabled(el);
+                    break;
+                }
+            }
             if (!btn) return { ready: false, reason: 'no_button', blocking };
             const r = btn.getBoundingClientRect();
-            const s = window.getComputedStyle(btn);
-            const visible = r.width > 8 && r.height > 8
-                && s.display !== 'none' && s.visibility !== 'hidden';
-            const disabled = !!btn.disabled
-                || btn.getAttribute('aria-disabled') === 'true'
-                || (btn.className || '').includes('disabled');
+            const readyByPath = visible && !disabled && selectedPathReady && !blocking;
             return {
-                ready: visible && !disabled && !blocking,
+                ready: readyByPath || (visible && !disabled && !blocking),
                 blocking,
                 disabled,
                 visible,
+                manualPickerOpen,
+                selectedPathReady,
+                forceClick: readyByPath,
                 x: r.left + r.width / 2,
                 y: r.top + r.height / 2,
             };
@@ -2042,6 +2169,7 @@ def _wait_category_submit_ready(
             _click_branch_c_category_recommendation(page, account_id, label)
         else:
             _confirm_category_picker_selection(page, account_id, label)
+            _dismiss_category_search_overlay(page, account_id, label)
         time.sleep(0.8)
         state = _read_category_submit_state(page)
         if state.get("ready"):
@@ -2050,16 +2178,25 @@ def _wait_category_submit_ready(
                 flush=True,
             )
             return True
+        if state.get("forceClick") and sec >= 2:
+            print(
+                f"[{account_id}] [{label}] 已选分类且按钮可见，结束等待并尝试点击 ({sec + 1}s)",
+                flush=True,
+            )
+            return True
         if (sec + 1) % 10 == 0:
             reason = "请选择完整的分类" if state.get("blocking") else (
                 "按钮未就绪" if not state.get("visible") else "按钮禁用"
             )
+            if state.get("selectedPathReady") and state.get("manualPickerOpen"):
+                reason = "已选完整分类，但弹层/校验未收起"
             print(
                 f"[{account_id}] [{label}] 仍在等待分类校验… ({sec + 1}/{max_wait}s, {reason})",
                 flush=True,
             )
         time.sleep(1)
-    return bool(_read_category_submit_state(page).get("ready"))
+    state = _read_category_submit_state(page)
+    return bool(state.get("ready") or state.get("forceClick"))
 
 
 def _resolve_category_next_click_point(page: DpPage) -> dict[str, Any]:
@@ -2304,6 +2441,7 @@ def upload_one_listing(
         )
 
         validate_unit_image_files(unit, source_run_id=run_id, account_id=account_id)
+    _log_unit_spec_snapshot(account_id, unit)
     covers = [str(p.resolve()) for p in unit.carousel_images]
     details = [str(p.resolve()) for p in unit.detail_images]
     style_names = ordered_style_names(unit)
@@ -2319,13 +2457,7 @@ def upload_one_listing(
     if _dismiss_address_required_page(page, account_id, label):
         time.sleep(2)
 
-    ui_type = "A"
-    if page.ele("css:.goodsCarousel_btns__22KMn", timeout=1) or page.ele(
-        'css:input[data-tracking-click-viewid="local_upload"]', timeout=1
-    ):
-        ui_type = "C"
-    elif page.ele('css:[data-tracking-click-viewid="cate_tree_tab"]', timeout=1):
-        ui_type = "B"
+    ui_type = _detect_category_ui_type(page)
     print(f"[{account_id}] [{label}] 路由判定：分支 {ui_type}")
 
     if ui_type == "C":
@@ -2340,7 +2472,12 @@ def upload_one_listing(
         category_mode = _resolve_category_page_mode(
             page, ui_type, manual_category=manual_category
         )
-        if _branch_c_category_already_selected(page) and category_mode == "render_wait":
+        if _branch_c_category_already_selected(page) and category_mode == "direct_next":
+            print(
+                f"[{account_id}] [{label}] 分支 C：已识别为以图发品/搜索发品且类目已选，直接点击下一步",
+                flush=True,
+            )
+        elif _branch_c_category_already_selected(page) and category_mode == "render_wait":
             print(
                 f"[{account_id}] [{label}] 分支 C：商品分类已选中，等待渲染后点下一步",
                 flush=True,
@@ -2396,7 +2533,7 @@ def upload_one_listing(
                 page,
                 account_id,
                 label,
-                mode="render_wait",
+                mode=category_mode,
                 burst_demo=category_next_burst_demo,
             )
         next_ok, next_err = click_category_next_and_advance(
@@ -2462,11 +2599,17 @@ def upload_one_listing(
                 phase="upload",
                 step="search_category",
             )
+        category_mode = _resolve_category_page_mode(page, ui_type)
+        if category_mode == "direct_next":
+            print(
+                f"[{account_id}] [{label}] 分支 {ui_type}：已选分类可直通，直接点击下一步",
+                flush=True,
+            )
         prepare_category_before_next(
             page,
             account_id,
             label,
-            mode="manual_picker",
+            mode=category_mode,
             burst_demo=False,
         )
         next_ok, next_err = click_category_next_and_advance(
@@ -2474,8 +2617,8 @@ def upload_one_listing(
             account_id,
             label,
             ui_type=ui_type,
-            mode="manual_picker",
-            burst_demo=False,
+            mode=category_mode,
+            burst_demo=category_mode == "render_wait",
         )
         if not next_ok:
             _clear_beforeunload(page)

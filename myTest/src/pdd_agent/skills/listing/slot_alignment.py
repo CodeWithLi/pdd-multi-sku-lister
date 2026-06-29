@@ -142,6 +142,19 @@ def _sort_skus_by_slot(skus: list[SkuCombo], style_code: str) -> list[SkuCombo]:
     )
 
 
+def _duplicate_model_names(skus: list[SkuCombo]) -> list[str]:
+    seen: set[str] = set()
+    dupes: list[str] = []
+    for sku in skus:
+        name = str(sku.model_name or "").strip()
+        if not name:
+            continue
+        if name in seen and name not in dupes:
+            dupes.append(name)
+        seen.add(name)
+    return dupes
+
+
 def _pick_reference_style(unit: ListingUnit) -> str:
     codes = sorted({sku.style_code.strip().upper() for sku in unit.skus if sku.style_code})
     if not codes:
@@ -224,11 +237,16 @@ def apply_slot_alignment(unit: ListingUnit, *, account_id: str = "") -> SlotAlig
         remaining_labels = [label for label in slot_labels if label not in used_labels]
         unmatched_sorted = _sort_skus_by_slot(unmatched, code)
         if len(unmatched_sorted) > len(remaining_labels):
+            first = unmatched_sorted[0]
+            sig = combo_slot_signature(first.combo_folder, code)
             return SlotAlignmentResult(
                 ok=False,
                 errors=[
-                    ListingErrors.Msg.SLOT_MISMATCH_FALLBACK.format(
-                        code=code, reference=reference, count=slot_count
+                    ListingErrors.Msg.SLOT_SIGNATURE_MISMATCH.format(
+                        label=unit.listing_label,
+                        code=code,
+                        combo=first.combo_folder,
+                        signature=sig,
                     )
                 ],
             )
@@ -243,6 +261,25 @@ def apply_slot_alignment(unit: ListingUnit, *, account_id: str = "") -> SlotAlig
                     f"{sku.combo_folder} {old} → {sku.model_name}",
                     flush=True,
                 )
+
+        if len(used_labels) != slot_count:
+            return SlotAlignmentResult(
+                ok=False,
+                errors=[
+                    ListingErrors.Msg.SLOT_MISMATCH_FALLBACK.format(
+                        code=code, reference=reference, count=slot_count
+                    )
+                ],
+            )
+        dupes = _duplicate_model_names(skus)
+        if dupes:
+            first = dupes[0]
+            return SlotAlignmentResult(
+                ok=False,
+                errors=[
+                    f"[{unit.listing_label}] 槽位对齐后 {code} 出现重复规格名：{first}"
+                ],
+            )
 
     unit.model_codes = list(slot_labels)
     expected_skus = slot_count * len(style_codes)

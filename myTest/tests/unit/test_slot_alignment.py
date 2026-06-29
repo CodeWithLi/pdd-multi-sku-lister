@@ -208,3 +208,49 @@ def test_slot_alignment_matches_signature_not_alphabetical_index(tmp_path):
     b_bundle = next(s for s in unit.skus if s.combo_folder == "BD037B+YKL001N+YKL020D+YKU007P")
     assert b_combo.model_name == "笔袋+挂件"
     assert b_bundle.model_name == "笔袋+套装"
+
+
+def test_fill_multi_spec_rows_stops_on_duplicate_spec_pairs():
+    from pdd_agent.domain.models import SkuCombo
+    from pdd_agent.skills.listing.multi_spec_page import fill_multi_spec_rows
+
+    skus = [
+        SkuCombo(
+            style_code="BD339E",
+            style_name="灰色",
+            model_code="YKL020A",
+            model_name="笔袋+磁吸夹",
+            combo_folder="BD339E+YKL020A",
+            preview_image=Path("a.png"),
+            inventory="1",
+            group_price="1",
+            single_price="1",
+        ),
+        SkuCombo(
+            style_code="BD339E",
+            style_name="灰色",
+            model_code="YKL632A",
+            model_name="笔袋+磁吸夹",
+            combo_folder="BD339E+YKL632A",
+            preview_image=Path("b.png"),
+            inventory="1",
+            group_price="1",
+            single_price="1",
+        ),
+    ]
+
+    result = fill_multi_spec_rows(
+        None,
+        "store_A",
+        skus,
+        {},
+        rows=[],
+        style_names=["灰色"],
+        size_names=["笔袋+挂件", "笔袋+磁吸夹"],
+    )
+
+    assert result["previews_ok"] is False
+    assert result["price_filled"] == 0
+    assert result["price_total"] == 2
+    assert result["failed_items"]
+    assert result["failed_items"][0]["reason"] == "duplicate_spec_pair"

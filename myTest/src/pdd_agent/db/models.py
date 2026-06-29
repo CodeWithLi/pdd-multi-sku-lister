@@ -399,6 +399,77 @@ class FailureCycleRelistActionLogORM(Base):
     )
 
 
+class FailureSequentialJobORM(Base):
+    """失败日志分阶段流水线：上架 → 限时限量购 → 活动 → 推广（独立于整合链路）。"""
+
+    __tablename__ = "failure_sequential_jobs"
+    __table_args__ = (
+        Index("ix_failure_seq_jobs_batch_phase", "batch_id", "current_phase"),
+        Index("ix_failure_seq_jobs_feishu", "feishu_record_id"),
+        Index("ix_failure_seq_jobs_overall", "overall_status"),
+    )
+
+    job_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    batch_id: Mapped[str] = mapped_column(String(64), index=True, nullable=False)
+    feishu_record_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    merchant_code: Mapped[str] = mapped_column(String(255), index=True, default="", nullable=False)
+    account_id: Mapped[str] = mapped_column(String(64), index=True, default="", nullable=False)
+    account_name: Mapped[str] = mapped_column(String(128), default="", nullable=False)
+    failure_reason: Mapped[str] = mapped_column(Text, default="", nullable=False)
+    report_platform: Mapped[str] = mapped_column(String(64), default="", nullable=False)
+    product_codes: Mapped[list[str]] = mapped_column(MySQLJSON, default=list, nullable=False)
+    current_phase: Mapped[str] = mapped_column(String(32), index=True, default="listing", nullable=False)
+    overall_status: Mapped[str] = mapped_column(String(32), index=True, default="active", nullable=False)
+    pdd_product_id: Mapped[str] = mapped_column(String(64), default="", nullable=False)
+    mapping_id: Mapped[str] = mapped_column(String(64), default="", nullable=False)
+    listing_status: Mapped[str] = mapped_column(String(16), default="pending", nullable=False)
+    listing_error: Mapped[str] = mapped_column(Text, default="", nullable=False)
+    listing_run_id: Mapped[str] = mapped_column(String(64), default="", nullable=False)
+    limited_time_status: Mapped[str] = mapped_column(String(16), default="pending", nullable=False)
+    limited_time_error: Mapped[str] = mapped_column(Text, default="", nullable=False)
+    limited_time_run_id: Mapped[str] = mapped_column(String(64), default="", nullable=False)
+    limited_time_completed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    activity_618_status: Mapped[str] = mapped_column(String(16), default="pending", nullable=False)
+    activity_618_error: Mapped[str] = mapped_column(Text, default="", nullable=False)
+    activity_618_run_id: Mapped[str] = mapped_column(String(64), default="", nullable=False)
+    activity_discount_status: Mapped[str] = mapped_column(String(16), default="pending", nullable=False)
+    activity_discount_error: Mapped[str] = mapped_column(Text, default="", nullable=False)
+    activity_discount_run_id: Mapped[str] = mapped_column(String(64), default="", nullable=False)
+    promotion_status: Mapped[str] = mapped_column(String(16), default="pending", nullable=False)
+    promotion_error: Mapped[str] = mapped_column(Text, default="", nullable=False)
+    promotion_run_id: Mapped[str] = mapped_column(String(64), default="", nullable=False)
+    meta: Mapped[dict] = mapped_column(MySQLJSON, default=dict, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, server_default=func.now(), nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, server_default=func.now(), onupdate=func.now(), nullable=False
+    )
+
+
+class FailureSequentialBatchORM(Base):
+    """失败日志分阶段流水线批次状态。"""
+
+    __tablename__ = "failure_sequential_batches"
+
+    batch_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    status: Mapped[str] = mapped_column(String(32), index=True, default="listing", nullable=False)
+    job_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    listing_done: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    limited_time_done: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    activity_done: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    promotion_done: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    completed_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    activity_unlocked: Mapped[bool] = mapped_column(default=False, nullable=False)
+    activity_scheduled_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    activity_unlocked_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    last_error: Mapped[str] = mapped_column(Text, default="", nullable=False)
+    started_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, server_default=func.now(), onupdate=func.now(), nullable=False
+    )
+
+
 class ProductStyleColorORM(Base):
     """商品编码 → AI/人工识别的款式颜色（缓存，省 token）。"""
 

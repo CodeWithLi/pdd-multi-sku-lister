@@ -1443,6 +1443,13 @@ function styleSizeKey(style, size) {
     return normSpecLabel(style) + '\\0' + normSpecLabel(size);
 }
 
+function isValidSpecPair(style, size, styleNames, sizeNames) {
+    if (!style || !size) return false;
+    const ns = normSpecLabel(style);
+    const nm = normSpecLabel(size);
+    return styleNames.includes(ns) && sizeNames.includes(nm);
+}
+
 function parseRowStyleSize(tr, styleNames, sizeNames, currentStyle) {
     if (!tr || !styleNames.length || !sizeNames.length) return null;
     let foundStyle = '';
@@ -1462,7 +1469,7 @@ function parseRowStyleSize(tr, styleNames, sizeNames, currentStyle) {
     if (!foundStyle && carryStyle && styleNames.includes(carryStyle)) {
         foundStyle = carryStyle;
     }
-    if (foundStyle && foundSize && foundStyle !== foundSize) {
+    if (isValidSpecPair(foundStyle, foundSize, styleNames, sizeNames)) {
         return { style: foundStyle, size: foundSize, nextStyle: foundStyle };
     }
     return carryStyle ? { style: '', size: '', nextStyle: carryStyle } : null;
@@ -1482,20 +1489,32 @@ function collectSkuDataRowElements() {
     return out;
 }
 
-function scanVisibleSpecPairs(pairMap, ctx, doStamp) {
-    const parsed = parseRowsWithRowspanContext(
-        collectSkuDataRowElements(),
-        ctx.styleNames,
-        ctx.sizeNames
-    );
+function scanVisibleSpecPairs(pairMap, ctx, doStamp, state) {
+    state = state || { currentStyle: '' };
+    const rows = collectSkuDataRowElements();
     let added = 0;
-    for (const item of parsed) {
-        const key = styleSizeKey(item.style, item.size);
+    for (const tr of rows) {
+        let rowStyle = '';
+        let rowSize = '';
+        for (const td of tr.querySelectorAll('td')) {
+            if (cellHasDataInput(td)) break;
+            const text = normCellText(td);
+            if (!text) continue;
+            if (ctx.styleNames.includes(text)) {
+                rowStyle = text;
+                if (td.getAttribute('rowspan')) state.currentStyle = text;
+            } else if (ctx.sizeNames.includes(text)) {
+                rowSize = text;
+            }
+        }
+        const style = rowStyle || state.currentStyle;
+        if (!isValidSpecPair(style, rowSize, ctx.styleNames, ctx.sizeNames)) continue;
+        const key = styleSizeKey(style, rowSize);
         if (pairMap[key]) continue;
-        pairMap[key] = item.tr;
+        pairMap[key] = tr;
         added++;
         if (doStamp) {
-            stampRowSpec(item.tr, item.style, item.size, ctx.styleNames, ctx.sizeNames);
+            stampRowSpec(tr, style, rowSize, ctx.styleNames, ctx.sizeNames);
         }
     }
     return added;
@@ -1516,9 +1535,10 @@ function collectAllSkuRowsByScrolling(styleNamesJson, sizeNamesJson) {
     const ctx = parseSpecLists(styleNamesJson, sizeNamesJson);
     const expected = ctx.styleNames.length * ctx.sizeNames.length;
     const pairMap = {};
+    const state = { currentStyle: '' };
 
     scrollSkuTableToTop();
-    scanVisibleSpecPairs(pairMap, ctx, false);
+    scanVisibleSpecPairs(pairMap, ctx, false, state);
 
     const targets = getSkuScrollTargets();
     const stepPx = targets.length
@@ -1528,7 +1548,7 @@ function collectAllSkuRowsByScrolling(styleNamesJson, sizeNamesJson) {
     for (let step = 0; step < 160; step++) {
         if (expected > 0 && Object.keys(pairMap).length >= expected) break;
         const moved = scrollSkuTableStep(stepPx);
-        const added = scanVisibleSpecPairs(pairMap, ctx, false);
+        const added = scanVisibleSpecPairs(pairMap, ctx, false, state);
         if (!moved && added === 0) break;
     }
 
@@ -1536,7 +1556,7 @@ function collectAllSkuRowsByScrolling(styleNamesJson, sizeNamesJson) {
         t.scrollTop = t.scrollHeight;
         fireSkuTableScroll(t);
     }
-    scanVisibleSpecPairs(pairMap, ctx, false);
+    scanVisibleSpecPairs(pairMap, ctx, false, state);
     scrollSkuTableToTop();
     return orderedTrsFromPairMap(pairMap, ctx);
 }
@@ -1559,7 +1579,7 @@ function parseRowsWithRowspanContext(rows, styleNames, sizeNames) {
             }
         }
         const style = rowStyle || currentStyle;
-        if (style && rowSize && style !== rowSize) {
+        if (isValidSpecPair(style, rowSize, styleNames, sizeNames)) {
             out.push({ tr, style, size: rowSize });
         }
     }
@@ -1811,8 +1831,9 @@ function countKnownSpecRows(styleNamesJson, sizeNamesJson) {
     const expected = ctx.styleNames.length * ctx.sizeNames.length;
     if (!expected) return countStyleSizeRows(styleNamesJson, sizeNamesJson);
     const pairMap = {};
+    const state = { currentStyle: '' };
     scrollSkuTableToTop();
-    scanVisibleSpecPairs(pairMap, ctx, false);
+    scanVisibleSpecPairs(pairMap, ctx, false, state);
     const targets = getSkuScrollTargets();
     const stepPx = targets.length
         ? Math.max(36, Math.floor((targets[0].clientHeight || 200) * 0.2))
@@ -1820,14 +1841,14 @@ function countKnownSpecRows(styleNamesJson, sizeNamesJson) {
     for (let step = 0; step < 160; step++) {
         if (Object.keys(pairMap).length >= expected) break;
         const moved = scrollSkuTableStep(stepPx);
-        const added = scanVisibleSpecPairs(pairMap, ctx, false);
+        const added = scanVisibleSpecPairs(pairMap, ctx, false, state);
         if (!moved && added === 0) break;
     }
     for (const t of getSkuScrollTargets()) {
         t.scrollTop = t.scrollHeight;
         fireSkuTableScroll(t);
     }
-    scanVisibleSpecPairs(pairMap, ctx, false);
+    scanVisibleSpecPairs(pairMap, ctx, false, state);
     scrollSkuTableToTop();
     return Math.min(Object.keys(pairMap).length, expected);
 }
@@ -1861,9 +1882,10 @@ function stampGlobalRowIndices(styleNamesJson, sizeNamesJson) {
     const expected = ctx.styleNames.length * ctx.sizeNames.length;
     if (!expected) return 0;
     const pairMap = {};
+    const state = { currentStyle: '' };
 
     scrollSkuTableToTop();
-    scanVisibleSpecPairs(pairMap, ctx, true);
+    scanVisibleSpecPairs(pairMap, ctx, true, state);
 
     const targets = getSkuScrollTargets();
     const stepPx = targets.length
@@ -1873,7 +1895,7 @@ function stampGlobalRowIndices(styleNamesJson, sizeNamesJson) {
     for (let step = 0; step < 160; step++) {
         if (Object.keys(pairMap).length >= expected) break;
         const moved = scrollSkuTableStep(stepPx);
-        scanVisibleSpecPairs(pairMap, ctx, true);
+        scanVisibleSpecPairs(pairMap, ctx, true, state);
         if (!moved && Object.keys(pairMap).length >= expected) break;
         if (!moved) break;
     }
@@ -1882,9 +1904,27 @@ function stampGlobalRowIndices(styleNamesJson, sizeNamesJson) {
         t.scrollTop = t.scrollHeight;
         fireSkuTableScroll(t);
     }
-    scanVisibleSpecPairs(pairMap, ctx, true);
+    scanVisibleSpecPairs(pairMap, ctx, true, state);
     scrollSkuTableToTop();
-    return Math.min(Object.keys(pairMap).length, expected);
+
+    let stamped = Math.min(Object.keys(pairMap).length, expected);
+    if (stamped < expected) {
+        const rows = collectSkuDataRowElements();
+        const parsed = parseRowsWithRowspanContext(rows, ctx.styleNames, ctx.sizeNames);
+        for (const item of parsed) {
+            const gi = stampRowSpec(item.tr, item.style, item.size, ctx.styleNames, ctx.sizeNames);
+            if (gi >= 0) stamped = Math.max(stamped, gi + 1);
+        }
+        if (rows.length >= expected) {
+            rows.forEach((tr, i) => {
+                if (!tr.getAttribute('data-pdd-sku-row')) {
+                    tr.setAttribute('data-pdd-sku-row', String(i));
+                }
+            });
+            stamped = Math.max(stamped, Math.min(rows.length, expected));
+        }
+    }
+    return stamped;
 }
 
 function stampAllRowsByScroll(styleNamesJson, sizeNamesJson) {
@@ -2005,16 +2045,17 @@ if (ctx.styleNames.length && ctx.sizeNames.length) {
 }
 const targets = getSkuScrollTargets();
 const pairMap = {};
-scanVisibleSpecPairs(pairMap, ctx, false);
+const scrollState = { currentStyle: '' };
+scanVisibleSpecPairs(pairMap, ctx, false, scrollState);
 let best = Object.keys(pairMap).length;
 if (!targets.length) {
     window.scrollTo(0, document.body.scrollHeight);
-    scanVisibleSpecPairs(pairMap, ctx, false);
+    scanVisibleSpecPairs(pairMap, ctx, false, scrollState);
     best = Math.max(best, Object.keys(pairMap).length);
     return best;
 }
 scrollSkuTableToTop();
-scanVisibleSpecPairs(pairMap, ctx, false);
+scanVisibleSpecPairs(pairMap, ctx, false, scrollState);
 best = Math.max(best, Object.keys(pairMap).length);
 const stepPx = targets.length
     ? Math.max(60, Math.floor((targets[0].clientHeight || 200) * 0.35))
@@ -2022,7 +2063,7 @@ const stepPx = targets.length
 for (let step = 0; step < 96; step++) {
     if (expected > 0 && best >= expected) break;
     const moved = scrollSkuTableStep(stepPx);
-    scanVisibleSpecPairs(pairMap, ctx, false);
+    scanVisibleSpecPairs(pairMap, ctx, false, scrollState);
     best = Object.keys(pairMap).length;
     if (!moved) break;
 }
@@ -2030,7 +2071,7 @@ for (const t of getSkuScrollTargets()) {
     t.scrollTop = t.scrollHeight;
     fireSkuTableScroll(t);
 }
-scanVisibleSpecPairs(pairMap, ctx, false);
+scanVisibleSpecPairs(pairMap, ctx, false, scrollState);
 best = Math.max(best, Object.keys(pairMap).length);
 return best;
 """
@@ -2145,6 +2186,17 @@ return verifyRowFilledBySpec(
     arguments[1] || '',
     arguments[2] || '[]',
     arguments[3] || '[]'
+);
+"""
+)
+
+_SCROLL_ROW_INTO_VIEW_JS = (
+    _SKU_TABLE_SCROLL_JS
+    + """
+return scrollRowIndexIntoView(
+    parseInt(arguments[0], 10),
+    arguments[1] || '[]',
+    arguments[2] || '[]'
 );
 """
 )
@@ -2635,15 +2687,30 @@ def _fill_skus_by_spec_order(
             f"库存={row_data['inventory']} 拼团={row_data['group_price']} 单买={row_data['single_price']}",
             flush=True,
         )
-        success = _fill_row_by_style_size(
+        success = _fill_row_at_index(
             page,
-            sku.style_name,
-            sku.model_name,
+            idx,
             row_data,
             style_names=style_names,
             size_names=size_names,
         )
+        if not success:
+            success = _fill_row_by_style_size(
+                page,
+                sku.style_name,
+                sku.model_name,
+                row_data,
+                style_names=style_names,
+                size_names=size_names,
+            )
         if success:
+            success = _verify_row_filled_at_index(
+                page,
+                idx,
+                style_names=style_names,
+                size_names=size_names,
+            )
+        if not success:
             success = _verify_row_filled_by_spec(
                 page,
                 sku.style_name,
@@ -2816,6 +2883,50 @@ def _scroll_spec_row_into_view(
     return False
 
 
+def _fill_row_at_index(
+    page,
+    idx: int,
+    row_data: dict,
+    *,
+    style_names: list[str] | None = None,
+    size_names: list[str] | None = None,
+) -> bool:
+    """按矩阵行号填库存/价格/编码（款式×尺寸顺序，与页面 DOM 行序一致）。"""
+    vals = json.dumps(
+        [
+            str(row_data.get("inventory", "")),
+            str(row_data.get("group_price", "")),
+            str(row_data.get("single_price", "")),
+            str(row_data.get("sku_code", "")),
+        ],
+        ensure_ascii=False,
+    )
+    styles_json, sizes_json = _spec_lists_json(style_names, size_names)
+    try:
+        page.run_js(_SCROLL_ROW_INTO_VIEW_JS, str(idx), styles_json, sizes_json)
+        time.sleep(0.1)
+        count = page.run_js(_FILL_ROW_AT_INDEX_JS, str(idx), vals) or 0
+        return int(count) >= 4
+    except Exception:
+        return False
+
+
+def _verify_row_filled_at_index(
+    page,
+    idx: int,
+    *,
+    style_names: list[str] | None = None,
+    size_names: list[str] | None = None,
+) -> bool:
+    styles_json, sizes_json = _spec_lists_json(style_names, size_names)
+    try:
+        return bool(
+            page.run_js(_VERIFY_ROW_FILLED_JS, str(idx), styles_json, sizes_json)
+        )
+    except Exception:
+        return False
+
+
 def _fill_row_by_style_size(
     page,
     style_name: str,
@@ -2955,6 +3066,36 @@ def fill_multi_spec_rows(
     """先批量填文字字段，再逐个上传预览图。返回预览图是否全部就绪。"""
     total_start = _now()
     unique_rows = _unique_sku_spec_pairs(skus)
+    total_skus = len(skus)
+
+    if total_skus and unique_rows < total_skus:
+        print(
+            f"[{account_id}] 规格映射异常：{total_skus} 个 SKU 仅剩 {unique_rows} 个唯一规格，"
+            "疑似槽位对齐后出现重复标签，停止继续填表",
+            flush=True,
+        )
+        failed_pairs = []
+        seen_pairs: set[tuple[str, str]] = set()
+        for sku in skus:
+            key = (getattr(sku, "style_name", "") or "", getattr(sku, "model_name", "") or "")
+            if key in seen_pairs:
+                failed_pairs.append(
+                    {
+                        "style": key[0],
+                        "size": key[1],
+                        "reason": "duplicate_spec_pair",
+                    }
+                )
+            else:
+                seen_pairs.add(key)
+        sku_dbg.log_fill_failures(account_id, "duplicate_spec_pairs", failed_pairs)
+        return {
+            "previews_ok": False,
+            "price_filled": 0,
+            "price_total": total_skus,
+            "failed_items": failed_pairs,
+            "row_indices": [],
+        }
 
     if not rows:
         t = _now()
@@ -3003,6 +3144,7 @@ def fill_multi_spec_rows(
                 )
             time.sleep(0.8)
     if style_names and size_names:
+        _remark_sku_rows(page)
         stamped = _stamp_global_row_indices(page, style_names, size_names)
         if stamped:
             print(
@@ -3126,22 +3268,42 @@ def fill_multi_spec_rows(
             }
             try:
                 t = _now()
-                ok = _fill_row_by_style_size(
-                    page,
-                    sku.style_name,
-                    sku.model_name,
-                    row_data,
-                    style_names=style_names,
-                    size_names=size_names,
+                idx = _spec_order_row_index(
+                    sku.style_name, sku.model_name, style_names, size_names
                 )
-                if ok:
-                    ok = _verify_row_filled_by_spec(
+                ok = False
+                if idx is not None:
+                    ok = _fill_row_at_index(
                         page,
-                        sku.style_name,
-                        sku.model_name,
+                        idx,
+                        row_data,
                         style_names=style_names,
                         size_names=size_names,
                     )
+                    if ok:
+                        ok = _verify_row_filled_at_index(
+                            page,
+                            idx,
+                            style_names=style_names,
+                            size_names=size_names,
+                        )
+                if not ok:
+                    ok = _fill_row_by_style_size(
+                        page,
+                        sku.style_name,
+                        sku.model_name,
+                        row_data,
+                        style_names=style_names,
+                        size_names=size_names,
+                    )
+                    if ok:
+                        ok = _verify_row_filled_by_spec(
+                            page,
+                            sku.style_name,
+                            sku.model_name,
+                            style_names=style_names,
+                            size_names=size_names,
+                        )
                 if ok:
                     _log_step(account_id, f"补填 {label}", t)
                 else:

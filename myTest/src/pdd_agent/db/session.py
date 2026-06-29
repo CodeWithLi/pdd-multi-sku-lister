@@ -137,6 +137,56 @@ def _ensure_published_products_columns(engine: Engine) -> None:
         return
 
 
+def _ensure_failure_sequential_job_columns(engine: Engine) -> None:
+    try:
+        inspector = inspect(engine)
+        if "failure_sequential_jobs" not in inspector.get_table_names():
+            return
+        existing = {col["name"] for col in inspector.get_columns("failure_sequential_jobs")}
+        if "limited_time_completed_at" in existing:
+            return
+        with engine.begin() as conn:
+            conn.execute(
+                text(
+                    "ALTER TABLE failure_sequential_jobs "
+                    "ADD COLUMN limited_time_completed_at DATETIME NULL"
+                )
+            )
+    except Exception:
+        return
+
+
+def _ensure_failure_sequential_batch_columns(engine: Engine) -> None:
+    try:
+        inspector = inspect(engine)
+        if "failure_sequential_batches" not in inspector.get_table_names():
+            return
+        existing = {col["name"] for col in inspector.get_columns("failure_sequential_batches")}
+        statements: list[str] = []
+        if "activity_unlocked" not in existing:
+            statements.append(
+                "ALTER TABLE failure_sequential_batches "
+                "ADD COLUMN activity_unlocked TINYINT(1) NOT NULL DEFAULT 0"
+            )
+        if "activity_scheduled_at" not in existing:
+            statements.append(
+                "ALTER TABLE failure_sequential_batches "
+                "ADD COLUMN activity_scheduled_at DATETIME NULL"
+            )
+        if "activity_unlocked_at" not in existing:
+            statements.append(
+                "ALTER TABLE failure_sequential_batches "
+                "ADD COLUMN activity_unlocked_at DATETIME NULL"
+            )
+        if not statements:
+            return
+        with engine.begin() as conn:
+            for stmt in statements:
+                conn.execute(text(stmt))
+    except Exception:
+        return
+
+
 def _ensure_listed_folders_backfill(engine: Engine) -> None:
     try:
         inspector = inspect(engine)
@@ -193,6 +243,8 @@ def init_database() -> bool:
         _ensure_accounts_columns(engine)
         _ensure_login_statuses_columns(engine)
         _ensure_published_products_columns(engine)
+        _ensure_failure_sequential_job_columns(engine)
+        _ensure_failure_sequential_batch_columns(engine)
         _ensure_listed_folders_backfill(engine)
         _engine = engine
         _sessionmaker = sessionmaker(bind=engine, expire_on_commit=False, future=True)

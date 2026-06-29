@@ -48,6 +48,13 @@ class PddFailureCycleRelistWatchOut(BaseModel):
     last_error: str = ""
     candidate_total: int = 0
     new_count: int = 0
+    sequential_staged_enabled: bool = False
+    sequential_scheduler_running: bool = False
+    sequential_last_tick_at: str = ""
+    sequential_last_error: str = ""
+    sequential_batch_active: bool = False
+    sequential_batch_status: str = ""
+    sequential_activity_delay_minutes: int = 5
     recent_actions: list[PddFailureCycleRelistActionOut] = Field(default_factory=list)
 
 
@@ -58,6 +65,8 @@ class PddFailureCycleRelistWatchUpdateIn(BaseModel):
         default_factory=lambda: ["已结束", "已处理完成"],
     )
     exclude_failure_reason_contains: str = ""
+    sequential_staged_enabled: bool = False
+    sequential_activity_delay_minutes: int = Field(default=5, ge=0, le=10080)
 
 
 class PddFailureCycleRelistTriggerIn(BaseModel):
@@ -147,3 +156,41 @@ class PddFailureCycleRelistPollResponse(BaseModel):
     new_items: list[dict[str, Any]] = Field(default_factory=list)
     claims: list[dict[str, Any]] = Field(default_factory=list)
     pipeline_triggers: list[dict[str, Any]] = Field(default_factory=list)
+
+
+class FailureSequentialJobOut(BaseModel):
+    job_id: str
+    batch_id: str
+    feishu_record_id: str
+    merchant_code: str = ""
+    account_id: str = ""
+    account_name: str = ""
+    failure_reason: str = ""
+    current_phase: str = ""
+    overall_status: str = ""
+    pdd_product_id: str = ""
+    listing_status: str = ""
+    listing_error: str = ""
+    limited_time_status: str = ""
+    limited_time_error: str = ""
+    limited_time_completed_at: str = ""
+    activity_618_status: str = ""
+    activity_618_error: str = ""
+    activity_discount_status: str = ""
+    activity_discount_error: str = ""
+    promotion_status: str = ""
+    promotion_error: str = ""
+    updated_at: str = ""
+
+
+class FailureSequentialJobListResponse(BaseModel):
+    ok: bool = True
+    total: int = 0
+    batch_active: bool = False
+    batch: dict[str, Any] = Field(default_factory=dict)
+    items: list[FailureSequentialJobOut] = Field(default_factory=list)
+
+
+class FailureSequentialTickResponse(BaseModel):
+    ok: bool = True
+    summary: dict[str, Any] = Field(default_factory=dict)

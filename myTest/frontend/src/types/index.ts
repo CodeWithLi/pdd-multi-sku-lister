@@ -498,6 +498,13 @@ export interface PddFailureCycleRelistWatch {
   last_error: string
   candidate_total: number
   new_count: number
+  sequential_staged_enabled: boolean
+  sequential_scheduler_running: boolean
+  sequential_last_tick_at: string
+  sequential_last_error: string
+  sequential_batch_active: boolean
+  sequential_batch_status: string
+  sequential_activity_delay_minutes: number
   recent_actions: PddFailureCycleRelistAction[]
 }
 
@@ -506,6 +513,41 @@ export interface PddFailureCycleRelistWatchUpdate {
   poll_seconds: number
   completed_statuses: string[]
   exclude_failure_reason_contains: string
+  sequential_staged_enabled: boolean
+  sequential_activity_delay_minutes: number
+}
+
+export interface FailureSequentialJob {
+  job_id: string
+  batch_id: string
+  feishu_record_id: string
+  merchant_code: string
+  account_id: string
+  account_name: string
+  failure_reason: string
+  current_phase: string
+  overall_status: string
+  pdd_product_id: string
+  listing_status: string
+  listing_error: string
+  limited_time_status: string
+  limited_time_error: string
+  limited_time_completed_at: string
+  activity_618_status: string
+  activity_618_error: string
+  activity_discount_status: string
+  activity_discount_error: string
+  promotion_status: string
+  promotion_error: string
+  updated_at: string
+}
+
+export interface FailureSequentialJobListResponse {
+  ok: boolean
+  total: number
+  batch_active: boolean
+  batch: Record<string, unknown>
+  items: FailureSequentialJob[]
 }
 
 export interface PddFailureCycleRelistTriggerResult {

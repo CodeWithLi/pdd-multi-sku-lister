@@ -29,5 +29,14 @@ def test_scroll_js_blocks_are_composed():
     assert "getRowBySpec" in msp._RESOLVE_PREVIEW_INPUT_BY_SPEC_JS
     assert "getRowBySpec" in msp._FILL_ONE_BY_STYLE_SIZE_JS
     assert "verifyRowFilledBySpec" in msp._VERIFY_ROW_FILLED_BY_SPEC_JS
+    assert "isValidSpecPair" in msp._STYLE_SIZE_MAP_JS
     assert "parseRowStyleSize" in msp._STYLE_SIZE_MAP_JS
     assert "getAllDataRows" in msp._FILL_ONE_BY_STYLE_SIZE_JS
+    assert "scrollRowIndexIntoView" in msp._SCROLL_ROW_INTO_VIEW_JS
+
+
+def test_style_size_map_allows_same_label_for_style_and_size():
+    """主款尺寸槽与款式同名（如 BD014A）时仍应识别为有效规格对。"""
+    js = msp._STYLE_SIZE_MAP_JS
+    assert "style !== rowSize" not in js
+    assert "isValidSpecPair" in js

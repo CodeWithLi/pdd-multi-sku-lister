@@ -25,6 +25,9 @@ from pdd_agent.api.schemas.pdd_failure_log_watch import (
     PddFailureCycleRelistTriggerOut,
     PddFailureCycleRelistWatchOut,
     PddFailureCycleRelistWatchUpdateIn,
+    FailureSequentialJobListResponse,
+    FailureSequentialJobOut,
+    FailureSequentialTickResponse,
 )
 from pdd_agent.api.services.cycle_relist_audit_service import (
     action_log_to_dict,
@@ -33,6 +36,13 @@ from pdd_agent.api.services.cycle_relist_audit_service import (
 from pdd_agent.api.services.failure_cycle_relist_scheduler import (
     get_failure_cycle_relist_watch_scheduler,
 )
+from pdd_agent.failure_sequential.orchestrator import (
+    get_batch_status,
+    is_batch_active,
+    tick_once,
+)
+from pdd_agent.failure_sequential.repository import list_recent_jobs
+from pdd_agent.failure_sequential.scheduler import get_failure_sequential_scheduler
 from pdd_agent.db.repositories import (
     latest_failure_cycle_relist_actions_by_record_ids,
     list_failure_cycle_relist_action_logs,
@@ -185,6 +195,8 @@ def _watch_out() -> PddFailureCycleRelistWatchOut:
     cfg = load_feishu_config()
     watch = cfg.pdd_upload_log.failure_cycle_relist_watch
     scheduler = get_failure_cycle_relist_watch_scheduler()
+    seq_scheduler = get_failure_sequential_scheduler()
+    batch_info = get_batch_status()
     recent = _recent_actions_out()
     return PddFailureCycleRelistWatchOut(
         enabled=bool(watch.enabled),
@@ -196,7 +208,48 @@ def _watch_out() -> PddFailureCycleRelistWatchOut:
         last_error=scheduler.last_error,
         candidate_total=scheduler.candidate_total,
         new_count=len(scheduler.new_items),
+        sequential_staged_enabled=bool(watch.sequential_staged_enabled),
+        sequential_scheduler_running=seq_scheduler.is_running,
+        sequential_last_tick_at=seq_scheduler.last_tick_at,
+        sequential_last_error=seq_scheduler.last_error,
+        sequential_batch_active=is_batch_active(),
+        sequential_batch_status=str(batch_info.get("status") or ""),
+        sequential_activity_delay_minutes=int(watch.sequential_activity_delay_minutes or 0),
         recent_actions=recent,
+    )
+
+
+def _job_to_out(row) -> FailureSequentialJobOut:
+    updated = ""
+    if getattr(row, "updated_at", None):
+        updated = row.updated_at.isoformat(timespec="seconds")
+    return FailureSequentialJobOut(
+        job_id=row.job_id,
+        batch_id=row.batch_id,
+        feishu_record_id=row.feishu_record_id,
+        merchant_code=row.merchant_code,
+        account_id=row.account_id,
+        account_name=row.account_name,
+        failure_reason=row.failure_reason,
+        current_phase=row.current_phase,
+        overall_status=row.overall_status,
+        pdd_product_id=row.pdd_product_id,
+        listing_status=row.listing_status,
+        listing_error=row.listing_error,
+        limited_time_status=row.limited_time_status,
+        limited_time_error=row.limited_time_error,
+        limited_time_completed_at=(
+            row.limited_time_completed_at.isoformat(timespec="seconds")
+            if row.limited_time_completed_at
+            else ""
+        ),
+        activity_618_status=row.activity_618_status,
+        activity_618_error=row.activity_618_error,
+        activity_discount_status=row.activity_discount_status,
+        activity_discount_error=row.activity_discount_error,
+        promotion_status=row.promotion_status,
+        promotion_error=row.promotion_error,
+        updated_at=updated,
     )
 
 
@@ -217,14 +270,18 @@ def update_cycle_relist_watch(body: PddFailureCycleRelistWatchUpdateIn):
     cfg = load_feishu_config()
     watch = cfg.pdd_upload_log.failure_cycle_relist_watch
     auto_on = bool(body.enabled)
+    sequential_on = bool(body.sequential_staged_enabled)
+    trigger_pipeline = auto_on and not sequential_on
     save_pdd_failure_cycle_relist_watch_to_config(
         enabled=body.enabled,
         poll_seconds=body.poll_seconds,
         completed_statuses=list(body.completed_statuses),
         exclude_failure_reason_contains=body.exclude_failure_reason_contains,
         ignore_existing_on_start=False if auto_on else watch.ignore_existing_on_start,
-        claim_on_discover=auto_on,
-        trigger_pipeline_on_discover=auto_on,
+        claim_on_discover=auto_on and not sequential_on,
+        trigger_pipeline_on_discover=trigger_pipeline,
+        sequential_staged_enabled=sequential_on,
+        sequential_activity_delay_minutes=body.sequential_activity_delay_minutes,
         pipeline_report_platforms=list(watch.pipeline_report_platforms),
         pipeline_activity_ids=list(watch.pipeline_activity_ids),
         pipeline_category_keyword=watch.pipeline_category_keyword,
@@ -237,10 +294,32 @@ def update_cycle_relist_watch(body: PddFailureCycleRelistWatchUpdateIn):
         pipeline_material_source=watch.pipeline_material_source,
     )
     scheduler = get_failure_cycle_relist_watch_scheduler()
+    seq_scheduler = get_failure_sequential_scheduler()
     scheduler.reset_tracking()
     if body.enabled:
         scheduler.start()
+    if body.enabled and sequential_on:
+        seq_scheduler.start()
     return _watch_out()
+
+
+@router.get("/cycle-relist/sequential/jobs", response_model=FailureSequentialJobListResponse)
+def list_sequential_jobs(limit: int = Query(100, ge=1, le=500)):
+    rows = list_recent_jobs(limit=limit)
+    batch_info = get_batch_status()
+    return FailureSequentialJobListResponse(
+        ok=True,
+        total=len(rows),
+        batch_active=is_batch_active(),
+        batch=batch_info,
+        items=[_job_to_out(row) for row in rows],
+    )
+
+
+@router.post("/cycle-relist/sequential/tick", response_model=FailureSequentialTickResponse)
+def manual_sequential_tick():
+    summary = tick_once()
+    return FailureSequentialTickResponse(ok=bool(summary.get("ok", True)), summary=summary)
 
 
 @router.post("/cycle-relist/poll", response_model=PddFailureCycleRelistPollResponse)

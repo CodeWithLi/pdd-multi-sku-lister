@@ -267,7 +267,18 @@ class FailureCycleRelistWatchScheduler:
             )
         claims: list[dict[str, Any]] = []
         pipeline_triggers: list[dict[str, Any]] = []
-        auto_process = bool(watch.enabled and watch.trigger_pipeline_on_discover)
+        auto_process = bool(
+            watch.enabled
+            and watch.trigger_pipeline_on_discover
+            and not watch.sequential_staged_enabled
+        )
+        try:
+            from pdd_agent.failure_sequential.scheduler import is_failure_sequential_busy
+
+            if is_failure_sequential_busy():
+                auto_process = False
+        except Exception:
+            pass
         active_cycle_relist_pipeline_id = ""
         if auto_process:
             active_cycle_relist_pipeline_id = self._find_active_cycle_relist_pipeline_id()
