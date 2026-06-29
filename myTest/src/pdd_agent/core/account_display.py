@@ -4,7 +4,12 @@ from __future__ import annotations
 
 from pdd_agent.core.config import load_yaml_settings
 from pdd_agent.core.logging import get_logger
-from pdd_agent.db.repositories import get_account_config, get_cached_shop_display_name
+from pdd_agent.db.repositories import (
+    get_account_config,
+    get_cached_shop_display_name,
+    list_account_configs,
+    list_enabled_account_ids_by_shop_display_name,
+)
 
 logger = get_logger(__name__)
 
@@ -40,11 +45,8 @@ def _account_id_exists(account_id: str) -> bool:
         return False
     try:
         settings = load_yaml_settings()
-        for acc in settings.accounts:
-            if not acc.enabled:
-                continue
-            if str(acc.account_id or "").strip() == aid:
-                return True
+        account = get_account_config(settings, aid)
+        return bool(account and account.enabled)
     except Exception:
         pass
     return False
@@ -67,6 +69,12 @@ def list_account_ids_by_display_name(display_name: str) -> list[str]:
         matched.append(candidate)
 
     try:
+        for aid in list_enabled_account_ids_by_shop_display_name(name):
+            _add(aid)
+    except Exception:
+        pass
+
+    try:
         from pdd_agent.db.repositories import list_login_status_rows
 
         for row in list_login_status_rows():
@@ -78,9 +86,7 @@ def list_account_ids_by_display_name(display_name: str) -> list[str]:
 
     try:
         settings = load_yaml_settings()
-        for acc in settings.accounts:
-            if not acc.enabled:
-                continue
+        for acc in list_account_configs(settings, enabled_only=True):
             aid = str(acc.account_id or "").strip()
             if not aid:
                 continue

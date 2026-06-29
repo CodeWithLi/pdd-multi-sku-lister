@@ -231,6 +231,20 @@ def test_maybe_continue_after_lt_failure_still_schedules_next_listing_batch(
     assert any(
         call.kwargs.get("status") == "running" for call in mock_update.call_args_list
     )
+    failure_updates = [
+        call.kwargs.get("meta_patch") or {}
+        for call in mock_update.call_args_list
+        if (call.kwargs.get("meta_patch") or {}).get("limited_time_outcome") == "failed"
+    ]
+    assert failure_updates
+    assert all("limited_time_finish_handled" not in patch for patch in failure_updates)
+    failure_updates = [
+        call.kwargs.get("meta_patch") or {}
+        for call in mock_update.call_args_list
+        if (call.kwargs.get("meta_patch") or {}).get("limited_time_outcome") == "failed"
+    ]
+    assert failure_updates
+    assert all("limited_time_finish_handled" not in patch for patch in failure_updates)
 
 
 def test_maybe_continue_returns_false_for_final_batch():

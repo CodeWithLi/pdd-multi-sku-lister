@@ -349,6 +349,12 @@ class PddFailureCycleRelistWatchConfig(BaseModel):
     )
     exclude_failure_reason_contains: str = ""
     fetch_limit: int = Field(default=200, ge=1, le=500)
+    fetch_page_size: int = Field(
+        default=50,
+        ge=10,
+        le=200,
+        description="循环上架候选：飞书 search 每页条数（服务端筛选后分页）",
+    )
     ignore_existing_on_start: bool = Field(
         default=False,
         description="启用后首次轮询不把已有符合条件的记录算作「新发现」",

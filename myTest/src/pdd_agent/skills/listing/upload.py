@@ -27,8 +27,9 @@ from pdd_agent.skills.listing.multi_spec_page import (
     wait_multi_sku_rows,
 )
 from pdd_agent.skills.listing.category_page_flow import (
+    CategoryPageMode,
     click_category_next_and_advance,
-    wait_category_section_ready,
+    prepare_category_before_next,
 )
 from pdd_agent.skills.listing.listing_publish_settings import apply_listing_publish_settings
 from pdd_agent.skills.listing.listing_spec_pipeline import apply_unit_listing_specs
@@ -1336,6 +1337,126 @@ def _category_page_body_text(page: DpPage) -> str:
         return ""
 
 
+def _click_category_section_blank(page: DpPage) -> None:
+    """点击商品分类/标题区域空白，促发推荐类目渲染（分支 C render_wait 用）。"""
+    try:
+        page.run_js(
+            """
+            for (const el of document.querySelectorAll('span, div, label, p')) {
+                const t = (el.textContent || '').trim();
+                if (t === '商品分类' || t === '商品标题') {
+                    el.click();
+                    return;
+                }
+            }
+            const main = document.querySelector('.goods-basic, .goods-info, form');
+            if (main) { main.click(); return; }
+            document.body.click();
+            """
+        )
+    except Exception:
+        pass
+    _blur_page_focus(page)
+    time.sleep(0.35)
+
+
+def _category_page_is_manual_picker(page: DpPage, ui_type: str = "") -> bool:
+    """图一：分类选择弹层/树已打开，或分支 B 整页选手动选类。"""
+    if ui_type == "B":
+        return True
+    body = _category_page_body_text(page)
+    if "分类选择" in body:
+        return True
+    if page.ele('css:input[placeholder="请输入关键词搜索分类"]', timeout=0.4):
+        return True
+    return False
+
+
+def _resolve_category_page_mode(
+    page: DpPage,
+    ui_type: str,
+    *,
+    manual_category: bool = False,
+) -> CategoryPageMode:
+    """分支 C：暂无推荐→手动选类；有推荐/已选→等待渲染 workaround。"""
+    if ui_type == "B" or manual_category or _category_page_is_manual_picker(page, ui_type):
+        return "manual_picker"
+    return "render_wait"
+
+
+_CONFIRM_CATEGORY_PICKER_JS = """
+function isVisible(el) {
+    if (!el) return false;
+    const r = el.getBoundingClientRect();
+    const s = window.getComputedStyle(el);
+    return r.width > 4 && r.height > 4
+        && s.display !== 'none' && s.visibility !== 'hidden'
+        && parseFloat(s.opacity || '1') > 0.05;
+}
+function clickEl(el) {
+    if (!el || !isVisible(el)) return false;
+    try { el.scrollIntoView({ block: 'center', behavior: 'instant' }); } catch (e) {}
+    el.click();
+    return true;
+}
+// 搜索命中后：点选三级列中最深层的 active/selected 项
+let best = null;
+let bestScore = -1;
+for (const el of document.querySelectorAll(
+    '[class*="active"], [class*="selected"], [class*="checked"], [class*="current"], [class*="highlight"]'
+)) {
+    if (!isVisible(el)) continue;
+    const t = (el.innerText || el.textContent || '').replace(/\\s+/g, ' ').trim();
+    if (!t || t.length < 2 || t.includes('最近使用')) continue;
+    const r = el.getBoundingClientRect();
+    const score = r.left + r.top;
+    if (score > bestScore) {
+        bestScore = score;
+        best = el;
+    }
+}
+if (best && clickEl(best)) {
+    return { ok: true, text: (best.innerText || '').slice(0, 50) };
+}
+// 点选带 > 的已选路径条
+for (const el of document.querySelectorAll('div, span, li, button')) {
+    const t = (el.innerText || el.textContent || '').replace(/\\s+/g, ' ').trim();
+    if (!t.includes('>')) continue;
+    if (t.split('>').filter(p => p.trim()).length < 2) continue;
+    if (clickEl(el)) return { ok: true, text: t.slice(0, 50) };
+}
+return { ok: false, text: '' };
+"""
+
+
+def _confirm_category_picker_selection(
+    page: DpPage,
+    account_id: str,
+    label: str,
+) -> bool:
+    """手动选类：确认搜索/列选结果，消除「请选择完整的分类」。"""
+    try:
+        raw = page.run_js(_CONFIRM_CATEGORY_PICKER_JS)
+        info = raw if isinstance(raw, dict) else {}
+        if info.get("ok"):
+            print(
+                f"[{account_id}] [{label}] 已确认分类选择：{info.get('text', '')}",
+                flush=True,
+            )
+            time.sleep(0.6)
+            return True
+    except Exception:
+        pass
+    return False
+
+
+    try:
+        text = page.run_js("return document.body?.innerText || '';")
+        return str(text or "")
+    except Exception:
+        return ""
+
+
 DEFAULT_CATEGORY_RENDER_WAIT = 45
 
 
@@ -1531,6 +1652,8 @@ def _wait_for_category_page_advance(
     label: str,
     *,
     max_wait: int = DEFAULT_CATEGORY_ADVANCE_WAIT,
+    mode: CategoryPageMode = "render_wait",
+    ui_type: str = "C",
 ) -> bool:
     """连续点击后等待跳转到完善商品信息页；已跳转则立即返回。"""
     if not _is_still_on_category_publish_step(page):
@@ -1553,7 +1676,11 @@ def _wait_for_category_page_advance(
                 f"[{account_id}] [{label}] 仍在等待页面跳转… ({sec + 1}/{max_wait}s)",
                 flush=True,
             )
-            _click_branch_c_category_recommendation(page, account_id, label)
+            if mode == "manual_picker":
+                _confirm_category_picker_selection(page, account_id, label)
+            elif ui_type == "C":
+                _click_branch_c_category_recommendation(page, account_id, label)
+            _dismiss_category_search_overlay(page, account_id, label)
             _mouse_click_category_next_button(page, account_id, label)
 
     advanced = not _is_still_on_category_publish_step(page)
@@ -1566,7 +1693,7 @@ def _wait_for_category_page_advance(
 
 
 def _category_page_needs_manual_selection(page: DpPage) -> bool:
-    """图二：暂无推荐分类，需点击「选择分类」后在搜索框选类目。"""
+    """分支 C 图二：暂无推荐分类，需点击「选择分类」后在搜索框选类目（图一弹层）。"""
     if _branch_c_category_already_selected(page):
         return False
     body = _category_page_body_text(page)
@@ -1659,6 +1786,66 @@ def _open_category_selector_panel(page: DpPage) -> bool:
         )
         if clicked:
             time.sleep(2)
+            return True
+    except Exception:
+        pass
+    return False
+
+
+def _dismiss_category_search_overlay(page: DpPage, account_id: str, label: str) -> bool:
+    """收起「搜索类目/分类选择」浮层，避免遮挡底部「下一步」。"""
+    try:
+        result = page.run_js(
+            """
+            function isVisible(el) {
+                if (!el || !el.getBoundingClientRect) return false;
+                const r = el.getBoundingClientRect();
+                const s = window.getComputedStyle(el);
+                return r.width > 8 && r.height > 8
+                    && s.display !== 'none'
+                    && s.visibility !== 'hidden'
+                    && parseFloat(s.opacity || '1') > 0.05;
+            }
+            const text = document.body?.innerText || '';
+            let hasOverlay = false;
+            if (text.includes('搜索类目') || text.includes('分类选择')) {
+                hasOverlay = true;
+            }
+            let closed = false;
+            const closeSelectors = [
+                '[data-testid="beast-core-icon-close"]',
+                '[class*="closeIcon"]',
+                '[class*="close"]',
+                'button[aria-label*="关闭"]',
+            ];
+            for (const sel of closeSelectors) {
+                for (const el of document.querySelectorAll(sel)) {
+                    if (!isVisible(el)) continue;
+                    try { el.click(); closed = true; } catch (e) {}
+                    if (closed) break;
+                }
+                if (closed) break;
+            }
+            if (!closed && hasOverlay) {
+                const esc = new KeyboardEvent('keydown', {
+                    key: 'Escape',
+                    code: 'Escape',
+                    bubbles: true,
+                    cancelable: true,
+                });
+                document.dispatchEvent(esc);
+                closed = true;
+            }
+            return { hasOverlay, closed };
+            """
+        )
+        info = result if isinstance(result, dict) else {}
+        if info.get("closed"):
+            print(
+                f"[{account_id}] [{label}] 已收起分类搜索浮层，避免遮挡下一步按钮",
+                flush=True,
+            )
+            time.sleep(0.35)
             return True
     except Exception:
         pass
@@ -1840,6 +2027,7 @@ def _wait_category_submit_ready(
     label: str,
     *,
     max_wait: int = DEFAULT_CATEGORY_SUBMIT_READY_WAIT,
+    click_recommendation: bool = True,
 ) -> bool:
     """等待「请选择完整的分类」消失且下一步按钮可点。"""
     state = _read_category_submit_state(page)
@@ -1850,7 +2038,10 @@ def _wait_category_submit_ready(
         flush=True,
     )
     for sec in range(max_wait):
-        _click_branch_c_category_recommendation(page, account_id, label)
+        if click_recommendation:
+            _click_branch_c_category_recommendation(page, account_id, label)
+        else:
+            _confirm_category_picker_selection(page, account_id, label)
         time.sleep(0.8)
         state = _read_category_submit_state(page)
         if state.get("ready"):
@@ -1985,6 +2176,7 @@ def _click_category_next_step(
     """点击分类页「下一步，完善商品信息」；优先 Playwright 坐标鼠标。"""
     if ui_type == "C":
         _click_branch_c_category_recommendation(page, account_id, label)
+    _dismiss_category_search_overlay(page, account_id, label)
     if not quiet:
         time.sleep(0.4)
     else:
@@ -2018,6 +2210,7 @@ def _click_category_next_step_burst(
     """等待分类可提交 → 坐标点击下一步 → 未跳转则再随机连点。"""
     if ui_type == "C":
         _wait_category_submit_ready(page, account_id, label)
+    _dismiss_category_search_overlay(page, account_id, label)
 
     if not _click_category_next_step(
         page, ui_type=ui_type, account_id=account_id, label=label
@@ -2044,6 +2237,7 @@ def _click_category_next_step_burst(
         )
         if ui_type == "C":
             _click_branch_c_category_recommendation(page, account_id, label)
+        _dismiss_category_search_overlay(page, account_id, label)
         _mouse_click_category_next_button(page, account_id, label)
         time.sleep(random.uniform(0.45, 0.85))
     return True
@@ -2142,19 +2336,26 @@ def upload_one_listing(
             listing_info,
             covers,
         )
-        wait_category_section_ready(
-            page, account_id, label, burst_demo=category_next_burst_demo
-        )
         manual_category = _category_page_needs_manual_selection(page)
-        if _branch_c_category_already_selected(page):
+        category_mode = _resolve_category_page_mode(
+            page, ui_type, manual_category=manual_category
+        )
+        if _branch_c_category_already_selected(page) and category_mode == "render_wait":
             print(
-                f"[{account_id}] [{label}] 分支 C：商品分类已选中，直接进入完善商品信息",
+                f"[{account_id}] [{label}] 分支 C：商品分类已选中，等待渲染后点下一步",
                 flush=True,
             )
         elif manual_category:
             print(
                 f"[{account_id}] [{label}] 分支 C-手动：暂无推荐分类，点击选择分类后搜索",
                 flush=True,
+            )
+            prepare_category_before_next(
+                page,
+                account_id,
+                label,
+                mode="render_wait",
+                burst_demo=False,
             )
             if not _open_category_selector_panel(page):
                 _clear_beforeunload(page)
@@ -2189,12 +2390,22 @@ def upload_one_listing(
                     phase="upload",
                     step="search_category",
                 )
+            category_mode = "manual_picker"
+        else:
+            prepare_category_before_next(
+                page,
+                account_id,
+                label,
+                mode="render_wait",
+                burst_demo=category_next_burst_demo,
+            )
         next_ok, next_err = click_category_next_and_advance(
             page,
             account_id,
             label,
             ui_type="C",
-            burst_demo=category_next_burst_demo,
+            mode=category_mode,
+            burst_demo=category_next_burst_demo and category_mode == "render_wait",
         )
         if not next_ok:
             _clear_beforeunload(page)
@@ -2251,12 +2462,20 @@ def upload_one_listing(
                 phase="upload",
                 step="search_category",
             )
+        prepare_category_before_next(
+            page,
+            account_id,
+            label,
+            mode="manual_picker",
+            burst_demo=False,
+        )
         next_ok, next_err = click_category_next_and_advance(
             page,
             account_id,
             label,
             ui_type=ui_type,
-            burst_demo=category_next_burst_demo,
+            mode="manual_picker",
+            burst_demo=False,
         )
         if not next_ok:
             _clear_beforeunload(page)

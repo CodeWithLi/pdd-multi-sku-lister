@@ -35,6 +35,10 @@ def test_process_candidate_starts_pipeline(monkeypatch):
     )
     cfg = MagicMock()
     cfg.pdd_upload_log.failure_cycle_relist_watch = watch
+    monkeypatch.setattr(
+        "pdd_agent.integrations.feishu.pdd_failure_cycle_relist_trigger.check_merchant_code_already_on_sale",
+        lambda **kwargs: {"checked": True, "listed": False},
+    )
 
     claim = MagicMock()
     claim.ok = True
@@ -80,6 +84,10 @@ def test_process_candidate_uses_cycle_relist_input_mode(monkeypatch):
     )
     cfg = MagicMock()
     cfg.pdd_upload_log.failure_cycle_relist_watch = watch
+    monkeypatch.setattr(
+        "pdd_agent.integrations.feishu.pdd_failure_cycle_relist_trigger.check_merchant_code_already_on_sale",
+        lambda **kwargs: {"checked": True, "listed": False},
+    )
 
     claim = MagicMock()
     claim.ok = True
@@ -123,3 +131,48 @@ def test_process_candidate_uses_cycle_relist_input_mode(monkeypatch):
     assert captured["listing_input_mode"] == "cycle_relist"
     assert captured["product_codes"] == ["BD023B毛绒小猫笔袋"]
     assert outcome["product_codes"] == ["BD023/第二套图/BD023B毛绒小猫笔袋"]
+
+
+def test_process_candidate_skips_when_already_on_sale(monkeypatch):
+    watch = PddFailureCycleRelistWatchConfig(
+        trigger_pipeline_on_discover=True,
+        pipeline_activity_ids=["20981"],
+    )
+    cfg = MagicMock()
+    cfg.pdd_upload_log.failure_cycle_relist_watch = watch
+
+    monkeypatch.setattr(
+        "pdd_agent.integrations.feishu.pdd_failure_cycle_relist_trigger.resolve_cycle_relist_account_id",
+        lambda **kwargs: ("shop-1", ""),
+    )
+    monkeypatch.setattr(
+        "pdd_agent.integrations.feishu.pdd_failure_cycle_relist_trigger.check_merchant_code_already_on_sale",
+        lambda **kwargs: {"checked": True, "listed": True, "pdd_product_id": "916001", "list_status": "销售中"},
+    )
+
+    called = {"start": False}
+
+    def _start(**kwargs):
+        called["start"] = True
+        return {"pipeline_id": "pipe-x"}
+
+    monkeypatch.setattr(
+        "pdd_agent.integrations.feishu.pdd_failure_cycle_relist_trigger.start_integrated_pipeline",
+        _start,
+    )
+
+    outcome = process_failure_cycle_relist_candidate(
+        {
+            "record_id": "rec3",
+            "merchant_code": "BD318G",
+            "account_name": "兔兔潮玩屋",
+            "report_platform": "拼多多",
+        },
+        config=cfg,
+        watch=watch,
+    )
+    assert outcome["ok"] is True
+    assert outcome["skipped"] is True
+    assert outcome["reason"] == "already_on_sale"
+    assert outcome["pdd_product_id"] == "916001"
+    assert called["start"] is False

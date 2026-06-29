@@ -298,6 +298,107 @@ class AccountLockORM(Base):
     )
 
 
+class DailyListingRecordORM(Base):
+    """每日上架成功记录（追加日志，用于统计当天上架商品数）。"""
+
+    __tablename__ = "daily_listing_records"
+    __table_args__ = (
+        Index("ix_daily_listing_records_listed_at_account", "listed_at", "account_id"),
+        Index("ix_daily_listing_records_run_product", "source_run_id", "pdd_product_id"),
+    )
+
+    record_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    account_id: Mapped[str] = mapped_column(String(64), index=True, nullable=False)
+    shop_display_name: Mapped[str] = mapped_column(String(128), default="", nullable=False)
+    pdd_product_id: Mapped[str] = mapped_column(String(64), index=True, nullable=False)
+    product_code: Mapped[str] = mapped_column(String(64), index=True, nullable=False)
+    family_code: Mapped[str] = mapped_column(String(64), index=True, default="", nullable=False)
+    image_set: Mapped[str] = mapped_column(String(255), default="", nullable=False)
+    listing_label: Mapped[str] = mapped_column(String(255), index=True, nullable=False)
+    merchant_code: Mapped[str] = mapped_column(String(255), default="", nullable=False)
+    title: Mapped[str] = mapped_column(String(512), default="", nullable=False)
+    source_run_id: Mapped[str] = mapped_column(String(64), index=True, default="", nullable=False)
+    source_kind: Mapped[str] = mapped_column(String(32), index=True, default="listing", nullable=False)
+    pipeline_id: Mapped[str] = mapped_column(String(64), index=True, default="", nullable=False)
+    listed_at: Mapped[datetime] = mapped_column(DateTime, index=True, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, server_default=func.now(), nullable=False
+    )
+
+
+class DailyCycleRelistRecordORM(Base):
+    """失败日志循环上架：每日触发整合链路记录。"""
+
+    __tablename__ = "daily_cycle_relist_records"
+    __table_args__ = (
+        Index("ix_daily_cycle_relist_triggered_at_account", "triggered_at", "account_id"),
+    )
+
+    record_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    feishu_record_id: Mapped[str] = mapped_column(String(64), index=True, nullable=False)
+    account_id: Mapped[str] = mapped_column(String(64), index=True, nullable=False)
+    shop_display_name: Mapped[str] = mapped_column(String(128), default="", nullable=False)
+    merchant_code: Mapped[str] = mapped_column(String(255), index=True, default="", nullable=False)
+    pipeline_id: Mapped[str] = mapped_column(String(64), unique=True, index=True, nullable=False)
+    product_codes: Mapped[list[str]] = mapped_column(MySQLJSON, default=list, nullable=False)
+    report_platform: Mapped[str] = mapped_column(String(64), default="", nullable=False)
+    trigger_source: Mapped[str] = mapped_column(String(32), index=True, default="auto_watch", nullable=False)
+    triggered_at: Mapped[datetime] = mapped_column(DateTime, index=True, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, server_default=func.now(), nullable=False
+    )
+
+
+class FailureCycleRelistPollLogORM(Base):
+    """失败日志循环上架：每次轮询拉取的候选快照。"""
+
+    __tablename__ = "failure_cycle_relist_poll_logs"
+    __table_args__ = (
+        Index("ix_failure_cycle_relist_poll_polled_at", "polled_at"),
+    )
+
+    poll_log_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    polled_at: Mapped[datetime] = mapped_column(DateTime, index=True, nullable=False)
+    candidate_total: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    new_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    fetch_mode: Mapped[str] = mapped_column(String(32), default="", nullable=False)
+    fetch_page_size: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    table_id: Mapped[str] = mapped_column(String(64), default="", nullable=False)
+    table_name: Mapped[str] = mapped_column(String(128), default="", nullable=False)
+    candidates: Mapped[list[dict]] = mapped_column(MySQLJSON, default=list, nullable=False)
+    new_candidates: Mapped[list[dict]] = mapped_column(MySQLJSON, default=list, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, server_default=func.now(), nullable=False
+    )
+
+
+class FailureCycleRelistActionLogORM(Base):
+    """失败日志循环上架：单条候选的处理结果。"""
+
+    __tablename__ = "failure_cycle_relist_action_logs"
+    __table_args__ = (
+        Index("ix_failure_cycle_relist_action_at", "action_at"),
+        Index("ix_failure_cycle_relist_action_feishu_record", "feishu_record_id"),
+    )
+
+    action_log_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    poll_log_id: Mapped[str] = mapped_column(String(64), index=True, default="", nullable=False)
+    feishu_record_id: Mapped[str] = mapped_column(String(64), index=True, nullable=False)
+    merchant_code: Mapped[str] = mapped_column(String(255), default="", nullable=False)
+    account_name: Mapped[str] = mapped_column(String(128), default="", nullable=False)
+    account_id: Mapped[str] = mapped_column(String(64), default="", nullable=False)
+    failure_reason: Mapped[str] = mapped_column(Text, default="", nullable=False)
+    report_platform: Mapped[str] = mapped_column(String(64), default="", nullable=False)
+    status: Mapped[str] = mapped_column(String(32), index=True, nullable=False)
+    message: Mapped[str] = mapped_column(Text, default="", nullable=False)
+    pipeline_id: Mapped[str] = mapped_column(String(64), default="", nullable=False)
+    trigger_source: Mapped[str] = mapped_column(String(32), default="auto_watch", nullable=False)
+    action_at: Mapped[datetime] = mapped_column(DateTime, index=True, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, server_default=func.now(), nullable=False
+    )
+
+
 class ProductStyleColorORM(Base):
     """商品编码 → AI/人工识别的款式颜色（缓存，省 token）。"""
 

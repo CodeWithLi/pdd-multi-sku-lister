@@ -2107,8 +2107,16 @@ def _on_limited_time_finished(row, *, run_id: str, success: bool, result: dict[s
 
     row = prepare_pipeline_row_for_post_listing_steps(row) or row
     meta = dict(row.meta or {})
-    if meta.get("limited_time_finish_handled"):
+    activity_already_scheduled = bool(
+        getattr(row, "campaign_run_id", None) or getattr(row, "scheduled_activity_at", None)
+    )
+    if meta.get("limited_time_finish_handled") and activity_already_scheduled:
         return
+    if meta.get("limited_time_finish_handled") and not activity_already_scheduled:
+        logger.warning(
+            "pipeline %s stale limited_time_finish_handled without activity, rescheduling",
+            row.pipeline_id,
+        )
     meta_patch: dict[str, Any] = {
         "limited_time_finish_handled": True,
         "limited_time_summary": _summarize_run_message(run_id),
@@ -2194,10 +2202,73 @@ def _run_status_value(status) -> str:
     return str(status.value if hasattr(status, "value") else status)
 
 
+def _listing_batches_complete_for_activity(row) -> bool:
+    """分批上架尚未结束时不要预约全量活动。"""
+    from pdd_agent.api.services.pipeline_listing_batch_continue import has_remaining_listing_batch
+    from pdd_agent.api.services.pipeline_per_batch_limited_time import _per_batch_state
+
+    if has_remaining_listing_batch(row):
+        return False
+    step = str(row.current_step or "")
+    if step.startswith("waiting_listing_batch_"):
+        return False
+    if dict(_per_batch_state(row)).get("pending"):
+        return False
+    return True
+
+
+def _reconcile_limited_time_to_activity(row) -> Any:
+    """限时限量购已结束但活动未预约时补推进（含 waiting_limited_time / waiting_activity）。"""
+    if not row or row.status in TERMINAL_PIPELINE_STATUSES:
+        return row
+    if row.campaign_run_id or row.scheduled_activity_at:
+        return row
+    if not _listing_batches_complete_for_activity(row):
+        return row
+
+    lt_run_id = _pipeline_limited_time_run_id(row)
+    if not lt_run_id:
+        return row
+
+    store = TaskRunStore()
+    record = store.load(lt_run_id)
+    if not record:
+        return row
+    run_status = _run_status_value(record.status)
+    if run_status not in {RunStatus.SUCCESS, RunStatus.FAILED}:
+        return row
+    if run_status == RunStatus.FAILED and not _pipeline_continue_after_limited_time_failure(row):
+        return row
+
+    _on_limited_time_finished(
+        row,
+        run_id=lt_run_id,
+        success=run_status == RunStatus.SUCCESS,
+        result=record.result if isinstance(record.result, dict) else {},
+        error=str(record.message or "").strip() if run_status == RunStatus.FAILED else "",
+    )
+    refreshed = get_integrated_pipeline(row.pipeline_id) or row
+    logger.warning(
+        "reconciled pipeline %s limited_time -> activity run_id=%s status=%s",
+        row.pipeline_id,
+        lt_run_id,
+        run_status,
+    )
+    return refreshed
+
+
 def _reconcile_stuck_pipeline_row(row) -> Any:
     """子任务已失败/取消但链路仍 running 时自动对齐（例如浏览器被关后回调未触发）。"""
     if not row or row.status in TERMINAL_PIPELINE_STATUSES:
         return row
+
+    if row.status in {"waiting_limited_time", "waiting_activity"} or (
+        not row.campaign_run_id and not row.scheduled_activity_at
+    ):
+        reconciled = _reconcile_limited_time_to_activity(row)
+        if reconciled is not row:
+            row = reconciled
+
     store = TaskRunStore()
     checks = [
         (row.listing_run_id, "listing_failed", "上架失败"),
@@ -2234,11 +2305,12 @@ def _reconcile_stuck_pipeline_row(row) -> Any:
         ):
             refreshed = get_integrated_pipeline(row.pipeline_id) or row
             refreshed_meta = refreshed.meta if isinstance(refreshed.meta, dict) else {}
-            if (
-                not refreshed.campaign_run_id
-                and not refreshed.scheduled_activity_at
-                and not refreshed_meta.get("limited_time_finish_handled")
-            ):
+            if not refreshed.campaign_run_id and not refreshed.scheduled_activity_at:
+                if refreshed_meta.get("limited_time_finish_handled"):
+                    logger.warning(
+                        "reconcile pipeline %s limited_time failed with stale finish flag",
+                        row.pipeline_id,
+                    )
                 _on_limited_time_finished(
                     refreshed,
                     run_id=run_id,
@@ -2360,7 +2432,9 @@ def list_pipelines(
     total = count_integrated_pipelines(batch_id=batch_id)
     rows = list_integrated_pipelines(limit=page_size, offset=offset, batch_id=batch_id)
     reconciled = [
-        _reconcile_stuck_pipeline_row(row) if row.status == "running" else row
+        _reconcile_stuck_pipeline_row(row)
+        if row.status not in TERMINAL_PIPELINE_STATUSES
+        else row
         for row in rows
     ]
     items = [pipeline_to_dict(row) for row in reconciled]

@@ -1197,6 +1197,12 @@ def persist_published_item(run_id: str, account_id: str, item: dict[str, Any]) -
         record_listed_folder_from_item(run_id, account_id, item)
     except Exception:
         logger.warning("record listed folder failed run_id=%s", run_id)
+    try:
+        from pdd_agent.api.services.daily_listing_service import record_daily_listing_from_item
+
+        record_daily_listing_from_item(run_id, account_id, item)
+    except Exception:
+        logger.warning("record daily listing failed run_id=%s", run_id)
 
 
 def _persist_published_products(run_id: str, account_id: str, result: dict[str, Any]) -> None:

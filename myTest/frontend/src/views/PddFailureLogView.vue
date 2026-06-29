@@ -1,11 +1,14 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, reactive, ref } from 'vue'
-import { ElMessage } from 'element-plus'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import { api } from '@/api/client'
 import PageHeader from '@/components/PageHeader.vue'
 import type {
   PddFailureCycleRelistAction,
   PddFailureCycleRelistCandidate,
+  PddFailureCycleRelistPollCandidate,
+  PddFailureCycleRelistPollLog,
+  PddFailureCycleRelistTriggerPayload,
   PddFailureCycleRelistWatch,
   PddFailureLogListResponse,
   PddFailureLogRecord,
@@ -14,6 +17,7 @@ import type {
 const loading = ref(false)
 const watchLoading = ref(false)
 const watchSaving = ref(false)
+const pollLogsLoading = ref(false)
 const error = ref('')
 const data = ref<PddFailureLogListResponse | null>(null)
 const showDebug = ref(false)
@@ -22,7 +26,22 @@ const limit = ref(100)
 
 const watchConfig = ref<PddFailureCycleRelistWatch | null>(null)
 const candidates = ref<PddFailureCycleRelistCandidate[]>([])
+const pollLogs = ref<PddFailureCycleRelistPollLog[]>([])
+const expandedPollId = ref('')
+const triggeringRecordId = ref('')
+const manualPolling = ref(false)
 let watchRefreshTimer: ReturnType<typeof setInterval> | null = null
+
+type ManualTriggerRow = Pick<
+  PddFailureCycleRelistTriggerPayload,
+  'record_id' | 'merchant_code' | 'account_name' | 'account_id' | 'report_platform'
+>
+type ManualTriggerStatusRow = ManualTriggerRow & {
+  action_status?: string
+  action_message?: string
+  pipeline_id?: string
+  cycle_relist?: string
+}
 
 const watchForm = reactive({
   enabled: false,
@@ -74,6 +93,25 @@ function actionStatusLabel(status: string) {
   return map[status] || status || '—'
 }
 
+function triggerSourceLabel(source: string) {
+  const map: Record<string, string> = {
+    auto_watch: '自动',
+    manual_api: '手动',
+    prime_skip: '启动忽略',
+  }
+  return map[source] || source || '—'
+}
+
+function fetchModeLabel(mode: string) {
+  if (mode === 'list_all_fallback') return '全表回退'
+  if (mode === 'search') return '条件搜索'
+  return mode || '—'
+}
+
+function togglePollExpand(pollLogId: string) {
+  expandedPollId.value = expandedPollId.value === pollLogId ? '' : pollLogId
+}
+
 function actionStatusType(status: string) {
   if (status === 'started') return 'success'
   if (status === 'failed') return 'danger'
@@ -115,6 +153,111 @@ async function loadCandidates() {
   }
 }
 
+async function loadPollLogs() {
+  pollLogsLoading.value = true
+  try {
+    const resp = await api.pddFailureCycleRelistPollLogs({ limit: 20 })
+    if (resp.ok) {
+      pollLogs.value = resp.items
+    }
+  } catch (e) {
+    ElMessage.error(e instanceof Error ? e.message : '读取拉取记录失败')
+  } finally {
+    pollLogsLoading.value = false
+  }
+}
+
+function isTriggering(recordId: string) {
+  return triggeringRecordId.value === recordId
+}
+
+function isCycleRelistSuccessText(value: string) {
+  const text = String(value || '').trim()
+  if (!text) return false
+  return text.includes('已循环上架') || text === '是' || text.includes('已循环')
+}
+
+function manualTriggerDisabledReason(row: ManualTriggerStatusRow) {
+  if (String(row.pipeline_id || '').trim()) return '已跑成功（已有链路）'
+  if (String(row.action_status || '').trim() === 'started') return '已跑成功（已启动链路）'
+  if (isCycleRelistSuccessText(String(row.cycle_relist || ''))) return '已跑成功（已循环上架）'
+  const actionMessage = String(row.action_message || '').trim()
+  if (actionMessage.includes('手动触发整合链路') || actionMessage.includes('已启动链路')) {
+    return '已跑成功（已触发）'
+  }
+  return ''
+}
+
+function isManualTriggerBlocked(row: ManualTriggerStatusRow) {
+  return !!manualTriggerDisabledReason(row)
+}
+
+async function manualTrigger(row: ManualTriggerStatusRow) {
+  const recordId = row.record_id?.trim()
+  if (!recordId || triggeringRecordId.value) return
+  const blockedReason = manualTriggerDisabledReason(row)
+  if (blockedReason) {
+    ElMessage.warning(`${blockedReason}，请勿重复手动跑`)
+    return
+  }
+
+  try {
+    await ElMessageBox.confirm(
+      `商品编码：${row.merchant_code || '—'}\n店铺：${row.account_name || '—'}\nrecord_id：${recordId}`,
+      '手动跑整合链路',
+      {
+        confirmButtonText: '开始跑',
+        cancelButtonText: '取消',
+        type: 'warning',
+      },
+    )
+  } catch {
+    return
+  }
+
+  triggeringRecordId.value = recordId
+  try {
+    const result = await api.triggerPddFailureCycleRelist({
+      record_id: recordId,
+      merchant_code: row.merchant_code,
+      account_name: row.account_name,
+      account_id: row.account_id,
+      report_platform: row.report_platform,
+    })
+    if (result.ok && result.pipeline_id) {
+      ElMessage.success(`已启动链路 ${result.pipeline_id}`)
+    } else if (result.skipped) {
+      ElMessage.warning(result.reason || '已跳过，未启动链路')
+    } else {
+      ElMessage.error(result.error || '触发失败')
+    }
+    await Promise.all([loadWatch(), loadCandidates(), loadPollLogs()])
+  } catch (e) {
+    ElMessage.error(e instanceof Error ? e.message : '触发失败')
+  } finally {
+    triggeringRecordId.value = ''
+  }
+}
+
+async function manualPoll() {
+  manualPolling.value = true
+  try {
+    const resp = await api.pollPddFailureCycleRelist()
+    if (!resp.ok) {
+      ElMessage.error(resp.error || '拉取失败')
+      return
+    }
+    const total = resp.total ?? 0
+    const newCount = resp.new_count ?? resp.new_items?.length ?? 0
+    ElMessage.success(`拉取完成：候选 ${total} 条，新发现 ${newCount} 条（未启用自动跑时不会自动触发链路）`)
+    await Promise.all([loadWatch(), loadCandidates(), loadPollLogs()])
+  } catch (e) {
+    ElMessage.error(e instanceof Error ? e.message : '拉取失败')
+  } finally {
+    manualPolling.value = false
+  }
+}
+
 async function saveWatch() {
   watchSaving.value = true
   try {
@@ -127,12 +270,18 @@ async function saveWatch() {
     applyWatch(cfg)
     ElMessage.success(watchForm.enabled ? '已启用自动循环上架' : '已关闭自动循环上架')
     await loadCandidates()
+    await loadPollLogs()
     setupWatchRefresh()
   } catch (e) {
     ElMessage.error(e instanceof Error ? e.message : '保存失败')
   } finally {
     watchSaving.value = false
   }
+}
+
+function onEnabledSwitchChange() {
+  if (watchLoading.value || watchSaving.value) return
+  void saveWatch()
 }
 
 function setupWatchRefresh() {
@@ -145,6 +294,7 @@ function setupWatchRefresh() {
   watchRefreshTimer = setInterval(() => {
     void loadWatch()
     void loadCandidates()
+    void loadPollLogs()
   }, interval)
 }
 
@@ -174,7 +324,7 @@ function openDebug(row: PddFailureLogRecord) {
 }
 
 onMounted(async () => {
-  await Promise.all([load(), loadWatch(), loadCandidates()])
+  await Promise.all([load(), loadWatch(), loadCandidates(), loadPollLogs()])
   setupWatchRefresh()
 })
 
@@ -203,7 +353,10 @@ onUnmounted(() => {
       <template #header>
         <div class="card-header">
           <span>自动循环上架</span>
-          <el-button type="primary" :loading="watchSaving" @click="saveWatch">保存</el-button>
+          <div class="card-actions">
+            <el-button :loading="manualPolling" @click="manualPoll">手动拉取</el-button>
+            <el-button type="primary" :loading="watchSaving" @click="saveWatch">保存</el-button>
+          </div>
         </div>
       </template>
 
@@ -228,12 +381,13 @@ onUnmounted(() => {
             上次轮询 {{ watchConfig.last_poll_at }} · 候选 {{ watchConfig.candidate_total }} 条 · 本轮新发现 {{ watchConfig.new_count }} 条
           </span>
           <span v-if="watchConfig.last_error" class="error-text"> · {{ watchConfig.last_error }}</span>
+          <span> · <router-link to="/daily-stats">按日期查看上架/循环统计 →</router-link></span>
         </template>
       </el-alert>
 
       <el-form label-width="140px" class="watch-form">
         <el-form-item label="启用">
-          <el-switch v-model="watchForm.enabled" />
+          <el-switch v-model="watchForm.enabled" @change="onEnabledSwitchChange" />
         </el-form-item>
         <el-form-item label="轮询间隔（秒）">
           <el-input-number v-model="watchForm.poll_seconds" :min="10" :max="3600" :step="10" />
@@ -269,6 +423,8 @@ onUnmounted(() => {
       >
         <el-table-column prop="at" label="时间" width="170" />
         <el-table-column prop="merchant_code" label="商品编码" width="130" show-overflow-tooltip />
+        <el-table-column prop="account_name" label="店铺" width="110" show-overflow-tooltip />
+        <el-table-column prop="failure_reason" label="失败原因" min-width="160" show-overflow-tooltip />
         <el-table-column prop="record_id" label="record_id" width="150" show-overflow-tooltip />
         <el-table-column label="结果" width="100">
           <template #default="{ row }: { row: PddFailureCycleRelistAction }">
@@ -277,9 +433,102 @@ onUnmounted(() => {
             </el-tag>
           </template>
         </el-table-column>
-        <el-table-column prop="message" label="说明" min-width="240" show-overflow-tooltip />
+        <el-table-column label="来源" width="90">
+          <template #default="{ row }: { row: PddFailureCycleRelistAction }">
+            {{ triggerSourceLabel(row.trigger_source || '') }}
+          </template>
+        </el-table-column>
+        <el-table-column prop="message" label="说明" min-width="200" show-overflow-tooltip />
         <el-table-column prop="pipeline_id" label="链路 ID" width="140" show-overflow-tooltip />
       </el-table>
+
+      <el-divider content-position="left">最近拉取记录</el-divider>
+      <el-table
+        v-loading="pollLogsLoading"
+        :data="pollLogs"
+        stripe
+        border
+        size="small"
+        empty-text="暂无拉取记录"
+        class="mb-16"
+      >
+        <el-table-column prop="polled_at" label="轮询时间" width="170" />
+        <el-table-column label="候选/新发现" width="110">
+          <template #default="{ row }">
+            {{ row.candidate_total }} / {{ row.new_count }}
+          </template>
+        </el-table-column>
+        <el-table-column label="拉取方式" width="100">
+          <template #default="{ row }">
+            {{ fetchModeLabel(row.fetch_mode) }}
+          </template>
+        </el-table-column>
+        <el-table-column prop="table_name" label="表" min-width="140" show-overflow-tooltip />
+        <el-table-column label="详情" width="90">
+          <template #default="{ row }">
+            <el-button link type="primary" @click="togglePollExpand(row.poll_log_id)">
+              {{ expandedPollId === row.poll_log_id ? '收起' : '展开' }}
+            </el-button>
+          </template>
+        </el-table-column>
+      </el-table>
+      <div v-if="expandedPollId" class="poll-detail mb-16">
+        <template v-for="log in pollLogs" :key="log.poll_log_id">
+          <div v-if="log.poll_log_id === expandedPollId">
+            <h4 v-if="log.new_candidates.length">本轮新发现（{{ log.new_candidates.length }}）</h4>
+            <el-table
+              v-if="log.new_candidates.length"
+              :data="log.new_candidates"
+              stripe
+              border
+              size="small"
+              class="mb-12"
+            >
+              <el-table-column prop="merchant_code" label="商品编码" width="130" />
+              <el-table-column prop="account_name" label="店铺" width="110" />
+              <el-table-column prop="failure_reason" label="失败原因" min-width="180" show-overflow-tooltip />
+              <el-table-column prop="process_status" label="处理状态" width="110" />
+              <el-table-column prop="record_id" label="record_id" width="150" show-overflow-tooltip />
+              <el-table-column label="操作" width="90" fixed="right">
+                <template #default="{ row }: { row: PddFailureCycleRelistPollCandidate }">
+                  <el-button
+                    link
+                    type="primary"
+                    :loading="isTriggering(row.record_id)"
+                    :disabled="isManualTriggerBlocked(row) || (!!triggeringRecordId && !isTriggering(row.record_id))"
+                    :title="manualTriggerDisabledReason(row)"
+                    @click="manualTrigger(row)"
+                  >
+                    {{ isManualTriggerBlocked(row) ? '已跑成功' : '手动跑' }}
+                  </el-button>
+                </template>
+              </el-table-column>
+            </el-table>
+            <h4>全部候选（{{ log.candidates.length }}）</h4>
+            <el-table :data="log.candidates" stripe border size="small">
+              <el-table-column prop="merchant_code" label="商品编码" width="130" />
+              <el-table-column prop="account_name" label="店铺" width="110" />
+              <el-table-column prop="failure_reason" label="失败原因" min-width="180" show-overflow-tooltip />
+              <el-table-column prop="process_status" label="处理状态" width="110" />
+              <el-table-column prop="record_id" label="record_id" width="150" show-overflow-tooltip />
+              <el-table-column label="操作" width="90" fixed="right">
+                <template #default="{ row }: { row: PddFailureCycleRelistPollCandidate }">
+                  <el-button
+                    link
+                    type="primary"
+                    :loading="isTriggering(row.record_id)"
+                    :disabled="isManualTriggerBlocked(row) || (!!triggeringRecordId && !isTriggering(row.record_id))"
+                    :title="manualTriggerDisabledReason(row)"
+                    @click="manualTrigger(row)"
+                  >
+                    {{ isManualTriggerBlocked(row) ? '已跑成功' : '手动跑' }}
+                  </el-button>
+                </template>
+              </el-table-column>
+            </el-table>
+          </div>
+        </template>
+      </div>
 
       <el-divider content-position="left">当前候选（{{ candidates.length }}）</el-divider>
       <el-table :data="candidates" stripe border size="small" empty-text="暂无符合条件的记录">
@@ -297,6 +546,20 @@ onUnmounted(() => {
         </el-table-column>
         <el-table-column prop="action_message" label="原因说明" min-width="220" show-overflow-tooltip />
         <el-table-column prop="pipeline_id" label="链路 ID" width="130" show-overflow-tooltip />
+        <el-table-column label="操作" width="90" fixed="right">
+          <template #default="{ row }: { row: PddFailureCycleRelistCandidate }">
+            <el-button
+              link
+              type="primary"
+              :loading="isTriggering(row.record_id)"
+              :disabled="isManualTriggerBlocked(row) || (!!triggeringRecordId && !isTriggering(row.record_id))"
+              :title="manualTriggerDisabledReason(row)"
+              @click="manualTrigger(row)"
+            >
+              {{ isManualTriggerBlocked(row) ? '已跑成功' : '手动跑' }}
+            </el-button>
+          </template>
+        </el-table-column>
       </el-table>
     </el-card>
 
@@ -336,8 +599,18 @@ onUnmounted(() => {
       <el-table-column prop="cycle_relist" label="是否已循环上架" width="130" show-overflow-tooltip />
       <el-table-column prop="processor" label="人员" width="100" show-overflow-tooltip />
       <el-table-column prop="processed_at" label="处理时间" width="150" />
-      <el-table-column label="操作" width="100" fixed="right">
-        <template #default="{ row }">
+      <el-table-column label="操作" width="150" fixed="right">
+        <template #default="{ row }: { row: PddFailureLogRecord }">
+          <el-button
+            link
+            type="primary"
+            :loading="isTriggering(row.record_id)"
+            :disabled="isManualTriggerBlocked(row) || (!!triggeringRecordId && !isTriggering(row.record_id))"
+            :title="manualTriggerDisabledReason(row)"
+            @click="manualTrigger(row)"
+          >
+            {{ isManualTriggerBlocked(row) ? '已跑成功' : '手动跑' }}
+          </el-button>
           <el-button link type="primary" @click="openDebug(row)">原始数据</el-button>
         </template>
       </el-table-column>
@@ -372,6 +645,12 @@ onUnmounted(() => {
   justify-content: space-between;
   align-items: center;
   gap: 12px;
+}
+
+.card-actions {
+  display: flex;
+  gap: 8px;
+  align-items: center;
 }
 
 .toolbar {
@@ -416,6 +695,17 @@ onUnmounted(() => {
   overflow: auto;
   font-size: 12px;
   line-height: 1.5;
+}
+
+.poll-detail {
+  background: var(--el-fill-color-light);
+  border-radius: 6px;
+  padding: 12px;
+}
+
+.poll-detail h4 {
+  margin: 8px 0;
+  font-size: 13px;
 }
 
 h4 {

@@ -579,6 +579,7 @@ def _append_skus_from_previews(
 
         from pdd_agent.skills.listing.pdd_product_catalog import (
             BUNDLE_MODEL_CODE,
+            _norm_code,
             catalog_codes_match,
             find_catalog_entry,
         )

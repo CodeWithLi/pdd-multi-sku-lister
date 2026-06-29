@@ -33,6 +33,8 @@ class FeishuAPIError(RuntimeError):
 
 
 _USER_TOKEN_EXPIRED_CODES = frozenset({99991663, 99991668, 99991677})
+_BITABLE_RETRYABLE_CODES = frozenset({1254607, 1255040, 1254290, 1254291})
+_BITABLE_RETRY_BACKOFF_SECONDS = (0.5, 1.2, 2.5)
 
 
 class FeishuClient:
@@ -213,6 +215,7 @@ class FeishuClient:
         json: dict[str, Any] | None = None,
         retry_on_token: bool = True,
         prefer_user_token: bool | None = None,
+        _bitable_attempt: int = 0,
     ) -> dict[str, Any]:
         use_user_token = self._config.use_user_access_token if prefer_user_token is None else prefer_user_token
         token = self.get_user_access_token() if use_user_token else self.get_tenant_access_token()
@@ -277,6 +280,20 @@ class FeishuClient:
             )
 
         if code != 0:
+            if (
+                code in _BITABLE_RETRYABLE_CODES
+                and _bitable_attempt < len(_BITABLE_RETRY_BACKOFF_SECONDS)
+            ):
+                time.sleep(_BITABLE_RETRY_BACKOFF_SECONDS[_bitable_attempt])
+                return self.request(
+                    method,
+                    path,
+                    params=params,
+                    json=json,
+                    retry_on_token=retry_on_token,
+                    prefer_user_token=use_user_token,
+                    _bitable_attempt=_bitable_attempt + 1,
+                )
             raise FeishuAPIError(
                 f"飞书 API 错误: {data.get('msg')} (code={code})",
                 code=code,

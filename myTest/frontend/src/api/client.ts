@@ -28,6 +28,11 @@ import type {
   PddFailureCycleRelistWatchUpdate,
   PddFailureCycleRelistCandidateListResponse,
   PddFailureCycleRelistPollResponse,
+  PddFailureCycleRelistPollLogListResponse,
+  DailyCycleRelistRecordListResponse,
+  DailyCycleRelistSummaryResponse,
+  DailyListingRecordListResponse,
+  DailyListingSummaryResponse,
   PddFailureCycleRelistTriggerResult,
   PddFailureCycleRelistTriggerPayload,
   PddFailureCycleRelistClaimResult,
@@ -881,6 +886,14 @@ export const api = {
       )
       .then((r) => r.data),
 
+  pddFailureCycleRelistPollLogs: (params?: { limit?: number }) =>
+    http
+      .get<PddFailureCycleRelistPollLogListResponse>(
+        '/pdd-failure-logs/cycle-relist/poll-logs',
+        { params },
+      )
+      .then((r) => r.data),
+
   claimPddFailureCycleRelist: (body: PddFailureCycleRelistClaimPayload) =>
     http
       .post<PddFailureCycleRelistClaimResult>('/pdd-failure-logs/cycle-relist/claim', body)
@@ -899,6 +912,34 @@ export const api = {
   triggerPddFailureCycleRelist: (body: PddFailureCycleRelistTriggerPayload) =>
     http
       .post<PddFailureCycleRelistTriggerResult>('/pdd-failure-logs/cycle-relist/trigger', body)
+      .then((r) => r.data),
+
+  dailyCycleRelistSummary: (params?: { triggered_date?: string }) =>
+    http
+      .get<DailyCycleRelistSummaryResponse>('/daily-cycle-relists/summary', { params })
+      .then((r) => r.data),
+
+  dailyCycleRelistRecords: (params?: {
+    triggered_date?: string
+    account_id?: string
+    limit?: number
+  }) =>
+    http
+      .get<DailyCycleRelistRecordListResponse>('/daily-cycle-relists', { params })
+      .then((r) => r.data),
+
+  dailyListingSummary: (params?: { listed_date?: string }) =>
+    http
+      .get<DailyListingSummaryResponse>('/daily-listings/summary', { params })
+      .then((r) => r.data),
+
+  dailyListingRecords: (params?: {
+    listed_date?: string
+    account_id?: string
+    limit?: number
+  }) =>
+    http
+      .get<DailyListingRecordListResponse>('/daily-listings', { params })
       .then((r) => r.data),
 
   wecomHealth: () => http.get<WecomHealth>('/wecom/health').then((r) => r.data),

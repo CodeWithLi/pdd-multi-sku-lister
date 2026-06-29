@@ -24,13 +24,45 @@ def test_resolve_cycle_relist_account_id_by_display_name():
     assert error == ""
 
 
+def test_list_account_ids_by_display_name_reads_db_shop_display_name():
+    with patch(
+        "pdd_agent.core.account_display.list_enabled_account_ids_by_shop_display_name",
+        return_value=["store_B", "多多李子2602"],
+    ), patch(
+        "pdd_agent.core.account_display._account_id_exists",
+        side_effect=lambda aid: aid in {"store_B", "多多李子2602"},
+    ), patch(
+        "pdd_agent.core.account_display.list_account_configs",
+        return_value=[],
+    ), patch(
+        "pdd_agent.db.repositories.list_login_status_rows",
+        return_value=[],
+    ):
+        from pdd_agent.core.account_display import list_account_ids_by_display_name
+
+        ids = list_account_ids_by_display_name("咕噜咕噜时尚店")
+    assert ids == ["store_B", "多多李子2602"]
+
+
+def test_resolve_cycle_relist_account_id_matches_db_shop_name():
+    with patch(
+        "pdd_agent.core.account_display.list_account_ids_by_display_name",
+        return_value=["多多李子2603"],
+    ), patch(
+        "pdd_agent.db.repositories.list_busy_account_ids",
+        return_value=set(),
+    ):
+        account_id, error = resolve_cycle_relist_account_id(account_name="啦啦啦甜甜圈时尚店")
+    assert account_id == "多多李子2603"
+    assert error == ""
+
+
 def test_resolve_cycle_relist_account_id_prefers_explicit_account_id():
-    settings = SimpleNamespace(
-        accounts=[
-            SimpleNamespace(account_id="store_B", enabled=True),
-        ]
-    )
-    with patch("pdd_agent.core.account_display.load_yaml_settings", return_value=settings):
+    settings = SimpleNamespace(accounts=[])
+    with patch("pdd_agent.core.account_display.load_yaml_settings", return_value=settings), patch(
+        "pdd_agent.core.account_display.get_account_config",
+        return_value=SimpleNamespace(account_id="store_B", enabled=True, username="多多青提2602"),
+    ):
         account_id, error = resolve_cycle_relist_account_id(
             account_name="兔兔潮玩屋",
             account_id="store_B",

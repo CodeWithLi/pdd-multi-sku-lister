@@ -9,6 +9,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from pdd_agent.api.routes.agents import router as agents_router
 from pdd_agent.api.routes.catalog import router as catalog_router
 from pdd_agent.api.routes.config import router as config_router
+from pdd_agent.api.routes.daily_cycle_relists import router as daily_cycle_relists_router
+from pdd_agent.api.routes.daily_listings import router as daily_listings_router
 from pdd_agent.api.routes.failures import router as failures_router
 from pdd_agent.api.routes.feishu_bitable import router as feishu_bitable_router
 from pdd_agent.api.routes.feishu_cache import router as feishu_cache_router
@@ -244,6 +246,8 @@ def create_app() -> FastAPI:
     app.include_router(health_router, prefix="/api")
     app.include_router(config_router, prefix="/api")
     app.include_router(catalog_router, prefix="/api")
+    app.include_router(daily_listings_router, prefix="/api")
+    app.include_router(daily_cycle_relists_router, prefix="/api")
     app.include_router(tasks_router, prefix="/api")
     app.include_router(traffic_report_schedule_router, prefix="/api")
     app.include_router(pipelines_router, prefix="/api")

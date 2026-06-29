@@ -11,9 +11,31 @@ class PddFailureCycleRelistActionOut(BaseModel):
     at: str = ""
     record_id: str = ""
     merchant_code: str = ""
+    account_name: str = ""
+    failure_reason: str = ""
     status: str = ""
     message: str = ""
     pipeline_id: str = ""
+    trigger_source: str = ""
+
+
+class PddFailureCycleRelistPollLogOut(BaseModel):
+    poll_log_id: str = ""
+    polled_at: str = ""
+    candidate_total: int = 0
+    new_count: int = 0
+    fetch_mode: str = ""
+    fetch_page_size: int = 0
+    table_id: str = ""
+    table_name: str = ""
+    candidates: list[dict[str, Any]] = Field(default_factory=list)
+    new_candidates: list[dict[str, Any]] = Field(default_factory=list)
+
+
+class PddFailureCycleRelistPollLogListResponse(BaseModel):
+    ok: bool = True
+    total: int = 0
+    items: list[PddFailureCycleRelistPollLogOut] = Field(default_factory=list)
 
 
 class PddFailureCycleRelistWatchOut(BaseModel):

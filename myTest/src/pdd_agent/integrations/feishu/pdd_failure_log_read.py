@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import Any
 
 from pdd_agent.integrations.feishu.bitable import (
@@ -10,6 +11,7 @@ from pdd_agent.integrations.feishu.bitable import (
     find_table_id_by_name,
     list_all_records,
     list_fields,
+    resolve_table_field_name,
 )
 from pdd_agent.integrations.feishu.client import FeishuClient
 from pdd_agent.integrations.feishu.config import FeishuConfig, load_feishu_config
@@ -177,14 +179,24 @@ def _resolve_cycle_relist_field_name(
     return resolve_cycle_relist_field_name(configured, table_fields)
 
 
-def list_pdd_failure_logs(
-    config: FeishuConfig | None = None,
-    client: FeishuClient | None = None,
-    *,
-    limit: int = 100,
-) -> dict[str, Any]:
-    cfg = config or load_feishu_config()
-    api = client or FeishuClient(cfg)
+@dataclass(frozen=True)
+class FailureLogTableContext:
+    app_token: str
+    table_id: str
+    table_name: str
+    resolve_method: str
+    mirror_field_name: str
+    cycle_relist_field_name: str
+    account_name_field: str
+    account_id_field: str
+    failure_reason_field: str
+    names: Any
+
+
+def resolve_failure_log_table_context(
+    cfg: FeishuConfig,
+    api: FeishuClient,
+) -> FailureLogTableContext | dict[str, Any]:
     app_token = str(cfg.bitable_app_token or "").strip()
     if not app_token:
         return {"ok": False, "error": "未配置 bitable_app_token"}
@@ -215,51 +227,138 @@ def list_pdd_failure_logs(
         str(getattr(names, "account_id", "") or ""),
         table_fields,
     )
+    failure_reason_field = resolve_table_field_name(
+        api,
+        app_token,
+        table_id,
+        str(names.failure_reason or "失败原因"),
+    )
+    return FailureLogTableContext(
+        app_token=app_token,
+        table_id=table_id,
+        table_name=table_name,
+        resolve_method=resolve_method,
+        mirror_field_name=mirror_field_name,
+        cycle_relist_field_name=cycle_relist_field_name,
+        account_name_field=account_name_field,
+        account_id_field=account_id_field,
+        failure_reason_field=failure_reason_field,
+        names=names,
+    )
+
+
+def build_cycle_relist_empty_condition(
+    api: FeishuClient,
+    ctx: FailureLogTableContext,
+) -> dict[str, Any]:
+    """是否已循环上架=未选：勾选框用 is false，单选/文本用 isEmpty。"""
+    from pdd_agent.integrations.feishu.bitable import get_table_field_meta
+    from pdd_agent.integrations.feishu.field_display import is_checkbox_like_cycle_relist_field
+
+    field_name = resolve_table_field_name(
+        api,
+        ctx.app_token,
+        ctx.table_id,
+        ctx.cycle_relist_field_name,
+    )
+    meta = get_table_field_meta(api, ctx.app_token, ctx.table_id)
+    field_meta = meta.get(field_name) or meta.get(ctx.cycle_relist_field_name) or {}
+    if is_checkbox_like_cycle_relist_field(field_meta):
+        return {"field_name": field_name, "operator": "is", "value": [False]}
+    return {"field_name": field_name, "operator": "isEmpty", "value": []}
+
+
+def build_cycle_relist_candidate_search_filter(
+    ctx: FailureLogTableContext,
+    api: FeishuClient,
+    *,
+    completed_status: str,
+) -> dict[str, Any]:
+    """飞书 search filter：单个处理状态镜像 + 是否已循环上架未选（避免 children 嵌套触发 InvalidFilter）。"""
+    status = str(completed_status or "").strip()
+    if not status:
+        raise ValueError("completed_status is required")
+
+    mirror_field = resolve_table_field_name(
+        api,
+        ctx.app_token,
+        ctx.table_id,
+        ctx.mirror_field_name,
+    )
+    return {
+        "conjunction": "and",
+        "conditions": [
+            {
+                "field_name": mirror_field,
+                "operator": "is",
+                "value": [status],
+            },
+            build_cycle_relist_empty_condition(api, ctx),
+        ],
+    }
+
+
+def parse_failure_log_record(
+    record: dict[str, Any],
+    ctx: FailureLogTableContext,
+) -> dict[str, Any]:
+    names = ctx.names
+    fields = record.get("fields") or {}
+    mirror_text = format_plain_text(fields.get(ctx.mirror_field_name))
+    processor_names = format_user_names(fields.get(names.processor))
+    processed_at = format_datetime_ms(fields.get(names.processed_at))
+    status = resolve_process_status(mirror_text=mirror_text)
+    account_name, account_id = read_failure_log_account(
+        fields,
+        account_name_field=ctx.account_name_field,
+        account_id_field=ctx.account_id_field,
+    )
+    return {
+        "record_id": str(record.get("record_id") or record.get("id") or ""),
+        "date": format_datetime_ms(fields.get(names.date)) or str(fields.get(names.date) or ""),
+        "merchant_code": str(fields.get(names.merchant_code) or ""),
+        "report_platform": format_single_select(fields.get(names.report_platform)),
+        "account_name": account_name,
+        "account_id": account_id,
+        "record_type": format_single_select(fields.get(names.record_type)),
+        "failure_reason": str(fields.get(names.failure_reason) or ""),
+        "publish_start": format_datetime_ms(fields.get(names.publish_start)),
+        "publish_end": format_datetime_ms(fields.get(names.publish_end)),
+        "duration_seconds": str(fields.get(names.duration_seconds) or ""),
+        "process_completed": {
+            "field_name": ctx.mirror_field_name,
+            "label": status["label"],
+            "source": status["source"],
+            "mirror_text": mirror_text,
+        },
+        "cycle_relist": format_single_select(fields.get(ctx.cycle_relist_field_name)),
+        "cycle_relist_field_name": ctx.cycle_relist_field_name,
+        "processor": processor_names,
+        "processed_at": processed_at,
+        "fields_raw": fields,
+    }
+
+
+def list_pdd_failure_logs(
+    config: FeishuConfig | None = None,
+    client: FeishuClient | None = None,
+    *,
+    limit: int = 100,
+) -> dict[str, Any]:
+    cfg = config or load_feishu_config()
+    api = client or FeishuClient(cfg)
+
+    resolved = resolve_failure_log_table_context(cfg, api)
+    if isinstance(resolved, dict):
+        return resolved
+    ctx = resolved
 
     max_items = max(1, min(int(limit), 500))
-    raw_records = list_all_records(api, app_token, table_id, page_size=max_items)
+    raw_records = list_all_records(api, ctx.app_token, ctx.table_id, page_size=max_items)
     if len(raw_records) > max_items:
         raw_records = raw_records[:max_items]
 
-    items: list[dict[str, Any]] = []
-    for record in raw_records:
-        fields = record.get("fields") or {}
-        mirror_text = format_plain_text(fields.get(mirror_field_name))
-        processor_names = format_user_names(fields.get(names.processor))
-        processed_at = format_datetime_ms(fields.get(names.processed_at))
-        status = resolve_process_status(mirror_text=mirror_text)
-        account_name, account_id = read_failure_log_account(
-            fields,
-            account_name_field=account_name_field,
-            account_id_field=account_id_field,
-        )
-
-        items.append(
-            {
-                "record_id": str(record.get("record_id") or record.get("id") or ""),
-                "date": format_datetime_ms(fields.get(names.date)) or str(fields.get(names.date) or ""),
-                "merchant_code": str(fields.get(names.merchant_code) or ""),
-                "report_platform": format_single_select(fields.get(names.report_platform)),
-                "account_name": account_name,
-                "account_id": account_id,
-                "record_type": format_single_select(fields.get(names.record_type)),
-                "failure_reason": str(fields.get(names.failure_reason) or ""),
-                "publish_start": format_datetime_ms(fields.get(names.publish_start)),
-                "publish_end": format_datetime_ms(fields.get(names.publish_end)),
-                "duration_seconds": str(fields.get(names.duration_seconds) or ""),
-                "process_completed": {
-                    "field_name": mirror_field_name,
-                    "label": status["label"],
-                    "source": status["source"],
-                    "mirror_text": mirror_text,
-                },
-                "cycle_relist": format_single_select(fields.get(cycle_relist_field_name)),
-                "cycle_relist_field_name": cycle_relist_field_name,
-                "processor": processor_names,
-                "processed_at": processed_at,
-                "fields_raw": fields,
-            }
-        )
+    items = [parse_failure_log_record(record, ctx) for record in raw_records]
 
     mirror_readable = any(
         bool((row.get("process_completed") or {}).get("mirror_text"))
@@ -268,14 +367,14 @@ def list_pdd_failure_logs(
 
     return {
         "ok": True,
-        "app_token": app_token,
-        "table_id": table_id,
-        "table_name": table_name,
-        "resolve_method": resolve_method,
-        "mirror_field_name": mirror_field_name,
-        "account_name_field": account_name_field,
-        "account_id_field": account_id_field,
-        "cycle_relist_field_name": cycle_relist_field_name,
+        "app_token": ctx.app_token,
+        "table_id": ctx.table_id,
+        "table_name": ctx.table_name,
+        "resolve_method": ctx.resolve_method,
+        "mirror_field_name": ctx.mirror_field_name,
+        "account_name_field": ctx.account_name_field,
+        "account_id_field": ctx.account_id_field,
+        "cycle_relist_field_name": ctx.cycle_relist_field_name,
         "mirror_api_readable": mirror_readable,
         "total": len(items),
         "items": items,
@@ -286,7 +385,7 @@ def list_pdd_failure_logs(
                 "type": int(f.get("type") or 0),
                 "ui_type": str(f.get("ui_type") or ""),
             }
-            for f in table_fields
+            for f in list_fields(api, ctx.app_token, ctx.table_id)
         ],
     }
 

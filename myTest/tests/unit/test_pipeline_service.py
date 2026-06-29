@@ -723,6 +723,52 @@ def test_on_limited_time_finished_continues_when_continue_enabled():
     assert update.call_args.kwargs["current_step"] == "limited_time_failed_continue"
 
 
+def test_on_limited_time_finished_reschedules_activity_when_stale_finish_flag():
+    row = SimpleNamespace(
+        pipeline_id="pipe_lt",
+        account_id="store_A",
+        demo_mode=True,
+        activity_delay_hours=24,
+        activity_id="20981",
+        campaign_run_id="",
+        scheduled_activity_at=None,
+        pdd_product_ids=["111", "222"],
+        mapping_ids=["m1", "m2"],
+        meta={
+            "activity_ids": ["20981"],
+            "limited_time_run_id": "lt_run",
+            "limited_time_finish_handled": True,
+            "continue_after_limited_time_failure": True,
+            "listing_throttle": {
+                "enabled": True,
+                "total_batches": 3,
+                "batch_index": 2,
+                "batches": [["a"], ["b"], ["c"]],
+                "completed": True,
+                "accumulated_pdd_ids": ["111", "222"],
+                "accumulated_mapping_ids": ["m1", "m2"],
+            },
+            "listing_per_batch_limited_time": {
+                "enabled": True,
+                "awaiting_final_activity": True,
+            },
+        },
+    )
+    with patch("pdd_agent.api.services.pipeline_service._summarize_run_message", return_value="fail"):
+        with patch("pdd_agent.api.services.pipeline_service.get_integrated_pipeline", return_value=row):
+            with patch(
+                "pdd_agent.api.services.pipeline_service._schedule_pipeline_activity_after_limited_time"
+            ) as schedule_activity:
+                _on_limited_time_finished(
+                    row,
+                    run_id="lt_run",
+                    success=False,
+                    result={"results": [{"status": "failed"}]},
+                    error="限时限量购设置失败",
+                )
+    schedule_activity.assert_called_once()
+
+
 def test_on_campaign_finished_is_idempotent_for_same_run_id():
     row = SimpleNamespace(
         pipeline_id="pipe_dup",

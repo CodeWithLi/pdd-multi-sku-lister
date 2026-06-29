@@ -203,9 +203,9 @@ def maybe_continue_after_per_batch_limited_time(
         return False
 
     failure_message = error or "限时限量购设置失败"
+    # 中间批次失败不能标记 limited_time_finish_handled，否则最后一批完成后活动预约会被跳过。
     lt_failure_meta: dict[str, Any] = {
         "limited_time_outcome": "failed",
-        "limited_time_finish_handled": True,
         "per_batch_limited_time_last_error": failure_message,
     }
     if not success and not pending:

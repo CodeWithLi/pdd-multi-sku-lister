@@ -449,9 +449,43 @@ export interface PddFailureCycleRelistAction {
   at: string
   record_id: string
   merchant_code: string
+  account_name?: string
+  failure_reason?: string
   status: string
   message: string
   pipeline_id: string
+  trigger_source?: string
+}
+
+export interface PddFailureCycleRelistPollCandidate {
+  record_id: string
+  merchant_code: string
+  account_name: string
+  account_id: string
+  report_platform: string
+  failure_reason: string
+  process_status: string
+  cycle_relist: string
+  date: string
+}
+
+export interface PddFailureCycleRelistPollLog {
+  poll_log_id: string
+  polled_at: string
+  candidate_total: number
+  new_count: number
+  fetch_mode: string
+  fetch_page_size: number
+  table_id: string
+  table_name: string
+  candidates: PddFailureCycleRelistPollCandidate[]
+  new_candidates: PddFailureCycleRelistPollCandidate[]
+}
+
+export interface PddFailureCycleRelistPollLogListResponse {
+  ok: boolean
+  total: number
+  items: PddFailureCycleRelistPollLog[]
 }
 
 export interface PddFailureCycleRelistWatch {
@@ -492,6 +526,7 @@ export interface PddFailureCycleRelistTriggerPayload {
   record_id: string
   merchant_code?: string
   account_name?: string
+  account_id?: string
   report_platform?: string
 }
 
@@ -556,6 +591,74 @@ export interface PddFailureCycleRelistPollResponse {
   total?: number
   new_count?: number
   new_items?: PddFailureCycleRelistCandidate[]
+}
+
+export interface DailyCycleRelistRecord {
+  record_id: string
+  feishu_record_id: string
+  account_id: string
+  shop_display_name: string
+  merchant_code: string
+  pipeline_id: string
+  product_codes: string[]
+  report_platform: string
+  trigger_source: string
+  triggered_at: string
+  created_at: string | null
+}
+
+export interface DailyCycleRelistShopSummary {
+  account_id: string
+  shop_display_name: string
+  count: number
+}
+
+export interface DailyCycleRelistSummaryResponse {
+  triggered_date: string
+  total: number
+  by_shop: DailyCycleRelistShopSummary[]
+}
+
+export interface DailyCycleRelistRecordListResponse {
+  triggered_date: string
+  total: number
+  items: DailyCycleRelistRecord[]
+}
+
+export interface DailyListingRecord {
+  record_id: string
+  account_id: string
+  shop_display_name: string
+  pdd_product_id: string
+  product_code: string
+  family_code: string
+  image_set: string
+  listing_label: string
+  merchant_code: string
+  title: string
+  source_run_id: string
+  source_kind: string
+  pipeline_id: string
+  listed_at: string
+  created_at: string | null
+}
+
+export interface DailyListingShopSummary {
+  account_id: string
+  shop_display_name: string
+  count: number
+}
+
+export interface DailyListingSummaryResponse {
+  listed_date: string
+  total: number
+  by_shop: DailyListingShopSummary[]
+}
+
+export interface DailyListingRecordListResponse {
+  listed_date: string
+  total: number
+  items: DailyListingRecord[]
 }
 
 export interface PublishedProduct {

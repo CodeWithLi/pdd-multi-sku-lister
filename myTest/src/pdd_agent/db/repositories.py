@@ -6,7 +6,7 @@ import hashlib
 import os
 import uuid
 from collections import defaultdict
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from pathlib import Path
 
 from sqlalchemy import case, func, select
@@ -24,6 +24,10 @@ from pdd_agent.db.models import (
     ProductStyleColorORM,
     PublishedProductORM,
     QueueControlORM,
+    DailyCycleRelistRecordORM,
+    DailyListingRecordORM,
+    FailureCycleRelistActionLogORM,
+    FailureCycleRelistPollLogORM,
     ListedAssetFolderORM,
     TaskQueueORM,
 )
@@ -149,6 +153,21 @@ def get_cached_shop_display_name(account_id: str) -> str:
         if row and str(row.shop_display_name or "").strip():
             return str(row.shop_display_name).strip()
     return ""
+
+
+def list_enabled_account_ids_by_shop_display_name(display_name: str) -> list[str]:
+    """按 accounts 表 shop_display_name 精确匹配已启用账号。"""
+    name = str(display_name or "").strip()
+    if not name or not is_database_available():
+        return []
+    with session_scope() as session:
+        rows = session.scalars(
+            select(AccountORM.account_id)
+            .where(AccountORM.enabled.is_(True))
+            .where(AccountORM.shop_display_name == name)
+            .order_by(AccountORM.account_id)
+        ).all()
+        return [str(aid) for aid in rows if str(aid or "").strip()]
 
 
 def update_shop_display_name(account_id: str, shop_display_name: str) -> None:
@@ -1915,3 +1934,460 @@ def count_pipeline_issue_reports(
         if severity:
             query = query.filter(IntegratedPipelineIssueReportORM.severity == severity)
         return int(query.scalar() or 0)
+
+
+def _day_bounds(target: date) -> tuple[datetime, datetime]:
+    start = datetime(target.year, target.month, target.day)
+    end = start + timedelta(days=1)
+    return start, end
+
+
+def create_daily_listing_record(
+    *,
+    account_id: str,
+    shop_display_name: str = "",
+    pdd_product_id: str,
+    product_code: str,
+    family_code: str = "",
+    image_set: str = "",
+    listing_label: str = "",
+    merchant_code: str = "",
+    title: str = "",
+    source_run_id: str = "",
+    source_kind: str = "listing",
+    pipeline_id: str = "",
+    listed_at: datetime | None = None,
+) -> DailyListingRecordORM | None:
+    """上架成功追加一条日志；同一 run + 商品 ID 重复调用时幂等跳过。"""
+    if not is_database_available():
+        return None
+    account_id = str(account_id or "").strip()
+    pdd_product_id = str(pdd_product_id or "").strip()
+    product_code = str(product_code or "").strip()
+    listing_label = str(listing_label or "").strip()
+    source_run_id = str(source_run_id or "").strip()
+    if not account_id or not pdd_product_id or not product_code:
+        return None
+    if not listing_label:
+        listing_label = f"{product_code}/{image_set}" if image_set else product_code
+    now = listed_at or datetime.now()
+    with session_scope() as session:
+        if source_run_id:
+            existing = (
+                session.query(DailyListingRecordORM)
+                .filter(
+                    DailyListingRecordORM.source_run_id == source_run_id,
+                    DailyListingRecordORM.pdd_product_id == pdd_product_id,
+                )
+                .first()
+            )
+            if existing:
+                session.expunge(existing)
+                return existing
+        row = DailyListingRecordORM(
+            record_id=uuid.uuid4().hex,
+            account_id=account_id,
+            shop_display_name=str(shop_display_name or "").strip(),
+            pdd_product_id=pdd_product_id,
+            product_code=product_code,
+            family_code=str(family_code or "").strip(),
+            image_set=str(image_set or "").strip(),
+            listing_label=listing_label,
+            merchant_code=str(merchant_code or "").strip(),
+            title=str(title or "").strip(),
+            source_run_id=source_run_id,
+            source_kind=str(source_kind or "listing").strip() or "listing",
+            pipeline_id=str(pipeline_id or "").strip(),
+            listed_at=now,
+            created_at=datetime.now(),
+        )
+        session.add(row)
+        session.flush()
+        session.refresh(row)
+        session.expunge(row)
+        return row
+
+
+def list_daily_listing_records(
+    *,
+    account_id: str = "",
+    listed_date: date | None = None,
+    limit: int = 200,
+) -> list[DailyListingRecordORM]:
+    if not is_database_available():
+        return []
+    limit = max(1, min(5000, limit))
+    target = listed_date or datetime.now().date()
+    start, end = _day_bounds(target)
+    with session_scope() as session:
+        query = session.query(DailyListingRecordORM).filter(
+            DailyListingRecordORM.listed_at >= start,
+            DailyListingRecordORM.listed_at < end,
+        )
+        if account_id:
+            query = query.filter(DailyListingRecordORM.account_id == account_id.strip())
+        rows = (
+            query.order_by(
+                DailyListingRecordORM.listed_at.desc(),
+                DailyListingRecordORM.record_id.desc(),
+            )
+            .limit(limit)
+            .all()
+        )
+        for row in rows:
+            session.expunge(row)
+        return rows
+
+
+def count_daily_listing_records(
+    *,
+    account_id: str = "",
+    listed_date: date | None = None,
+) -> int:
+    if not is_database_available():
+        return 0
+    target = listed_date or datetime.now().date()
+    start, end = _day_bounds(target)
+    with session_scope() as session:
+        query = session.query(func.count(DailyListingRecordORM.record_id)).filter(
+            DailyListingRecordORM.listed_at >= start,
+            DailyListingRecordORM.listed_at < end,
+        )
+        if account_id:
+            query = query.filter(DailyListingRecordORM.account_id == account_id.strip())
+        return int(query.scalar() or 0)
+
+
+def summarize_daily_listing_records(
+    *,
+    listed_date: date | None = None,
+) -> list[dict[str, str | int]]:
+    """按店铺汇总指定日期的上架数量。"""
+    if not is_database_available():
+        return []
+    target = listed_date or datetime.now().date()
+    start, end = _day_bounds(target)
+    with session_scope() as session:
+        rows = (
+            session.query(
+                DailyListingRecordORM.account_id,
+                DailyListingRecordORM.shop_display_name,
+                func.count(DailyListingRecordORM.record_id),
+            )
+            .filter(
+                DailyListingRecordORM.listed_at >= start,
+                DailyListingRecordORM.listed_at < end,
+            )
+            .group_by(
+                DailyListingRecordORM.account_id,
+                DailyListingRecordORM.shop_display_name,
+            )
+            .order_by(func.count(DailyListingRecordORM.record_id).desc())
+            .all()
+        )
+        return [
+            {
+                "account_id": str(account_id or ""),
+                "shop_display_name": str(shop_name or "").strip(),
+                "count": int(count or 0),
+            }
+            for account_id, shop_name, count in rows
+        ]
+
+
+def create_daily_cycle_relist_record(
+    *,
+    feishu_record_id: str,
+    account_id: str,
+    shop_display_name: str = "",
+    merchant_code: str = "",
+    pipeline_id: str,
+    product_codes: list[str] | None = None,
+    report_platform: str = "",
+    trigger_source: str = "auto_watch",
+    triggered_at: datetime | None = None,
+) -> DailyCycleRelistRecordORM | None:
+    """失败日志循环上架成功启动整合链路后追加一条记录；同一 pipeline_id 幂等。"""
+    if not is_database_available():
+        return None
+    feishu_record_id = str(feishu_record_id or "").strip()
+    account_id = str(account_id or "").strip()
+    pipeline_id = str(pipeline_id or "").strip()
+    if not account_id or not pipeline_id:
+        return None
+    now = triggered_at or datetime.now()
+    with session_scope() as session:
+        existing = (
+            session.query(DailyCycleRelistRecordORM)
+            .filter(DailyCycleRelistRecordORM.pipeline_id == pipeline_id)
+            .first()
+        )
+        if existing:
+            session.expunge(existing)
+            return existing
+        row = DailyCycleRelistRecordORM(
+            record_id=uuid.uuid4().hex,
+            feishu_record_id=feishu_record_id,
+            account_id=account_id,
+            shop_display_name=str(shop_display_name or "").strip(),
+            merchant_code=str(merchant_code or "").strip(),
+            pipeline_id=pipeline_id,
+            product_codes=list(product_codes or []),
+            report_platform=str(report_platform or "").strip(),
+            trigger_source=str(trigger_source or "auto_watch").strip() or "auto_watch",
+            triggered_at=now,
+            created_at=datetime.now(),
+        )
+        session.add(row)
+        session.flush()
+        session.refresh(row)
+        session.expunge(row)
+        return row
+
+
+def list_daily_cycle_relist_records(
+    *,
+    account_id: str = "",
+    triggered_date: date | None = None,
+    limit: int = 200,
+) -> list[DailyCycleRelistRecordORM]:
+    if not is_database_available():
+        return []
+    limit = max(1, min(5000, limit))
+    target = triggered_date or datetime.now().date()
+    start, end = _day_bounds(target)
+    with session_scope() as session:
+        query = session.query(DailyCycleRelistRecordORM).filter(
+            DailyCycleRelistRecordORM.triggered_at >= start,
+            DailyCycleRelistRecordORM.triggered_at < end,
+        )
+        if account_id:
+            query = query.filter(DailyCycleRelistRecordORM.account_id == account_id.strip())
+        rows = (
+            query.order_by(
+                DailyCycleRelistRecordORM.triggered_at.desc(),
+                DailyCycleRelistRecordORM.record_id.desc(),
+            )
+            .limit(limit)
+            .all()
+        )
+        for row in rows:
+            session.expunge(row)
+        return rows
+
+
+def count_daily_cycle_relist_records(
+    *,
+    account_id: str = "",
+    triggered_date: date | None = None,
+) -> int:
+    if not is_database_available():
+        return 0
+    target = triggered_date or datetime.now().date()
+    start, end = _day_bounds(target)
+    with session_scope() as session:
+        query = session.query(func.count(DailyCycleRelistRecordORM.record_id)).filter(
+            DailyCycleRelistRecordORM.triggered_at >= start,
+            DailyCycleRelistRecordORM.triggered_at < end,
+        )
+        if account_id:
+            query = query.filter(DailyCycleRelistRecordORM.account_id == account_id.strip())
+        return int(query.scalar() or 0)
+
+
+def summarize_daily_cycle_relist_records(
+    *,
+    triggered_date: date | None = None,
+) -> list[dict[str, str | int]]:
+    if not is_database_available():
+        return []
+    target = triggered_date or datetime.now().date()
+    start, end = _day_bounds(target)
+    with session_scope() as session:
+        rows = (
+            session.query(
+                DailyCycleRelistRecordORM.account_id,
+                DailyCycleRelistRecordORM.shop_display_name,
+                func.count(DailyCycleRelistRecordORM.record_id),
+            )
+            .filter(
+                DailyCycleRelistRecordORM.triggered_at >= start,
+                DailyCycleRelistRecordORM.triggered_at < end,
+            )
+            .group_by(
+                DailyCycleRelistRecordORM.account_id,
+                DailyCycleRelistRecordORM.shop_display_name,
+            )
+            .order_by(func.count(DailyCycleRelistRecordORM.record_id).desc())
+            .all()
+        )
+        return [
+            {
+                "account_id": str(account_id or ""),
+                "shop_display_name": str(shop_name or "").strip(),
+                "count": int(count or 0),
+            }
+            for account_id, shop_name, count in rows
+        ]
+
+
+def _compact_cycle_relist_candidate(item: dict) -> dict:
+    return {
+        "record_id": str(item.get("record_id") or ""),
+        "merchant_code": str(item.get("merchant_code") or ""),
+        "account_name": str(item.get("account_name") or ""),
+        "account_id": str(item.get("account_id") or ""),
+        "report_platform": str(item.get("report_platform") or ""),
+        "failure_reason": str(item.get("failure_reason") or ""),
+        "process_status": str(item.get("process_status") or ""),
+        "cycle_relist": str(item.get("cycle_relist") or ""),
+        "date": str(item.get("date") or ""),
+    }
+
+
+def create_failure_cycle_relist_poll_log(
+    *,
+    polled_at: datetime | None = None,
+    candidate_total: int = 0,
+    new_count: int = 0,
+    fetch_mode: str = "",
+    fetch_page_size: int = 0,
+    table_id: str = "",
+    table_name: str = "",
+    candidates: list[dict] | None = None,
+    new_candidates: list[dict] | None = None,
+) -> FailureCycleRelistPollLogORM | None:
+    if not is_database_available():
+        return None
+    now = polled_at or datetime.now()
+    compact_all = [_compact_cycle_relist_candidate(item) for item in (candidates or [])]
+    compact_new = [_compact_cycle_relist_candidate(item) for item in (new_candidates or [])]
+    with session_scope() as session:
+        row = FailureCycleRelistPollLogORM(
+            poll_log_id=uuid.uuid4().hex,
+            polled_at=now,
+            candidate_total=int(candidate_total),
+            new_count=int(new_count),
+            fetch_mode=str(fetch_mode or "").strip(),
+            fetch_page_size=int(fetch_page_size or 0),
+            table_id=str(table_id or "").strip(),
+            table_name=str(table_name or "").strip(),
+            candidates=compact_all,
+            new_candidates=compact_new,
+            created_at=datetime.now(),
+        )
+        session.add(row)
+        session.flush()
+        session.refresh(row)
+        session.expunge(row)
+        return row
+
+
+def create_failure_cycle_relist_action_log(
+    *,
+    feishu_record_id: str,
+    merchant_code: str = "",
+    account_name: str = "",
+    account_id: str = "",
+    failure_reason: str = "",
+    report_platform: str = "",
+    status: str,
+    message: str = "",
+    pipeline_id: str = "",
+    trigger_source: str = "auto_watch",
+    poll_log_id: str = "",
+    action_at: datetime | None = None,
+) -> FailureCycleRelistActionLogORM | None:
+    if not is_database_available():
+        return None
+    feishu_record_id = str(feishu_record_id or "").strip()
+    if not feishu_record_id:
+        return None
+    now = action_at or datetime.now()
+    with session_scope() as session:
+        row = FailureCycleRelistActionLogORM(
+            action_log_id=uuid.uuid4().hex,
+            poll_log_id=str(poll_log_id or "").strip(),
+            feishu_record_id=feishu_record_id,
+            merchant_code=str(merchant_code or "").strip(),
+            account_name=str(account_name or "").strip(),
+            account_id=str(account_id or "").strip(),
+            failure_reason=str(failure_reason or "").strip(),
+            report_platform=str(report_platform or "").strip(),
+            status=str(status or "").strip(),
+            message=str(message or "").strip(),
+            pipeline_id=str(pipeline_id or "").strip(),
+            trigger_source=str(trigger_source or "auto_watch").strip() or "auto_watch",
+            action_at=now,
+            created_at=datetime.now(),
+        )
+        session.add(row)
+        session.flush()
+        session.refresh(row)
+        session.expunge(row)
+        return row
+
+
+def list_failure_cycle_relist_action_logs(*, limit: int = 100) -> list[FailureCycleRelistActionLogORM]:
+    if not is_database_available():
+        return []
+    limit = max(1, min(500, limit))
+    with session_scope() as session:
+        rows = (
+            session.query(FailureCycleRelistActionLogORM)
+            .order_by(
+                FailureCycleRelistActionLogORM.action_at.desc(),
+                FailureCycleRelistActionLogORM.action_log_id.desc(),
+            )
+            .limit(limit)
+            .all()
+        )
+        for row in rows:
+            session.expunge(row)
+        return rows
+
+
+def list_failure_cycle_relist_poll_logs(*, limit: int = 20) -> list[FailureCycleRelistPollLogORM]:
+    if not is_database_available():
+        return []
+    limit = max(1, min(100, limit))
+    with session_scope() as session:
+        rows = (
+            session.query(FailureCycleRelistPollLogORM)
+            .order_by(
+                FailureCycleRelistPollLogORM.polled_at.desc(),
+                FailureCycleRelistPollLogORM.poll_log_id.desc(),
+            )
+            .limit(limit)
+            .all()
+        )
+        for row in rows:
+            session.expunge(row)
+        return rows
+
+
+def latest_failure_cycle_relist_actions_by_record_ids(
+    record_ids: list[str],
+) -> dict[str, FailureCycleRelistActionLogORM]:
+    if not is_database_available():
+        return {}
+    ids = [str(rid).strip() for rid in record_ids if str(rid).strip()]
+    if not ids:
+        return {}
+    with session_scope() as session:
+        rows = (
+            session.query(FailureCycleRelistActionLogORM)
+            .filter(FailureCycleRelistActionLogORM.feishu_record_id.in_(ids))
+            .order_by(
+                FailureCycleRelistActionLogORM.action_at.desc(),
+                FailureCycleRelistActionLogORM.action_log_id.desc(),
+            )
+            .all()
+        )
+        latest: dict[str, FailureCycleRelistActionLogORM] = {}
+        for row in rows:
+            rid = str(row.feishu_record_id or "").strip()
+            if rid and rid not in latest:
+                session.expunge(row)
+                latest[rid] = row
+        return latest

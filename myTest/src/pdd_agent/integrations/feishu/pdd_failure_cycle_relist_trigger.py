@@ -4,11 +4,12 @@ from __future__ import annotations
 
 from typing import Any
 
+from pdd_agent.browser.sync_job import run_sync_browser_job
 from pdd_agent.api.services.pipeline_service import start_integrated_pipeline
 from pdd_agent.core.account_display import resolve_cycle_relist_account_id
 from pdd_agent.core.config import load_yaml_settings
 from pdd_agent.core.logging import get_logger
-from pdd_agent.db.repositories import update_integrated_pipeline
+from pdd_agent.db.repositories import get_account_config, update_integrated_pipeline
 from pdd_agent.integrations.feishu.config import (
     FeishuConfig,
     PddFailureCycleRelistWatchConfig,
@@ -79,12 +80,64 @@ def resolve_listing_selectors_for_merchant_code(
     return list(dict.fromkeys(fuzzy_matches))
 
 
+def check_merchant_code_already_on_sale(
+    *,
+    account_id: str,
+    merchant_code: str,
+) -> dict[str, Any]:
+    """在拼多多商品列表按商品编码搜索，判断是否已存在在售商品。"""
+    aid = str(account_id or "").strip()
+    code = str(merchant_code or "").strip()
+    if not aid or not code:
+        return {"checked": False, "listed": False, "error": "account_id 或 merchant_code 为空"}
+
+    settings = load_yaml_settings()
+    account = get_account_config(settings, aid)
+    if not account or not account.enabled:
+        return {"checked": False, "listed": False, "error": f"店铺不可用: {aid}"}
+
+    def _job(page):
+        from pdd_agent.skills.listing.upload import (
+            _click_goods_search,
+            _fill_goods_merchant_code_filter,
+            _open_goods_list,
+            _parse_goods_list_matches,
+            _reset_goods_list_filters,
+            _set_goods_filter,
+        )
+
+        if not _open_goods_list(page, aid, tab_text="在售中"):
+            return {"checked": False, "listed": False, "error": "无法打开在售商品列表"}
+        _reset_goods_list_filters(page)
+        fill = _fill_goods_merchant_code_filter(page, code)
+        filled = bool(fill.get("filled"))
+        if not filled:
+            filled = bool(_set_goods_filter(page, "商品编码", code))
+        if not filled:
+            return {"checked": False, "listed": False, "error": "无法填写商品编码搜索框"}
+        _click_goods_search(page)
+        matches = _parse_goods_list_matches(page, code, "")
+        if not matches:
+            return {"checked": True, "listed": False, "matches": 0}
+        selected = matches[0]
+        return {
+            "checked": True,
+            "listed": True,
+            "matches": len(matches),
+            "pdd_product_id": str(selected.get("pdd_product_id") or ""),
+            "list_status": str(selected.get("list_status") or ""),
+        }
+
+    return run_sync_browser_job(settings, account, _job)
+
+
 def process_failure_cycle_relist_candidate(
     candidate: dict[str, Any],
     *,
     config: FeishuConfig | None = None,
     watch: PddFailureCycleRelistWatchConfig | None = None,
     skip_claim: bool = False,
+    trigger_source: str = "auto_watch",
 ) -> dict[str, Any]:
     """占用失败日志行并启动整合链路。旧失败日志保持勾选，不再修改。"""
     cfg = config or load_feishu_config()
@@ -131,6 +184,40 @@ def process_failure_cycle_relist_candidate(
         return base
     base["account_id"] = account_id
 
+    if not merchant_code:
+        base["error"] = "飞书商品编码为空"
+        return base
+
+    try:
+        listed_check = check_merchant_code_already_on_sale(
+            account_id=account_id,
+            merchant_code=merchant_code,
+        )
+        if listed_check.get("checked") and listed_check.get("listed"):
+            base.update(
+                ok=True,
+                skipped=True,
+                reason="already_on_sale",
+                pdd_product_id=str(listed_check.get("pdd_product_id") or ""),
+                list_status=str(listed_check.get("list_status") or ""),
+            )
+            logger.info(
+                "cycle relist skip already listed record_id=%s merchant_code=%s account=%s pdd_product_id=%s",
+                record_id,
+                merchant_code,
+                account_id,
+                base.get("pdd_product_id") or "",
+            )
+            return base
+    except Exception as exc:
+        logger.warning(
+            "cycle relist precheck goods list failed record_id=%s merchant_code=%s account=%s error=%s",
+            record_id,
+            merchant_code,
+            account_id,
+            exc,
+        )
+
     if not skip_claim:
         claim_result = try_claim_cycle_relist(
             record_id,
@@ -148,10 +235,6 @@ def process_failure_cycle_relist_candidate(
             if not claim_result.ok:
                 base["error"] = claim_result.error or "占用失败"
                 return base
-
-    if not merchant_code:
-        base["error"] = "飞书商品编码为空"
-        return base
 
     product_codes = [merchant_code]
 
@@ -220,5 +303,19 @@ def process_failure_cycle_relist_candidate(
         product_codes=list(pipeline.get("product_codes") or product_codes),
         account_id=account_id,
         reason="pipeline_started",
+        report_platform=report_platform,
     )
+    try:
+        from pdd_agent.api.services.daily_cycle_relist_service import (
+            record_cycle_relist_pipeline_started,
+        )
+
+        record_cycle_relist_pipeline_started(base, trigger_source=trigger_source)
+    except Exception:
+        logger.warning(
+            "record daily cycle relist failed pipeline_id=%s record_id=%s",
+            pipeline_id,
+            record_id,
+            exc_info=True,
+        )
     return base

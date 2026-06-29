@@ -17,6 +17,8 @@ from pdd_agent.api.schemas.pdd_failure_log_watch import (
     PddFailureCycleRelistCandidateOut,
     PddFailureCycleRelistClaimIn,
     PddFailureCycleRelistClaimOut,
+    PddFailureCycleRelistPollLogListResponse,
+    PddFailureCycleRelistPollLogOut,
     PddFailureCycleRelistPollResponse,
     PddFailureCycleRelistReleaseIn,
     PddFailureCycleRelistTriggerIn,
@@ -24,8 +26,17 @@ from pdd_agent.api.schemas.pdd_failure_log_watch import (
     PddFailureCycleRelistWatchOut,
     PddFailureCycleRelistWatchUpdateIn,
 )
+from pdd_agent.api.services.cycle_relist_audit_service import (
+    action_log_to_dict,
+    poll_log_to_dict,
+)
 from pdd_agent.api.services.failure_cycle_relist_scheduler import (
     get_failure_cycle_relist_watch_scheduler,
+)
+from pdd_agent.db.repositories import (
+    latest_failure_cycle_relist_actions_by_record_ids,
+    list_failure_cycle_relist_action_logs,
+    list_failure_cycle_relist_poll_logs,
 )
 from pdd_agent.integrations.feishu.client import FeishuAPIError, FeishuClient
 from pdd_agent.integrations.feishu.config import (
@@ -33,7 +44,6 @@ from pdd_agent.integrations.feishu.config import (
     save_pdd_failure_cycle_relist_watch_to_config,
 )
 from pdd_agent.integrations.feishu.pdd_failure_log_read import list_pdd_failure_logs
-from pdd_agent.integrations.feishu.pdd_failure_log_watch import list_cycle_relist_candidates
 from pdd_agent.integrations.feishu.pdd_failure_cycle_relist_claim import (
     get_cycle_relist_claim,
     release_cycle_relist_claim,
@@ -118,9 +128,14 @@ def _candidate_with_action(
     *,
     scheduler,
     new_record_ids: set[str] | None = None,
+    db_actions: dict | None = None,
 ) -> PddFailureCycleRelistCandidateOut:
     rid = str(row.get("record_id") or "")
     action = scheduler.record_actions.get(rid) or {}
+    if not action and db_actions:
+        db_row = db_actions.get(rid)
+        if db_row is not None:
+            action = action_log_to_dict(db_row)
     new_ids = new_record_ids or {
         str(x.get("record_id") or "") for x in scheduler.new_items
     }
@@ -155,14 +170,22 @@ def _candidate_with_action(
     )
 
 
+def _recent_actions_out(*, limit: int = 100) -> list[PddFailureCycleRelistActionOut]:
+    rows = list_failure_cycle_relist_action_logs(limit=limit)
+    if rows:
+        return [PddFailureCycleRelistActionOut(**action_log_to_dict(row)) for row in rows]
+    scheduler = get_failure_cycle_relist_watch_scheduler()
+    return [
+        PddFailureCycleRelistActionOut(**item)
+        for item in scheduler.recent_actions[:limit]
+    ]
+
+
 def _watch_out() -> PddFailureCycleRelistWatchOut:
     cfg = load_feishu_config()
     watch = cfg.pdd_upload_log.failure_cycle_relist_watch
     scheduler = get_failure_cycle_relist_watch_scheduler()
-    recent = [
-        PddFailureCycleRelistActionOut(**item)
-        for item in scheduler.recent_actions
-    ]
+    recent = _recent_actions_out()
     return PddFailureCycleRelistWatchOut(
         enabled=bool(watch.enabled),
         poll_seconds=int(watch.poll_seconds),
@@ -180,6 +203,13 @@ def _watch_out() -> PddFailureCycleRelistWatchOut:
 @router.get("/cycle-relist/watch", response_model=PddFailureCycleRelistWatchOut)
 def get_cycle_relist_watch():
     return _watch_out()
+
+
+@router.get("/cycle-relist/poll-logs", response_model=PddFailureCycleRelistPollLogListResponse)
+def list_cycle_relist_poll_logs_api(limit: int = Query(20, ge=1, le=100)):
+    rows = list_failure_cycle_relist_poll_logs(limit=limit)
+    items = [PddFailureCycleRelistPollLogOut(**poll_log_to_dict(row)) for row in rows]
+    return PddFailureCycleRelistPollLogListResponse(ok=True, total=len(items), items=items)
 
 
 @router.put("/cycle-relist/watch", response_model=PddFailureCycleRelistWatchOut)
@@ -261,7 +291,43 @@ def trigger_cycle_relist_pipeline(body: PddFailureCycleRelistTriggerIn):
             "report_platform": body.report_platform,
         },
         config=cfg,
+        trigger_source="manual_api",
     )
+    scheduler = get_failure_cycle_relist_watch_scheduler()
+    candidate = {
+        "record_id": body.record_id,
+        "merchant_code": body.merchant_code,
+        "account_name": body.account_name,
+        "account_id": body.account_id,
+        "report_platform": body.report_platform,
+    }
+    if outcome.get("ok") and outcome.get("pipeline_id"):
+        scheduler.record_action(
+            record_id=body.record_id,
+            status="started",
+            message="手动触发整合链路",
+            pipeline_id=str(outcome.get("pipeline_id") or ""),
+            account_id=str(outcome.get("account_id") or ""),
+            trigger_source="manual_api",
+            candidate=candidate,
+        )
+    elif outcome.get("skipped"):
+        reason = str(outcome.get("reason") or "")
+        scheduler.record_action(
+            record_id=body.record_id,
+            status="skipped",
+            message=f"手动触发已跳过：{reason or '未知原因'}",
+            trigger_source="manual_api",
+            candidate=candidate,
+        )
+    elif not outcome.get("ok"):
+        scheduler.record_action(
+            record_id=body.record_id,
+            status="failed",
+            message=str(outcome.get("error") or "手动触发失败"),
+            trigger_source="manual_api",
+            candidate=candidate,
+        )
     return PddFailureCycleRelistTriggerOut(
         ok=bool(outcome.get("ok")),
         skipped=bool(outcome.get("skipped")),
@@ -324,10 +390,6 @@ def get_cycle_relist_claim_status(record_id: str):
 def list_cycle_relist_candidates_api(
     only_new: bool = Query(False, description="仅返回本轮新发现的候选"),
 ):
-    cfg = load_feishu_config()
-    if not cfg.bitable_app_token:
-        raise HTTPException(status_code=422, detail="未配置 bitable_app_token")
-
     scheduler = get_failure_cycle_relist_watch_scheduler()
     try:
         if only_new:
@@ -340,42 +402,59 @@ def list_cycle_relist_candidates_api(
                 }
             items = list(poll.get("new_items") or [])
             new_ids = {str(x.get("record_id") or "") for x in items}
+            db_actions = latest_failure_cycle_relist_actions_by_record_ids(list(new_ids))
             return PddFailureCycleRelistCandidateListResponse(
                 ok=True,
                 total=len(items),
                 items=[
-                    _candidate_with_action(row, scheduler=scheduler, new_record_ids=new_ids)
+                    _candidate_with_action(
+                        row,
+                        scheduler=scheduler,
+                        new_record_ids=new_ids,
+                        db_actions=db_actions,
+                    )
                     for row in items
                 ],
                 new_items=[
-                    _candidate_with_action(row, scheduler=scheduler, new_record_ids=new_ids)
+                    _candidate_with_action(
+                        row,
+                        scheduler=scheduler,
+                        new_record_ids=new_ids,
+                        db_actions=db_actions,
+                    )
                     for row in items
                 ],
             )
-
-        payload = list_cycle_relist_candidates(cfg)
     except FeishuAPIError as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
 
-    if not payload.get("ok"):
+    # 性能优先：默认只返回调度器最近一次轮询缓存，避免页面刷新时每次直连飞书阻塞接口。
+    # 如需主动刷新，请调用 /cycle-relist/poll（前端「手动拉取」按钮）。
+    raw_items = list(scheduler.all_items)
+    if not scheduler.last_poll_at and not raw_items:
         return PddFailureCycleRelistCandidateListResponse(
-            ok=False,
-            error=str(payload.get("error") or "读取失败"),
+            ok=True,
+            total=0,
+            items=[],
+            new_items=[],
         )
 
+    record_ids = [str(row.get("record_id") or "") for row in raw_items]
+    record_ids.extend(str(row.get("record_id") or "") for row in scheduler.new_items)
+    db_actions = latest_failure_cycle_relist_actions_by_record_ids(record_ids)
     items = [
-        _candidate_with_action(row, scheduler=scheduler)
-        for row in payload.get("items") or []
+        _candidate_with_action(row, scheduler=scheduler, db_actions=db_actions)
+        for row in raw_items
     ]
     new_rows = [
-        _candidate_with_action(row, scheduler=scheduler)
+        _candidate_with_action(row, scheduler=scheduler, db_actions=db_actions)
         for row in scheduler.new_items
     ]
     return PddFailureCycleRelistCandidateListResponse(
         ok=True,
-        total=int(payload.get("total") or 0),
+        total=len(raw_items),
         items=items,
         new_items=new_rows,
-        table_id=str(payload.get("table_id") or ""),
-        table_name=str(payload.get("table_name") or ""),
+        table_id="",
+        table_name="",
     )

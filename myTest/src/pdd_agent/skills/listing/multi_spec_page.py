@@ -2930,6 +2930,19 @@ def _unique_sku_spec_pairs(skus: list) -> int:
     )
 
 
+def _prefer_style_size_fill(
+    style_names: list[str] | None,
+    size_names: list[str] | None,
+) -> bool:
+    """
+    单款式（1 x N）场景，优先按「款式+尺寸」定位，规避偶发行序错位。
+    多款式保持原有按顺序索引策略。
+    """
+    if not style_names or not size_names:
+        return True
+    return len(style_names) <= 1
+
+
 def fill_multi_spec_rows(
     page,
     account_id: str,
@@ -3012,7 +3025,8 @@ def fill_multi_spec_rows(
     _audit_sku_spec_coverage(account_id, skus, style_names, size_names)
 
     t = _now()
-    if style_names and size_names:
+    use_style_size_fill = _prefer_style_size_fill(style_names, size_names)
+    if style_names and size_names and not use_style_size_fill:
         filled, failed = _fill_skus_by_spec_order(
             page, account_id, skus, style_names, size_names, defaults
         )
@@ -3032,7 +3046,8 @@ def fill_multi_spec_rows(
                 f"({item.get('reason')})",
                 flush=True,
             )
-    _log_step(account_id, f"按序填写库存/价格/编码 {filled}/{matrix_need} 格", t)
+    strategy_label = "文字定位" if use_style_size_fill else "按序索引"
+    _log_step(account_id, f"{strategy_label}填写库存/价格/编码 {filled}/{matrix_need} 格", t)
     sku_dbg.log_fill_progress(
         account_id,
         "after_spec_order",

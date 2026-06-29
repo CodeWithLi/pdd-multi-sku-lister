@@ -506,6 +506,70 @@ def map_fields_to_table_names(
     return mapped
 
 
+def iter_search_record_pages(
+    client: FeishuClient,
+    app_token: str,
+    table_id: str,
+    *,
+    filter_body: dict[str, Any],
+    page_size: int = 50,
+    max_pages: int = 40,
+) -> Any:
+    """按 filter 分页迭代记录批次（每批最多 page_size 条）。"""
+    page_token = ""
+    size = max(1, min(int(page_size), 500))
+    pages = 0
+    while pages < max(1, int(max_pages)):
+        body: dict[str, Any] = {
+            "filter": filter_body,
+            "page_size": size,
+        }
+        if page_token:
+            body["page_token"] = page_token
+        data = client.request(
+            "POST",
+            f"/bitable/v1/apps/{app_token}/tables/{table_id}/records/search",
+            json=body,
+        )
+        payload = data.get("data") or {}
+        batch = list(payload.get("items") or [])
+        if batch:
+            yield batch
+        pages += 1
+        if not payload.get("has_more"):
+            break
+        page_token = str(payload.get("page_token") or "").strip()
+        if not page_token:
+            break
+
+
+def search_records(
+    client: FeishuClient,
+    app_token: str,
+    table_id: str,
+    *,
+    filter_body: dict[str, Any],
+    page_size: int = 50,
+    max_items: int | None = None,
+    max_pages: int = 40,
+) -> list[dict[str, Any]]:
+    """按 filter 分页搜索记录，可选上限。"""
+    items: list[dict[str, Any]] = []
+    cap = max(1, int(max_items)) if max_items is not None else None
+    for batch in iter_search_record_pages(
+        client,
+        app_token,
+        table_id,
+        filter_body=filter_body,
+        page_size=page_size,
+        max_pages=max_pages,
+    ):
+        items.extend(batch)
+        if cap is not None and len(items) >= cap:
+            return items[:cap]
+    return items
+
+
 def list_all_records(
     client: FeishuClient,
     app_token: str,
