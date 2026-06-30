@@ -944,6 +944,73 @@ export interface IntegratedPipeline {
   has_feishu_inspect?: boolean
   created_at: string | null
   updated_at: string | null
+  commerce_queued?: boolean
+  intent_id?: string
+  block_reason?: string
+  block_reason_label?: string
+  wake_at?: string
+  is_merged?: boolean
+}
+
+export interface AccountLifecycle {
+  account_id: string
+  lifecycle_id?: string
+  owner_type?: string
+  owner_id?: string
+  trigger_source?: string
+  phase?: string
+  lifecycle_status: string
+  wake_at?: string
+  product_selectors?: string[]
+  updated_at?: string
+}
+
+export interface CommerceIntent {
+  intent_id: string
+  account_id: string
+  trigger_source: string
+  priority: number
+  product_selectors: string[]
+  status: string
+  block_reason: string
+  block_reason_label?: string
+  block_detail?: string
+  result_pipeline_id?: string
+  created_at?: string
+  dispatched_at?: string
+  is_merged?: boolean
+}
+
+export interface CommerceIntentCancelResult {
+  ok: boolean
+  intent_id?: string
+  error?: string
+  status?: string
+  intent?: CommerceIntent
+}
+
+export interface CommerceIntentBatchCancelResult {
+  ok: boolean
+  canceled_count: number
+  failed_count: number
+  canceled: CommerceIntentCancelResult[]
+  failed: CommerceIntentCancelResult[]
+}
+
+export interface CommerceOverview {
+  lifecycles: AccountLifecycle[]
+  pending_intents: CommerceIntent[]
+  pending_total: number
+  pending_by_account: Record<string, number>
+}
+
+export interface CommerceDispatchResult {
+  dispatched?: boolean
+  intent_id?: string
+  pipeline_id?: string
+  message?: string
+  error?: string
+  queued_again?: boolean
 }
 
 export interface IntegratedPipelineListResponse {
@@ -1202,6 +1269,8 @@ export interface WecomConfig {
   webhook_configured: boolean
   notify_on_listing_failed: boolean
   notify_on_pipeline_failed: boolean
+  notify_on_commerce_queued: boolean
+  notify_on_commerce_dispatched: boolean
   config_path: string
 }
 
@@ -1210,6 +1279,8 @@ export interface WecomConfigUpdatePayload {
   webhook_url: string
   notify_on_listing_failed: boolean
   notify_on_pipeline_failed: boolean
+  notify_on_commerce_queued: boolean
+  notify_on_commerce_dispatched: boolean
 }
 
 export interface WecomTestSendPayload {

@@ -209,9 +209,22 @@ def start_integrated(body: IntegratedPipelineStartRequest):
             listing_per_batch_campaign_enabled=body.listing_per_batch_campaign_enabled,
             delist_spec_code_search_enabled=body.delist_spec_code_search_enabled,
             activity_limited_time_success_only=body.activity_limited_time_success_only,
+            trigger_source="manual",
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    if data.get("commerce_queued"):
+        return IntegratedPipelineResponse(
+            commerce_queued=True,
+            intent_id=str(data.get("intent_id") or ""),
+            account_id=str(data.get("account_id") or body.account_id),
+            product_codes=list(data.get("product_codes") or body.product_codes),
+            block_reason=str(data.get("block_reason") or ""),
+            block_reason_label=str(data.get("block_reason_label") or ""),
+            wake_at=str(data.get("wake_at") or ""),
+            status="queued",
+            current_step="commerce_queued",
+        )
     return IntegratedPipelineResponse(**data)
 
 

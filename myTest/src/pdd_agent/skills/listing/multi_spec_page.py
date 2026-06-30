@@ -3,6 +3,10 @@ import json
 import time
 
 from pdd_agent.skills.listing import _sku_table_debug as sku_dbg
+from pdd_agent.skills.listing.pdd_page_image_errors import (
+    PddImageDimensionRejected,
+    raise_if_pdd_image_dimension_rejected,
+)
 
 
 def _now() -> float:
@@ -1093,13 +1097,22 @@ def _wait_preview_uploaded(
     timeout: float = _PREVIEW_VERIFY_TIMEOUT,
     interval: float = _PREVIEW_VERIFY_INTERVAL,
     *,
+    account_id: str = "",
     style_name: str = "",
     size_name: str = "",
     style_names: list[str] | None = None,
     size_names: list[str] | None = None,
 ) -> bool:
+    sku_label = f"{style_name} / {size_name}".strip(" /")
     deadline = _now() + timeout
     while _now() < deadline:
+        raise_if_pdd_image_dimension_rejected(
+            page,
+            account_id=account_id,
+            label=sku_label,
+            image_kind="preview",
+            sku_label=sku_label,
+        )
         if _preview_is_uploaded(
             page,
             index,
@@ -1223,11 +1236,19 @@ def upload_row_preview(
                 t,
             )
             time.sleep(_PREVIEW_POST_INPUT_WAIT)
+            raise_if_pdd_image_dimension_rejected(
+                page,
+                account_id=account_id,
+                label=label,
+                image_kind="preview",
+                sku_label=label,
+            )
 
             t = _now()
             if _wait_preview_uploaded(
                 page,
                 index,
+                account_id=account_id,
                 style_name=style_name,
                 size_name=size_name,
                 style_names=style_names,
@@ -1246,6 +1267,13 @@ def upload_row_preview(
                 account_id,
                 f"  预览图校验未通过 #{index + 1} (第{attempt}次)",
                 t,
+            )
+            raise_if_pdd_image_dimension_rejected(
+                page,
+                account_id=account_id,
+                label=label,
+                image_kind="preview",
+                sku_label=label,
             )
             if _preview_is_uploaded(
                 page,
@@ -1276,6 +1304,8 @@ def upload_row_preview(
             flush=True,
         )
         return False
+    except PddImageDimensionRejected:
+        raise
     except Exception as e:
         err = _safe_exc(e)
         if "连接已断开" in err or "disconnect" in err.lower():
@@ -3652,6 +3682,8 @@ def fill_multi_spec_rows(
                 size_names=size_names,
             ):
                 uploaded += 1
+        except PddImageDimensionRejected:
+            raise
         except Exception as exc:
             err = _safe_exc(exc)
             if "连接已断开" in err or "disconnect" in err.lower():

@@ -7,6 +7,10 @@ import type {
   AutoUploadConfig,
   BatchTaskResponse,
   CampaignTaskResponse,
+  CommerceDispatchResult,
+  CommerceIntentBatchCancelResult,
+  CommerceIntentCancelResult,
+  CommerceOverview,
   TrafficTaskResponse,
   MarketingActivityListResponse,
   ConfigSummary,
@@ -728,6 +732,35 @@ export const api = {
 
   updateAutoUploadConfig: (body: AutoUploadConfig) =>
     http.put<AutoUploadConfig>('/pipelines/auto-upload-config', body).then((r) => r.data),
+
+  commerceOverview: () => http.get<CommerceOverview>('/commerce/overview').then((r) => r.data),
+
+  dispatchCommerceAccount: (accountId: string) =>
+    http.post<CommerceDispatchResult>(`/commerce/dispatch/${accountId}`).then((r) => r.data),
+
+  dispatchCommerceAll: (limit = 20) =>
+    http
+      .post<{ count: number; items: CommerceDispatchResult[]; nudged?: number; synced?: number }>(
+        '/commerce/dispatch',
+        null,
+        { params: { limit } },
+      )
+      .then((r) => r.data),
+
+  cancelCommerceIntent: (intentId: string) =>
+    http.post<CommerceIntentCancelResult>(`/commerce/intents/${intentId}/cancel`).then((r) => r.data),
+
+  cancelCommerceIntents: (body: { intent_ids?: string[]; account_id?: string } = {}) =>
+    http.post<CommerceIntentBatchCancelResult>('/commerce/intents/cancel', body).then((r) => r.data),
+
+  reconcileCommerce: (dispatchLimit = 30) =>
+    http
+      .post<{ nudged: number; synced: number; dispatched_count: number; dispatched: CommerceDispatchResult[] }>(
+        '/commerce/reconcile',
+        null,
+        { params: { dispatch_limit: dispatchLimit } },
+      )
+      .then((r) => r.data),
 
   pipelineIssues: (params: {
     page?: number

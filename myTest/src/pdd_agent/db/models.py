@@ -473,6 +473,71 @@ class FailureSequentialBatchORM(Base):
     )
 
 
+class AccountLifecycleORM(Base):
+    """店铺当前运营周期（一店一行；周期结束后删除）。"""
+
+    __tablename__ = "account_lifecycles"
+
+    account_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    lifecycle_id: Mapped[str] = mapped_column(String(64), unique=True, index=True, nullable=False)
+    owner_type: Mapped[str] = mapped_column(String(32), index=True, nullable=False)
+    owner_id: Mapped[str] = mapped_column(String(64), index=True, nullable=False)
+    trigger_source: Mapped[str] = mapped_column(String(32), index=True, nullable=False)
+    phase: Mapped[str] = mapped_column(String(32), index=True, default="listing", nullable=False)
+    lifecycle_status: Mapped[str] = mapped_column(String(16), index=True, default="active", nullable=False)
+    wake_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    product_selectors: Mapped[list[str]] = mapped_column(MySQLJSON, default=list, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, server_default=func.now(), nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, server_default=func.now(), onupdate=func.now(), nullable=False
+    )
+
+
+class CommerceIntentORM(Base):
+    """待执行的整合链路上架意图（四入口统一排队）。"""
+
+    __tablename__ = "commerce_intents"
+    __table_args__ = (
+        Index("ix_commerce_intents_account_status", "account_id", "status", "priority"),
+        Index("ix_commerce_intents_dedupe", "dedupe_key", "status"),
+    )
+
+    intent_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    account_id: Mapped[str] = mapped_column(String(64), index=True, nullable=False)
+    trigger_source: Mapped[str] = mapped_column(String(32), index=True, nullable=False)
+    priority: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
+    product_selectors: Mapped[list[str]] = mapped_column(MySQLJSON, default=list, nullable=False)
+    payload: Mapped[dict] = mapped_column(MySQLJSON, default=dict, nullable=False)
+    status: Mapped[str] = mapped_column(String(16), index=True, default="pending", nullable=False)
+    dedupe_key: Mapped[str] = mapped_column(String(128), index=True, default="", nullable=False)
+    block_reason: Mapped[str] = mapped_column(String(64), default="", nullable=False)
+    block_detail: Mapped[str] = mapped_column(Text, default="", nullable=False)
+    result_pipeline_id: Mapped[str] = mapped_column(String(64), default="", index=True, nullable=False)
+    result_owner_id: Mapped[str] = mapped_column(String(64), default="", nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, server_default=func.now(), index=True, nullable=False
+    )
+    dispatched_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, server_default=func.now(), onupdate=func.now(), nullable=False
+    )
+
+
+class ProductClaimORM(Base):
+    """商品占用（防止同套图被多入口重复启动）。"""
+
+    __tablename__ = "product_claims"
+
+    claim_key: Mapped[str] = mapped_column(String(512), primary_key=True)
+    account_id: Mapped[str] = mapped_column(String(64), index=True, nullable=False)
+    lifecycle_id: Mapped[str] = mapped_column(String(64), index=True, nullable=False)
+    intent_id: Mapped[str] = mapped_column(String(64), default="", index=True, nullable=False)
+    listing_selector: Mapped[str] = mapped_column(String(512), default="", nullable=False)
+    claimed_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+
+
 class ProductStyleColorORM(Base):
     """商品编码 → AI/人工识别的款式颜色（缓存，省 token）。"""
 

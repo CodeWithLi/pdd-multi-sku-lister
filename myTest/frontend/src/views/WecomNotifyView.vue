@@ -20,6 +20,8 @@ const configForm = reactive({
   enabled: false,
   notify_on_listing_failed: false,
   notify_on_pipeline_failed: false,
+  notify_on_commerce_queued: false,
+  notify_on_commerce_dispatched: false,
 })
 
 const testForm = reactive({
@@ -49,6 +51,8 @@ function applyConfig(cfg: WecomConfig) {
   webhookConfigured.value = Boolean(cfg.webhook_configured)
   configForm.notify_on_listing_failed = cfg.notify_on_listing_failed
   configForm.notify_on_pipeline_failed = cfg.notify_on_pipeline_failed
+  configForm.notify_on_commerce_queued = cfg.notify_on_commerce_queued
+  configForm.notify_on_commerce_dispatched = cfg.notify_on_commerce_dispatched
   webhookEditing.value = false
   webhookDraft.value = ''
 }
@@ -85,6 +89,8 @@ async function save() {
       webhook_url: webhookUrl,
       notify_on_listing_failed: configForm.notify_on_listing_failed,
       notify_on_pipeline_failed: configForm.notify_on_pipeline_failed,
+      notify_on_commerce_queued: configForm.notify_on_commerce_queued,
+      notify_on_commerce_dispatched: configForm.notify_on_commerce_dispatched,
     })
     applyConfig(cfg)
     health.value = await api.wecomHealth()
@@ -231,6 +237,14 @@ onMounted(() => {
 
             <el-form-item label="整合链路失败时推送">
               <el-switch v-model="configForm.notify_on_pipeline_failed" />
+            </el-form-item>
+
+            <el-form-item label="运营任务排队时推送">
+              <el-switch v-model="configForm.notify_on_commerce_queued" />
+            </el-form-item>
+
+            <el-form-item label="排队任务派发时推送">
+              <el-switch v-model="configForm.notify_on_commerce_dispatched" />
             </el-form-item>
           </el-form>
         </el-card>

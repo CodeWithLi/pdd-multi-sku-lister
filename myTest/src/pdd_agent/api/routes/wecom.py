@@ -45,6 +45,8 @@ def _config_out(cfg: WecomConfig, *, expose_webhook: bool = False) -> WecomConfi
         webhook_configured=bool(url),
         notify_on_listing_failed=bool(cfg.notify_on_listing_failed),
         notify_on_pipeline_failed=bool(cfg.notify_on_pipeline_failed),
+        notify_on_commerce_queued=bool(cfg.notify_on_commerce_queued),
+        notify_on_commerce_dispatched=bool(cfg.notify_on_commerce_dispatched),
         config_path=_config_path(),
     )
 
@@ -103,6 +105,8 @@ def update_wecom_config(body: WecomConfigUpdateIn):
             webhook_url=webhook_url,
             notify_on_listing_failed=bool(body.notify_on_listing_failed),
             notify_on_pipeline_failed=bool(body.notify_on_pipeline_failed),
+            notify_on_commerce_queued=bool(body.notify_on_commerce_queued),
+            notify_on_commerce_dispatched=bool(body.notify_on_commerce_dispatched),
         )
     )
     return _config_out(saved)

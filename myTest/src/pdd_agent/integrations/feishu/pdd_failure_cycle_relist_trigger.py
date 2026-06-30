@@ -260,6 +260,7 @@ def process_failure_cycle_relist_candidate(
             slot_alignment_test=bool(watch_cfg.pipeline_slot_alignment_test),
             material_source=str(watch_cfg.pipeline_material_source or "minio"),
             listing_input_mode="cycle_relist",
+            trigger_source="cycle_relist",
         )
     except Exception as exc:
         logger.exception(
@@ -268,6 +269,21 @@ def process_failure_cycle_relist_candidate(
             merchant_code,
         )
         base["error"] = str(exc)
+        return base
+
+    if pipeline.get("commerce_queued"):
+        base.update(
+            ok=True,
+            skipped=True,
+            reason="commerce_queued",
+            account_id=account_id,
+            product_codes=list(pipeline.get("product_codes") or product_codes),
+        )
+        base["commerce"] = {
+            "intent_id": pipeline.get("intent_id"),
+            "block_reason": pipeline.get("block_reason"),
+            "block_reason_label": pipeline.get("block_reason_label"),
+        }
         return base
 
     pipeline_id = str(pipeline.get("pipeline_id") or "").strip()

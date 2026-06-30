@@ -15,7 +15,9 @@ from pdd_agent.failure_sequential.repository import (
     get_active_batch,
     has_completed_feishu_job,
     insert_job,
+    job_activity_618_due,
     job_exists_for_feishu,
+    job_ready_for_activity,
     job_ready_for_limited_time,
     list_jobs_by_batch,
     listing_phase_complete,
@@ -277,6 +279,28 @@ def tick_once() -> dict[str, Any]:
                 _refresh_batch_counters(batch_id, jobs)
                 summary["action"] = "listing_wait"
                 return summary
+            from pdd_agent.api.services.commerce_dispatch import (
+                gate_failure_sequential_job,
+                register_failure_sequential_lifecycle,
+            )
+
+            allowed, block_reason = gate_failure_sequential_job(
+                account_id=str(job.account_id or ""),
+                product_selectors=list(job.product_codes or []),
+            )
+            if not allowed:
+                summary.update(
+                    action="commerce_blocked",
+                    job_id=job.job_id,
+                    phase=C.PHASE_LISTING,
+                    error=block_reason,
+                )
+                return summary
+            register_failure_sequential_lifecycle(
+                account_id=str(job.account_id or ""),
+                job_id=job.job_id,
+                product_selectors=list(job.product_codes or []),
+            )
             summary.update(action="listing", job_id=job.job_id, phase=C.PHASE_LISTING)
             patch_job(job.job_id, listing_status=C.STAGE_RUNNING, current_phase=C.PHASE_LISTING)
             outcome = run_listing_stage(job, watch=watch)
@@ -291,6 +315,31 @@ def tick_once() -> dict[str, Any]:
                 if (outcome.get("status") or C.STAGE_FAILED) in C.TERMINAL_STAGES
                 else C.PHASE_LISTING,
             )
+            try:
+                from pdd_agent.api.services.commerce_dispatch import (
+                    LIFECYCLE_ACTIVE,
+                    sync_failure_sequential_job_lifecycle,
+                )
+
+                listing_status = str(outcome.get("status") or C.STAGE_FAILED)
+                if listing_status == C.STAGE_SUCCESS:
+                    sync_failure_sequential_job_lifecycle(
+                        account_id=str(job.account_id or ""),
+                        job_id=job.job_id,
+                        product_selectors=list(job.product_codes or []),
+                        phase=C.PHASE_LIMITED_TIME,
+                        lifecycle_status=LIFECYCLE_ACTIVE,
+                    )
+                elif listing_status in C.TERMINAL_STAGES:
+                    sync_failure_sequential_job_lifecycle(
+                        account_id=str(job.account_id or ""),
+                        job_id=job.job_id,
+                        product_selectors=list(job.product_codes or []),
+                        phase=C.PHASE_LISTING,
+                        lifecycle_status="failed",
+                    )
+            except Exception:
+                logger.exception("sync failure sequential commerce lifecycle failed job=%s", job.job_id)
             _refresh_batch_counters(batch_id, list_jobs_by_batch(batch_id))
             return summary
 
@@ -313,6 +362,26 @@ def tick_once() -> dict[str, Any]:
             if all(j.overall_status == C.OVERALL_COMPLETED for j in jobs):
                 update_batch_stats(batch_id, status=C.BATCH_COMPLETED)
                 summary["action"] = "batch_completed"
+                try:
+                    from pdd_agent.api.services.commerce_dispatch import (
+                        sync_failure_sequential_job_lifecycle,
+                    )
+
+                    seen_accounts: set[str] = set()
+                    for j in jobs:
+                        aid = str(j.account_id or "").strip()
+                        if not aid or aid in seen_accounts:
+                            continue
+                        seen_accounts.add(aid)
+                        sync_failure_sequential_job_lifecycle(
+                            account_id=aid,
+                            job_id=j.job_id,
+                            product_selectors=list(j.product_codes or []),
+                            phase=C.PHASE_COMPLETED,
+                            lifecycle_status="completed",
+                        )
+                except Exception:
+                    logger.exception("release commerce lifecycle on batch_completed batch=%s", batch_id)
             else:
                 summary["action"] = "finalize"
             return summary
@@ -320,9 +389,54 @@ def tick_once() -> dict[str, Any]:
         if step in {"activity_wait", "idle"}:
             _refresh_batch_counters(batch_id, jobs)
             summary["action"] = step
+            if step == "activity_wait":
+                try:
+                    from pdd_agent.api.services.commerce_dispatch import (
+                        LIFECYCLE_SCHEDULED,
+                        sync_failure_sequential_job_lifecycle,
+                    )
+                    from pdd_agent.failure_sequential.repository import activity_due_at
+
+                    for j in jobs:
+                        if not job_ready_for_activity(j):
+                            continue
+                        if job_activity_618_due(j, delay_minutes):
+                            continue
+                        sync_failure_sequential_job_lifecycle(
+                            account_id=str(j.account_id or ""),
+                            job_id=j.job_id,
+                            product_selectors=list(j.product_codes or []),
+                            phase=C.BATCH_AWAITING_ACTIVITY,
+                            lifecycle_status=LIFECYCLE_SCHEDULED,
+                            wake_at=activity_due_at(j, delay_minutes),
+                        )
+                except Exception:
+                    logger.exception("sync failure sequential scheduled lifecycle batch=%s", batch_id)
             return summary
 
         assert next_job is not None
+        from pdd_agent.api.services.commerce_dispatch import (
+            gate_failure_sequential_job,
+            register_failure_sequential_lifecycle,
+        )
+
+        allowed, block_reason = gate_failure_sequential_job(
+            account_id=str(next_job.account_id or ""),
+            product_selectors=list(next_job.product_codes or []),
+        )
+        if not allowed:
+            summary.update(
+                action="commerce_blocked",
+                job_id=next_job.job_id,
+                phase=step,
+                error=block_reason,
+            )
+            return summary
+        register_failure_sequential_lifecycle(
+            account_id=str(next_job.account_id or ""),
+            job_id=next_job.job_id,
+            product_selectors=list(next_job.product_codes or []),
+        )
         _run_post_listing_step(
             batch_id=batch_id,
             jobs=jobs,

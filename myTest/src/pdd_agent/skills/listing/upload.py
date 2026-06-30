@@ -37,6 +37,12 @@ from pdd_agent.skills.listing.category_page_flow import (
 )
 from pdd_agent.skills.listing.listing_publish_settings import apply_listing_publish_settings
 from pdd_agent.skills.listing.listing_spec_pipeline import apply_unit_listing_specs
+from pdd_agent.skills.listing.pdd_page_image_errors import (
+    BranchCCoverImageRejected,
+    PddImageDimensionRejected,
+    raise_if_pdd_image_dimension_rejected,
+    read_pdd_image_dimension_error,
+)
 from pdd_agent.skills.listing.page_ai_title import apply_title_after_cover_upload
 from pdd_agent.skills.listing.spec_labels import is_forbidden_spec_code_label, ordered_style_names
 from pdd_agent.skills.listing.title import resolve_listing_title
@@ -2929,73 +2935,8 @@ def _find_branch_c_cover_input(page: DpPage):
     return None
 
 
-_BRANCH_C_COVER_UPLOAD_ERROR_PATTERNS = (
-    "尺寸不符合要求",
-    "图片尺寸不符合",
-    "图片不符合要求",
-    "图片尺寸不符",
-)
-
-
-class BranchCCoverImageRejected(RuntimeError):
-    """分支 C 主图上传被拼多多页面拒绝（如尺寸不合规）。"""
-
-    def __init__(self, message: str, *, platform_message: str = ""):
-        super().__init__(message)
-        self.platform_message = str(platform_message or message).strip()
-
-
 def _read_branch_c_cover_upload_error(page: DpPage) -> str:
-    """读取分支 C 主图上传后页面报错（如「尺寸不符合要求」）。"""
-    try:
-        msg = page.run_js(
-            """
-            function isVisible(el) {
-                if (!el) return false;
-                const r = el.getBoundingClientRect();
-                const s = window.getComputedStyle(el);
-                return r.width > 2 && r.height > 2
-                    && s.display !== 'none' && s.visibility !== 'hidden'
-                    && parseFloat(s.opacity || '1') > 0.05;
-            }
-            const patterns = [
-                '尺寸不符合要求',
-                '图片尺寸不符合',
-                '图片不符合要求',
-                '图片尺寸不符',
-            ];
-            const selectors = [
-                '[class*="toast"]', '[class*="Toast"]',
-                '[class*="notice"]', '[class*="Notice"]',
-                '[class*="message"]', '[class*="Message"]',
-                '[class*="error"]', '[class*="Error"]',
-                '[class*="warn"]', '[class*="Warn"]',
-                '[class*="tip"]', '[class*="Tip"]',
-            ];
-            for (const sel of selectors) {
-                for (const el of document.querySelectorAll(sel)) {
-                    const raw = (el.innerText || el.textContent || '').trim();
-                    if (!raw || !isVisible(el)) continue;
-                    const compact = raw.replace(/\\s+/g, '');
-                    for (const p of patterns) {
-                        if (compact.includes(p.replace(/\\s+/g, ''))) return raw;
-                    }
-                }
-            }
-            const body = document.body?.innerText || '';
-            for (const p of patterns) {
-                if (body.includes(p)) return p;
-            }
-            return '';
-            """
-        )
-        return str(msg or "").strip()
-    except Exception:
-        body = _category_page_body_text(page)
-        for pattern in _BRANCH_C_COVER_UPLOAD_ERROR_PATTERNS:
-            if pattern in body:
-                return pattern
-        return ""
+    return read_pdd_image_dimension_error(page)
 
 
 def _raise_if_branch_c_cover_upload_rejected(
@@ -3004,17 +2945,11 @@ def _raise_if_branch_c_cover_upload_rejected(
     account_id: str = "",
     label: str = "",
 ) -> None:
-    platform_message = _read_branch_c_cover_upload_error(page)
-    if not platform_message:
-        return
-    prefix = f"[{account_id}] [{label}] " if account_id and label else ""
-    print(
-        f"{prefix}分支 C：拼多多主图校验失败：{platform_message}",
-        flush=True,
-    )
-    raise BranchCCoverImageRejected(
-        f"{prefix}分支 C 主图上传失败：{platform_message}",
-        platform_message=platform_message,
+    raise_if_pdd_image_dimension_rejected(
+        page,
+        account_id=account_id,
+        label=label,
+        image_kind="carousel",
     )
 
 
@@ -3670,15 +3605,43 @@ def upload_one_listing(
     )
 
     print(f"[{account_id}] [{label}] 开始填写价格表...")
-    fill_stats = fill_multi_spec_rows(
-        page,
-        account_id,
-        unit.skus,
-        defaults,
-        rows=sku_rows,
-        style_names=style_names,
-        size_names=size_names,
-    )
+    try:
+        fill_stats = fill_multi_spec_rows(
+            page,
+            account_id,
+            unit.skus,
+            defaults,
+            rows=sku_rows,
+            style_names=style_names,
+            size_names=size_names,
+        )
+    except PddImageDimensionRejected as exc:
+        _clear_beforeunload(page)
+        sku_label = str(exc.sku_label or "").strip()
+        platform_msg = str(exc.platform_message or exc).strip()
+        error_text = (
+            f"预览图尺寸不符合要求 [{sku_label}]：{platform_msg}"
+            if sku_label
+            else f"预览图尺寸不符合要求：{platform_msg}"
+        )
+        return _finish_listing(
+            run_id,
+            account_id,
+            unit,
+            status="failed",
+            reason=ListingErrorCode.PREVIEW_IMAGE_DIMENSION_REJECTED,
+            error=error_text,
+            title=listing_info.get("title", ""),
+            retryable=False,
+            legacy_status="failed",
+            extra={
+                "preview_sku_label": sku_label,
+                "platform_message": platform_msg,
+            },
+            phase="preview",
+            step="upload_preview_image",
+            page_url=str(page.url or ""),
+        )
     previews_ok = bool(fill_stats.get("previews_ok"))
     price_filled = int(fill_stats.get("price_filled") or 0)
     price_total = int(fill_stats.get("price_total") or len(unit.skus))

@@ -254,6 +254,7 @@ def test_start_integrated_pipeline_skip_listing_schedules_activity():
                                     product_codes=["BD713/第一套图/BD713A"],
                                     activity_id="20981",
                                     skip_listing=True,
+                                    skip_commerce_gate=True,
                                 )
     on_listing.assert_called_once()
     assert result["status"] == "waiting_activity"
@@ -288,6 +289,7 @@ def test_start_integrated_pipeline_partial_listing_skip_enqueues_unlisted_only()
                                 product_codes=["BD720/第一套图/BD720A", "BD720/第一套图/BD720B"],
                                 activity_id="20981",
                                 listing_skip_selectors=["BD720/第一套图/BD720A"],
+                                skip_commerce_gate=True,
                             )
     enqueue.assert_called_once()
     payload = enqueue.call_args.kwargs["payload"]

@@ -20,6 +20,8 @@ class WecomConfig(BaseModel):
     webhook_url: str = ""
     notify_on_listing_failed: bool = False
     notify_on_pipeline_failed: bool = False
+    notify_on_commerce_queued: bool = False
+    notify_on_commerce_dispatched: bool = False
 
     @model_validator(mode="after")
     def normalize(self) -> "WecomConfig":

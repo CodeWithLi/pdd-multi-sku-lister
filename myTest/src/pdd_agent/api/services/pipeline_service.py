@@ -1136,6 +1136,9 @@ def start_integrated_pipeline(
     delist_spec_code_search_enabled: bool = False,
     activity_limited_time_success_only: bool = False,
     extra_meta: dict[str, Any] | None = None,
+    trigger_source: str = "manual",
+    skip_commerce_gate: bool = False,
+    commerce_intent_id: str = "",
 ) -> dict[str, Any]:
     account_id = str(account_id or "").strip()
     normalized_activity_ids = _normalize_pipeline_activity_ids(activity_id, activity_ids)
@@ -1174,6 +1177,53 @@ def start_integrated_pipeline(
     skip_selector_set = set(skip_selectors)
     list_codes = [c for c in codes if c not in skip_selector_set]
 
+    if not skip_commerce_gate:
+        from pdd_agent.api.services.commerce_dispatch import (
+            build_pipeline_payload_from_kwargs,
+            gate_integrated_pipeline_start,
+        )
+
+        pipeline_kwargs = build_pipeline_payload_from_kwargs(
+            {
+                "activity_id": activity_id,
+                "activity_ids": normalized_activity_ids,
+                "category_keyword": category_keyword,
+                "auto_promotion": auto_promotion,
+                "auto_limited_time_setup": auto_limited_time_setup,
+                "continue_after_limited_time_failure": continue_after_limited_time_failure,
+                "continue_after_activity_failure": continue_after_activity_failure,
+                "activity_delay_hours": activity_delay_hours,
+                "demo_mode": demo_mode,
+                "platform_listing_code": platform_listing_code,
+                "slot_alignment_test": slot_alignment_test,
+                "category_next_burst_demo": category_next_burst_demo,
+                "listing_scheduled_at": listing_scheduled_at,
+                "batch_id": batch_id,
+                "skip_listing": skip_listing,
+                "listing_skip_selectors": skip_selectors,
+                "material_source": material_source,
+                "listing_input_mode": listing_input_mode,
+                "relist_strategy": strategy,
+                "listing_throttle_enabled": listing_throttle_enabled,
+                "listing_batch_set_count": listing_batch_set_count,
+                "listing_batch_interval_minutes": listing_batch_interval_minutes,
+                "listing_per_batch_limited_time_enabled": listing_per_batch_limited_time_enabled,
+                "listing_per_batch_campaign_enabled": listing_per_batch_campaign_enabled,
+                "delist_spec_code_search_enabled": delist_spec_code_search_enabled,
+                "activity_limited_time_success_only": activity_limited_time_success_only,
+                "extra_meta": extra_meta,
+                "trigger_source": trigger_source,
+            }
+        )
+        queued = gate_integrated_pipeline_start(
+            account_id=account_id,
+            product_selectors=codes,
+            trigger_source=trigger_source,
+            pipeline_payload=pipeline_kwargs,
+        )
+        if queued:
+            return queued
+
     pipeline_id = _pipeline_id()
     listing_run_id = create_listing_run(account_id)
     meta: dict[str, Any] = {
@@ -1191,6 +1241,7 @@ def start_integrated_pipeline(
         "campaign_results": [],
         "relist_strategy": strategy,
         "delist_spec_code_search_enabled": bool(delist_spec_code_search_enabled),
+        "commerce_trigger_source": str(trigger_source or "manual"),
         **listing_input_meta,
     }
     if batch_id:
@@ -1218,6 +1269,18 @@ def start_integrated_pipeline(
         listing_run_id=listing_run_id,
         meta=meta,
     )
+    try:
+        from pdd_agent.api.services.commerce_dispatch import register_integrated_pipeline_lifecycle
+
+        register_integrated_pipeline_lifecycle(
+            account_id=account_id,
+            pipeline_id=pipeline_id,
+            product_selectors=codes,
+            trigger_source=trigger_source,
+            intent_id=commerce_intent_id,
+        )
+    except Exception:
+        logger.exception("register commerce lifecycle failed pipeline_id=%s", pipeline_id)
     try:
         from pdd_agent.integrations.feishu.listing_feishu_inspect_store import (
             schedule_pipeline_feishu_inspect_capture,

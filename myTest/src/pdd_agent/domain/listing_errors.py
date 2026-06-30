@@ -20,6 +20,7 @@ class ListingErrorCode:
     PREFLIGHT_CATALOG = "preflight_catalog"
     IMAGE_FILE_MISSING = "image_file_missing"
     CAROUSEL_IMAGE_DIMENSION_REJECTED = "carousel_image_dimension_rejected"
+    PREVIEW_IMAGE_DIMENSION_REJECTED = "preview_image_dimension_rejected"
     CATALOG_PARSE_WARNING = "catalog_parse_warning"
     NO_VALID_UNITS = "no_valid_units"
     SLOT_ALIGNMENT_FAILED = "slot_alignment_failed"
@@ -102,6 +103,7 @@ class ListingErrors:
         ListingErrorCode.PREFLIGHT_CATALOG: "上架前校验：商品表或素材目录问题",
         ListingErrorCode.IMAGE_FILE_MISSING: "图片文件不存在或无法读取",
         ListingErrorCode.CAROUSEL_IMAGE_DIMENSION_REJECTED: "主图尺寸不符合平台要求",
+        ListingErrorCode.PREVIEW_IMAGE_DIMENSION_REJECTED: "预览图尺寸不符合平台要求",
         ListingErrorCode.PRICE_FILL_PARTIAL: "价格表文字字段未全部填写（库存/拼团价/单买价/编码）",
         ListingErrorCode.PRICE_FILL_ROW_NOT_FOUND: "价格表找不到对应规格行",
         ListingErrorCode.PRICE_FILL_BY_INDEX_FAILED: "按行号填写价格表失败",
@@ -197,6 +199,7 @@ class ListingErrors:
         ListingErrorCode.PREFLIGHT_CATALOG: "商品目录或素材有问题",
         ListingErrorCode.IMAGE_FILE_MISSING: "图片文件不存在或打不开",
         ListingErrorCode.CAROUSEL_IMAGE_DIMENSION_REJECTED: "主图尺寸不符合要求",
+        ListingErrorCode.PREVIEW_IMAGE_DIMENSION_REJECTED: "预览图尺寸不符合要求",
         ListingErrorCode.PRICE_FILL_PARTIAL: "价格表没填完整（库存/拼团价/单买价/编码）",
         ListingErrorCode.PRICE_FILL_ROW_NOT_FOUND: "价格表找不到对应规格行",
         ListingErrorCode.PRICE_FILL_BY_INDEX_FAILED: "按行号填写价格表失败",
@@ -321,6 +324,7 @@ class ListingErrors:
             ListingErrorCode.PRICE_FILL_BY_INDEX_FAILED,
             ListingErrorCode.LISTED,
             ListingErrorCode.CAROUSEL_IMAGE_DIMENSION_REJECTED,
+            ListingErrorCode.PREVIEW_IMAGE_DIMENSION_REJECTED,
             ListingErrorCode.FEISHU_PRODUCT_CATALOG_MISSING,
         }
     )
@@ -863,7 +867,10 @@ class ListingErrors:
             return cls.Msg.FEISHU_DETAIL_MISSING.format(code=code) if code else "详情图缺失"
         if "尺寸不符合" in text:
             code = str(merchant_code or "").strip().upper()
-            brief = "主图尺寸不符合要求"
+            if "预览图" in text:
+                brief = "预览图尺寸不符合要求"
+            else:
+                brief = "主图尺寸不符合要求"
             return f"{code}{brief}" if code else brief
         if "数字命名图" in text:
             range_m = re.search(r"\((\d+)\s*-\s*(\d+)\)", text)

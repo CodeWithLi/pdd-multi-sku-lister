@@ -266,15 +266,18 @@ def test_upload_category_branch_c_covers_applies_title_after_upload(monkeypatch)
 
 def test_read_branch_c_cover_upload_error_detects_dimension_message(monkeypatch):
     page = MagicMock()
-    page.run_js.return_value = "尺寸不符合要求"
+    monkeypatch.setattr(
+        listing_upload,
+        "read_pdd_image_dimension_error",
+        lambda _page: "尺寸不符合要求",
+    )
     assert listing_upload._read_branch_c_cover_upload_error(page) == "尺寸不符合要求"
 
 
 def test_raise_if_branch_c_cover_upload_rejected_raises(monkeypatch):
     page = MagicMock()
     monkeypatch.setattr(
-        listing_upload,
-        "_read_branch_c_cover_upload_error",
+        "pdd_agent.skills.listing.pdd_page_image_errors.read_pdd_image_dimension_error",
         lambda _page: "尺寸不符合要求",
     )
     try:

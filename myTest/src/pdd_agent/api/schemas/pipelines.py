@@ -134,22 +134,22 @@ class IntegratedPipelineListingUnitStatus(BaseModel):
 
 
 class IntegratedPipelineResponse(BaseModel):
-    pipeline_id: str
-    account_id: str
-    status: str
-    current_step: str
-    product_codes: list[str]
-    activity_id: str
+    pipeline_id: str = ""
+    account_id: str = ""
+    status: str = "queued"
+    current_step: str = "commerce_queued"
+    product_codes: list[str] = Field(default_factory=list)
+    activity_id: str = ""
     activity_ids: list[str] = Field(default_factory=list)
-    auto_promotion: bool
+    auto_promotion: bool = True
     auto_limited_time_setup: bool = True
     continue_after_limited_time_failure: bool = False
     continue_after_activity_failure: bool = False
     activity_limited_time_success_only: bool = False
     limited_time_outcome: str = ""
     limited_time_skip_reason: str = ""
-    activity_delay_hours: float
-    demo_mode: bool
+    activity_delay_hours: float = 24.0
+    demo_mode: bool = False
     slot_alignment_test: bool = False
     category_next_burst_demo: bool = True
     batch_id: str = ""
@@ -157,8 +157,8 @@ class IntegratedPipelineResponse(BaseModel):
     listing_run_id: str = ""
     campaign_run_id: str = ""
     traffic_run_id: str = ""
-    pdd_product_ids: list[str] = []
-    mapping_ids: list[str] = []
+    pdd_product_ids: list[str] = Field(default_factory=list)
+    mapping_ids: list[str] = Field(default_factory=list)
     scheduled_activity_at: datetime | None = None
     error: str = ""
     campaign_outcome: str = ""
@@ -169,11 +169,16 @@ class IntegratedPipelineResponse(BaseModel):
     limited_time_success_detail: str = ""
     listing_unit_statuses: list[IntegratedPipelineListingUnitStatus] = Field(default_factory=list)
     campaign_results: list[IntegratedPipelineCampaignResult] = Field(default_factory=list)
-    steps: list[IntegratedPipelineStepInfo] = []
+    steps: list[IntegratedPipelineStepInfo] = Field(default_factory=list)
     feishu_inspect_at: str = ""
     has_feishu_inspect: bool = False
     created_at: datetime | None = None
     updated_at: datetime | None = None
+    commerce_queued: bool = False
+    intent_id: str = ""
+    block_reason: str = ""
+    block_reason_label: str = ""
+    wake_at: str = ""
 
 
 class IntegratedPipelineBatchRunItem(BaseModel):

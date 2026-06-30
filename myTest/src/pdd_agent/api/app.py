@@ -8,6 +8,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from pdd_agent.api.routes.agents import router as agents_router
 from pdd_agent.api.routes.catalog import router as catalog_router
+from pdd_agent.api.routes.commerce import router as commerce_router
 from pdd_agent.api.routes.config import router as config_router
 from pdd_agent.api.routes.daily_cycle_relists import router as daily_cycle_relists_router
 from pdd_agent.api.routes.daily_listings import router as daily_listings_router
@@ -35,6 +36,7 @@ from pdd_agent.api.services.failure_cycle_relist_scheduler import (
     get_failure_cycle_relist_watch_scheduler,
 )
 from pdd_agent.failure_sequential.scheduler import get_failure_sequential_scheduler
+from pdd_agent.api.services.commerce_dispatch_scheduler import get_commerce_dispatch_scheduler
 from pdd_agent.api.services.platform_skip_dedupe_scheduler import get_platform_skip_dedupe_scheduler
 from pdd_agent.api.services.traffic_report_scheduler import get_traffic_report_scheduler
 from pdd_agent.api.services.task_queue import TaskQueueWorker
@@ -45,6 +47,7 @@ traffic_report_scheduler = get_traffic_report_scheduler()
 failure_cycle_relist_watch_scheduler = get_failure_cycle_relist_watch_scheduler()
 failure_sequential_scheduler = get_failure_sequential_scheduler()
 platform_skip_dedupe_scheduler = get_platform_skip_dedupe_scheduler()
+commerce_dispatch_scheduler = get_commerce_dispatch_scheduler()
 
 
 @asynccontextmanager
@@ -60,6 +63,7 @@ async def lifespan(app: FastAPI):
     failure_cycle_relist_watch_scheduler.start()
     failure_sequential_scheduler.start()
     platform_skip_dedupe_scheduler.start()
+    commerce_dispatch_scheduler.start()
 
     from pdd_agent.integrations.minio.broadcast import bind_event_loop
     from pdd_agent.integrations.minio.rabbitmq_consumer import get_minio_rabbitmq_consumer
@@ -216,6 +220,7 @@ async def lifespan(app: FastAPI):
     await failure_sequential_scheduler.stop()
     await failure_cycle_relist_watch_scheduler.stop()
     await platform_skip_dedupe_scheduler.stop()
+    await commerce_dispatch_scheduler.stop()
     await traffic_report_scheduler.stop()
     await worker.stop()
     logger.info("PDD Agent API stopped")
@@ -255,6 +260,7 @@ def create_app() -> FastAPI:
     app.include_router(tasks_router, prefix="/api")
     app.include_router(traffic_report_schedule_router, prefix="/api")
     app.include_router(pipelines_router, prefix="/api")
+    app.include_router(commerce_router, prefix="/api")
     app.include_router(pipeline_issues_router, prefix="/api")
     app.include_router(listed_folders_router, prefix="/api")
     app.include_router(queue_router, prefix="/api")

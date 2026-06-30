@@ -1822,6 +1822,17 @@ def update_integrated_pipeline(
         session.flush()
         session.refresh(row)
         session.expunge(row)
+        try:
+            from pdd_agent.api.services.commerce_dispatch import sync_lifecycle_from_integrated_pipeline
+
+            sync_lifecycle_from_integrated_pipeline(row)
+        except Exception:
+            from pdd_agent.core.logging import get_logger
+
+            get_logger(__name__).exception(
+                "sync commerce lifecycle failed pipeline_id=%s",
+                pipeline_id,
+            )
         return row
 
 

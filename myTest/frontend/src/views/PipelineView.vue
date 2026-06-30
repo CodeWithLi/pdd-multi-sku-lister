@@ -36,8 +36,10 @@ import {
 } from '@/utils/labels'
 import type {
   Account,
+  AccountLifecycle,
   AutoUploadConfig,
   AutoUploadTriggerMode,
+  CommerceOverview,
   FeishuInspectListingPricesResult,
   IntegratedPipeline,
   ListingTargetOption,
@@ -45,6 +47,17 @@ import type {
   PreflightResponse,
   RelistStrategy,
 } from '@/types'
+import {
+  commerceBlockReasonLabel,
+  commerceLifecycleStatusLabel,
+  commerceLifecycleTagType,
+  commercePhaseLabel,
+  commerceTriggerLabel,
+  formatIntentProducts,
+  formatWakeCountdown,
+  intentPriorityLabel,
+  summarizeLifecycle,
+} from '@/utils/commerceLabels'
 
 const router = useRouter()
 const loading = ref(false)
@@ -64,6 +77,16 @@ const pipelinePage = ref(1)
 const pipelinePageSize = ref(10)
 const pipelineTotal = ref(0)
 const activePipeline = ref<IntegratedPipeline | null>(null)
+const commerceOverview = ref<CommerceOverview>({
+  lifecycles: [],
+  pending_intents: [],
+  pending_total: 0,
+  pending_by_account: {},
+})
+const commerceLoading = ref(false)
+const commerceDispatchingAll = ref(false)
+const commerceDispatchingAccount = ref('')
+const commerceCancelingIntent = ref('')
 
 const accountId = ref('')
 const productCodes = ref<string[]>([])
@@ -159,6 +182,64 @@ const {
 let pollTimer: ReturnType<typeof setInterval> | null = null
 
 const enabledAccounts = computed(() => accounts.value.filter((a) => a.enabled))
+
+function accountDisplayName(accountId: string): string {
+  const acc = accounts.value.find((item) => item.account_id === accountId)
+  const shop = String(acc?.shop_display_name || acc?.display_name || '').trim()
+  return shop ? `${accountId}（${shop}）` : accountId
+}
+
+function lifecycleForAccount(accountId: string): AccountLifecycle | null {
+  const id = String(accountId || '').trim()
+  if (!id) return null
+  return commerceOverview.value.lifecycles.find((row) => row.account_id === id) || null
+}
+
+const commerceAccountRows = computed(() => {
+  const map = new Map<
+    string,
+    { account_id: string; lifecycle: AccountLifecycle | null; pending_count: number }
+  >()
+  for (const row of commerceOverview.value.lifecycles) {
+    map.set(row.account_id, {
+      account_id: row.account_id,
+      lifecycle: row,
+      pending_count: commerceOverview.value.pending_by_account[row.account_id] || 0,
+    })
+  }
+  for (const [accountId, count] of Object.entries(commerceOverview.value.pending_by_account || {})) {
+    if (!map.has(accountId)) {
+      map.set(accountId, { account_id: accountId, lifecycle: null, pending_count: count })
+    }
+  }
+  return Array.from(map.values()).sort((a, b) => {
+    const score = (row: { lifecycle: AccountLifecycle | null; pending_count: number }) =>
+      (row.lifecycle ? 10 : 0) + (row.pending_count > 0 ? 5 : 0)
+    return score(b) - score(a) || a.account_id.localeCompare(b.account_id)
+  })
+})
+
+const selectedAccountLifecycle = computed(() =>
+  pipelineBatchEnabled.value ? null : lifecycleForAccount(accountId.value),
+)
+
+const selectedAccountPendingCount = computed(() => {
+  if (pipelineBatchEnabled.value || !accountId.value) return 0
+  return commerceOverview.value.pending_by_account[accountId.value] || 0
+})
+
+const selectedAccountCommerceHint = computed(() => {
+  if (pipelineBatchEnabled.value || !accountId.value) return ''
+  const parts: string[] = []
+  const lifecycle = selectedAccountLifecycle.value
+  if (lifecycle && lifecycle.lifecycle_status && lifecycle.lifecycle_status !== 'none') {
+    parts.push(summarizeLifecycle(lifecycle))
+  }
+  if (selectedAccountPendingCount.value > 0) {
+    parts.push(`排队 ${selectedAccountPendingCount.value} 条`)
+  }
+  return parts.join('；')
+})
 
 const unlistedGroupCount = computed(
   () => productOptions.value.filter((item) => !item.is_fully_listed).length,
@@ -855,6 +936,90 @@ async function onLogSpecSkuRowsChange(enabled: boolean) {
   }
 }
 
+async function refreshCommerceOverview() {
+  commerceLoading.value = true
+  try {
+    commerceOverview.value = await api.commerceOverview()
+  } catch {
+    commerceOverview.value = {
+      lifecycles: [],
+      pending_intents: [],
+      pending_total: 0,
+      pending_by_account: {},
+    }
+  } finally {
+    commerceLoading.value = false
+  }
+}
+
+async function dispatchCommerceForAccount(targetAccountId: string) {
+  const id = String(targetAccountId || '').trim()
+  if (!id) return
+  commerceDispatchingAccount.value = id
+  try {
+    const result = await api.dispatchCommerceAccount(id)
+    if (result.dispatched && result.pipeline_id) {
+      ElMessage.success(`已派发排队任务，链路 ${result.pipeline_id}`)
+      pipelinePage.value = 1
+      await refreshPipelines()
+      startPolling()
+    } else if (result.queued_again) {
+      ElMessage.warning('店铺仍被占用，任务继续排队')
+      await refreshCommerceOverview()
+    } else {
+      ElMessage.info(result.message || '当前没有可派发的排队任务')
+      await refreshCommerceOverview()
+    }
+  } catch (e) {
+    ElMessage.error(e instanceof Error ? e.message : String(e))
+  } finally {
+    commerceDispatchingAccount.value = ''
+  }
+}
+
+async function dispatchAllCommerce() {
+  commerceDispatchingAll.value = true
+  try {
+    const result = await api.dispatchCommerceAll()
+    if (result.count > 0) {
+      const extra =
+        result.nudged || result.synced
+          ? `（推进 ${result.nudged || 0} 条等待活动，同步 ${result.synced || 0} 条周期）`
+          : ''
+      ElMessage.success(`已尝试派发 ${result.count} 条排队任务${extra}`)
+      pipelinePage.value = 1
+      await refreshPipelines()
+      startPolling()
+    } else {
+      const extra =
+        result.nudged || result.synced
+          ? `已推进 ${result.nudged || 0} 条等待活动，同步 ${result.synced || 0} 条周期`
+          : '暂无排队任务可派发'
+      ElMessage.info(extra)
+      await refreshCommerceOverview()
+    }
+  } catch (e) {
+    ElMessage.error(e instanceof Error ? e.message : String(e))
+  } finally {
+    commerceDispatchingAll.value = false
+  }
+}
+
+async function cancelCommerceIntentRow(intentId: string) {
+  const id = String(intentId || '').trim()
+  if (!id) return
+  commerceCancelingIntent.value = id
+  try {
+    await api.cancelCommerceIntent(id)
+    ElMessage.success('已取消排队任务')
+    await refreshCommerceOverview()
+  } catch (e) {
+    ElMessage.error(e instanceof Error ? e.message : String(e))
+  } finally {
+    commerceCancelingIntent.value = ''
+  }
+}
+
 async function refreshPipelines() {
   const page = pipelinePage.value
   const pageSize = pipelinePageSize.value
@@ -879,6 +1044,7 @@ async function refreshPipelines() {
       }
     }
   }
+  await refreshCommerceOverview()
 }
 
 function onPipelinePageChange(page: number) {
@@ -985,6 +1151,14 @@ async function startPipeline() {
         activity_limited_time_success_only: activityLimitedTimeSuccessOnly.value,
       })
       pipelinePage.value = 1
+      if (result.commerce_queued) {
+        const mergedHint = result.is_merged ? '（已合并到现有排队）' : ''
+        success.value =
+          (result.block_reason_label ||
+            `任务已排队（${result.intent_id || '—'}），当前店铺有进行中的运营周期`) + mergedHint
+        await refreshCommerceOverview()
+        return
+      }
       activePipeline.value = result
       const activityCount = activityIds.value.length
       const activityHint = activityCount > 1 ? `，${activityCount} 个活动将依次报名` : ''
@@ -1202,6 +1376,16 @@ onUnmounted(() => {
                   />
                 </el-select>
               </el-form-item>
+
+              <el-alert
+                v-if="selectedAccountCommerceHint"
+                type="warning"
+                :closable="false"
+                show-icon
+                class="commerce-account-hint"
+                :title="`当前店铺：${selectedAccountCommerceHint}`"
+                description="若此时启动整合链路，任务会自动进入排队；当前周期结束后系统会尝试自动派发。"
+              />
 
               <el-row v-if="pipelineBatchEnabled" :gutter="16">
                 <el-col :span="12">
@@ -1912,6 +2096,148 @@ onUnmounted(() => {
           </el-steps>
         </el-card>
 
+        <el-card shadow="never" class="stat-card side-card commerce-card">
+          <template #header>
+            <div class="card-head">
+              <span>店铺运营状态</span>
+              <div class="card-head-actions">
+                <el-tag v-if="commerceOverview.pending_total" size="small" type="warning">
+                  排队 {{ commerceOverview.pending_total }}
+                </el-tag>
+                <el-button
+                  link
+                  type="primary"
+                  size="small"
+                  :loading="commerceLoading"
+                  @click="refreshCommerceOverview().catch(() => undefined)"
+                >
+                  刷新
+                </el-button>
+                <el-button
+                  link
+                  type="primary"
+                  size="small"
+                  :loading="commerceDispatchingAll"
+                  :disabled="!commerceOverview.pending_total"
+                  @click="dispatchAllCommerce"
+                >
+                  派发全部
+                </el-button>
+              </div>
+            </div>
+          </template>
+
+          <el-empty
+            v-if="!commerceAccountRows.length && !commerceOverview.pending_total"
+            description="各店铺空闲，无排队任务"
+            :image-size="56"
+          />
+
+          <el-table
+            v-if="commerceAccountRows.length"
+            :data="commerceAccountRows"
+            size="small"
+            class="commerce-status-table"
+            empty-text="暂无活跃周期"
+          >
+            <el-table-column label="店铺" min-width="120" show-overflow-tooltip>
+              <template #default="{ row }">
+                {{ accountDisplayName(row.account_id) }}
+              </template>
+            </el-table-column>
+            <el-table-column label="状态" width="88">
+              <template #default="{ row }">
+                <el-tag
+                  size="small"
+                  :type="commerceLifecycleTagType(row.lifecycle?.lifecycle_status || 'none')"
+                >
+                  {{ commerceLifecycleStatusLabel(row.lifecycle?.lifecycle_status || 'none') }}
+                </el-tag>
+              </template>
+            </el-table-column>
+            <el-table-column label="阶段" width="88">
+              <template #default="{ row }">
+                {{ row.lifecycle ? commercePhaseLabel(row.lifecycle.phase || '') : '—' }}
+              </template>
+            </el-table-column>
+            <el-table-column label="等待" min-width="96" show-overflow-tooltip>
+              <template #default="{ row }">
+                <span v-if="row.lifecycle?.lifecycle_status === 'scheduled'">
+                  {{ formatWakeCountdown(row.lifecycle.wake_at) }}
+                </span>
+                <span v-else-if="row.lifecycle?.wake_at">
+                  {{ formatTime(row.lifecycle.wake_at) }}
+                </span>
+                <span v-else>—</span>
+              </template>
+            </el-table-column>
+            <el-table-column label="排队" width="56" align="center">
+              <template #default="{ row }">
+                <el-tag v-if="row.pending_count" size="small" type="warning">{{ row.pending_count }}</el-tag>
+                <span v-else>0</span>
+              </template>
+            </el-table-column>
+            <el-table-column label="操作" width="72" align="center">
+              <template #default="{ row }">
+                <el-button
+                  v-if="row.pending_count"
+                  link
+                  type="primary"
+                  size="small"
+                  :loading="commerceDispatchingAccount === row.account_id"
+                  @click="dispatchCommerceForAccount(row.account_id)"
+                >
+                  派发
+                </el-button>
+              </template>
+            </el-table-column>
+          </el-table>
+
+          <div v-if="commerceOverview.pending_intents.length" class="commerce-intents-panel">
+            <div class="commerce-intents-head">排队明细</div>
+            <el-table
+              :data="commerceOverview.pending_intents"
+              size="small"
+              class="commerce-intents-table"
+              max-height="220"
+            >
+              <el-table-column prop="account_id" label="店铺" width="88" show-overflow-tooltip />
+              <el-table-column label="来源" width="108">
+                <template #default="{ row }">
+                  <span>{{ intentPriorityLabel(row) }}</span>
+                  <el-tag v-if="row.is_merged" size="small" type="info" class="commerce-merged-tag">
+                    已合并
+                  </el-tag>
+                </template>
+              </el-table-column>
+              <el-table-column label="商品" min-width="140" show-overflow-tooltip>
+                <template #default="{ row }">
+                  {{ formatIntentProducts(row.product_selectors) }}
+                </template>
+              </el-table-column>
+              <el-table-column label="原因" min-width="120" show-overflow-tooltip>
+                <template #default="{ row }">
+                  {{ row.block_reason_label || commerceBlockReasonLabel(row.block_reason) }}
+                </template>
+              </el-table-column>
+              <el-table-column prop="created_at" label="入队" width="96" show-overflow-tooltip />
+              <el-table-column label="操作" width="72" fixed="right" align="center">
+                <template #default="{ row }">
+                  <el-button
+                    link
+                    type="danger"
+                    size="small"
+                    :loading="commerceCancelingIntent === row.intent_id"
+                    @click="cancelCommerceIntentRow(row.intent_id)"
+                  >
+                    取消
+                  </el-button>
+                </template>
+              </el-table-column>
+            </el-table>
+          </div>
+        </el-card>
+
         <el-card shadow="never" class="stat-card side-card recent-pipelines-card">
           <template #header>
             <div class="card-head">
@@ -2220,6 +2546,36 @@ onUnmounted(() => {
 
 .recent-pipelines-card :deep(.el-card__body) {
   padding-bottom: 12px;
+}
+
+.commerce-card :deep(.el-card__body) {
+  padding-top: 8px;
+  padding-bottom: 12px;
+}
+
+.commerce-account-hint {
+  margin-bottom: 12px;
+}
+
+.commerce-status-table {
+  margin-bottom: 8px;
+}
+
+.commerce-intents-panel {
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid var(--el-border-color-lighter);
+}
+
+.commerce-intents-head {
+  font-size: 13px;
+  color: var(--el-text-color-secondary);
+  margin-bottom: 8px;
+}
+
+.commerce-merged-tag {
+  margin-left: 4px;
+  vertical-align: middle;
 }
 
 .recent-pipelines-table {

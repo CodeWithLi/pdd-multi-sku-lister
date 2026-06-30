@@ -190,7 +190,17 @@ def _run_auto_pipeline(
             demo_mode=cfg.demo_mode,
             slot_alignment_test=cfg.slot_alignment_test,
             material_source=material_source,
+            trigger_source="rabbitmq_auto",
         )
+        if pipeline.get("commerce_queued"):
+            logger.info(
+                "auto pipeline queued account=%s products=%s intent=%s reason=%s",
+                account_id,
+                product_codes,
+                pipeline.get("intent_id"),
+                pipeline.get("block_reason"),
+            )
+            return
         logger.info(
             "auto pipeline triggered pipeline_id=%s account=%s products=%s",
             pipeline.get("pipeline_id"),

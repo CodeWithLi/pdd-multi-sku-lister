@@ -45,3 +45,51 @@ def notify_pipeline_failed(
         f"原因：{(error or '—')[:1200]}"
     )
     send_if_enabled(content, cfg=cfg)
+
+
+def notify_commerce_queued(
+    *,
+    account_id: str,
+    intent_id: str,
+    product_codes: list[str],
+    trigger_source: str,
+    block_reason: str,
+    block_reason_label: str = "",
+) -> None:
+    cfg = load_wecom_config()
+    if not cfg.notify_on_commerce_queued:
+        return
+    codes = ", ".join(str(c) for c in product_codes if str(c).strip()) or "—"
+    reason = block_reason_label or block_reason or "—"
+    content = (
+        "【运营任务已排队】\n"
+        f"意图：{intent_id or '—'}\n"
+        f"店铺：{account_id or '—'}\n"
+        f"来源：{trigger_source or '—'}\n"
+        f"商品：{codes[:800]}\n"
+        f"原因：{reason[:500]}"
+    )
+    send_if_enabled(content, cfg=cfg)
+
+
+def notify_commerce_dispatched(
+    *,
+    account_id: str,
+    intent_id: str,
+    pipeline_id: str,
+    product_codes: list[str],
+    trigger_source: str = "",
+) -> None:
+    cfg = load_wecom_config()
+    if not cfg.notify_on_commerce_dispatched:
+        return
+    codes = ", ".join(str(c) for c in product_codes if str(c).strip()) or "—"
+    content = (
+        "【排队任务已派发】\n"
+        f"意图：{intent_id or '—'}\n"
+        f"链路：{pipeline_id or '—'}\n"
+        f"店铺：{account_id or '—'}\n"
+        f"来源：{trigger_source or '—'}\n"
+        f"商品：{codes[:800]}"
+    )
+    send_if_enabled(content, cfg=cfg)
