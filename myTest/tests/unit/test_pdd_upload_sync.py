@@ -30,6 +30,8 @@ from pdd_agent.integrations.feishu.pdd_upload_sync import (
 )
 from pdd_agent.skills.listing.goods_list_capture import (
     extract_list_status_from_text,
+    extract_merchant_code_from_row_text,
+    extract_total_inventory_from_row_text,
     is_plain_goods_template_link,
     parse_goods_list_row_meta,
 )
@@ -53,6 +55,24 @@ def test_parse_goods_list_row_meta_extracts_created_at_and_status():
     """
     meta = parse_goods_list_row_meta(row_text)
     assert meta["matched_created_at"] == "2026-06-16 13:21:00"
+    assert meta["list_status"] == "销售中"
+    assert meta["merchant_code"] == "BD737A"
+
+
+def test_extract_merchant_code_and_inventory_from_row_text():
+    row_text = """
+    笔袋套装
+    ID: 967054361524
+    商品编码: BD029C
+    总库存 54022
+    2026-06-30 00:19
+    销售中
+    """
+    assert extract_merchant_code_from_row_text(row_text) == "BD029C"
+    assert extract_total_inventory_from_row_text(row_text) == 54022
+    meta = parse_goods_list_row_meta(row_text)
+    assert meta["merchant_code"] == "BD029C"
+    assert meta["total_inventory"] == "54022"
     assert meta["list_status"] == "销售中"
 
 

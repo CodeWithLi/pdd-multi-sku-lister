@@ -6,7 +6,7 @@ import re
 import random
 import time
 from datetime import datetime
-from typing import Any
+from typing import Any, Literal
 
 from pdd_agent.browser.dp_compat_sync import DpPage
 from pdd_agent.domain.listing_errors import ListingErrorCode, ListingErrors
@@ -18,6 +18,8 @@ from pdd_agent.skills.delist.time_utils import (
 )
 from pdd_agent.skills.listing.goods_list_capture import (
     enrich_capture_from_goods_list,
+    extract_merchant_code_from_row_text,
+    extract_total_inventory_from_row_text,
     parse_goods_list_row_meta,
 )
 from pdd_agent.skills.listing.multi_spec_page import (
@@ -1149,6 +1151,42 @@ def _read_global_product_code(page: DpPage) -> str:
         return ""
 
 
+def _parse_goods_list_matches_by_merchant_code(
+    page: DpPage,
+    merchant_code: str,
+) -> list[dict[str, Any]]:
+    """在商品列表中仅按商品编码精确匹配（用于「全部」Tab 兜底核验）。"""
+    query_code = str(merchant_code or "").strip()
+    if not query_code:
+        return []
+    try:
+        rows = page.eles("css:tbody tr", timeout=3)
+    except Exception:
+        rows = []
+    matches: list[dict[str, Any]] = []
+    for row in rows:
+        text = row.text or ""
+        row_code = extract_merchant_code_from_row_text(text)
+        if row_code != query_code:
+            continue
+        product_id = extract_product_id_from_text(text)
+        if not product_id:
+            continue
+        row_meta = parse_goods_list_row_meta(text)
+        inventory = extract_total_inventory_from_row_text(text)
+        matches.append(
+            {
+                "pdd_product_id": product_id or "",
+                "row_text": text.strip(),
+                "merchant_code": row_code,
+                "matched_created_at": row_meta.get("matched_created_at") or "",
+                "list_status": row_meta.get("list_status") or "",
+                "total_inventory": inventory,
+            }
+        )
+    return matches
+
+
 def _parse_goods_list_matches(
     page: DpPage,
     merchant_code: str,
@@ -1202,6 +1240,160 @@ def _capture_result(
     }
 
 
+def _execute_goods_all_tab_query(
+    page: DpPage,
+    merchant_code: str,
+) -> list[dict[str, Any]]:
+    """「全部」Tab：重置筛选、按商品编码查询并解析匹配行。"""
+    _reset_goods_list_filters(page)
+    fill_result = _fill_goods_merchant_code_filter(page, merchant_code)
+    if not fill_result.get("filled"):
+        filter_ok = _set_goods_filter(page, "商品编码", merchant_code)
+    else:
+        filter_ok = True
+    if filter_ok:
+        _click_goods_search(page)
+    return _parse_goods_list_matches_by_merchant_code(page, merchant_code)
+
+
+def _evaluate_all_tab_row(
+    selected: dict[str, Any],
+    merchant_code: str,
+) -> dict[str, Any]:
+    """校验「全部」Tab 匹配行：编码一致 → 库存 → 销售状态。"""
+    query_code = str(merchant_code or "").strip()
+    row_code = str(selected.get("merchant_code") or "").strip()
+    if not row_code:
+        row_code = extract_merchant_code_from_row_text(str(selected.get("row_text") or ""))
+    if row_code != query_code:
+        return _capture_result(
+            status="merchant_code_mismatch",
+            tab="all",
+            pdd_product_id=str(selected.get("pdd_product_id") or ""),
+            matched_row_text=str(selected.get("row_text") or ""),
+            message=f"商品编码不一致：期望 {query_code}，实际 {row_code or '(空)'}",
+        )
+
+    inventory = selected.get("total_inventory")
+    if inventory is None:
+        inventory = extract_total_inventory_from_row_text(str(selected.get("row_text") or ""))
+    if inventory is None:
+        return _capture_result(
+            status="inventory_unparsed",
+            tab="all",
+            pdd_product_id=str(selected.get("pdd_product_id") or ""),
+            matched_row_text=str(selected.get("row_text") or ""),
+            message="未能解析总库存",
+        )
+    if int(inventory) == 0:
+        return _capture_result(
+            status="zero_inventory",
+            tab="all",
+            pdd_product_id=str(selected.get("pdd_product_id") or ""),
+            matched_created_at=str(selected.get("matched_created_at") or ""),
+            matched_row_text=str(selected.get("row_text") or ""),
+            list_status=str(selected.get("list_status") or ""),
+            message="当前库存为0",
+        )
+
+    list_status = str(selected.get("list_status") or "").strip()
+    if list_status == "销售中":
+        return _capture_result(
+            status="captured",
+            tab="all",
+            pdd_product_id=str(selected.get("pdd_product_id") or ""),
+            matched_created_at=str(selected.get("matched_created_at") or ""),
+            matched_row_text=str(selected.get("row_text") or ""),
+            list_status=list_status,
+        )
+
+    status_label = list_status or "未知"
+    return _capture_result(
+        status="invalid_list_status",
+        tab="all",
+        pdd_product_id=str(selected.get("pdd_product_id") or ""),
+        matched_created_at=str(selected.get("matched_created_at") or ""),
+        matched_row_text=str(selected.get("row_text") or ""),
+        list_status=status_label,
+        message=f"当前商品上架状态为{status_label}",
+    )
+
+
+def _search_goods_all_tab(
+    page: DpPage,
+    account_id: str,
+    unit: ListingUnit,
+    merchant_code: str,
+) -> dict[str, Any]:
+    """在售中/已驳回均未命中时，改在「全部」Tab 按商品编码兜底核验。"""
+    label = unit.listing_label
+    if not _open_goods_list(page, account_id, "全部"):
+        return _capture_result(status="open_goods_list_failed", tab="all")
+
+    print(
+        f"[{account_id}] [{label}] 在售中/已驳回未匹配，改在全部Tab按商品编码核验",
+        flush=True,
+    )
+    matches = _execute_goods_all_tab_query(page, merchant_code)
+    if not matches:
+        return _capture_result(status="not_found", tab="all")
+
+    selected = matches[0]
+    result = _evaluate_all_tab_row(selected, merchant_code)
+    status = str(result.get("status") or "")
+    if status == "captured":
+        print(
+            f"[{account_id}] [{label}] 全部Tab核验通过："
+            f"product_id={result.get('pdd_product_id')} "
+            f"库存={selected.get('total_inventory')} 状态={result.get('list_status')}",
+            flush=True,
+        )
+    elif status == "zero_inventory":
+        print(
+            f"[{account_id}] [{label}] 全部Tab找到商品但总库存为0",
+            flush=True,
+        )
+    elif status == "invalid_list_status":
+        print(
+            f"[{account_id}] [{label}] 全部Tab找到商品但状态={result.get('list_status') or '未知'}",
+            flush=True,
+        )
+    return result
+
+
+def _execute_goods_tab_query(
+    page: DpPage,
+    merchant_code: str,
+    title: str,
+) -> list[dict[str, Any]]:
+    """重置筛选、按商品编码查询并解析匹配行。"""
+    _reset_goods_list_filters(page)
+    fill_result = _fill_goods_merchant_code_filter(page, merchant_code)
+    if not fill_result.get("filled"):
+        filter_ok = _set_goods_filter(page, "商品编码", merchant_code)
+    else:
+        filter_ok = True
+    if filter_ok:
+        _click_goods_search(page)
+    return _parse_goods_list_matches(page, merchant_code, title)
+
+
+def _refresh_goods_list_tab(page: DpPage, tab_text: str) -> None:
+    """刷新当前商品列表页并切回指定 Tab。"""
+    try:
+        page._page.reload(wait_until="domcontentloaded")
+    except Exception:
+        return
+    time.sleep(2)
+    try:
+        tab = page.ele(f"text:{tab_text}", timeout=3)
+        if tab:
+            tab.click()
+            time.sleep(1.5)
+    except Exception:
+        pass
+
+
 def _search_goods_tab(
     page: DpPage,
     account_id: str,
@@ -1211,31 +1403,42 @@ def _search_goods_tab(
     tab_key: str,
     merchant_code: str,
     title: str,
+    max_attempts: int = 1,
+    refresh_on_not_found: bool = False,
 ) -> dict[str, Any]:
     if not _open_goods_list(page, account_id, tab_text):
         return _capture_result(status="open_goods_list_failed", tab=tab_key)
-    _reset_goods_list_filters(page)
-    fill_result = _fill_goods_merchant_code_filter(page, merchant_code)
-    if not fill_result.get("filled"):
-        filter_ok = _set_goods_filter(page, "商品编码", merchant_code)
-    else:
-        filter_ok = True
-    if filter_ok:
-        search_result = _click_goods_search(page)
 
-    matches = _parse_goods_list_matches(page, merchant_code, title)
-    if not matches:
-        return _capture_result(status="not_found", tab=tab_key)
+    label = unit.listing_label
+    attempts = max(1, int(max_attempts or 1))
+    for attempt in range(1, attempts + 1):
+        matches = _execute_goods_tab_query(page, merchant_code, title)
+        if matches:
+            selected = matches[0]
+            if attempt > 1:
+                print(
+                    f"[{account_id}] [{label}] {tab_text} 第{attempt}次查询匹配成功",
+                    flush=True,
+                )
+            return _capture_result(
+                status="captured",
+                tab=tab_key,
+                pdd_product_id=str(selected.get("pdd_product_id") or ""),
+                matched_created_at=str(selected.get("matched_created_at") or ""),
+                matched_row_text=str(selected.get("row_text") or ""),
+                list_status=str(selected.get("list_status") or ""),
+            )
 
-    selected = matches[0]
-    return _capture_result(
-        status="captured",
-        tab=tab_key,
-        pdd_product_id=str(selected.get("pdd_product_id") or ""),
-        matched_created_at=str(selected.get("matched_created_at") or ""),
-        matched_row_text=str(selected.get("row_text") or ""),
-        list_status=str(selected.get("list_status") or ""),
-    )
+        if attempt >= attempts or not refresh_on_not_found:
+            break
+
+        print(
+            f"[{account_id}] [{label}] {tab_text} 第{attempt}次未匹配到商品，刷新页面后重试",
+            flush=True,
+        )
+        _refresh_goods_list_tab(page, tab_text)
+
+    return _capture_result(status="not_found", tab=tab_key)
 
 
 def _capture_publish_outcome(
@@ -1254,6 +1457,8 @@ def _capture_publish_outcome(
             tab_key="on_sale",
             merchant_code=merchant_code,
             title=title,
+            max_attempts=2,
+            refresh_on_not_found=True,
         )
         if on_sale["status"] == "captured" and on_sale.get("pdd_product_id"):
             print(
@@ -1286,6 +1491,9 @@ def _capture_publish_outcome(
             f"[{account_id}] [{unit.listing_label}] 提交后未在在售中/已驳回匹配到本次商品",
             flush=True,
         )
+        all_tab = _search_goods_all_tab(page, account_id, unit, merchant_code)
+        if all_tab.get("status") != "not_found":
+            return all_tab
         return _capture_result(
             status=status,
             message="提交成功页已出现，但商品列表未匹配到本次发布记录",
@@ -1540,11 +1748,248 @@ def _confirm_category_picker_selection(
     return False
 
 
+DEFAULT_BRANCH_A_CATEGORY_ADVANCE_WAIT = 45
+
+
+def _read_branch_a_confirm_publish_state(page: DpPage) -> dict[str, Any]:
+    """分支 A：检测「确认发布该类商品」是否可见且可点。"""
     try:
-        text = page.run_js("return document.body?.innerText || '';")
-        return str(text or "")
+        state = page.run_js(
+            """
+            const body = document.body?.innerText || '';
+            const compact = body.replace(/\\s+/g, '');
+            function isVisible(el) {
+                if (!el || !el.getBoundingClientRect) return false;
+                const r = el.getBoundingClientRect();
+                const s = window.getComputedStyle(el);
+                return r.width > 4 && r.height > 4
+                    && s.display !== 'none' && s.visibility !== 'hidden'
+                    && parseFloat(s.opacity || '1') > 0.05;
+            }
+            function isDisabled(el) {
+                return !!el.disabled
+                    || el.getAttribute('aria-disabled') === 'true'
+                    || (el.className || '').includes('disabled');
+            }
+            function norm(t) { return (t || '').replace(/\\s+/g, ''); }
+            const blocking = body.includes('请选择完整的分类');
+            let selectedPathReady = compact.includes('已选分类') && body.includes('>');
+            if (!selectedPathReady) {
+                for (const el of document.querySelectorAll(
+                    '[class*="selected"], [class*="Selected"], [class*="active"], [class*="checked"], [class*="current"], div, span, li'
+                )) {
+                    if (!isVisible(el)) continue;
+                    const t = (el.innerText || el.textContent || '').replace(/\\s+/g, ' ').trim();
+                    if (!t.includes('>')) continue;
+                    const parts = t.split('>').map((x) => x.trim()).filter(Boolean);
+                    if (parts.length >= 3) {
+                        selectedPathReady = true;
+                        break;
+                    }
+                }
+            }
+            let btn = null;
+            for (const el of document.querySelectorAll('button, a, div, span')) {
+                const t = norm(el.innerText || el.textContent || '');
+                if (t !== '确认发布该类商品') continue;
+                if (!isVisible(el)) continue;
+                btn = el;
+                break;
+            }
+            if (!btn) {
+                return {
+                    ready: false,
+                    visible: false,
+                    disabled: true,
+                    blocking,
+                    selectedPathReady,
+                    forceClick: false,
+                };
+            }
+            const visible = isVisible(btn);
+            const disabled = isDisabled(btn);
+            const r = btn.getBoundingClientRect();
+            const ready = visible && !disabled && selectedPathReady && !blocking;
+            return {
+                ready,
+                visible,
+                disabled,
+                blocking,
+                selectedPathReady,
+                forceClick: ready || (visible && !disabled && selectedPathReady),
+                x: r.left + r.width / 2,
+                y: r.top + r.height / 2,
+            };
+            """
+        )
+        return state if isinstance(state, dict) else {}
     except Exception:
-        return ""
+        return {}
+
+
+def _click_branch_a_confirm_publish(
+    page: DpPage,
+    account_id: str,
+    label: str,
+) -> bool:
+    """分支 A：点击「确认发布该类商品」。"""
+    prefix = f"[{account_id}] [{label}] "
+    _blur_page_focus(page)
+    state = _read_branch_a_confirm_publish_state(page)
+    if state.get("x") and state.get("y"):
+        if _playwright_mouse_at(page, float(state["x"]), float(state["y"])):
+            print(f"{prefix}分支 A：已点击「确认发布该类商品」(mouse)", flush=True)
+            time.sleep(0.8)
+            return True
+
+    confirm = page.ele("text:确认发布该类商品", timeout=1)
+    if confirm and _playwright_mouse_click_element(page, confirm):
+        print(f"{prefix}分支 A：已点击「确认发布该类商品」", flush=True)
+        time.sleep(0.8)
+        return True
+
+    try:
+        clicked = page.run_js(
+            """
+            function isVisible(el) {
+                if (!el) return false;
+                const r = el.getBoundingClientRect();
+                const s = window.getComputedStyle(el);
+                return r.width > 4 && r.height > 4
+                    && s.display !== 'none' && s.visibility !== 'hidden';
+            }
+            for (const el of document.querySelectorAll('button, a, div, span')) {
+                const t = (el.innerText || el.textContent || '').replace(/\\s+/g, '');
+                if (t !== '确认发布该类商品' || !isVisible(el)) continue;
+                try { el.scrollIntoView({ block: 'center', behavior: 'instant' }); } catch (e) {}
+                el.click();
+                return true;
+            }
+            return false;
+            """
+        )
+        if clicked:
+            print(f"{prefix}分支 A：已点击「确认发布该类商品」(JS)", flush=True)
+            time.sleep(0.8)
+            return True
+    except Exception:
+        pass
+
+    print(f"{prefix}分支 A：未找到「确认发布该类商品」", flush=True)
+    return False
+
+
+def _wait_branch_a_confirm_publish_ready(
+    page: DpPage,
+    account_id: str,
+    label: str,
+    *,
+    max_wait: int = 15,
+) -> bool:
+    """分支 A：分类已选后等待「确认发布该类商品」可点。"""
+    state = _read_branch_a_confirm_publish_state(page)
+    if state.get("ready") or state.get("forceClick"):
+        return True
+    print(
+        f"[{account_id}] [{label}] 分支 A：等待「确认发布该类商品」可点…",
+        flush=True,
+    )
+    for sec in range(max_wait):
+        _confirm_category_picker_selection(page, account_id, label)
+        time.sleep(0.5)
+        state = _read_branch_a_confirm_publish_state(page)
+        if state.get("ready") or state.get("forceClick"):
+            print(
+                f"[{account_id}] [{label}] 分支 A：确认按钮已就绪 ({sec + 1}s)",
+                flush=True,
+            )
+            return True
+        if (sec + 1) % 5 == 0:
+            reason = "按钮未就绪" if not state.get("visible") else "按钮禁用"
+            if state.get("selectedPathReady"):
+                reason = "已选完整分类，等待确认按钮"
+            print(
+                f"[{account_id}] [{label}] 分支 A：仍在等待确认按钮… "
+                f"({sec + 1}/{max_wait}s, {reason})",
+                flush=True,
+            )
+        time.sleep(1)
+    state = _read_branch_a_confirm_publish_state(page)
+    return bool(state.get("visible") and not state.get("disabled"))
+
+
+def _branch_a_advanced_past_category_picker(page: DpPage) -> bool:
+    """分支 A：已离开分类选择弹层，进入完善商品信息页。"""
+    if page.ele("css:.uploadImgEnter.uploadImgEnterNew", timeout=0.3):
+        return True
+    if page.ele(
+        'css:input[type="file"]:not([data-tracking-click-viewid="detail_img_localfile_upload"])',
+        timeout=0.3,
+    ):
+        return True
+    body = _category_page_body_text(page)
+    if "确认发布该类商品" in body:
+        return False
+    if page.ele('css:input[placeholder="请输入关键词搜索分类"]', timeout=0.3):
+        return False
+    if "商品规格" in body or page.ele("#spec", timeout=0.3):
+        return True
+    return False
+
+
+def _wait_for_branch_a_category_advance(
+    page: DpPage,
+    account_id: str,
+    label: str,
+    *,
+    max_wait: int = DEFAULT_BRANCH_A_CATEGORY_ADVANCE_WAIT,
+) -> bool:
+    if _branch_a_advanced_past_category_picker(page):
+        return True
+    print(
+        f"[{account_id}] [{label}] 分支 A：等待离开分类选择页，最多 {max_wait}s…",
+        flush=True,
+    )
+    for sec in range(max_wait):
+        time.sleep(1)
+        if _branch_a_advanced_past_category_picker(page):
+            print(
+                f"[{account_id}] [{label}] 分支 A：已进入完善商品信息页 ({sec + 1}s)",
+                flush=True,
+            )
+            return True
+        if (sec + 1) % 10 == 0:
+            _click_branch_a_confirm_publish(page, account_id, label)
+    advanced = _branch_a_advanced_past_category_picker(page)
+    if not advanced:
+        print(
+            f"[{account_id}] [{label}] 分支 A：等待跳转超时 ({max_wait}s)，仍在分类选择页",
+            flush=True,
+        )
+    return advanced
+
+
+def click_category_branch_a_and_advance(
+    page: DpPage,
+    account_id: str,
+    label: str,
+) -> tuple[bool, Literal["", "not_found", "no_advance"]]:
+    """分支 A 手动选类：确认类目后点击「确认发布该类商品」并等待跳转。"""
+    print(
+        f"[{account_id}] [{label}] 分支 A：确认选类后点击「确认发布该类商品」",
+        flush=True,
+    )
+    _confirm_category_picker_selection(page, account_id, label)
+    _dismiss_category_search_overlay(page, account_id, label)
+    _wait_branch_a_confirm_publish_ready(page, account_id, label)
+    if not _click_branch_a_confirm_publish(page, account_id, label):
+        return False, "not_found"
+    if not _wait_for_branch_a_category_advance(page, account_id, label):
+        if _click_branch_a_confirm_publish(page, account_id, label):
+            if _wait_for_branch_a_category_advance(page, account_id, label, max_wait=20):
+                return True, ""
+        return False, "no_advance"
+    return True, ""
 
 
 DEFAULT_CATEGORY_RENDER_WAIT = 45
@@ -3382,6 +3827,71 @@ def upload_one_listing(
                 },
                 phase="post_submit",
                 step="capture_outcome",
+                page_url=page_url,
+            )
+            result = _attach_capture_fields(result, capture)
+            return result
+        if capture["status"] == "zero_inventory":
+            result = _finish_listing(
+                run_id,
+                account_id,
+                unit,
+                status="failed",
+                reason="goods_list_zero_inventory",
+                error="当前库存为0",
+                title=listing_info.get("title", ""),
+                retryable=False,
+                legacy_status="failed",
+                extra={
+                    "platform_listing_code": pcode,
+                    "publish_submitted_at": format_datetime(submitted_at) if submitted_at else "",
+                },
+                phase="post_submit",
+                step="capture_outcome_all_tab",
+                page_url=page_url,
+            )
+            result = _attach_capture_fields(result, capture)
+            return result
+        if capture["status"] == "invalid_list_status":
+            status_label = str(capture.get("list_status") or "未知").strip() or "未知"
+            result = _finish_listing(
+                run_id,
+                account_id,
+                unit,
+                status="failed",
+                reason="goods_list_status_not_on_sale",
+                error=f"当前商品上架状态为{status_label}",
+                title=listing_info.get("title", ""),
+                retryable=False,
+                legacy_status="failed",
+                extra={
+                    "platform_listing_code": pcode,
+                    "publish_submitted_at": format_datetime(submitted_at) if submitted_at else "",
+                },
+                phase="post_submit",
+                step="capture_outcome_all_tab",
+                page_url=page_url,
+            )
+            result = _attach_capture_fields(result, capture)
+            return result
+        if capture["status"] in {"merchant_code_mismatch", "inventory_unparsed"}:
+            verify_error = str(capture.get("message") or "").strip() or "全部Tab商品核验失败"
+            result = _finish_listing(
+                run_id,
+                account_id,
+                unit,
+                status="failed",
+                reason="goods_list_all_tab_verify_failed",
+                error=verify_error,
+                title=listing_info.get("title", ""),
+                retryable=False,
+                legacy_status="failed",
+                extra={
+                    "platform_listing_code": pcode,
+                    "publish_submitted_at": format_datetime(submitted_at) if submitted_at else "",
+                },
+                phase="post_submit",
+                step="capture_outcome_all_tab",
                 page_url=page_url,
             )
             result = _attach_capture_fields(result, capture)

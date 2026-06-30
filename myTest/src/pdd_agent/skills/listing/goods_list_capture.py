@@ -109,11 +109,41 @@ def extract_list_status_from_text(text: str) -> str:
     return ""
 
 
+def extract_merchant_code_from_row_text(text: str) -> str:
+    """从商品列表行文本提取商品编码/商家编码。"""
+    if not text:
+        return ""
+    for pattern in (
+        r"商品编码[：:\s]*([^\s\n]+)",
+        r"商家编码[：:\s]*([^\s\n]+)",
+    ):
+        match = re.search(pattern, text)
+        if match:
+            return match.group(1).strip()
+    return ""
+
+
+def extract_total_inventory_from_row_text(text: str) -> int | None:
+    """从商品列表行文本提取总库存（整数）。"""
+    if not text:
+        return None
+    match = re.search(r"总库存[：:\s]*([\d,]+)", text)
+    if match:
+        try:
+            return int(match.group(1).replace(",", ""))
+        except ValueError:
+            return None
+    return None
+
+
 def parse_goods_list_row_meta(row_text: str) -> dict[str, str]:
     created_dt = extract_created_at_from_text(row_text)
+    inventory = extract_total_inventory_from_row_text(row_text)
     return {
         "matched_created_at": format_datetime(created_dt) if created_dt else "",
         "list_status": extract_list_status_from_text(row_text),
+        "merchant_code": extract_merchant_code_from_row_text(row_text),
+        "total_inventory": str(inventory) if inventory is not None else "",
     }
 
 

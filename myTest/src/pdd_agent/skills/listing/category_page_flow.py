@@ -105,6 +105,10 @@ def click_category_next_and_advance(
     from pdd_agent.skills.listing import upload as listing_upload
 
     if mode == "manual_picker":
+        if ui_type == "A":
+            return listing_upload.click_category_branch_a_and_advance(
+                page, account_id, label
+            )
         print(
             f"[{account_id}] [{label}] 分类选手动模式：确认选类后点击下一步",
             flush=True,

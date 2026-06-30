@@ -181,8 +181,8 @@ pdd_product_catalog:
   fallback_excel: false
   cache_seconds: 300
   price_float_enabled: true
-  price_float_min: 0
-  price_float_max: 5
+  price_float_min: 5
+  price_float_max: 10
   single_price_float_min: 1.01
   single_price_float_max: 2
   field_names:
