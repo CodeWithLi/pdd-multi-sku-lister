@@ -137,6 +137,7 @@ def _unit_detail_from_spec_metadata(row) -> ListingUnitOut | None:
         return None
     carousel_images = [str(item) for item in (meta.get("carousel_images") or [])]
     detail_images = [str(item) for item in (meta.get("detail_images") or [])]
+    material_image = str(meta.get("material_image") or "")
     return ListingUnitOut(
         product_code=str(meta.get("product_code") or row.product_code or ""),
         family_code=str(meta.get("family_code") or row.family_code or ""),
@@ -146,6 +147,7 @@ def _unit_detail_from_spec_metadata(row) -> ListingUnitOut | None:
         root=str(meta.get("root") or ""),
         carousel_images=carousel_images,
         detail_images=detail_images,
+        material_image=material_image,
         carousel_count=len(carousel_images),
         detail_count=len(detail_images),
         sku_count=len(skus),

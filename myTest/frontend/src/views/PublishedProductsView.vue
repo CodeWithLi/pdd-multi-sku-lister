@@ -380,12 +380,21 @@ function unitAllImages(unit: ListingUnit) {
     path,
     meta: fileName(path),
   }))
+  const material = unit.material_image
+    ? [
+        {
+          label: '商品素材',
+          path: unit.material_image,
+          meta: fileName(unit.material_image),
+        },
+      ]
+    : []
   const skuPreviews = unit.skus.map((sku) => ({
     label: `${sku.style_name}/${sku.model_name}`,
     path: sku.preview_image,
     meta: sku.combo_folder,
   }))
-  return [...carousel, ...detail, ...skuPreviews]
+  return [...carousel, ...detail, ...material, ...skuPreviews]
 }
 
 function openImages(title: string, images: PreviewImage[]) {

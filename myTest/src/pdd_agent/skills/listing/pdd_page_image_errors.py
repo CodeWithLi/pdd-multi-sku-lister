@@ -111,6 +111,8 @@ def raise_if_pdd_image_dimension_rejected(
         scope = f"预览图 [{sku_label or label}]" if (sku_label or label) else "预览图"
     elif kind == "carousel":
         scope = "分支 C 主图"
+    elif kind == "material":
+        scope = "商品素材（白底图）"
     else:
         scope = label or kind or "图片"
     print(

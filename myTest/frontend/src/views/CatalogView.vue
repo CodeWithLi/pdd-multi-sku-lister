@@ -602,7 +602,21 @@ function openImages(title: string, images: PreviewImage[]) {
   previewImages.value = images
 }
 
-function openUnitImages(unit: ListingUnit, kind: 'carousel' | 'detail') {
+function openUnitImages(unit: ListingUnit, kind: 'carousel' | 'detail' | 'material') {
+  if (kind === 'material') {
+    if (!unit.material_image) {
+      ElMessage.warning('当前没有商品素材图')
+      return
+    }
+    openImages(`${unit.listing_label} · 商品素材`, [
+      {
+        label: '商品素材',
+        path: unit.material_image,
+        meta: fileName(unit.material_image),
+      },
+    ])
+    return
+  }
   const source = kind === 'carousel' ? unit.carousel_images : unit.detail_images
   const label = kind === 'carousel' ? '主图' : '详情图'
   openImages(
@@ -626,12 +640,21 @@ function unitAllImages(unit: ListingUnit) {
     path,
     meta: fileName(path),
   }))
+  const material = unit.material_image
+    ? [
+        {
+          label: '商品素材',
+          path: unit.material_image,
+          meta: fileName(unit.material_image),
+        },
+      ]
+    : []
   const skuPreviews = unit.skus.map((sku) => ({
     label: `${sku.style_name}/${sku.model_name}`,
     path: sku.preview_image,
     meta: sku.combo_folder,
   }))
-  return [...carousel, ...detail, ...skuPreviews]
+  return [...carousel, ...detail, ...material, ...skuPreviews]
 }
 
 function showAllUnitImages(unit: ListingUnit) {

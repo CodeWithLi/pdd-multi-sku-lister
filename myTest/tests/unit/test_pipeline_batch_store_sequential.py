@@ -40,3 +40,56 @@ def test_batch_store_sequential_does_not_duplicate_activity_kwargs():
     assert captured["activity_id"] == "20981"
     assert captured["activity_ids"] == ["20981"]
     assert captured["account_id"] == "store_A"
+
+
+def test_batch_store_sequential_returns_commerce_queued_when_first_store_blocked():
+    queued = {
+        "commerce_queued": True,
+        "intent_id": "intent_1",
+        "account_id": "store_A",
+        "block_reason": "account_active",
+        "block_reason_label": "店铺执行中",
+    }
+
+    with patch(
+        "pdd_agent.api.services.pipeline_service.start_integrated_pipeline",
+        return_value=queued,
+    ):
+        result = start_integrated_pipeline_batch(
+            items=[
+                {"account_id": "store_A", "product_codes": ["BD001/第一套/BD001A"]},
+                {"account_id": "store_B", "product_codes": ["BD002/第一套/BD002A"]},
+            ],
+            activity_ids=["20981"],
+            store_sequential_enabled=True,
+        )
+
+    assert result["commerce_queued"] is True
+    assert result["intent_id"] == "intent_1"
+    assert result["pipelines"] == []
+
+
+def test_batch_parallel_returns_commerce_queued_when_all_stores_blocked():
+    queued = {
+        "commerce_queued": True,
+        "intent_id": "intent_2",
+        "account_id": "store_A",
+        "block_reason": "account_active",
+        "block_reason_label": "店铺执行中",
+    }
+
+    with patch(
+        "pdd_agent.api.services.pipeline_service.start_integrated_pipeline",
+        return_value=queued,
+    ):
+        result = start_integrated_pipeline_batch(
+            items=[
+                {"account_id": "store_A", "product_codes": ["BD001/第一套/BD001A"]},
+                {"account_id": "store_B", "product_codes": ["BD002/第一套/BD002A"]},
+            ],
+            activity_ids=["20981"],
+        )
+
+    assert result["commerce_queued"] is True
+    assert result["queued_count"] == 2
+    assert result["pipelines"] == []

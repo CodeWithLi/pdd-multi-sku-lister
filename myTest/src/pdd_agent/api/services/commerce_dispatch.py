@@ -894,16 +894,19 @@ def cancel_commerce_intents(
     *,
     intent_ids: list[str] | None = None,
     account_id: str = "",
+    all_pending: bool = False,
 ) -> dict[str, Any]:
     ids = [str(x).strip() for x in (intent_ids or []) if str(x).strip()]
     aid = str(account_id or "").strip()
-    if not ids and not aid:
+    if not ids and not aid and not all_pending:
         return {"ok": False, "error": "intent_ids_or_account_id_required", "canceled": []}
 
     canceled: list[dict[str, Any]] = []
     failed: list[dict[str, Any]] = []
     target_ids = list(ids)
-    if not target_ids and aid:
+    if not target_ids and all_pending:
+        target_ids = [item["intent_id"] for item in list_pending_intents(limit=200)]
+    elif not target_ids and aid:
         target_ids = [item["intent_id"] for item in list_pending_intents(account_id=aid, limit=200)]
 
     for intent_id in target_ids:
@@ -918,6 +921,210 @@ def cancel_commerce_intents(
         "failed_count": len(failed),
         "canceled": canceled,
         "failed": failed,
+    }
+
+
+def _force_clear_account_lifecycle(account_id: str, *, reason: str = "") -> bool:
+    """强制清除店铺运营周期与商品占用（不取消底层 pipeline）。"""
+    if not commerce_enabled():
+        return False
+    account_id = str(account_id or "").strip()
+    if not account_id:
+        return False
+    cleared = False
+    with session_scope() as session:
+        lc = session.get(AccountLifecycleORM, account_id)
+        if not lc:
+            return False
+        lifecycle_id = str(lc.lifecycle_id or "")
+        session.execute(delete(AccountLifecycleORM).where(AccountLifecycleORM.account_id == account_id))
+        if lifecycle_id:
+            session.execute(delete(ProductClaimORM).where(ProductClaimORM.lifecycle_id == lifecycle_id))
+        cleared = True
+    if cleared:
+        logger.info(
+            "commerce lifecycle cleared account=%s reason=%s",
+            account_id,
+            reason or "manual",
+        )
+    return cleared
+
+
+def reconcile_stale_lifecycles() -> int:
+    """清除 owner 链路已结束或已丢失的残留运营周期。"""
+    if not commerce_enabled():
+        return 0
+    from pdd_agent.api.services.pipeline_service import TERMINAL_PIPELINE_STATUSES
+    from pdd_agent.db.repositories import get_integrated_pipeline
+
+    cleared = 0
+    for lc in list_active_account_lifecycles():
+        account_id = str(lc.get("account_id") or "").strip()
+        owner_type = str(lc.get("owner_type") or "")
+        owner_id = str(lc.get("owner_id") or "").strip()
+        if not account_id:
+            continue
+        if owner_type == "integrated_pipeline" and owner_id:
+            row = get_integrated_pipeline(owner_id)
+            if row and str(row.status or "") not in TERMINAL_PIPELINE_STATUSES:
+                continue
+        elif owner_type == "failure_sequential" and owner_id:
+            try:
+                from pdd_agent.failure_sequential.repository import get_job
+
+                job = get_job(owner_id)
+                if job and str(job.get("status") or "") not in {"completed", "failed", "canceled"}:
+                    continue
+            except Exception:
+                pass
+        if _force_clear_account_lifecycle(account_id, reason="stale_lifecycle_reconcile"):
+            cleared += 1
+    return cleared
+
+
+def _list_non_terminal_pipeline_ids_for_account(account_id: str) -> list[str]:
+    from pdd_agent.api.services.pipeline_service import TERMINAL_PIPELINE_STATUSES
+    from pdd_agent.db.repositories import list_integrated_pipelines
+
+    account_id = str(account_id or "").strip()
+    if not account_id:
+        return []
+    ids: list[str] = []
+    for row in list_integrated_pipelines(limit=200):
+        if str(row.account_id or "") != account_id:
+            continue
+        if str(row.status or "") in TERMINAL_PIPELINE_STATUSES:
+            continue
+        pid = str(row.pipeline_id or "").strip()
+        if pid:
+            ids.append(pid)
+    return ids
+
+
+def reset_account_commerce_state(
+    account_id: str,
+    *,
+    cancel_pipelines: bool = True,
+    cancel_intents: bool = True,
+    clear_lifecycle: bool = True,
+    reconcile_stale: bool = True,
+) -> dict[str, Any]:
+    """重置单店：可选取消活跃链路、清空排队、清除运营周期。"""
+    account_id = str(account_id or "").strip()
+    if not account_id:
+        return {"ok": False, "error": "account_id_required", "account_id": account_id}
+
+    canceled_pipelines: list[str] = []
+    pipeline_errors: list[dict[str, str]] = []
+    if cancel_pipelines:
+        from pdd_agent.api.services.pipeline_service import cancel_integrated_pipeline
+
+        for pipeline_id in _list_non_terminal_pipeline_ids_for_account(account_id):
+            try:
+                cancel_integrated_pipeline(pipeline_id)
+                canceled_pipelines.append(pipeline_id)
+            except Exception as exc:
+                logger.warning(
+                    "reset cancel pipeline failed account=%s pipeline=%s error=%s",
+                    account_id,
+                    pipeline_id,
+                    exc,
+                )
+                pipeline_errors.append({"pipeline_id": pipeline_id, "error": str(exc)})
+
+    canceled_intents = 0
+    if cancel_intents:
+        outcome = cancel_commerce_intents(account_id=account_id)
+        canceled_intents = int(outcome.get("canceled_count") or 0)
+
+    lifecycle_cleared = False
+    if reconcile_stale:
+        lc = _get_account_lifecycle(account_id)
+        if lc:
+            owner_type = str(lc.owner_type or "")
+            owner_id = str(lc.owner_id or "")
+            if owner_type == "integrated_pipeline" and owner_id:
+                from pdd_agent.api.services.pipeline_service import TERMINAL_PIPELINE_STATUSES
+                from pdd_agent.db.repositories import get_integrated_pipeline
+
+                row = get_integrated_pipeline(owner_id)
+                if not row or str(row.status or "") in TERMINAL_PIPELINE_STATUSES:
+                    lifecycle_cleared = _force_clear_account_lifecycle(account_id, reason="reset_reconcile")
+            else:
+                lifecycle_cleared = _force_clear_account_lifecycle(account_id, reason="reset_reconcile")
+    if clear_lifecycle and not lifecycle_cleared:
+        lifecycle_cleared = _force_clear_account_lifecycle(account_id, reason="reset_force")
+
+    had_work = bool(canceled_pipelines or canceled_intents or lifecycle_cleared)
+    result: dict[str, Any] = {
+        "ok": had_work or not pipeline_errors,
+        "account_id": account_id,
+        "canceled_pipelines": canceled_pipelines,
+        "canceled_intents": canceled_intents,
+        "lifecycle_cleared": lifecycle_cleared,
+        "pipeline_errors": pipeline_errors,
+    }
+    if not had_work and not pipeline_errors:
+        result["message"] = "店铺已是空闲状态"
+    return result
+
+
+def reset_commerce_state(
+    *,
+    account_ids: list[str] | None = None,
+    all_accounts: bool = False,
+    cancel_pipelines: bool = True,
+    cancel_intents: bool = True,
+    clear_lifecycle: bool = True,
+) -> dict[str, Any]:
+    """批量重置店铺运营状态。"""
+    if not commerce_enabled():
+        return {"ok": False, "error": "database_unavailable", "results": []}
+
+    targets: set[str] = set()
+    if all_accounts:
+        for lc in list_active_account_lifecycles():
+            aid = str(lc.get("account_id") or "").strip()
+            if aid:
+                targets.add(aid)
+        for item in list_pending_intents(limit=200):
+            aid = str(item.get("account_id") or "").strip()
+            if aid:
+                targets.add(aid)
+    else:
+        for aid in account_ids or []:
+            aid = str(aid or "").strip()
+            if aid:
+                targets.add(aid)
+
+    if not targets:
+        stale = reconcile_stale_lifecycles()
+        return {
+            "ok": stale > 0,
+            "count": 0,
+            "stale_cleared": stale,
+            "results": [],
+            "message": "没有需要重置的店铺" if stale <= 0 else f"已清理 {stale} 条残留周期",
+        }
+
+    results = [
+        reset_account_commerce_state(
+            aid,
+            cancel_pipelines=cancel_pipelines,
+            cancel_intents=cancel_intents,
+            clear_lifecycle=clear_lifecycle,
+        )
+        for aid in sorted(targets)
+    ]
+    stale = reconcile_stale_lifecycles()
+    return {
+        "ok": True,
+        "count": len(results),
+        "stale_cleared": stale,
+        "results": results,
+        "canceled_pipelines_total": sum(len(r.get("canceled_pipelines") or []) for r in results),
+        "canceled_intents_total": sum(int(r.get("canceled_intents") or 0) for r in results),
+        "lifecycle_cleared_total": sum(1 for r in results if r.get("lifecycle_cleared")),
     }
 
 
@@ -977,10 +1184,12 @@ def sync_lifecycle_from_active_pipelines() -> int:
 
 def reconcile_commerce_state(*, dispatch_limit: int = 30) -> dict[str, Any]:
     """对账 + 活动到点推进 + 派发排队任务（调度器每轮调用）。"""
+    stale = reconcile_stale_lifecycles()
     nudged = nudge_due_scheduled_pipelines()
     synced = sync_lifecycle_from_active_pipelines()
     dispatched = dispatch_all_pending_intents(limit=dispatch_limit)
     return {
+        "stale_cleared": stale,
         "nudged": nudged,
         "synced": synced,
         "dispatched_count": len(dispatched),

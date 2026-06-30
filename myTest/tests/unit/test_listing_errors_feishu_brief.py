@@ -197,3 +197,16 @@ def test_compact_system_diagnostic_strips_leading_brackets():
     compact = ListingErrors.compact_system_diagnostic(raw)
     assert compact.startswith("商品表无编码")
     assert "[BD037B/第一套图]" not in compact
+
+
+def test_feishu_brief_detail_and_material_missing():
+    detail = ListingErrors.compact_feishu_line(
+        "[BD046A/第一套图] 未找到 6-8 详情图",
+        merchant_code="BD046A",
+    )
+    assert detail == "BD046A详情图缺失"
+    material = ListingErrors.compact_feishu_line(
+        "[BD046A/第一套图] 未找到 9 商品素材图",
+        merchant_code="BD046A",
+    )
+    assert material == "BD046A商品素材图缺失"

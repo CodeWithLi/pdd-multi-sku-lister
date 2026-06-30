@@ -81,6 +81,15 @@ def run_preflight(
                         listing_label=unit.listing_label,
                     )
                 )
+            if not unit.material_image:
+                report.issues.append(
+                    PreflightIssue(
+                        level="warning",
+                        message=ListingErrors.Msg.MATERIAL_EMPTY,
+                        listing_label=unit.listing_label,
+                        reason_code=ListingErrorCode.PREFLIGHT_NO_MATERIAL,
+                    )
+                )
             for w in unit.warnings:
                 level, reason_code = _warning_issue_level(w)
                 report.issues.append(

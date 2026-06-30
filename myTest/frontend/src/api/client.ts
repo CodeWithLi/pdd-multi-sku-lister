@@ -11,6 +11,8 @@ import type {
   CommerceIntentBatchCancelResult,
   CommerceIntentCancelResult,
   CommerceOverview,
+  CommerceResetResult,
+  CommerceAccountResetResult,
   TrafficTaskResponse,
   MarketingActivityListResponse,
   ConfigSummary,
@@ -750,8 +752,24 @@ export const api = {
   cancelCommerceIntent: (intentId: string) =>
     http.post<CommerceIntentCancelResult>(`/commerce/intents/${intentId}/cancel`).then((r) => r.data),
 
-  cancelCommerceIntents: (body: { intent_ids?: string[]; account_id?: string } = {}) =>
+  cancelCommerceIntents: (body: { intent_ids?: string[]; account_id?: string; all_pending?: boolean } = {}) =>
     http.post<CommerceIntentBatchCancelResult>('/commerce/intents/cancel', body).then((r) => r.data),
+
+  resetCommerceAccount: (
+    accountId: string,
+    params: { cancel_pipelines?: boolean; cancel_intents?: boolean; clear_lifecycle?: boolean } = {},
+  ) =>
+    http
+      .post<CommerceAccountResetResult>(`/commerce/reset/${accountId}`, null, { params })
+      .then((r) => r.data),
+
+  resetCommerceAll: (body: {
+    account_ids?: string[]
+    all_accounts?: boolean
+    cancel_pipelines?: boolean
+    cancel_intents?: boolean
+    clear_lifecycle?: boolean
+  } = {}) => http.post<CommerceResetResult>('/commerce/reset', body).then((r) => r.data),
 
   reconcileCommerce: (dispatchLimit = 30) =>
     http

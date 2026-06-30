@@ -78,6 +78,7 @@ export const failureReasonLabel: Record<string, string> = {
   preflight_no_skus: '上架前校验：无有效 SKU',
   preflight_no_carousel: '上架前校验：主图为空',
   preflight_no_detail: '上架前校验：详情图为空',
+  preflight_no_material: '上架前校验：商品素材图为空',
   preflight_catalog: '上架前校验：商品表或目录问题',
   image_file_missing: '图片文件不存在或无法打开',
   price_fill_partial: '价格表未全部填写',

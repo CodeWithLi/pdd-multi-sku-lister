@@ -844,6 +844,8 @@ def _schedule_feishu_listing_result_log(
             continue
 
         if status in {"failed", "retryable"} or item.get("error") or item.get("reason"):
+            if item.get("feishu_failure_logged"):
+                continue
             _queue_failure(
                 listing_label=listing_label,
                 merchant_code=merchant_code,
@@ -895,8 +897,10 @@ def _schedule_feishu_listing_result_log(
             reason_code = "preflight_no_skus"
         elif "主图为空" in message or "1-5 主图" in message:
             reason_code = "preflight_no_carousel"
-        elif "详情图为空" in message or "7-9 详情图" in message:
+        elif "详情图为空" in message or "6-8 详情图" in message or "7-9 详情图" in message:
             reason_code = "preflight_no_detail"
+        elif "商品素材图为空" in message or "9 商品素材图" in message:
+            reason_code = "preflight_no_material"
         elif "图片" in message and ("不存在" in message or "无法" in message):
             reason_code = "image_file_missing"
         elif "没数据" in message and any(

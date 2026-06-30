@@ -51,6 +51,7 @@ ISSUE_TITLE_MAP: dict[str, str] = {
     "preflight_no_skus": "SKU 编码无效或找不到",
     "preflight_no_carousel": "主图为空",
     "preflight_no_detail": "详情图为空",
+    "preflight_no_material": "商品素材图为空",
     "preflight_catalog": "商品表/素材目录问题",
     "image_file_missing": "图片文件缺失",
     "price_fill_partial": "价格表未填完整",

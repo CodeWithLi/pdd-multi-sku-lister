@@ -89,6 +89,7 @@ def _unit_to_out(
         root=str(unit.root),
         carousel_images=[_asset_path(p, root) for p in unit.carousel_images],
         detail_images=[_asset_path(p, root) for p in unit.detail_images],
+        material_image=_asset_path(unit.material_image, root) if unit.material_image else "",
         carousel_count=len(unit.carousel_images),
         detail_count=len(unit.detail_images),
         sku_count=len(unit.skus),

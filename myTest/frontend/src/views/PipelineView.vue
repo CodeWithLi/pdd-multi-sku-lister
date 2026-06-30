@@ -87,6 +87,8 @@ const commerceLoading = ref(false)
 const commerceDispatchingAll = ref(false)
 const commerceDispatchingAccount = ref('')
 const commerceCancelingIntent = ref('')
+const commerceResettingAccount = ref('')
+const commerceResettingAll = ref(false)
 
 const accountId = ref('')
 const productCodes = ref<string[]>([])
@@ -1017,6 +1019,89 @@ async function cancelCommerceIntentRow(intentId: string) {
     ElMessage.error(e instanceof Error ? e.message : String(e))
   } finally {
     commerceCancelingIntent.value = ''
+  }
+}
+
+async function resetCommerceAccountRow(targetAccountId: string) {
+  const id = String(targetAccountId || '').trim()
+  if (!id) return
+  try {
+    await ElMessageBox.confirm(
+      `将重置店铺 ${accountDisplayName(id)}：\n· 取消该店所有进行中的整合链路\n· 清空排队任务\n· 清除「执行中/等活动」状态\n\n浏览器里正在跑的上架任务也会停止。`,
+      '重置店铺运营状态',
+      { type: 'warning', confirmButtonText: '确定重置', cancelButtonText: '取消' },
+    )
+  } catch {
+    return
+  }
+  commerceResettingAccount.value = id
+  try {
+    const result = await api.resetCommerceAccount(id)
+    const parts: string[] = []
+    if (result.canceled_pipelines?.length) parts.push(`取消 ${result.canceled_pipelines.length} 条链路`)
+    if (result.canceled_intents) parts.push(`清空 ${result.canceled_intents} 条排队`)
+    if (result.lifecycle_cleared) parts.push('已清除运营状态')
+    ElMessage.success(parts.length ? parts.join('，') : '店铺已重置')
+    await Promise.all([refreshCommerceOverview(), refreshPipelines()])
+  } catch (e) {
+    ElMessage.error(e instanceof Error ? e.message : String(e))
+  } finally {
+    commerceResettingAccount.value = ''
+  }
+}
+
+async function resetAllCommerce() {
+  const count = commerceAccountRows.value.length
+  if (!count && !commerceOverview.value.pending_total) {
+    ElMessage.info('当前没有需要重置的店铺')
+    return
+  }
+  try {
+    await ElMessageBox.confirm(
+      `将重置全部 ${count} 个活跃店铺及所有排队：\n· 取消各店进行中的整合链路\n· 清空全部排队\n· 清除运营状态\n\n此操作不可撤销。`,
+      '重置全部店铺',
+      { type: 'warning', confirmButtonText: '确定重置全部', cancelButtonText: '取消' },
+    )
+  } catch {
+    return
+  }
+  commerceResettingAll.value = true
+  try {
+    const result = await api.resetCommerceAll({ all_accounts: true })
+    const parts: string[] = []
+    if (result.canceled_pipelines_total) parts.push(`取消 ${result.canceled_pipelines_total} 条链路`)
+    if (result.canceled_intents_total) parts.push(`清空 ${result.canceled_intents_total} 条排队`)
+    if (result.lifecycle_cleared_total) parts.push(`清除 ${result.lifecycle_cleared_total} 店状态`)
+    if (result.stale_cleared) parts.push(`清理 ${result.stale_cleared} 条残留`)
+    ElMessage.success(parts.length ? parts.join('，') : result.message || '已重置')
+    await Promise.all([refreshCommerceOverview(), refreshPipelines()])
+  } catch (e) {
+    ElMessage.error(e instanceof Error ? e.message : String(e))
+  } finally {
+    commerceResettingAll.value = false
+  }
+}
+
+async function clearAllPendingIntents() {
+  if (!commerceOverview.value.pending_total) {
+    ElMessage.info('当前没有排队任务')
+    return
+  }
+  try {
+    await ElMessageBox.confirm(
+      `确定清空全部 ${commerceOverview.value.pending_total} 条排队任务？\n不会取消已在执行的整合链路。`,
+      '清空排队',
+      { type: 'warning', confirmButtonText: '清空', cancelButtonText: '取消' },
+    )
+  } catch {
+    return
+  }
+  try {
+    const result = await api.cancelCommerceIntents({ all_pending: true })
+    ElMessage.success(`已清空 ${result.canceled_count} 条排队`)
+    await refreshCommerceOverview()
+  } catch (e) {
+    ElMessage.error(e instanceof Error ? e.message : String(e))
   }
 }
 
@@ -2123,6 +2208,25 @@ onUnmounted(() => {
                 >
                   派发全部
                 </el-button>
+                <el-button
+                  v-if="commerceOverview.pending_total"
+                  link
+                  type="warning"
+                  size="small"
+                  @click="clearAllPendingIntents"
+                >
+                  清空排队
+                </el-button>
+                <el-button
+                  v-if="commerceAccountRows.length || commerceOverview.pending_total"
+                  link
+                  type="danger"
+                  size="small"
+                  :loading="commerceResettingAll"
+                  @click="resetAllCommerce"
+                >
+                  重置全部
+                </el-button>
               </div>
             </div>
           </template>
@@ -2177,7 +2281,7 @@ onUnmounted(() => {
                 <span v-else>0</span>
               </template>
             </el-table-column>
-            <el-table-column label="操作" width="72" align="center">
+            <el-table-column label="操作" width="120" align="center">
               <template #default="{ row }">
                 <el-button
                   v-if="row.pending_count"
@@ -2188,6 +2292,16 @@ onUnmounted(() => {
                   @click="dispatchCommerceForAccount(row.account_id)"
                 >
                   派发
+                </el-button>
+                <el-button
+                  v-if="row.lifecycle || row.pending_count"
+                  link
+                  type="danger"
+                  size="small"
+                  :loading="commerceResettingAccount === row.account_id"
+                  @click="resetCommerceAccountRow(row.account_id)"
+                >
+                  重置
                 </el-button>
               </template>
             </el-table-column>

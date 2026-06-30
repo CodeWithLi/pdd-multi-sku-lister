@@ -7,11 +7,11 @@ data/assets/商品上架规格文件/
     第一套/
       BD046A/            # 商品编码（文件夹名 = 上架货号）
         1.png ... 5.png  # 主图
-        6.png            # 白底占位，不上传
-        7.png ... 9.png  # 详情图
+        6.png ... 8.png  # 详情图
+        9.png            # 商品素材（白底图）
         BD046A+AXBD001A.png  # 规格图，文件名即组合编码
 
-上架 BD046A 时：主图/详情图取自 BD046A 目录；规格图依次合并同套图下
+上架 BD046A 时：主图/详情图/商品素材取自 BD046A 目录；规格图依次合并同套图下
 所有兄弟编码目录（A-Z，最多 26 个）的规格图，写入该商品的 SKU 表。
 
 代码仍保留旧结构兼容，避免历史数据/测试立即失效。
@@ -743,12 +743,16 @@ def parse_new_listing_unit(
         root=unit_root,
     )
     unit.carousel_images = _collect_numbered_images(unit_root, {1, 2, 3, 4, 5})
-    unit.detail_images = _collect_numbered_images(unit_root, {7, 8, 9})
+    unit.detail_images = _collect_numbered_images(unit_root, {6, 7, 8})
+    material_images = _collect_numbered_images(unit_root, {9})
+    unit.material_image = material_images[0] if material_images else None
 
     if not unit.carousel_images:
         unit.warnings.append(ListingErrors.Msg.CAROUSEL_MISSING.format(label=label))
     if not unit.detail_images:
         unit.warnings.append(ListingErrors.Msg.DETAIL_MISSING.format(label=label))
+    if not unit.material_image:
+        unit.warnings.append(ListingErrors.Msg.MATERIAL_MISSING.format(label=label))
 
     # 规格图：同套图下所有兄弟商品编码文件夹（A-Z），依次合并到当前上架单元。
     set_dir = unit_root.parent if unit_root.parent.name == image_set else unit_root

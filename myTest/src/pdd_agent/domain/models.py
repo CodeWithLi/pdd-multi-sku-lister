@@ -34,6 +34,7 @@ class ListingUnit(BaseModel):
     root: Path
     carousel_images: list[Path] = Field(default_factory=list)
     detail_images: list[Path] = Field(default_factory=list)
+    material_image: Path | None = None  # 9.png → 拼多多「商品素材」白底图
     style_codes: list[str] = Field(default_factory=list)
     model_codes: list[str] = Field(default_factory=list)
     skus: list[SkuCombo] = Field(default_factory=list)

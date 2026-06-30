@@ -1454,6 +1454,68 @@ def start_integrated_pipeline(
     return pipeline_to_dict(refreshed or row)
 
 
+def _batch_run_item_from_start(
+    data: dict[str, Any],
+    *,
+    scheduled_at: datetime,
+) -> dict[str, Any]:
+    """将 start_integrated_pipeline 返回值转为批量项；支持 commerce_queued。"""
+    if data.get("commerce_queued"):
+        return {
+            "account_id": str(data.get("account_id") or ""),
+            "pipeline_id": "",
+            "listing_run_id": "",
+            "listing_scheduled_at": scheduled_at,
+            "commerce_queued": True,
+            "intent_id": str(data.get("intent_id") or ""),
+            "block_reason": str(data.get("block_reason") or ""),
+            "block_reason_label": str(data.get("block_reason_label") or ""),
+            "wake_at": str(data.get("wake_at") or ""),
+            "is_merged": bool(data.get("is_merged")),
+        }
+    return {
+        "account_id": str(data.get("account_id") or ""),
+        "pipeline_id": str(data.get("pipeline_id") or ""),
+        "listing_run_id": str(data.get("listing_run_id") or ""),
+        "listing_scheduled_at": scheduled_at,
+        "commerce_queued": False,
+    }
+
+
+def _build_batch_commerce_queued_response(
+    *,
+    batch_id: str,
+    items: list[dict[str, Any]],
+    queued: dict[str, Any],
+    max_concurrent: int,
+    delay_range: tuple[int, int],
+    store_sequential_enabled: bool,
+    pending_stores: int = 0,
+) -> dict[str, Any]:
+    reason_label = str(queued.get("block_reason_label") or "").strip()
+    account_id = str(queued.get("account_id") or "")
+    return {
+        "batch_id": batch_id,
+        "total": len(items),
+        "max_concurrent_stores": max_concurrent,
+        "store_start_delay_min_seconds": delay_range[0],
+        "store_start_delay_max_seconds": delay_range[1],
+        "store_sequential_enabled": store_sequential_enabled,
+        "pending_stores": pending_stores,
+        "pipelines": [],
+        "commerce_queued": True,
+        "queued_count": 1,
+        "intent_id": str(queued.get("intent_id") or ""),
+        "account_id": account_id,
+        "block_reason": str(queued.get("block_reason") or ""),
+        "block_reason_label": reason_label,
+        "wake_at": str(queued.get("wake_at") or ""),
+        "is_merged": bool(queued.get("is_merged")),
+        "message": reason_label
+        or f"店铺 {account_id} 任务已排队，当前有进行中的运营周期",
+    }
+
+
 def start_integrated_pipeline_batch(
     *,
     items: list[dict[str, Any]],
@@ -1550,6 +1612,16 @@ def start_integrated_pipeline_batch(
             ),
             **common_params,
         )
+        if data.get("commerce_queued"):
+            return _build_batch_commerce_queued_response(
+                batch_id=batch_id,
+                items=items,
+                queued=data,
+                max_concurrent=max_concurrent,
+                delay_range=delay_range,
+                store_sequential_enabled=True,
+                pending_stores=len(pending_items),
+            )
         coordinator_id = str(data.get("pipeline_id") or "").strip()
         if coordinator_id:
             coordinator_row = get_integrated_pipeline(coordinator_id)
@@ -1558,12 +1630,7 @@ def start_integrated_pipeline_batch(
             seq["started_pipeline_ids"] = [coordinator_id]
             update_integrated_pipeline(coordinator_id, meta_patch={"store_sequential": seq})
         pipelines.append(
-            {
-                "account_id": data["account_id"],
-                "pipeline_id": data["pipeline_id"],
-                "listing_run_id": data["listing_run_id"],
-                "listing_scheduled_at": scheduled_at,
-            }
+            _batch_run_item_from_start(data, scheduled_at=scheduled_at)
         )
         return {
             "batch_id": batch_id,
@@ -1615,12 +1682,21 @@ def start_integrated_pipeline_batch(
             activity_limited_time_success_only=activity_limited_time_success_only,
         )
         pipelines.append(
-            {
-                "account_id": data["account_id"],
-                "pipeline_id": data["pipeline_id"],
-                "listing_run_id": data["listing_run_id"],
-                "listing_scheduled_at": scheduled_at,
-            }
+            _batch_run_item_from_start(data, scheduled_at=scheduled_at)
+        )
+
+    queued_count = sum(1 for row in pipelines if row.get("commerce_queued"))
+    started = [row for row in pipelines if not row.get("commerce_queued")]
+    if queued_count and not started:
+        first_queued = next(row for row in pipelines if row.get("commerce_queued"))
+        return _build_batch_commerce_queued_response(
+            batch_id=batch_id,
+            items=items,
+            queued=first_queued,
+            max_concurrent=max_concurrent,
+            delay_range=delay_range,
+            store_sequential_enabled=False,
+            pending_stores=0,
         )
 
     return {
@@ -1632,9 +1708,17 @@ def start_integrated_pipeline_batch(
         "store_sequential_enabled": False,
         "pending_stores": 0,
         "pipelines": pipelines,
+        "commerce_queued": queued_count > 0,
+        "queued_count": queued_count,
         "message": (
-            f"batch integrated pipeline queued: {len(pipelines)} pipelines, "
-            f"concurrency {max_concurrent}, start delay {delay_range[0]}-{delay_range[1]}s"
+            f"batch integrated pipeline queued: {len(started)} started, "
+            f"{queued_count} commerce-queued, concurrency {max_concurrent}, "
+            f"start delay {delay_range[0]}-{delay_range[1]}s"
+            if queued_count
+            else (
+                f"batch integrated pipeline queued: {len(pipelines)} pipelines, "
+                f"concurrency {max_concurrent}, start delay {delay_range[0]}-{delay_range[1]}s"
+            )
         ),
     }
 

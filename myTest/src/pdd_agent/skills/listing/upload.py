@@ -30,6 +30,11 @@ from pdd_agent.skills.listing.multi_spec_page import (
     fill_multi_spec_rows,
     wait_multi_sku_rows,
 )
+from pdd_agent.skills.listing.category_branch_c_flow import run_branch_c_category_after_covers
+from pdd_agent.skills.listing.category_branch_title import (
+    apply_title_after_branch_c_category_advance,
+    apply_title_after_branch_c_cover_upload,
+)
 from pdd_agent.skills.listing.category_page_flow import (
     CategoryPageMode,
     click_category_next_and_advance,
@@ -59,6 +64,7 @@ def _unit_spec_metadata(unit: ListingUnit) -> dict[str, Any]:
         "root": str(unit.root),
         "carousel_images": [str(path) for path in unit.carousel_images],
         "detail_images": [str(path) for path in unit.detail_images],
+        "material_image": str(unit.material_image) if unit.material_image else "",
         "style_codes": list(unit.style_codes),
         "model_codes": list(unit.model_codes),
         "skus": [listing_unit_sku_metadata(sku) for sku in unit.skus],
@@ -1621,12 +1627,14 @@ def _detect_category_ui_type(page: DpPage) -> str:
 
 def _category_page_is_manual_picker(page: DpPage, ui_type: str = "") -> bool:
     """分类选择弹层/树已打开；分支 B 仅在尚未直通下一步时走手动选类。"""
+    if ui_type == "C" and _branch_c_category_already_selected(page):
+        return False
     if ui_type == "B" and _category_direct_next_ready(page):
         return False
     if ui_type == "B":
         return True
     body = _category_page_body_text(page)
-    if "分类选择" in body:
+    if "分类选择" in body and not _branch_c_category_already_selected(page):
         return True
     if page.ele('css:input[placeholder="请输入关键词搜索分类"]', timeout=0.4):
         return True
@@ -1670,6 +1678,8 @@ def _category_direct_next_ready(page: DpPage) -> bool:
                     && parseFloat(s.opacity || '1') > 0.05;
             }
             function norm(t) { return (t || '').replace(/\\s+/g, ''); }
+            const byE2e = document.querySelector('[data-e2e-id="e2e-publish-button"]');
+            if (byE2e && isVisible(byE2e) && !byE2e.disabled) return true;
             const byId = document.getElementById('bottomSubmitBtnId');
             if (byId && isVisible(byId) && !byId.disabled) return true;
             for (const el of document.querySelectorAll('button, a, div, span')) {
@@ -2181,6 +2191,8 @@ def _is_still_on_category_publish_step(page: DpPage) -> bool:
     body = _category_page_body_text(page)
     if ("商品规格" in body or "规格类型" in body) and "完善商品信息" not in body.replace(" ", ""):
         return False
+    if page.ele('css:button[data-e2e-id="e2e-publish-button"]', timeout=0.3):
+        return True
     if page.ele("#bottomSubmitBtnId", timeout=0.3):
         return True
     compact = body.replace(" ", "")
@@ -2224,7 +2236,10 @@ def _wait_for_category_page_advance(
             elif ui_type == "C":
                 _click_branch_c_category_recommendation(page, account_id, label)
             _dismiss_category_search_overlay(page, account_id, label)
-            _mouse_click_category_next_button(page, account_id, label)
+            if ui_type == "C":
+                _click_branch_c_category_next(page, account_id, label)
+            else:
+                _mouse_click_category_next_button(page, account_id, label)
 
     advanced = not _is_still_on_category_publish_step(page)
     if not advanced:
@@ -2237,6 +2252,8 @@ def _wait_for_category_page_advance(
 
 def _category_page_needs_manual_selection(page: DpPage) -> bool:
     """分支 C 图二：暂无推荐分类，需点击「选择分类」后在搜索框选类目（图一弹层）。"""
+    if _is_image_category_recommendation_modal_visible(page):
+        return False
     if _branch_c_category_already_selected(page):
         return False
     body = _category_page_body_text(page)
@@ -2259,7 +2276,24 @@ def _category_page_needs_manual_selection(page: DpPage) -> bool:
 
 def _branch_c_category_already_selected(page: DpPage) -> bool:
     """分支 C：推荐分类已选中（带勾选/路径），可直接点下一步。"""
+    from pdd_agent.skills.listing.category_branch_c_modal import (
+        body_text_indicates_recommendation_modal,
+        is_modal_blocking_category_advance,
+    )
+
     body = _category_page_body_text(page)
+    if body_text_indicates_recommendation_modal(body) or is_modal_blocking_category_advance(page):
+        return False
+    compact = body.replace(" ", "").replace("\n", "")
+    modal_open = _is_image_category_recommendation_modal_visible(page)
+    if ("已选分类" in body or "已选分类" in compact) and not modal_open:
+        has_next = bool(
+            page.ele("#bottomSubmitBtnId", timeout=0.5) or page.ele("text:下一步", timeout=0.5)
+        )
+        if has_next and body.count(">") >= 2:
+            return True
+    if modal_open:
+        return False
     if "暂无推荐的分类" in body:
         return False
     if "暂无推荐" in body:
@@ -2512,12 +2546,135 @@ return null;
 """
 
 
+_IMAGE_CATEGORY_RECOMMENDATION_MODAL_JS = """
+function isVisible(el) {
+    if (!el) return false;
+    const r = el.getBoundingClientRect();
+    const s = window.getComputedStyle(el);
+    return r.width > 8 && r.height > 8
+        && s.display !== 'none' && s.visibility !== 'hidden'
+        && parseFloat(s.opacity || '1') > 0.05;
+}
+function norm(t) {
+    return (t || '').replace(/\\s+/g, '');
+}
+function isCategoryOptionText(t) {
+    const s = (t || '').replace(/\\s+/g, ' ').trim();
+    if (!s.includes('>')) return false;
+    const parts = s.split('>').map((x) => x.trim()).filter(Boolean);
+    return parts.length >= 2 && s.length >= 8 && s.length <= 180;
+}
+function findModalRoot() {
+    for (const el of document.querySelectorAll(
+        '[role="dialog"], [class*="modal"], [class*="Modal"], [class*="dialog"], [class*="Dialog"], [class*="popup"], [class*="Popup"], [class*="drawer"], [class*="Drawer"]'
+    )) {
+        if (!isVisible(el)) continue;
+        const t = el.innerText || '';
+        if (!t.includes('推荐分类')) continue;
+        if (!t.includes('确认')) continue;
+        if (!t.includes('请选择')) continue;
+        if (!t.includes('为您推荐分类') && !t.includes('根据您上传的图片')) continue;
+        return el;
+    }
+    return null;
+}
+function detectImageCategoryRecommendationModal() {
+    return { visible: !!findModalRoot() };
+}
+function handleImageCategoryRecommendationModal() {
+    const root = findModalRoot();
+    if (!root) return { ok: false, reason: 'not_visible' };
+    let selected = false;
+    let selectedText = '';
+    const radios = Array.from(root.querySelectorAll('input[type="radio"]')).filter(isVisible);
+    radios.sort((a, b) => a.getBoundingClientRect().top - b.getBoundingClientRect().top);
+    for (const input of radios) {
+        try {
+            input.click();
+            input.checked = true;
+            selected = true;
+            const label = input.closest('label') || input.parentElement;
+            selectedText = ((label && label.innerText) || '').replace(/\\s+/g, ' ').trim().slice(0, 80);
+            break;
+        } catch (e) {}
+    }
+    if (!selected) {
+        const options = [];
+        for (const el of root.querySelectorAll('label, li, div, span, button')) {
+            const t = (el.innerText || el.textContent || '').replace(/\\s+/g, ' ').trim();
+            if (!isCategoryOptionText(t)) continue;
+            if (!isVisible(el)) continue;
+            const r = el.getBoundingClientRect();
+            options.push({ el, y: r.top, t });
+        }
+        options.sort((a, b) => a.y - b.y || a.t.length - b.t.length);
+        if (options.length) {
+            try {
+                options[0].el.click();
+                selected = true;
+                selectedText = options[0].t.slice(0, 80);
+            } catch (e) {}
+        }
+    }
+    let confirmed = false;
+    for (const el of root.querySelectorAll('button, a, div, span')) {
+        const t = norm(el.innerText || el.textContent || '');
+        if (t !== '确认') continue;
+        if (!isVisible(el)) continue;
+        try { el.click(); confirmed = true; break; } catch (e) {}
+    }
+    return {
+        ok: selected && confirmed,
+        selected,
+        confirmed,
+        selectedText,
+    };
+}
+"""
+
+
+def _is_image_category_recommendation_modal_visible(page: DpPage) -> bool:
+    """分支 C：上传主图后「根据图片推荐分类」弹窗是否可见。"""
+    from pdd_agent.skills.listing.category_branch_c_modal import (
+        is_image_category_recommendation_modal_visible,
+    )
+
+    return is_image_category_recommendation_modal_visible(page)
+
+
+def _handle_image_category_recommendation_modal(
+    page: DpPage,
+    account_id: str,
+    label: str,
+    *,
+    wait_seconds: int = 0,
+) -> bool:
+    """
+    分支 C 以图推荐分类弹窗：选第一项 → 点「确认」。
+    无弹窗返回 False，走原有分类链路。
+    """
+    from pdd_agent.skills.listing.category_branch_c_modal import (
+        handle_image_category_recommendation_modal,
+    )
+
+    return handle_image_category_recommendation_modal(
+        page,
+        account_id,
+        label,
+        wait_seconds=wait_seconds,
+    )
+
+
 def _click_branch_c_category_recommendation(
     page: DpPage,
     account_id: str,
     label: str,
 ) -> bool:
     """Playwright 坐标点击推荐类目，完成平台分类校验。"""
+    if _handle_image_category_recommendation_modal(page, account_id, label):
+        return True
+    if _branch_c_category_already_selected(page):
+        return False
     try:
         point = page.run_js(_CATEGORY_RECOMMENDATION_POINT_JS)
     except Exception:
@@ -2577,7 +2734,8 @@ def _read_category_submit_state(page: DpPage) -> dict[str, Any]:
                     }
                 }
             }
-            let btn = document.getElementById('bottomSubmitBtnId');
+            let btn = document.querySelector('[data-e2e-id="e2e-publish-button"]')
+                || document.getElementById('bottomSubmitBtnId');
             let visible = btn ? isVisible(btn) : false;
             let disabled = btn ? isDisabled(btn) : true;
             if (!visible) {
@@ -2700,6 +2858,9 @@ def _resolve_category_next_click_point(page: DpPage) -> dict[str, Any]:
                     id: (target || el).id || '',
                 };
             }
+            const byE2e = document.querySelector('[data-e2e-id="e2e-publish-button"]');
+            const fromE2e = pick(byE2e, 'e2e-publish-button');
+            if (fromE2e) return fromE2e;
             const byId = document.getElementById('bottomSubmitBtnId');
             const fromId = pick(byId, 'bottomSubmitBtnId');
             if (fromId) return fromId;
@@ -2719,6 +2880,18 @@ def _resolve_category_next_click_point(page: DpPage) -> dict[str, Any]:
         return point if isinstance(point, dict) else {}
     except Exception:
         return {}
+
+
+def _click_branch_c_category_next(
+    page: DpPage,
+    account_id: str,
+    label: str,
+) -> tuple[bool, str]:
+    from pdd_agent.skills.listing.category_branch_c_next import (
+        click_branch_c_category_next_button,
+    )
+
+    return click_branch_c_category_next_button(page, account_id, label)
 
 
 def _mouse_click_category_next_button(
@@ -2783,7 +2956,11 @@ def _click_category_next_step(
     else:
         time.sleep(0.12)
 
-    ok, _method = _mouse_click_category_next_button(page, account_id, label)
+    ok, _method = (
+        _click_branch_c_category_next(page, account_id, label)
+        if ui_type == "C"
+        else _mouse_click_category_next_button(page, account_id, label)
+    )
     if ok:
         time.sleep(0.25 if quiet else 0.8)
         return True
@@ -2839,7 +3016,10 @@ def _click_category_next_step_burst(
         if ui_type == "C":
             _click_branch_c_category_recommendation(page, account_id, label)
         _dismiss_category_search_overlay(page, account_id, label)
-        _mouse_click_category_next_button(page, account_id, label)
+        if ui_type == "C":
+            _click_branch_c_category_next(page, account_id, label)
+        else:
+            _mouse_click_category_next_button(page, account_id, label)
         time.sleep(random.uniform(0.45, 0.85))
     return True
 
@@ -3264,6 +3444,136 @@ def _branch_c_search_publish_and_select(
     return False
 
 
+_MATERIAL_UPLOAD_VIEWIDS = (
+    "white_img_localfile_upload",
+    "white_background_img_localfile_upload",
+    "goods_material_white_img_localfile_upload",
+    "material_white_img_localfile_upload",
+    "bai_di_img_localfile_upload",
+)
+
+
+def _find_product_material_upload_input(page: DpPage):
+    """定位「基本信息」-「商品素材」-「白底图」上传框。"""
+    for vid in _MATERIAL_UPLOAD_VIEWIDS:
+        ele = page.ele(f'css:input[data-tracking-click-viewid="{vid}"]', timeout=0.3)
+        if ele:
+            return ele
+    for xpath in (
+        'xpath://*[normalize-space(text())="白底图"]/following::input[@type="file"][1]',
+        'xpath://*[contains(text(),"白底图") and string-length(normalize-space(text()))<=12]/following::input[@type="file"][1]',
+        (
+            'xpath://*[contains(text(),"商品素材")]'
+            '/following::input[@type="file"][not(@data-tracking-click-viewid="detail_img_localfile_upload")][1]'
+        ),
+    ):
+        ele = page.ele(xpath, timeout=0.5)
+        if ele:
+            return ele
+    try:
+        marked = page.run_js(
+            """
+            const exclude = new Set(['detail_img_localfile_upload', 'local_upload']);
+            function clearMark() {
+                document.querySelectorAll('input[data-pdd-agent-target="material-white-bg"]').forEach((el) => {
+                    el.removeAttribute('data-pdd-agent-target');
+                });
+            }
+            function isVisible(el) {
+                if (!el) return false;
+                const r = el.getBoundingClientRect();
+                const s = window.getComputedStyle(el);
+                return r.width > 0 && r.height > 0 && s.display !== 'none' && s.visibility !== 'hidden';
+            }
+            clearMark();
+            const allInputs = Array.from(document.querySelectorAll('input[type="file"]'));
+            for (const input of allInputs) {
+                const vid = (input.getAttribute('data-tracking-click-viewid') || '').toLowerCase();
+                if (!vid || exclude.has(vid)) continue;
+                if (vid.includes('white') || vid.includes('material') || vid.includes('bai_di') || vid.includes('baidi')) {
+                    input.setAttribute('data-pdd-agent-target', 'material-white-bg');
+                    return true;
+                }
+            }
+            const labels = Array.from(document.querySelectorAll('*')).filter((el) => {
+                if (!isVisible(el)) return false;
+                const t = (el.innerText || '').trim();
+                return t === '白底图' || (t.includes('白底图') && t.length <= 16);
+            });
+            for (const label of labels) {
+                let node = label;
+                for (let depth = 0; depth < 10 && node; depth++) {
+                    const inputs = node.querySelectorAll('input[type="file"]');
+                    for (const input of inputs) {
+                        const vid = input.getAttribute('data-tracking-click-viewid') || '';
+                        if (vid !== 'detail_img_localfile_upload') {
+                            input.setAttribute('data-pdd-agent-target', 'material-white-bg');
+                            return true;
+                        }
+                    }
+                    node = node.parentElement;
+                }
+            }
+            return false;
+            """
+        )
+        if marked:
+            return page.ele('css:input[data-pdd-agent-target="material-white-bg"]', timeout=0.5)
+    except Exception:
+        pass
+    return None
+
+
+def _upload_product_material_image(
+    page: DpPage,
+    account_id: str,
+    label: str,
+    image_path: str,
+) -> bool:
+    path = str(image_path or "").strip()
+    if not path:
+        return False
+    print(f"[{account_id}] [{label}] 正在上传商品素材（白底图）...", flush=True)
+    try:
+        page.run_js("window.scrollTo(0, 0);")
+        time.sleep(0.3)
+    except Exception:
+        pass
+    material_input = _find_product_material_upload_input(page)
+    if not material_input:
+        print(f"[{account_id}] [{label}] 未找到商品素材上传框，跳过 9.png", flush=True)
+        return False
+    try:
+        page.run_js("arguments[0].scrollIntoView({block:'center'});", material_input)
+    except Exception:
+        pass
+    time.sleep(0.3)
+    try:
+        material_input.input(path)
+    except Exception as exc:
+        print(
+            f"[{account_id}] [{label}] 商品素材上传失败：{_safe_exc(exc)}",
+            flush=True,
+        )
+        return False
+    time.sleep(1.5)
+    try:
+        raise_if_pdd_image_dimension_rejected(
+            page,
+            account_id=account_id,
+            label=label,
+            image_kind="material",
+        )
+    except PddImageDimensionRejected as exc:
+        print(
+            f"[{account_id}] [{label}] 商品素材尺寸不合规：{exc.platform_message or exc}",
+            flush=True,
+        )
+        return False
+    print(f"[{account_id}] [{label}] 商品素材已上传", flush=True)
+    return True
+
+
 def _upload_category_branch_c_covers(
     page: DpPage,
     account_id: str,
@@ -3302,8 +3612,12 @@ def _upload_category_branch_c_covers(
             )
 
     time.sleep(random.uniform(1.0, 2.0))
-    title = apply_title_after_cover_upload(
-        page, account_id, product_info, listing_info.get("title", "")
+    title = apply_title_after_branch_c_cover_upload(
+        page,
+        account_id,
+        product_info,
+        listing_info.get("title", ""),
+        label=label,
     )
     time.sleep(1)
     return title
@@ -3351,6 +3665,7 @@ def upload_one_listing(
     _log_unit_spec_snapshot(account_id, unit)
     covers = [str(p.resolve()) for p in unit.carousel_images]
     details = [str(p.resolve()) for p in unit.detail_images]
+    material_path = str(unit.material_image.resolve()) if unit.material_image else ""
     style_names = ordered_style_names(unit)
     size_names = list(unit.model_codes)
 
@@ -3392,84 +3707,28 @@ def upload_one_listing(
                 phase="upload",
                 step="branch_c_cover_upload",
             )
-        manual_category = _category_page_needs_manual_selection(page)
-        category_mode = _resolve_category_page_mode(
-            page, ui_type, manual_category=manual_category
-        )
-        if _branch_c_category_already_selected(page) and category_mode == "direct_next":
-            print(
-                f"[{account_id}] [{label}] 分支 C：已识别为以图发品/搜索发品且类目已选，直接点击下一步",
-                flush=True,
-            )
-        elif _branch_c_category_already_selected(page) and category_mode == "render_wait":
-            print(
-                f"[{account_id}] [{label}] 分支 C：商品分类已选中，等待渲染后点下一步",
-                flush=True,
-            )
-        elif manual_category:
-            print(
-                f"[{account_id}] [{label}] 分支 C-手动：暂无推荐分类，点击选择分类后搜索",
-                flush=True,
-            )
-            prepare_category_before_next(
-                page,
-                account_id,
-                label,
-                mode="render_wait",
-                burst_demo=False,
-            )
-            if not _open_category_selector_panel(page):
-                _clear_beforeunload(page)
-                return _finish_listing(
-                    run_id,
-                    account_id,
-                    unit,
-                    status="retryable",
-                    reason="category_selector_not_found",
-                    error="未找到「选择分类」入口",
-                    retryable=True,
-                    legacy_status="skipped",
-                    phase="upload",
-                    step="open_category_selector",
-                )
-            if not _select_category_by_keyword_search(
-                page,
-                account_id,
-                label,
-                str(listing_info.get("category_keyword") or "玩偶"),
-            ):
-                _clear_beforeunload(page)
-                return _finish_listing(
-                    run_id,
-                    account_id,
-                    unit,
-                    status="retryable",
-                    reason="category_search_failed",
-                    error=f"分类搜索失败：{listing_info.get('category_keyword', '玩偶')}",
-                    retryable=True,
-                    legacy_status="skipped",
-                    phase="upload",
-                    step="search_category",
-                )
-            category_mode = "manual_picker"
-        else:
-            prepare_category_before_next(
-                page,
-                account_id,
-                label,
-                mode=category_mode,
-                burst_demo=category_next_burst_demo,
-            )
-        next_ok, next_err = click_category_next_and_advance(
+        next_ok, next_err, _category_mode = run_branch_c_category_after_covers(
             page,
             account_id,
             label,
-            ui_type="C",
-            mode=category_mode,
-            burst_demo=category_next_burst_demo and category_mode == "render_wait",
+            listing_info,
+            category_next_burst_demo=category_next_burst_demo,
         )
         if not next_ok:
             _clear_beforeunload(page)
+            if next_err == "modal_blocking":
+                return _finish_listing(
+                    run_id,
+                    account_id,
+                    unit,
+                    status="retryable",
+                    reason="category_recommendation_modal_blocking",
+                    error="「根据图片推荐分类」弹窗未确认，无法点击下一步",
+                    retryable=True,
+                    legacy_status="skipped",
+                    phase="upload",
+                    step="category_recommendation_modal",
+                )
             if next_err == "not_found":
                 return _finish_listing(
                     run_id,
@@ -3497,6 +3756,16 @@ def upload_one_listing(
             )
         time.sleep(2)
         page.wait.load_start()
+        if _dismiss_address_required_page(page, account_id, label):
+            time.sleep(2)
+        listing_info["title"] = apply_title_after_branch_c_category_advance(
+            page,
+            account_id,
+            product_info,
+            listing_info.get("title", ""),
+            label=label,
+        )
+        time.sleep(1)
     else:
         if ui_type == "B":
             tab = page.ele('css:[data-tracking-click-viewid="cate_tree_tab"]')
@@ -3596,6 +3865,10 @@ def upload_one_listing(
     if detail_input and details:
         detail_input.input(details)
     time.sleep(2)
+
+    if material_path:
+        _upload_product_material_image(page, account_id, label, material_path)
+        time.sleep(1)
 
     print(f"[{account_id}] [{label}] 正在录入多规格（款式 + 型号）...")
     add_style_and_model_specs(page, account_id, style_names, size_names)
@@ -4073,6 +4346,16 @@ def run_listing_uploads(
             if run_id:
                 _persist_unit_progress(run_id, item_result)
             if not _listing_unit_succeeded(item_result):
+                from pdd_agent.skills.listing.listing_unit_feishu_log import (
+                    schedule_listing_unit_failure_to_feishu,
+                )
+
+                schedule_listing_unit_failure_to_feishu(
+                    account_id,
+                    unit,
+                    item_result,
+                    run_id=run_id,
+                )
                 print(
                     f"[{account_id}] [{unit.listing_label}] 上架失败，继续下一单元",
                     flush=True,
@@ -4108,6 +4391,16 @@ def run_listing_uploads(
             results.append(exc_result)
             if run_id:
                 _persist_unit_progress(run_id, exc_result)
+            from pdd_agent.skills.listing.listing_unit_feishu_log import (
+                schedule_listing_unit_failure_to_feishu,
+            )
+
+            schedule_listing_unit_failure_to_feishu(
+                account_id,
+                unit,
+                exc_result,
+                run_id=run_id,
+            )
             print(
                 f"[{account_id}] [{unit.listing_label}] 上架异常，继续下一单元",
                 flush=True,

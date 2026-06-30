@@ -63,8 +63,8 @@ def test_click_category_next_step_uses_mouse_fallback(monkeypatch):
     page = MagicMock()
     monkeypatch.setattr(
         listing_upload,
-        "_mouse_click_category_next_button",
-        lambda *_a, **_k: (True, "mouse/#bottomSubmitBtnId"),
+        "_click_branch_c_category_next",
+        lambda *_a, **_k: (True, "e2e-publish-button"),
     )
     monkeypatch.setattr(listing_upload, "_click_branch_c_category_recommendation", lambda *_a, **_k: True)
     monkeypatch.setattr(listing_upload, "time", MagicMock(sleep=lambda *_: None))
@@ -76,8 +76,8 @@ def test_click_category_next_step_prefers_mouse_click(monkeypatch):
     page = MagicMock()
     monkeypatch.setattr(
         listing_upload,
-        "_mouse_click_category_next_button",
-        lambda *_a, **_k: (True, "mouse/#bottomSubmitBtnId"),
+        "_click_branch_c_category_next",
+        lambda *_a, **_k: (True, "e2e-publish-button"),
     )
     monkeypatch.setattr(listing_upload, "_click_branch_c_category_recommendation", lambda *_a, **_k: True)
     monkeypatch.setattr(listing_upload, "time", MagicMock(sleep=lambda *_: None))
@@ -156,6 +156,7 @@ def test_click_category_next_step_burst_clicks_extra_when_still_on_page(monkeypa
     states = iter([True, True, True, False])
     monkeypatch.setattr(listing_upload, "_wait_category_submit_ready", lambda *_a, **_k: True)
     monkeypatch.setattr(listing_upload, "_click_category_next_step", _click)
+    monkeypatch.setattr(listing_upload, "_click_branch_c_category_next", _mouse_click)
     monkeypatch.setattr(listing_upload, "_mouse_click_category_next_button", _mouse_click)
     monkeypatch.setattr(
         listing_upload,
@@ -184,6 +185,11 @@ def test_click_category_next_step_burst_skips_extra_when_advanced(monkeypatch):
         lambda *_a, **_k: click_count.__setitem__("n", click_count["n"] + 1) or True,
     )
     monkeypatch.setattr(listing_upload, "_is_still_on_category_publish_step", lambda _page: False)
+    monkeypatch.setattr(
+        listing_upload,
+        "_handle_image_category_recommendation_modal",
+        lambda *_a, **_k: False,
+    )
     monkeypatch.setattr(listing_upload, "time", MagicMock(sleep=lambda *_: None))
 
     assert listing_upload._click_category_next_step_burst(page, account_id="store_A", label="BD050B") is True
@@ -238,7 +244,7 @@ def test_upload_category_branch_c_covers_raises_when_both_paths_fail(monkeypatch
     assert raised
 
 
-def test_upload_category_branch_c_covers_applies_title_after_upload(monkeypatch):
+def test_upload_category_branch_c_covers_skips_page_ai_on_category_page(monkeypatch):
     page = MagicMock()
     monkeypatch.setattr(
         listing_upload,
@@ -247,8 +253,8 @@ def test_upload_category_branch_c_covers_applies_title_after_upload(monkeypatch)
     )
     monkeypatch.setattr(
         listing_upload,
-        "apply_title_after_cover_upload",
-        lambda *_a, **_k: "AI标题",
+        "apply_title_after_branch_c_cover_upload",
+        lambda *_a, **_k: "fallback",
     )
     monkeypatch.setattr(listing_upload, "time", MagicMock(sleep=lambda *_: None))
     monkeypatch.setattr(listing_upload, "random", MagicMock(uniform=lambda *_: 1.0))
@@ -261,7 +267,7 @@ def test_upload_category_branch_c_covers_applies_title_after_upload(monkeypatch)
         ["/tmp/cover.jpg"],
         label="BD047A",
     )
-    assert title == "AI标题"
+    assert title == "fallback"
 
 
 def test_read_branch_c_cover_upload_error_detects_dimension_message(monkeypatch):
@@ -319,3 +325,132 @@ def test_upload_branch_c_cover_files_stops_on_dimension_error(monkeypatch):
 
     assert raised
     cover_input.input.assert_called_once()
+
+
+def test_image_category_recommendation_modal_visible(monkeypatch):
+    page = MagicMock()
+    page.run_js.return_value = {"visible": True, "hasRoot": True}
+    assert listing_upload._is_image_category_recommendation_modal_visible(page) is True
+
+
+def test_image_category_recommendation_modal_not_visible(monkeypatch):
+    page = MagicMock()
+    page.run_js.side_effect = [
+        {"visible": False, "hasRoot": False},
+        "商品分类 笔袋",
+    ]
+    assert listing_upload._is_image_category_recommendation_modal_visible(page) is False
+
+
+def test_handle_image_category_recommendation_modal_selects_first_and_confirms(monkeypatch):
+    page = MagicMock()
+    visible = iter([True, False])
+
+    def _visible(_page):
+        return next(visible, False)
+
+    monkeypatch.setattr(
+        "pdd_agent.skills.listing.category_branch_c_modal.is_image_category_recommendation_modal_visible",
+        _visible,
+    )
+    monkeypatch.setattr(
+        "pdd_agent.skills.listing.category_branch_c_modal._attempt_close_recommendation_modal",
+        lambda *_a, **_k: (True, "文具电教/文化用品/商务用品 > 日常学习用品 > 笔袋/文具袋"),
+    )
+    monkeypatch.setattr(listing_upload, "time", MagicMock(sleep=lambda *_: None))
+
+    assert listing_upload._handle_image_category_recommendation_modal(
+        page, "store_A", "BD050B"
+    ) is True
+
+
+def test_handle_image_category_recommendation_modal_absent_returns_false(monkeypatch):
+    page = MagicMock()
+    page.run_js.return_value = {"visible": False}
+
+    assert listing_upload._handle_image_category_recommendation_modal(
+        page, "store_A", "BD050B"
+    ) is False
+
+
+def test_branch_c_not_selected_when_recommendation_modal_open(monkeypatch):
+    page = MagicMock()
+    monkeypatch.setattr(
+        listing_upload,
+        "_is_image_category_recommendation_modal_visible",
+        lambda _page: True,
+    )
+    monkeypatch.setattr(
+        listing_upload,
+        "_category_page_body_text",
+        lambda _page: "根据您上传的图片 为您推荐分类 请选择",
+    )
+
+    assert listing_upload._branch_c_category_already_selected(page) is False
+    assert listing_upload._category_page_needs_manual_selection(page) is False
+
+
+def test_branch_c_selected_with_category_picker_uses_direct_next(monkeypatch):
+    """三级列选器已展示「已选分类」时不应误判为 manual_picker。"""
+    page = MagicMock()
+    page.run_js.return_value = True
+    next_btn = MagicMock()
+
+    def _ele(locator, timeout=1):
+        if locator in ("#bottomSubmitBtnId", "text:下一步"):
+            return next_btn
+        return None
+
+    page.ele.side_effect = _ele
+    monkeypatch.setattr(
+        listing_upload,
+        "_is_image_category_recommendation_modal_visible",
+        lambda _page: False,
+    )
+    monkeypatch.setattr(
+        listing_upload,
+        "_category_page_body_text",
+        lambda _page: (
+            "商品分类\n分类选择\n"
+            "已选分类 文具电教/文化用品/商务用品 > 日常学习用品 > 笔袋/文具袋\n"
+            "下一步，完善商品信息"
+        ),
+    )
+
+    assert listing_upload._branch_c_category_already_selected(page) is True
+    assert listing_upload._category_page_is_manual_picker(page, "C") is False
+    assert listing_upload._resolve_category_page_mode(page, "C", manual_category=False) == "direct_next"
+
+
+def test_click_branch_c_recommendation_skips_when_category_selected(monkeypatch):
+    page = MagicMock()
+    monkeypatch.setattr(
+        listing_upload,
+        "_handle_image_category_recommendation_modal",
+        lambda *_a, **_k: False,
+    )
+    monkeypatch.setattr(
+        listing_upload,
+        "_branch_c_category_already_selected",
+        lambda _page: True,
+    )
+    clicks = {"js": 0}
+    page.run_js.side_effect = lambda *_a, **_k: clicks.__setitem__("js", clicks["js"] + 1)
+
+    assert listing_upload._click_branch_c_category_recommendation(page, "store_A", "BD050B") is False
+    assert clicks["js"] == 0
+
+
+def test_click_branch_c_recommendation_prefers_modal_handler(monkeypatch):
+    page = MagicMock()
+    calls = {"modal": 0, "inline": 0}
+
+    monkeypatch.setattr(
+        listing_upload,
+        "_handle_image_category_recommendation_modal",
+        lambda *_a, **_k: calls.__setitem__("modal", calls["modal"] + 1) or True,
+    )
+    monkeypatch.setattr(listing_upload, "time", MagicMock(sleep=lambda *_: None))
+
+    assert listing_upload._click_branch_c_category_recommendation(page, "store_A", "BD050B") is True
+    assert calls["modal"] == 1

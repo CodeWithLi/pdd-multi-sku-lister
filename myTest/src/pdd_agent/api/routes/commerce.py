@@ -12,6 +12,8 @@ from pdd_agent.api.services.commerce_dispatch import (
     get_commerce_overview,
     list_pending_intents,
     reconcile_commerce_state,
+    reset_account_commerce_state,
+    reset_commerce_state,
     try_dispatch_pending_for_account,
 )
 from pdd_agent.db.session import is_database_available
@@ -22,6 +24,15 @@ router = APIRouter(prefix="/commerce", tags=["commerce"])
 class CommerceIntentCancelIn(BaseModel):
     intent_ids: list[str] = Field(default_factory=list)
     account_id: str = ""
+    all_pending: bool = False
+
+
+class CommerceResetIn(BaseModel):
+    account_ids: list[str] = Field(default_factory=list)
+    all_accounts: bool = False
+    cancel_pipelines: bool = True
+    cancel_intents: bool = True
+    clear_lifecycle: bool = True
 
 
 @router.get("/overview")
@@ -98,7 +109,40 @@ def cancel_intents(body: CommerceIntentCancelIn):
     outcome = cancel_commerce_intents(
         intent_ids=body.intent_ids,
         account_id=body.account_id,
+        all_pending=body.all_pending,
     )
-    if not outcome.get("ok"):
+    if not outcome.get("ok") and not body.all_pending:
         raise HTTPException(status_code=400, detail="没有可取消的排队任务")
     return outcome
+
+
+@router.post("/reset/{account_id}")
+def reset_account(
+    account_id: str,
+    cancel_pipelines: bool = Query(default=True),
+    cancel_intents: bool = Query(default=True),
+    clear_lifecycle: bool = Query(default=True),
+):
+    if not is_database_available():
+        raise HTTPException(status_code=503, detail="数据库不可用")
+    return reset_account_commerce_state(
+        account_id,
+        cancel_pipelines=cancel_pipelines,
+        cancel_intents=cancel_intents,
+        clear_lifecycle=clear_lifecycle,
+    )
+
+
+@router.post("/reset")
+def reset_accounts(body: CommerceResetIn):
+    if not is_database_available():
+        raise HTTPException(status_code=503, detail="数据库不可用")
+    if not body.all_accounts and not body.account_ids:
+        raise HTTPException(status_code=400, detail="请指定 account_ids 或 all_accounts=true")
+    return reset_commerce_state(
+        account_ids=body.account_ids,
+        all_accounts=body.all_accounts,
+        cancel_pipelines=body.cancel_pipelines,
+        cancel_intents=body.cancel_intents,
+        clear_lifecycle=body.clear_lifecycle,
+    )

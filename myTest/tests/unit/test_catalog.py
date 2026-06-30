@@ -35,7 +35,7 @@ def test_list_image_sets_empty(tmp_path):
 
 
 def test_new_flat_image_layout(tmp_path, monkeypatch):
-    """新结构：母文件夹/套图/编码，1-5 主图、7-9 详情，根目录图片为 SKU 预览图。"""
+    """新结构：母文件夹/套图/编码，1-5 主图、6-8 详情、9 商品素材，根目录图片为 SKU 预览图。"""
     monkeypatch.setattr("pdd_agent.core.config.PROJECT_ROOT", tmp_path)
     monkeypatch.setattr("pdd_agent.paths.PROJECT_ROOT", tmp_path)
     get_pdd_product_catalog.cache_clear()
@@ -58,8 +58,9 @@ def test_new_flat_image_layout(tmp_path, monkeypatch):
     assert len(units) == 1
     unit = units[0]
     assert [p.name for p in unit.carousel_images] == ["1.png", "2.png", "3.png", "4.png", "5.png"]
-    assert [p.name for p in unit.detail_images] == ["7.png", "8.png", "9.png"]
-    assert "6.png" not in [p.name for p in unit.carousel_images + unit.detail_images]
+    assert [p.name for p in unit.detail_images] == ["6.png", "7.png", "8.png"]
+    assert unit.material_image and unit.material_image.name == "9.png"
+    assert "9.png" not in [p.name for p in unit.carousel_images + unit.detail_images]
     assert [sku.combo_folder for sku in unit.skus] == ["BD046A", "BD046A+AXBD001A", "BD046A+AXBD888"]
     assert unit.family_code == "BD046"
 
@@ -381,7 +382,7 @@ def test_minio_style_preview_filenames_with_chinese_suffix(tmp_path, monkeypatch
     folder = "BD023A毛绒小狗笔袋"
     unit_root = root / "BD023" / "第一套图" / folder
     unit_root.mkdir(parents=True)
-    for index in [1, 2, 3, 4, 5, 7, 8, 9]:
+    for index in [1, 2, 3, 4, 5, 6, 7, 8, 9]:
         (unit_root / f"{index}.png").write_bytes(b"img")
     (unit_root / f"{folder}.png").write_bytes(b"preview")
     (unit_root / f"{folder}+YKL001N.png").write_bytes(b"preview")
@@ -397,6 +398,7 @@ def test_minio_style_preview_filenames_with_chinese_suffix(tmp_path, monkeypatch
     unit = units[0]
     assert len(unit.carousel_images) == 5
     assert len(unit.detail_images) == 3
+    assert unit.material_image and unit.material_image.name == "9.png"
     combo_folders = [sku.combo_folder for sku in unit.skus]
     assert len(unit.skus) == 4
     assert folder in combo_folders

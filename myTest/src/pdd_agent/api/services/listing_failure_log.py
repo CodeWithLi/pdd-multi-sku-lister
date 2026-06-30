@@ -190,6 +190,8 @@ def record_preflight_issue(
             reason_code = ListingErrorCode.PREFLIGHT_NO_CAROUSEL
         elif "详情图为空" in issue.message:
             reason_code = ListingErrorCode.PREFLIGHT_NO_DETAIL
+        elif "商品素材图为空" in issue.message:
+            reason_code = ListingErrorCode.PREFLIGHT_NO_MATERIAL
         elif "商品表" in issue.message or "Excel" in issue.message:
             reason_code = ListingErrorCode.PREFLIGHT_CATALOG
 
@@ -220,6 +222,8 @@ def validate_unit_image_files(
         checks.append(("carousel", str(path)))
     for path in unit.detail_images:
         checks.append(("detail", str(path)))
+    if unit.material_image:
+        checks.append(("material", str(unit.material_image)))
     for sku in unit.skus:
         if sku.preview_image:
             checks.append((f"preview:{sku.style_name}/{sku.model_name}", str(sku.preview_image)))

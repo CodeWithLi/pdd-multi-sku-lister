@@ -7,6 +7,8 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from sqlalchemy.sql.dml import Delete
+
 from pdd_agent.api.services import commerce_dispatch as cd
 from pdd_agent.db.models import AccountLifecycleORM, CommerceIntentORM, ProductClaimORM
 
@@ -21,10 +23,15 @@ def mock_db(monkeypatch):
 
     def fake_scope():
         class Session:
+            _pending_lifecycle_id: str = ""
+            _pending_account_id: str = ""
+
             def get(self, model, key):
                 if model is AccountLifecycleORM:
                     row = store["lifecycles"].get(key)
                     if row:
+                        Session._pending_lifecycle_id = str(row.get("lifecycle_id") or "")
+                        Session._pending_account_id = str(key)
                         return _obj(AccountLifecycleORM, row)
                     return None
                 if model is CommerceIntentORM:
@@ -42,6 +49,14 @@ def mock_db(monkeypatch):
                     store["claims"][row.claim_key] = _dump(row)
 
             def execute(self, stmt):
+                if isinstance(stmt, Delete):
+                    table_name = getattr(getattr(stmt, "table", None), "name", "")
+                    if table_name == "account_lifecycles":
+                        store["lifecycles"].pop(Session._pending_account_id, None)
+                    elif table_name == "product_claims" and Session._pending_lifecycle_id:
+                        for key, claim in list(store["claims"].items()):
+                            if claim.get("lifecycle_id") == Session._pending_lifecycle_id:
+                                store["claims"].pop(key, None)
                 return MagicMock()
 
             def flush(self):
@@ -57,12 +72,33 @@ def mock_db(monkeypatch):
                 return None
 
             def scalars(self, stmt):
+                captured = stmt
+
                 class R:
                     def all(inner):
-                        return [
-                            _obj(ProductClaimORM, v)
-                            for v in store["claims"].values()
-                        ]
+                        if "commerce_intents" in str(captured):
+                            rows = [
+                                _obj(CommerceIntentORM, v)
+                                for v in store["intents"].values()
+                                if v.get("status") == "pending"
+                            ]
+                            if "account_id" in str(captured):
+                                for v in store["intents"].values():
+                                    pass
+                                rows = [
+                                    _obj(CommerceIntentORM, v)
+                                    for v in store["intents"].values()
+                                    if v.get("status") == "pending"
+                                ]
+                            return rows
+                        if "account_lifecycles" in str(captured):
+                            return [
+                                _obj(AccountLifecycleORM, v)
+                                for v in store["lifecycles"].values()
+                                if v.get("lifecycle_status") not in cd.LIFECYCLE_TERMINAL
+                            ]
+                        return [_obj(ProductClaimORM, v) for v in store["claims"].values()]
+
                 return R()
 
         class CM:
@@ -215,6 +251,7 @@ def test_reconcile_commerce_state_calls_helpers(mock_db, monkeypatch):
 
     monkeypatch.setattr(cd, "nudge_due_scheduled_pipelines", lambda: 2)
     monkeypatch.setattr(cd, "sync_lifecycle_from_active_pipelines", lambda: 1)
+    monkeypatch.setattr(cd, "reconcile_stale_lifecycles", lambda: 0)
     monkeypatch.setattr(
         cd,
         "dispatch_all_pending_intents",
@@ -247,3 +284,67 @@ def test_intent_to_dict_merged_flag(mock_db):
     )
     data = cd.intent_to_dict(row)
     assert data["is_merged"] is True
+
+
+def test_force_clear_account_lifecycle(mock_db):
+    mock_db["lifecycles"]["store_a"] = {
+        "account_id": "store_a",
+        "lifecycle_id": "lc1",
+        "owner_type": "integrated_pipeline",
+        "owner_id": "pipe_old",
+        "trigger_source": "manual",
+        "phase": "listing",
+        "lifecycle_status": cd.LIFECYCLE_ACTIVE,
+        "wake_at": None,
+        "product_selectors": [],
+        "created_at": datetime.now(),
+        "updated_at": datetime.now(),
+    }
+    mock_db["claims"]["store_a|BD014A/第一套图"] = {
+        "claim_key": "store_a|BD014A/第一套图",
+        "account_id": "store_a",
+        "lifecycle_id": "lc1",
+        "listing_selector": "BD014A/第一套图",
+        "claimed_at": datetime.now(),
+    }
+    assert cd._force_clear_account_lifecycle("store_a", reason="test") is True
+    assert "store_a" not in mock_db["lifecycles"]
+    assert not any(v.get("lifecycle_id") == "lc1" for v in mock_db["claims"].values())
+
+
+def test_reset_account_clears_intents_and_lifecycle(mock_db, monkeypatch):
+    mock_db["intents"]["intent_1"] = {
+        "intent_id": "intent_1",
+        "account_id": "store_a",
+        "trigger_source": "manual",
+        "priority": 5,
+        "product_selectors": [],
+        "status": "pending",
+        "block_reason": "account_active",
+        "block_detail": "",
+        "dedupe_key": "k1",
+        "created_at": datetime.now(),
+        "updated_at": datetime.now(),
+    }
+    mock_db["lifecycles"]["store_a"] = {
+        "account_id": "store_a",
+        "lifecycle_id": "lc1",
+        "owner_type": "integrated_pipeline",
+        "owner_id": "pipe_gone",
+        "trigger_source": "manual",
+        "phase": "listing",
+        "lifecycle_status": cd.LIFECYCLE_ACTIVE,
+        "wake_at": None,
+        "product_selectors": [],
+        "created_at": datetime.now(),
+        "updated_at": datetime.now(),
+    }
+    monkeypatch.setattr(cd, "_list_non_terminal_pipeline_ids_for_account", lambda _aid: [])
+    monkeypatch.setattr(
+        "pdd_agent.db.repositories.get_integrated_pipeline",
+        lambda _pid: None,
+    )
+    result = cd.reset_account_commerce_state("store_a", cancel_pipelines=False)
+    assert result["ok"] is True
+    assert result["canceled_intents"] == 1
+    assert result["lifecycle_cleared"] is True

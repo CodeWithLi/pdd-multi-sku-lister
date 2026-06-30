@@ -17,6 +17,7 @@ class ListingErrorCode:
     PREFLIGHT_NO_SKUS = "preflight_no_skus"
     PREFLIGHT_NO_CAROUSEL = "preflight_no_carousel"
     PREFLIGHT_NO_DETAIL = "preflight_no_detail"
+    PREFLIGHT_NO_MATERIAL = "preflight_no_material"
     PREFLIGHT_CATALOG = "preflight_catalog"
     IMAGE_FILE_MISSING = "image_file_missing"
     CAROUSEL_IMAGE_DIMENSION_REJECTED = "carousel_image_dimension_rejected"
@@ -100,6 +101,7 @@ class ListingErrors:
         ListingErrorCode.PREFLIGHT_NO_SKUS: "上架前校验：无有效 SKU",
         ListingErrorCode.PREFLIGHT_NO_CAROUSEL: "上架前校验：主图为空",
         ListingErrorCode.PREFLIGHT_NO_DETAIL: "上架前校验：详情图为空",
+        ListingErrorCode.PREFLIGHT_NO_MATERIAL: "上架前校验：商品素材图为空",
         ListingErrorCode.PREFLIGHT_CATALOG: "上架前校验：商品表或素材目录问题",
         ListingErrorCode.IMAGE_FILE_MISSING: "图片文件不存在或无法读取",
         ListingErrorCode.CAROUSEL_IMAGE_DIMENSION_REJECTED: "主图尺寸不符合平台要求",
@@ -195,7 +197,8 @@ class ListingErrors:
         ListingErrorCode.UNEXPECTED_ERROR: "运行异常，请查看操作记录",
         ListingErrorCode.PREFLIGHT_NO_SKUS: "Excel 与预览图对不上，没有可上架规格",
         ListingErrorCode.PREFLIGHT_NO_CAROUSEL: "缺少主图（需 1-5 编号图）",
-        ListingErrorCode.PREFLIGHT_NO_DETAIL: "缺少详情图（需 7-9 编号图）",
+        ListingErrorCode.PREFLIGHT_NO_DETAIL: "缺少详情图（需 6-8 编号图）",
+        ListingErrorCode.PREFLIGHT_NO_MATERIAL: "缺少商品素材图（需 9 编号图）",
         ListingErrorCode.PREFLIGHT_CATALOG: "商品目录或素材有问题",
         ListingErrorCode.IMAGE_FILE_MISSING: "图片文件不存在或打不开",
         ListingErrorCode.CAROUSEL_IMAGE_DIMENSION_REJECTED: "主图尺寸不符合要求",
@@ -292,6 +295,7 @@ class ListingErrors:
             ListingErrorCode.PREFLIGHT_NO_SKUS,
             ListingErrorCode.PREFLIGHT_NO_CAROUSEL,
             ListingErrorCode.PREFLIGHT_NO_DETAIL,
+            ListingErrorCode.PREFLIGHT_NO_MATERIAL,
             ListingErrorCode.PREFLIGHT_CATALOG,
             ListingErrorCode.CATALOG_PARSE_WARNING,
             ListingErrorCode.NO_VALID_UNITS,
@@ -351,6 +355,7 @@ class ListingErrors:
             ListingErrorCode.PREFLIGHT_NO_SKUS,
             ListingErrorCode.PREFLIGHT_NO_CAROUSEL,
             ListingErrorCode.PREFLIGHT_NO_DETAIL,
+            ListingErrorCode.PREFLIGHT_NO_MATERIAL,
             ListingErrorCode.PREFLIGHT_CATALOG,
             ListingErrorCode.IMAGE_FILE_MISSING,
             ListingErrorCode.PRICE_FILL_PARTIAL,
@@ -371,7 +376,10 @@ class ListingErrors:
         DETAIL_EMPTY = "详情图为空"
         NO_VALID_SKU = "未解析到任何有效 SKU"
         CAROUSEL_MISSING = "[{label}] 未找到 1-5 主图"
-        DETAIL_MISSING = "[{label}] 未找到 7-9 详情图"
+        DETAIL_MISSING = "[{label}] 未找到 6-8 详情图"
+        MATERIAL_MISSING = "[{label}] 未找到 9 商品素材图"
+        MATERIAL_EMPTY = "商品素材图为空"
+        FEISHU_MATERIAL_MISSING = "{code}商品素材图缺失"
         NO_SKU_PARSED = "[{label}] 未解析到任何有效 SKU"
         PREVIEW_MISSING = "[{label}] 缺少预览图: {style}/{combo}"
         STYLE_CODE_MISSING_SKIP = "[{label}] 商品表无款式编码[{style}]，跳过"
@@ -640,7 +648,11 @@ class ListingErrors:
             detail_imgs = getattr(unit, "detail_images", None) or (
                 unit.get("detail_images") if isinstance(unit, dict) else []
             ) or []
-            _add(f"主图 {len(carousel)} 张，详情图 {len(detail_imgs)} 张")
+            material_img = getattr(unit, "material_image", None) or (
+                unit.get("material_image") if isinstance(unit, dict) else None
+            )
+            material_note = "有" if material_img else "无"
+            _add(f"主图 {len(carousel)} 张，详情图 {len(detail_imgs)} 张，商品素材 {material_note}")
             break
 
         for issue in issues:
@@ -762,6 +774,8 @@ class ListingErrors:
                 return cls.Msg.FEISHU_CAROUSEL_MISSING.format(code=code)
             if rc == ListingErrorCode.PREFLIGHT_NO_DETAIL and code:
                 return cls.Msg.FEISHU_DETAIL_MISSING.format(code=code)
+            if rc == ListingErrorCode.PREFLIGHT_NO_MATERIAL and code:
+                return cls.Msg.FEISHU_MATERIAL_MISSING.format(code=code)
             if rc == ListingErrorCode.PREFLIGHT_NO_SKUS:
                 return cls.infer_no_sku_failure_brief(
                     merchant_code=code,
@@ -862,9 +876,12 @@ class ListingErrors:
         if "未找到 1-5 主图" in text or text == cls.Msg.CAROUSEL_EMPTY:
             code = str(merchant_code or "").strip().upper()
             return cls.Msg.FEISHU_CAROUSEL_MISSING.format(code=code) if code else "主图缺失"
-        if "未找到 7-9 详情图" in text or text == cls.Msg.DETAIL_EMPTY:
+        if "未找到 6-8 详情图" in text or "未找到 7-9 详情图" in text or text == cls.Msg.DETAIL_EMPTY:
             code = str(merchant_code or "").strip().upper()
             return cls.Msg.FEISHU_DETAIL_MISSING.format(code=code) if code else "详情图缺失"
+        if "未找到 9 商品素材图" in text or text == cls.Msg.MATERIAL_EMPTY:
+            code = str(merchant_code or "").strip().upper()
+            return cls.Msg.FEISHU_MATERIAL_MISSING.format(code=code) if code else "商品素材图缺失"
         if "尺寸不符合" in text:
             code = str(merchant_code or "").strip().upper()
             if "预览图" in text:

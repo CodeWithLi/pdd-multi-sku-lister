@@ -153,6 +153,7 @@ export interface ListingUnit {
   root: string
   carousel_images: string[]
   detail_images: string[]
+  material_image?: string
   carousel_count: number
   detail_count: number
   sku_count: number
@@ -995,6 +996,27 @@ export interface CommerceIntentBatchCancelResult {
   failed_count: number
   canceled: CommerceIntentCancelResult[]
   failed: CommerceIntentCancelResult[]
+}
+
+export interface CommerceAccountResetResult {
+  ok: boolean
+  account_id: string
+  canceled_pipelines: string[]
+  canceled_intents: number
+  lifecycle_cleared: boolean
+  pipeline_errors?: { pipeline_id: string; error: string }[]
+  error?: string
+}
+
+export interface CommerceResetResult {
+  ok: boolean
+  count: number
+  stale_cleared?: number
+  canceled_pipelines_total?: number
+  canceled_intents_total?: number
+  lifecycle_cleared_total?: number
+  results: CommerceAccountResetResult[]
+  message?: string
 }
 
 export interface CommerceOverview {
