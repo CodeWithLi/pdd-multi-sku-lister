@@ -187,6 +187,32 @@ def _ensure_failure_sequential_batch_columns(engine: Engine) -> None:
         return
 
 
+def _ensure_daily_listing_records_columns(engine: Engine) -> None:
+    """为 daily_listing_records 补充逻辑删除字段。"""
+    try:
+        inspector = inspect(engine)
+        if "daily_listing_records" not in inspector.get_table_names():
+            return
+        existing = {col["name"] for col in inspector.get_columns("daily_listing_records")}
+        statements: list[str] = []
+        if "status" not in existing:
+            statements.append(
+                "ALTER TABLE daily_listing_records "
+                "ADD COLUMN status VARCHAR(32) NOT NULL DEFAULT 'active'"
+            )
+        if "delisted_at" not in existing:
+            statements.append(
+                "ALTER TABLE daily_listing_records ADD COLUMN delisted_at DATETIME NULL"
+            )
+        if not statements:
+            return
+        with engine.begin() as conn:
+            for stmt in statements:
+                conn.execute(text(stmt))
+    except Exception:
+        return
+
+
 def _ensure_listed_folders_backfill(engine: Engine) -> None:
     try:
         inspector = inspect(engine)
@@ -248,6 +274,7 @@ def init_database() -> bool:
         _ensure_published_products_columns(engine)
         _ensure_failure_sequential_job_columns(engine)
         _ensure_failure_sequential_batch_columns(engine)
+        _ensure_daily_listing_records_columns(engine)
         _ensure_listed_folders_backfill(engine)
         _engine = engine
         _sessionmaker = sessionmaker(bind=engine, expire_on_commit=False, future=True)

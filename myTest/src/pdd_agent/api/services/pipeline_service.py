@@ -344,7 +344,21 @@ def _pipeline_auto_limited_time(row) -> bool:
 
 def _pipeline_continue_after_limited_time_failure(row) -> bool:
     """限时限量购失败后仍继续活动报名与推广。"""
+    from pdd_agent.api.services.pipeline_activity_limited_time_success import (
+        is_activity_limited_time_success_only_row,
+    )
+
+    if is_activity_limited_time_success_only_row(row):
+        return False
     return bool((row.meta or {}).get("continue_after_limited_time_failure"))
+
+
+def _pipeline_activity_limited_time_success_only(row) -> bool:
+    from pdd_agent.api.services.pipeline_activity_limited_time_success import (
+        is_activity_limited_time_success_only_row,
+    )
+
+    return is_activity_limited_time_success_only_row(row)
 
 
 def _pipeline_continue_after_activity_failure(row) -> bool:
@@ -470,6 +484,8 @@ def _schedule_pipeline_activity_after_limited_time(
     row,
     *,
     meta_patch: dict[str, Any] | None = None,
+    pdd_ids: list[str] | None = None,
+    mapping_ids: list[str] | None = None,
 ) -> None:
     scheduled_at = resolve_activity_scheduled_at(
         demo_mode=bool(row.demo_mode),
@@ -486,6 +502,8 @@ def _schedule_pipeline_activity_after_limited_time(
         row,
         activity_index=0,
         scheduled_at=scheduled_at,
+        pdd_ids=pdd_ids,
+        mapping_ids=mapping_ids,
         meta_patch=patch,
     )
     logger.info(
@@ -507,8 +525,11 @@ def _enqueue_pipeline_traffic(row, *, meta_patch: dict[str, Any] | None = None) 
             refreshed.traffic_run_id,
         )
         return
-    pdd_ids = list(refreshed.pdd_product_ids or [])
-    mapping_ids = list(refreshed.mapping_ids or [])
+    from pdd_agent.api.services.pipeline_activity_limited_time_success import (
+        resolve_activity_product_ids_for_row,
+    )
+
+    pdd_ids, mapping_ids = resolve_activity_product_ids_for_row(refreshed)
     traffic_run_id = create_traffic_run(refreshed.account_id)
     enqueue_task(
         agent=AgentKind.TRAFFIC.value,
@@ -1021,6 +1042,13 @@ def pipeline_to_dict(row) -> dict[str, Any]:
         "auto_limited_time_setup": _pipeline_auto_limited_time(row),
         "continue_after_limited_time_failure": _pipeline_continue_after_limited_time_failure(row),
         "continue_after_activity_failure": _pipeline_continue_after_activity_failure(row),
+        "activity_limited_time_success_only": _pipeline_activity_limited_time_success_only(row),
+        "activity_pdd_product_ids": list(
+            (row.meta or {}).get("activity_pdd_product_ids")
+            or (row.meta or {}).get("limited_time_success_pdd_product_ids")
+            or []
+        ),
+        "limited_time_success_detail": str((row.meta or {}).get("limited_time_success_detail") or ""),
         "limited_time_outcome": str((row.meta or {}).get("limited_time_outcome") or ""),
         "limited_time_skip_reason": str((row.meta or {}).get("limited_time_skip_reason") or ""),
         "activity_delay_hours": float(row.activity_delay_hours or 24.0),
@@ -1106,6 +1134,7 @@ def start_integrated_pipeline(
     listing_per_batch_limited_time_enabled: bool = False,
     listing_per_batch_campaign_enabled: bool = False,
     delist_spec_code_search_enabled: bool = False,
+    activity_limited_time_success_only: bool = False,
     extra_meta: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     account_id = str(account_id or "").strip()
@@ -1156,6 +1185,7 @@ def start_integrated_pipeline(
         "auto_limited_time_setup": bool(normalized_activity_ids),
         "continue_after_limited_time_failure": bool(continue_after_limited_time_failure),
         "continue_after_activity_failure": bool(continue_after_activity_failure),
+        "activity_limited_time_success_only": bool(activity_limited_time_success_only),
         "activity_ids": normalized_activity_ids,
         "campaign_activity_index": 0,
         "campaign_results": [],
@@ -1390,6 +1420,7 @@ def start_integrated_pipeline_batch(
     listing_per_batch_campaign_enabled: bool = False,
     store_sequential_enabled: bool = False,
     delist_spec_code_search_enabled: bool = False,
+    activity_limited_time_success_only: bool = False,
 ) -> dict[str, Any]:
     """批量创建整合链路；默认各店按启动间隔错开并行入队；串行模式下一家跑完再跑下一家。"""
     from pdd_agent.api.services.pipeline_store_sequential import (
@@ -1433,6 +1464,7 @@ def start_integrated_pipeline_batch(
         listing_per_batch_limited_time_enabled=listing_per_batch_limited_time_enabled,
         listing_per_batch_campaign_enabled=listing_per_batch_campaign_enabled,
         delist_spec_code_search_enabled=delist_spec_code_search_enabled,
+        activity_limited_time_success_only=activity_limited_time_success_only,
     )
 
     if store_sequential_enabled:
@@ -1517,6 +1549,7 @@ def start_integrated_pipeline_batch(
             listing_per_batch_limited_time_enabled=listing_per_batch_limited_time_enabled,
             listing_per_batch_campaign_enabled=listing_per_batch_campaign_enabled,
             delist_spec_code_search_enabled=delist_spec_code_search_enabled,
+            activity_limited_time_success_only=activity_limited_time_success_only,
         )
         pipelines.append(
             {
@@ -2081,6 +2114,10 @@ def _on_campaign_finished(row, *, run_id: str, success: bool, result: dict[str, 
 
 
 def _on_limited_time_finished(row, *, run_id: str, success: bool, result: dict[str, Any], error: str) -> None:
+    from pdd_agent.api.services.pipeline_activity_limited_time_success import (
+        handle_pipeline_limited_time_finished_for_activity,
+        is_activity_limited_time_success_only_row,
+    )
     from pdd_agent.api.services.pipeline_per_batch_limited_time import (
         maybe_continue_after_per_batch_limited_time,
         prepare_pipeline_row_for_post_listing_steps,
@@ -2104,6 +2141,18 @@ def _on_limited_time_finished(row, *, run_id: str, success: bool, result: dict[s
         error=error,
     ):
         return
+
+    if is_activity_limited_time_success_only_row(row):
+        if handle_pipeline_limited_time_finished_for_activity(
+            row,
+            run_id=run_id,
+            success=success,
+            result=result,
+            error=error,
+            schedule_activity_fn=_schedule_pipeline_activity_after_limited_time,
+            advance_store_sequential_fn=_try_advance_store_sequential_after_listing_limited_time,
+        ):
+            return
 
     row = prepare_pipeline_row_for_post_listing_steps(row) or row
     meta = dict(row.meta or {})
@@ -2260,6 +2309,15 @@ def _reconcile_limited_time_to_activity(row) -> Any:
 def _reconcile_stuck_pipeline_row(row) -> Any:
     """子任务已失败/取消但链路仍 running 时自动对齐（例如浏览器被关后回调未触发）。"""
     if not row or row.status in TERMINAL_PIPELINE_STATUSES:
+        return row
+
+    from pdd_agent.api.services.pipeline_activity_limited_time_success import (
+        reconcile_pipeline_waiting_activity,
+    )
+
+    row = reconcile_pipeline_waiting_activity(row)
+
+    if row.status in TERMINAL_PIPELINE_STATUSES:
         return row
 
     if row.status in {"waiting_limited_time", "waiting_activity"} or (

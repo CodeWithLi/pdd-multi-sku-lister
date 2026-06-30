@@ -199,6 +199,34 @@ class FailureSequentialTickResponse(BaseModel):
     summary: dict[str, Any] = Field(default_factory=dict)
 
 
+class FailureSequentialStuckStageOut(BaseModel):
+    stage: str = ""
+    label: str = ""
+    run_id: str = ""
+    reason: str = ""
+
+
+class FailureSequentialStuckJobOut(BaseModel):
+    job_id: str
+    batch_id: str = ""
+    merchant_code: str = ""
+    account_name: str = ""
+    updated_at: str = ""
+    stuck_stages: list[FailureSequentialStuckStageOut] = Field(default_factory=list)
+
+
+class FailureSequentialStuckListResponse(BaseModel):
+    ok: bool = True
+    total: int = 0
+    items: list[FailureSequentialStuckJobOut] = Field(default_factory=list)
+
+
+class FailureSequentialResetStuckResponse(BaseModel):
+    ok: bool = True
+    reset_count: int = 0
+    items: list[FailureSequentialStuckJobOut] = Field(default_factory=list)
+
+
 class PddFailureCycleRelistDismissBlockerIn(BaseModel):
     pipeline_id: str = Field(
         default="",

@@ -20,7 +20,9 @@ from pdd_agent.skills.listing.goods_list_capture import (
     enrich_capture_from_goods_list,
     extract_merchant_code_from_row_text,
     extract_total_inventory_from_row_text,
+    merchant_code_matches_query,
     parse_goods_list_row_meta,
+    resolve_row_merchant_code,
 )
 from pdd_agent.skills.listing.multi_spec_page import (
     _safe_exc,
@@ -1166,9 +1168,9 @@ def _parse_goods_list_matches_by_merchant_code(
     matches: list[dict[str, Any]] = []
     for row in rows:
         text = row.text or ""
-        row_code = extract_merchant_code_from_row_text(text)
-        if row_code != query_code:
+        if not merchant_code_matches_query(row, text, query_code):
             continue
+        row_code = resolve_row_merchant_code(row, text)
         product_id = extract_product_id_from_text(text)
         if not product_id:
             continue
@@ -1199,7 +1201,7 @@ def _parse_goods_list_matches(
     matches: list[dict[str, Any]] = []
     for row in rows:
         text = row.text or ""
-        if merchant_code and merchant_code not in text:
+        if not merchant_code_matches_query(row, text, merchant_code):
             continue
         if not _row_matches_title(text, title):
             continue
@@ -2927,6 +2929,95 @@ def _find_branch_c_cover_input(page: DpPage):
     return None
 
 
+_BRANCH_C_COVER_UPLOAD_ERROR_PATTERNS = (
+    "尺寸不符合要求",
+    "图片尺寸不符合",
+    "图片不符合要求",
+    "图片尺寸不符",
+)
+
+
+class BranchCCoverImageRejected(RuntimeError):
+    """分支 C 主图上传被拼多多页面拒绝（如尺寸不合规）。"""
+
+    def __init__(self, message: str, *, platform_message: str = ""):
+        super().__init__(message)
+        self.platform_message = str(platform_message or message).strip()
+
+
+def _read_branch_c_cover_upload_error(page: DpPage) -> str:
+    """读取分支 C 主图上传后页面报错（如「尺寸不符合要求」）。"""
+    try:
+        msg = page.run_js(
+            """
+            function isVisible(el) {
+                if (!el) return false;
+                const r = el.getBoundingClientRect();
+                const s = window.getComputedStyle(el);
+                return r.width > 2 && r.height > 2
+                    && s.display !== 'none' && s.visibility !== 'hidden'
+                    && parseFloat(s.opacity || '1') > 0.05;
+            }
+            const patterns = [
+                '尺寸不符合要求',
+                '图片尺寸不符合',
+                '图片不符合要求',
+                '图片尺寸不符',
+            ];
+            const selectors = [
+                '[class*="toast"]', '[class*="Toast"]',
+                '[class*="notice"]', '[class*="Notice"]',
+                '[class*="message"]', '[class*="Message"]',
+                '[class*="error"]', '[class*="Error"]',
+                '[class*="warn"]', '[class*="Warn"]',
+                '[class*="tip"]', '[class*="Tip"]',
+            ];
+            for (const sel of selectors) {
+                for (const el of document.querySelectorAll(sel)) {
+                    const raw = (el.innerText || el.textContent || '').trim();
+                    if (!raw || !isVisible(el)) continue;
+                    const compact = raw.replace(/\\s+/g, '');
+                    for (const p of patterns) {
+                        if (compact.includes(p.replace(/\\s+/g, ''))) return raw;
+                    }
+                }
+            }
+            const body = document.body?.innerText || '';
+            for (const p of patterns) {
+                if (body.includes(p)) return p;
+            }
+            return '';
+            """
+        )
+        return str(msg or "").strip()
+    except Exception:
+        body = _category_page_body_text(page)
+        for pattern in _BRANCH_C_COVER_UPLOAD_ERROR_PATTERNS:
+            if pattern in body:
+                return pattern
+        return ""
+
+
+def _raise_if_branch_c_cover_upload_rejected(
+    page: DpPage,
+    *,
+    account_id: str = "",
+    label: str = "",
+) -> None:
+    platform_message = _read_branch_c_cover_upload_error(page)
+    if not platform_message:
+        return
+    prefix = f"[{account_id}] [{label}] " if account_id and label else ""
+    print(
+        f"{prefix}分支 C：拼多多主图校验失败：{platform_message}",
+        flush=True,
+    )
+    raise BranchCCoverImageRejected(
+        f"{prefix}分支 C 主图上传失败：{platform_message}",
+        platform_message=platform_message,
+    )
+
+
 def _reveal_branch_c_carousel_section(page: DpPage) -> None:
     for sel in (
         "css:.goodsCarousel_btns__22KMn",
@@ -3022,6 +3113,9 @@ def _upload_branch_c_cover_files(
         return False
     for sec in range(wait_seconds):
         time.sleep(1)
+        _raise_if_branch_c_cover_upload_rejected(
+            page, account_id=account_id, label=label
+        )
         current, total = _branch_c_carousel_upload_count(page)
         if current > 0:
             print(
@@ -3035,6 +3129,9 @@ def _upload_branch_c_cover_files(
                 flush=True,
             )
     current, total = _branch_c_carousel_upload_count(page)
+    _raise_if_branch_c_cover_upload_rejected(
+        page, account_id=account_id, label=label
+    )
     print(
         f"[{account_id}] [{label}] 分支 C：主图上传未完成（{current}/{total}）",
         flush=True,
@@ -3082,14 +3179,17 @@ def _ensure_branch_c_covers_on_image_tab(
             time.sleep(1.5)
             continue
 
-        if _upload_branch_c_cover_files(
-            page,
-            cover_input,
-            covers,
-            account_id=account_id,
-            label=label,
-        ):
-            return True
+        try:
+            if _upload_branch_c_cover_files(
+                page,
+                cover_input,
+                covers,
+                account_id=account_id,
+                label=label,
+            ):
+                return True
+        except BranchCCoverImageRejected:
+            raise
         _click_branch_c_upload_placeholder(page, account_id=account_id, label=label)
         time.sleep(1)
 
@@ -3333,14 +3433,30 @@ def upload_one_listing(
     print(f"[{account_id}] [{label}] 路由判定：分支 {ui_type}")
 
     if ui_type == "C":
-        listing_info["title"] = _upload_category_branch_c_covers(
-            page,
-            account_id,
-            product_info,
-            listing_info,
-            covers,
-            label=label,
-        )
+        try:
+            listing_info["title"] = _upload_category_branch_c_covers(
+                page,
+                account_id,
+                product_info,
+                listing_info,
+                covers,
+                label=label,
+            )
+        except BranchCCoverImageRejected as exc:
+            _clear_beforeunload(page)
+            platform_msg = str(exc.platform_message or exc).strip()
+            return _finish_listing(
+                run_id,
+                account_id,
+                unit,
+                status="failed",
+                reason=ListingErrorCode.CAROUSEL_IMAGE_DIMENSION_REJECTED,
+                error=platform_msg or "主图尺寸不符合要求",
+                retryable=False,
+                legacy_status="failed",
+                phase="upload",
+                step="branch_c_cover_upload",
+            )
         manual_category = _category_page_needs_manual_selection(page)
         category_mode = _resolve_category_page_mode(
             page, ui_type, manual_category=manual_category

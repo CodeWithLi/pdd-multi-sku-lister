@@ -101,7 +101,7 @@ def check_merchant_code_already_on_sale(
             _click_goods_search,
             _fill_goods_merchant_code_filter,
             _open_goods_list,
-            _parse_goods_list_matches,
+            _parse_goods_list_matches_by_merchant_code,
             _reset_goods_list_filters,
             _set_goods_filter,
         )
@@ -116,7 +116,7 @@ def check_merchant_code_already_on_sale(
         if not filled:
             return {"checked": False, "listed": False, "error": "无法填写商品编码搜索框"}
         _click_goods_search(page)
-        matches = _parse_goods_list_matches(page, code, "")
+        matches = _parse_goods_list_matches_by_merchant_code(page, code)
         if not matches:
             return {"checked": True, "listed": False, "matches": 0}
         selected = matches[0]

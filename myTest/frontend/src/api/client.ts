@@ -28,6 +28,8 @@ import type {
   PddFailureCycleRelistWatchUpdate,
   PddFailureCycleRelistDismissBlockerResult,
   FailureSequentialJobListResponse,
+  FailureSequentialResetStuckResponse,
+  FailureSequentialStuckListResponse,
   PddFailureCycleRelistCandidateListResponse,
   PddFailureCycleRelistPollResponse,
   PddFailureCycleRelistPollLogListResponse,
@@ -890,6 +892,22 @@ export const api = {
       })
       .then((r) => r.data),
 
+  pddFailureSequentialStuckJobs: (params?: { limit?: number }) =>
+    http
+      .get<FailureSequentialStuckListResponse>('/pdd-failure-logs/cycle-relist/sequential/stuck', {
+        params,
+      })
+      .then((r) => r.data),
+
+  resetPddFailureSequentialStuckJobs: (params?: { limit?: number }) =>
+    http
+      .post<FailureSequentialResetStuckResponse>(
+        '/pdd-failure-logs/cycle-relist/sequential/reset-stuck',
+        null,
+        { params },
+      )
+      .then((r) => r.data),
+
   pollPddFailureCycleRelist: () =>
     http
       .post<PddFailureCycleRelistPollResponse>('/pdd-failure-logs/cycle-relist/poll')
@@ -954,6 +972,7 @@ export const api = {
     listed_date?: string
     account_id?: string
     limit?: number
+    active_only?: boolean
   }) =>
     http
       .get<DailyListingRecordListResponse>('/daily-listings', { params })

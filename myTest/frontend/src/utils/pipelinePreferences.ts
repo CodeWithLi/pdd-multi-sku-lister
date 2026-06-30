@@ -7,6 +7,7 @@ const LISTING_BATCH_INTERVAL_KEY = 'pdd_agent.pipeline.listing_batch_interval_mi
 const LISTING_PER_BATCH_LIMITED_TIME_KEY = 'pdd_agent.pipeline.listing_per_batch_limited_time_enabled'
 const LISTING_PER_BATCH_CAMPAIGN_KEY = 'pdd_agent.pipeline.listing_per_batch_campaign_enabled'
 const DELIST_SPEC_CODE_SEARCH_KEY = 'pdd_agent.pipeline.delist_spec_code_search_enabled'
+const ACTIVITY_LIMITED_TIME_SUCCESS_ONLY_KEY = 'pdd_agent.pipeline.activity_limited_time_success_only'
 const MINIO_MATERIAL_REFRESH_PAUSED_KEY = 'pdd_agent.minio_material_refresh_paused'
 
 const VALID_RELIST_STRATEGIES = new Set<RelistStrategy>([
@@ -133,6 +134,22 @@ export function loadDelistSpecCodeSearchEnabled(): boolean {
 export function saveDelistSpecCodeSearchEnabled(enabled: boolean): void {
   try {
     localStorage.setItem(DELIST_SPEC_CODE_SEARCH_KEY, enabled ? '1' : '0')
+  } catch {
+    // ignore
+  }
+}
+
+export function loadActivityLimitedTimeSuccessOnly(): boolean {
+  try {
+    return localStorage.getItem(ACTIVITY_LIMITED_TIME_SUCCESS_ONLY_KEY) === '1'
+  } catch {
+    return false
+  }
+}
+
+export function saveActivityLimitedTimeSuccessOnly(enabled: boolean): void {
+  try {
+    localStorage.setItem(ACTIVITY_LIMITED_TIME_SUCCESS_ONLY_KEY, enabled ? '1' : '0')
   } catch {
     // ignore
   }

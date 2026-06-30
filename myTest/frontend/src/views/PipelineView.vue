@@ -19,6 +19,7 @@ import {
   loadListingPerBatchLimitedTimeEnabled,
   loadListingPerBatchCampaignEnabled,
   loadDelistSpecCodeSearchEnabled,
+  loadActivityLimitedTimeSuccessOnly,
   loadPipelineRelistStrategy,
   saveListingBatchIntervalMinutes,
   saveListingBatchSetCount,
@@ -26,6 +27,7 @@ import {
   saveListingPerBatchLimitedTimeEnabled,
   saveListingPerBatchCampaignEnabled,
   saveDelistSpecCodeSearchEnabled,
+  saveActivityLimitedTimeSuccessOnly,
   savePipelineRelistStrategy,
 } from '@/utils/pipelinePreferences'
 import {
@@ -82,6 +84,7 @@ const listingBatchIntervalMinutes = ref(loadListingBatchIntervalMinutes())
 const listingPerBatchLimitedTimeEnabled = ref(loadListingPerBatchLimitedTimeEnabled())
 const listingPerBatchCampaignEnabled = ref(loadListingPerBatchCampaignEnabled())
 const delistSpecCodeSearchEnabled = ref(loadDelistSpecCodeSearchEnabled())
+const activityLimitedTimeSuccessOnly = ref(loadActivityLimitedTimeSuccessOnly())
 const excelFallbackEnabled = ref(false)
 const excelFallbackSaving = ref(false)
 const logSpecSkuRowsEnabled = ref(false)
@@ -937,6 +940,7 @@ async function startPipeline() {
         listing_per_batch_campaign_enabled: listingPerBatchCampaignEnabled.value,
         store_sequential_enabled: storeSequentialEnabled.value,
         delist_spec_code_search_enabled: delistSpecCodeSearchEnabled.value,
+        activity_limited_time_success_only: activityLimitedTimeSuccessOnly.value,
       })
       success.value = `批量整合链路已提交：${result.total} 家店铺${
         result.store_sequential_enabled
@@ -978,6 +982,7 @@ async function startPipeline() {
         listing_per_batch_limited_time_enabled: listingPerBatchLimitedTimeEnabled.value,
         listing_per_batch_campaign_enabled: listingPerBatchCampaignEnabled.value,
         delist_spec_code_search_enabled: delistSpecCodeSearchEnabled.value,
+        activity_limited_time_success_only: activityLimitedTimeSuccessOnly.value,
       })
       pipelinePage.value = 1
       activePipeline.value = result
@@ -1071,6 +1076,13 @@ watch(listingPerBatchCampaignEnabled, (value) => {
 
 watch(delistSpecCodeSearchEnabled, (value) => {
   saveDelistSpecCodeSearchEnabled(value)
+})
+
+watch(activityLimitedTimeSuccessOnly, (value) => {
+  saveActivityLimitedTimeSuccessOnly(value)
+  if (value) {
+    continueAfterLimitedTimeFailure.value = false
+  }
 })
 
 watch(resolvedListingSelectors, () => {
@@ -1558,7 +1570,18 @@ onUnmounted(() => {
                   </div>
                   <div class="switch-row">
                     <span class="switch-label">限时失败仍继续</span>
-                    <el-switch v-model="continueAfterLimitedTimeFailure" />
+                    <el-switch
+                      v-model="continueAfterLimitedTimeFailure"
+                      :disabled="activityLimitedTimeSuccessOnly"
+                    />
+                  </div>
+                  <div class="switch-row">
+                    <span class="switch-label">仅限时成功报活动</span>
+                    <el-switch v-model="activityLimitedTimeSuccessOnly" />
+                  </div>
+                  <div v-if="activityLimitedTimeSuccessOnly" class="form-tip option-tip">
+                    开启后：活动/推广只使用限时限量购提交成功的商品 ID；限时整单失败但无成功商品时不报活动。
+                    与「限时失败仍继续（全量 ID）」互斥。
                   </div>
                   <div class="switch-row">
                     <span class="switch-label">活动失败仍继续</span>

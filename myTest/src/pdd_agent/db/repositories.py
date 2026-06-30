@@ -920,6 +920,12 @@ def update_published_product_status(mapping_id: str, status: str) -> PublishedPr
             return None
         row.status = status
         if str(status or "").strip() == "delisted":
+            mark_daily_listing_records_delisted(
+                account_id=row.account_id,
+                pdd_product_id=row.pdd_product_id,
+                product_code=row.product_code,
+                image_set=row.image_set,
+            )
             listed_id = _listed_folder_record_id(
                 row.account_id,
                 build_folder_selector(
@@ -969,6 +975,12 @@ def delete_published_product(mapping_id: str) -> bool:
         row = session.get(PublishedProductORM, mapping_id)
         if not row:
             return False
+        mark_daily_listing_records_delisted(
+            account_id=row.account_id,
+            pdd_product_id=row.pdd_product_id,
+            product_code=row.product_code,
+            image_set=row.image_set,
+        )
         listed_id = _listed_folder_record_id(
             row.account_id,
             build_folder_selector(
@@ -1998,7 +2010,9 @@ def create_daily_listing_record(
             source_run_id=source_run_id,
             source_kind=str(source_kind or "listing").strip() or "listing",
             pipeline_id=str(pipeline_id or "").strip(),
+            status="active",
             listed_at=now,
+            delisted_at=None,
             created_at=datetime.now(),
         )
         session.add(row)
@@ -2008,11 +2022,47 @@ def create_daily_listing_record(
         return row
 
 
+def mark_daily_listing_records_delisted(
+    *,
+    account_id: str,
+    pdd_product_id: str = "",
+    product_code: str = "",
+    image_set: str = "",
+) -> int:
+    """逻辑删除每日上架记录（商品下架或重新上架预备时调用）。"""
+    if not is_database_available():
+        return 0
+    account_id = str(account_id or "").strip()
+    pdd_product_id = str(pdd_product_id or "").strip()
+    product_code = str(product_code or "").strip()
+    image_set = str(image_set or "").strip()
+    if not account_id or (not pdd_product_id and not product_code):
+        return 0
+    now = datetime.now()
+    with session_scope() as session:
+        query = session.query(DailyListingRecordORM).filter(
+            DailyListingRecordORM.account_id == account_id,
+            DailyListingRecordORM.status == "active",
+        )
+        if pdd_product_id:
+            query = query.filter(DailyListingRecordORM.pdd_product_id == pdd_product_id)
+        else:
+            query = query.filter(DailyListingRecordORM.product_code == product_code)
+            if image_set:
+                query = query.filter(DailyListingRecordORM.image_set == image_set)
+        rows = query.all()
+        for row in rows:
+            row.status = "delisted"
+            row.delisted_at = now
+        return len(rows)
+
+
 def list_daily_listing_records(
     *,
     account_id: str = "",
     listed_date: date | None = None,
     limit: int = 200,
+    active_only: bool = False,
 ) -> list[DailyListingRecordORM]:
     if not is_database_available():
         return []
@@ -2026,6 +2076,8 @@ def list_daily_listing_records(
         )
         if account_id:
             query = query.filter(DailyListingRecordORM.account_id == account_id.strip())
+        if active_only:
+            query = query.filter(DailyListingRecordORM.status == "active")
         rows = (
             query.order_by(
                 DailyListingRecordORM.listed_at.desc(),
@@ -2043,6 +2095,7 @@ def count_daily_listing_records(
     *,
     account_id: str = "",
     listed_date: date | None = None,
+    active_only: bool = False,
 ) -> int:
     if not is_database_available():
         return 0
@@ -2055,6 +2108,8 @@ def count_daily_listing_records(
         )
         if account_id:
             query = query.filter(DailyListingRecordORM.account_id == account_id.strip())
+        if active_only:
+            query = query.filter(DailyListingRecordORM.status == "active")
         return int(query.scalar() or 0)
 
 
@@ -2062,7 +2117,7 @@ def summarize_daily_listing_records(
     *,
     listed_date: date | None = None,
 ) -> list[dict[str, str | int]]:
-    """按店铺汇总指定日期的上架数量。"""
+    """按店铺汇总指定日期的上架数量（含总计/仍在上架/已下架）。"""
     if not is_database_available():
         return []
     target = listed_date or datetime.now().date()
@@ -2073,6 +2128,7 @@ def summarize_daily_listing_records(
                 DailyListingRecordORM.account_id,
                 DailyListingRecordORM.shop_display_name,
                 func.count(DailyListingRecordORM.record_id),
+                func.sum(case((DailyListingRecordORM.status == "active", 1), else_=0)),
             )
             .filter(
                 DailyListingRecordORM.listed_at >= start,
@@ -2090,8 +2146,10 @@ def summarize_daily_listing_records(
                 "account_id": str(account_id or ""),
                 "shop_display_name": str(shop_name or "").strip(),
                 "count": int(count or 0),
+                "active_count": int(active_count or 0),
+                "delisted_count": int((count or 0) - (active_count or 0)),
             }
-            for account_id, shop_name, count in rows
+            for account_id, shop_name, count, active_count in rows
         ]
 
 

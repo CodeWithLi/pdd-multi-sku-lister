@@ -396,7 +396,52 @@ def maybe_start_per_batch_campaign_after_limited_time(
     if current_lt_run_id != str(run_id or "").strip():
         return False
 
-    if not success and not _pipeline_continue_after_limited_time_failure(row):
+    from pdd_agent.api.services.pipeline_activity_limited_time_success import (
+        filter_products_for_per_batch_campaign_after_limited_time,
+        is_activity_limited_time_success_only_row,
+    )
+
+    pdd_ids = list(row.pdd_product_ids or [])
+    mapping_ids = list(row.mapping_ids or [])
+    if is_activity_limited_time_success_only_row(row):
+        pdd_ids, mapping_ids, should_continue, block_reason = (
+            filter_products_for_per_batch_campaign_after_limited_time(
+                row,
+                run_id=run_id,
+                success=success,
+                error=error,
+                pdd_ids=pdd_ids,
+                mapping_ids=mapping_ids,
+            )
+        )
+        if not should_continue:
+            update_integrated_pipeline(
+                row.pipeline_id,
+                status="failed",
+                current_step="limited_time_failed",
+                error=block_reason or error or "限时限量购无成功商品",
+            )
+            return True
+        from pdd_agent.api.services.pipeline_activity_limited_time_success import (
+            LimitedTimeSuccessProducts,
+            build_limited_time_success_meta_patch,
+        )
+
+        update_integrated_pipeline(
+            row.pipeline_id,
+            pdd_product_ids=pdd_ids,
+            mapping_ids=mapping_ids,
+            meta_patch=build_limited_time_success_meta_patch(
+                LimitedTimeSuccessProducts(
+                    pdd_product_ids=pdd_ids,
+                    mapping_ids=mapping_ids,
+                    source="limited_time_success",
+                    detail=block_reason,
+                )
+            ),
+        )
+        row = get_integrated_pipeline(row.pipeline_id) or row
+    elif not success and not _pipeline_continue_after_limited_time_failure(row):
         return False
 
     lt_state = dict((row.meta or {}).get("listing_per_batch_limited_time") or {})
@@ -407,8 +452,6 @@ def maybe_start_per_batch_campaign_after_limited_time(
     if state.get("enabled") and state.get("phase") in {"campaign", "traffic"}:
         return False
 
-    pdd_ids = list(row.pdd_product_ids or [])
-    mapping_ids = list(row.mapping_ids or [])
     throttle = _throttle_state(row)
     batch_index = int(throttle.get("batch_index") or 0)
     pending = dict(lt_state.get("pending") or {})

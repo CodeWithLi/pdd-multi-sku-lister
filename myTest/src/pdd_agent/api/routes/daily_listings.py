@@ -48,7 +48,9 @@ def _row_out(row) -> DailyListingRecordOut:
         source_run_id=row.source_run_id or "",
         source_kind=row.source_kind or "listing",
         pipeline_id=row.pipeline_id or "",
+        status=str(row.status or "active"),
         listed_at=row.listed_at,
+        delisted_at=row.delisted_at,
         created_at=row.created_at,
     )
 
@@ -58,11 +60,14 @@ def list_daily_listings(
     account_id: str = "",
     listed_date: str = "",
     limit: int = 200,
+    active_only: bool = False,
 ):
     if not is_database_available():
         return DailyListingRecordListResponse(
             listed_date=datetime.now().date(),
             total=0,
+            active_total=0,
+            delisted_total=0,
             items=[],
         )
     account_id = str(account_id or "").strip()
@@ -73,11 +78,19 @@ def list_daily_listings(
         account_id=account_id,
         listed_date=target,
         limit=limit,
+        active_only=active_only,
     )
     total = count_daily_listing_records(account_id=account_id, listed_date=target)
+    active_total = count_daily_listing_records(
+        account_id=account_id,
+        listed_date=target,
+        active_only=True,
+    )
     return DailyListingRecordListResponse(
         listed_date=target,
         total=total,
+        active_total=active_total,
+        delisted_total=max(0, total - active_total),
         items=[_row_out(row) for row in rows],
     )
 
@@ -86,11 +99,20 @@ def list_daily_listings(
 def summarize_daily_listings(listed_date: str = ""):
     target = _parse_listed_date(listed_date)
     if not is_database_available():
-        return DailyListingSummaryResponse(listed_date=target, total=0, by_shop=[])
+        return DailyListingSummaryResponse(
+            listed_date=target,
+            total=0,
+            active_total=0,
+            delisted_total=0,
+            by_shop=[],
+        )
     by_shop = summarize_daily_listing_records(listed_date=target)
     total = count_daily_listing_records(listed_date=target)
+    active_total = count_daily_listing_records(listed_date=target, active_only=True)
     return DailyListingSummaryResponse(
         listed_date=target,
         total=total,
+        active_total=active_total,
+        delisted_total=max(0, total - active_total),
         by_shop=[DailyListingShopSummary(**item) for item in by_shop],
     )

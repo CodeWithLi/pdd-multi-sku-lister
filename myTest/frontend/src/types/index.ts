@@ -562,6 +562,34 @@ export interface FailureSequentialJobListResponse {
   items: FailureSequentialJob[]
 }
 
+export interface FailureSequentialStuckStage {
+  stage: string
+  label: string
+  run_id: string
+  reason: string
+}
+
+export interface FailureSequentialStuckJob {
+  job_id: string
+  batch_id: string
+  merchant_code: string
+  account_name: string
+  updated_at: string
+  stuck_stages: FailureSequentialStuckStage[]
+}
+
+export interface FailureSequentialStuckListResponse {
+  ok: boolean
+  total: number
+  items: FailureSequentialStuckJob[]
+}
+
+export interface FailureSequentialResetStuckResponse {
+  ok: boolean
+  reset_count: number
+  items: FailureSequentialStuckJob[]
+}
+
 export interface PddFailureCycleRelistTriggerResult {
   ok: boolean
   skipped?: boolean
@@ -693,7 +721,9 @@ export interface DailyListingRecord {
   source_run_id: string
   source_kind: string
   pipeline_id: string
+  status: string
   listed_at: string
+  delisted_at: string | null
   created_at: string | null
 }
 
@@ -701,17 +731,23 @@ export interface DailyListingShopSummary {
   account_id: string
   shop_display_name: string
   count: number
+  active_count: number
+  delisted_count: number
 }
 
 export interface DailyListingSummaryResponse {
   listed_date: string
   total: number
+  active_total: number
+  delisted_total: number
   by_shop: DailyListingShopSummary[]
 }
 
 export interface DailyListingRecordListResponse {
   listed_date: string
   total: number
+  active_total: number
+  delisted_total: number
   items: DailyListingRecord[]
 }
 
@@ -880,8 +916,11 @@ export interface IntegratedPipeline {
   auto_limited_time_setup?: boolean
   continue_after_limited_time_failure?: boolean
   continue_after_activity_failure?: boolean
+  activity_limited_time_success_only?: boolean
   limited_time_outcome?: string
   limited_time_skip_reason?: string
+  activity_pdd_product_ids?: string[]
+  limited_time_success_detail?: string
   activity_delay_hours: number
   demo_mode: boolean
   slot_alignment_test?: boolean
@@ -945,6 +984,7 @@ export interface IntegratedPipelineStartPayload {
   auto_limited_time_setup?: boolean
   continue_after_limited_time_failure?: boolean
   continue_after_activity_failure?: boolean
+  activity_limited_time_success_only?: boolean
   activity_delay_hours?: number
   demo_mode?: boolean
   platform_listing_code?: string
@@ -972,6 +1012,7 @@ export interface IntegratedPipelineBatchStartPayload {
   auto_limited_time_setup?: boolean
   continue_after_limited_time_failure?: boolean
   continue_after_activity_failure?: boolean
+  activity_limited_time_success_only?: boolean
   activity_delay_hours?: number
   demo_mode?: boolean
   platform_listing_code?: string
@@ -991,6 +1032,7 @@ export interface IntegratedPipelineBatchStartPayload {
   listing_per_batch_campaign_enabled?: boolean
   store_sequential_enabled?: boolean
   delist_spec_code_search_enabled?: boolean
+  activity_limited_time_success_only?: boolean
 }
 
 export interface IntegratedPipelineBatchRunItem {

@@ -305,6 +305,7 @@ class DailyListingRecordORM(Base):
     __table_args__ = (
         Index("ix_daily_listing_records_listed_at_account", "listed_at", "account_id"),
         Index("ix_daily_listing_records_run_product", "source_run_id", "pdd_product_id"),
+        Index("ix_daily_listing_records_status", "status"),
     )
 
     record_id: Mapped[str] = mapped_column(String(64), primary_key=True)
@@ -320,7 +321,9 @@ class DailyListingRecordORM(Base):
     source_run_id: Mapped[str] = mapped_column(String(64), index=True, default="", nullable=False)
     source_kind: Mapped[str] = mapped_column(String(32), index=True, default="listing", nullable=False)
     pipeline_id: Mapped[str] = mapped_column(String(64), index=True, default="", nullable=False)
+    status: Mapped[str] = mapped_column(String(32), default="active", nullable=False)
     listed_at: Mapped[datetime] = mapped_column(DateTime, index=True, nullable=False)
+    delisted_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime, server_default=func.now(), nullable=False
     )

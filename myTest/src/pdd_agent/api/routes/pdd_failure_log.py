@@ -12,6 +12,10 @@ from pdd_agent.api.schemas.pdd_failure_log import (
     PddFailureLogWorkflowOut,
 )
 from pdd_agent.api.schemas.pdd_failure_log_watch import (
+    FailureSequentialResetStuckResponse,
+    FailureSequentialStuckJobOut,
+    FailureSequentialStuckListResponse,
+    FailureSequentialStuckStageOut,
     PddFailureCycleRelistActionOut,
     PddFailureCycleRelistCandidateListResponse,
     PddFailureCycleRelistCandidateOut,
@@ -43,6 +47,7 @@ from pdd_agent.failure_sequential.orchestrator import (
     is_batch_active,
     tick_once,
 )
+from pdd_agent.failure_sequential.stuck import list_stuck_jobs, reset_stuck_jobs
 from pdd_agent.failure_sequential.repository import list_recent_jobs
 from pdd_agent.failure_sequential.scheduler import get_failure_sequential_scheduler
 from pdd_agent.db.repositories import (
@@ -225,6 +230,23 @@ def _watch_out() -> PddFailureCycleRelistWatchOut:
     )
 
 
+def _stuck_job_to_out(item) -> FailureSequentialStuckJobOut:
+    data = item.to_dict() if hasattr(item, "to_dict") else dict(item)
+    return FailureSequentialStuckJobOut(
+        job_id=str(data.get("job_id") or ""),
+        batch_id=str(data.get("batch_id") or ""),
+        merchant_code=str(data.get("merchant_code") or ""),
+        account_name=str(data.get("account_name") or ""),
+        updated_at=str(data.get("updated_at") or ""),
+        stuck_stages=[
+            FailureSequentialStuckStageOut(**stage)
+            if isinstance(stage, dict)
+            else stage
+            for stage in (data.get("stuck_stages") or [])
+        ],
+    )
+
+
 def _job_to_out(row) -> FailureSequentialJobOut:
     updated = ""
     if getattr(row, "updated_at", None):
@@ -347,6 +369,26 @@ def list_sequential_jobs(limit: int = Query(100, ge=1, le=500)):
 def manual_sequential_tick():
     summary = tick_once()
     return FailureSequentialTickResponse(ok=bool(summary.get("ok", True)), summary=summary)
+
+
+@router.get("/cycle-relist/sequential/stuck", response_model=FailureSequentialStuckListResponse)
+def list_sequential_stuck_jobs(limit: int = Query(100, ge=1, le=500)):
+    items = list_stuck_jobs(limit=limit)
+    return FailureSequentialStuckListResponse(
+        ok=True,
+        total=len(items),
+        items=[_stuck_job_to_out(item) for item in items],
+    )
+
+
+@router.post("/cycle-relist/sequential/reset-stuck", response_model=FailureSequentialResetStuckResponse)
+def reset_sequential_stuck_jobs(limit: int = Query(100, ge=1, le=500)):
+    items = reset_stuck_jobs(limit=limit)
+    return FailureSequentialResetStuckResponse(
+        ok=True,
+        reset_count=len(items),
+        items=[_stuck_job_to_out(item) for item in items],
+    )
 
 
 @router.post("/cycle-relist/poll", response_model=PddFailureCycleRelistPollResponse)

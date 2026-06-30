@@ -123,6 +123,105 @@ def extract_merchant_code_from_row_text(text: str) -> str:
     return ""
 
 
+def is_truncated_merchant_code(code: str) -> bool:
+    """列表单元格省略展示时编码常以 ... / … 结尾。"""
+    text = str(code or "").strip()
+    if not text:
+        return False
+    return text.endswith("...") or text.endswith("…") or text.endswith("...")
+
+
+def _truncated_merchant_prefix(code: str) -> str:
+    return re.sub(r"[.…]+$", "", str(code or "").strip())
+
+
+def read_merchant_code_from_row_hover(row: Any) -> str:
+    """悬停商品编码单元格，从 tooltip / title 读取完整编码。"""
+    try:
+        loc = getattr(row, "_loc", None)
+        if loc is None:
+            return ""
+        hover_target = None
+        for factory in (
+            lambda: loc.get_by_text("商品编码", exact=False),
+            lambda: loc.locator("text=商品编码"),
+        ):
+            try:
+                cand = factory()
+                if cand.count() > 0:
+                    hover_target = cand.first
+                    break
+            except Exception:
+                continue
+        if hover_target is None:
+            return ""
+
+        hover_target.scroll_into_view_if_needed(timeout=2000)
+        hover_target.hover(timeout=3000)
+        time.sleep(0.35)
+
+        page = getattr(row, "_page", None)
+        if page is not None:
+            tooltip_roots = page.locator(
+                '[role="tooltip"], [class*="tooltip"], [class*="Tooltip"], '
+                '[class*="popover"], [class*="Popover"]'
+            )
+            for idx in range(min(tooltip_roots.count(), 10)):
+                tip = tooltip_roots.nth(idx)
+                try:
+                    if not tip.is_visible(timeout=200):
+                        continue
+                    tip_text = (tip.inner_text(timeout=500) or "").strip()
+                    code = extract_merchant_code_from_row_text(tip_text)
+                    if code and not is_truncated_merchant_code(code):
+                        return code
+                except Exception:
+                    continue
+
+        for target in (hover_target, hover_target.locator("xpath=..")):
+            try:
+                title = str(target.get_attribute("title") or "").strip()
+                code = extract_merchant_code_from_row_text(title)
+                if code and not is_truncated_merchant_code(code):
+                    return code
+            except Exception:
+                continue
+    except Exception:
+        pass
+    return ""
+
+
+def resolve_row_merchant_code(row: Any, row_text: str) -> str:
+    """解析行内商品编码；截断时尝试 hover 读取完整值。"""
+    row_code = extract_merchant_code_from_row_text(row_text)
+    if row_code and not is_truncated_merchant_code(row_code):
+        return row_code
+    if row is not None:
+        hovered = read_merchant_code_from_row_hover(row)
+        if hovered:
+            return hovered
+    return row_code
+
+
+def merchant_code_matches_query(row: Any, row_text: str, query_code: str) -> bool:
+    """判断列表行是否匹配目标商品编码（兼容 UI 截断）。"""
+    query = str(query_code or "").strip()
+    if not query:
+        return True
+    text = str(row_text or "")
+    if query in text:
+        return True
+    resolved = resolve_row_merchant_code(row, text)
+    if resolved == query:
+        return True
+    if is_truncated_merchant_code(resolved):
+        prefix = _truncated_merchant_prefix(resolved)
+        # 已通过筛选框精确搜索时，列表行省略展示可仅用前缀兜底
+        if len(prefix) >= 6 and query.startswith(prefix):
+            return True
+    return False
+
+
 def extract_total_inventory_from_row_text(text: str) -> int | None:
     """从商品列表行文本提取总库存（整数）。"""
     if not text:

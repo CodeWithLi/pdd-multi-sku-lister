@@ -12,6 +12,7 @@ import type {
 
 const loading = ref(false)
 const queryDate = ref(formatDate(new Date()))
+const showActiveOnly = ref(false)
 const listingSummary = ref<DailyListingSummaryResponse | null>(null)
 const listingRecords = ref<DailyListingRecord[]>([])
 const cycleSummary = ref<DailyCycleRelistSummaryResponse | null>(null)
@@ -30,7 +31,13 @@ const cycleSuccessRecords = computed(() =>
   listingRecords.value.filter((row) => {
     const sourceKind = String(row.source_kind || '').trim()
     const pipelineId = String(row.pipeline_id || '').trim()
-    return sourceKind === 'integrated_pipeline' && !!pipelineId && cyclePipelineIdSet.value.has(pipelineId)
+    const active = String(row.status || 'active') === 'active'
+    return (
+      active &&
+      sourceKind === 'integrated_pipeline' &&
+      !!pipelineId &&
+      cyclePipelineIdSet.value.has(pipelineId)
+    )
   }),
 )
 const cycleSuccessByShop = computed(() => {
@@ -71,6 +78,14 @@ function setYesterday() {
   void load()
 }
 
+function listingStatusLabel(status: string) {
+  return String(status || 'active') === 'active' ? '仍在上架' : '已下架'
+}
+
+function listingStatusType(status: string): 'success' | 'info' {
+  return String(status || 'active') === 'active' ? 'success' : 'info'
+}
+
 async function load() {
   const date = String(queryDate.value || '').trim()
   if (!date) {
@@ -81,7 +96,11 @@ async function load() {
   try {
     const [listingSum, listingRows, cycleSum, cycleRows] = await Promise.all([
       api.dailyListingSummary({ listed_date: date }),
-      api.dailyListingRecords({ listed_date: date, limit: 200 }),
+      api.dailyListingRecords({
+        listed_date: date,
+        limit: 200,
+        active_only: showActiveOnly.value,
+      }),
       api.dailyCycleRelistSummary({ triggered_date: date }),
       api.dailyCycleRelistRecords({ triggered_date: date, limit: 200 }),
     ])
@@ -134,7 +153,11 @@ onMounted(load)
       <template #header>
         <div class="card-header">
           <span>{{ dateLabel }} 上架成功</span>
-          <el-tag type="success">共 {{ listingSummary?.total ?? 0 }} 件</el-tag>
+          <div class="summary-tags">
+            <el-tag type="primary">当天总共 {{ listingSummary?.total ?? 0 }} 件</el-tag>
+            <el-tag type="success">仍在上架 {{ listingSummary?.active_total ?? 0 }} 件</el-tag>
+            <el-tag type="info">已下架 {{ listingSummary?.delisted_total ?? 0 }} 件</el-tag>
+          </div>
         </div>
       </template>
 
@@ -147,13 +170,22 @@ onMounted(load)
           :md="8"
           :lg="6"
         >
-          <el-statistic
-            :title="shop.shop_display_name || shop.account_id"
-            :value="shop.count"
-            suffix="件"
-          />
+          <div class="shop-stat-card">
+            <div class="shop-stat-title">{{ shop.shop_display_name || shop.account_id }}</div>
+            <div class="shop-stat-values">
+              <span>总共 {{ shop.count }} 件</span>
+              <span class="active">仍在上架 {{ shop.active_count }} 件</span>
+              <span class="delisted">已下架 {{ shop.delisted_count }} 件</span>
+            </div>
+          </div>
         </el-col>
       </el-row>
+
+      <div class="table-toolbar mb-12">
+        <el-checkbox v-model="showActiveOnly" @change="load">
+          仅显示仍在上架
+        </el-checkbox>
+      </div>
 
       <el-table
         :data="listingRecords"
@@ -162,7 +194,19 @@ onMounted(load)
         size="small"
         empty-text="该日暂无上架成功记录"
       >
+        <el-table-column label="状态" width="100">
+          <template #default="{ row }: { row: DailyListingRecord }">
+            <el-tag :type="listingStatusType(row.status)" size="small">
+              {{ listingStatusLabel(row.status) }}
+            </el-tag>
+          </template>
+        </el-table-column>
         <el-table-column prop="listed_at" label="上架时间" width="170" />
+        <el-table-column prop="delisted_at" label="下架时间" width="170">
+          <template #default="{ row }: { row: DailyListingRecord }">
+            {{ row.delisted_at || '—' }}
+          </template>
+        </el-table-column>
         <el-table-column prop="shop_display_name" label="店铺" width="120" show-overflow-tooltip />
         <el-table-column prop="pdd_product_id" label="商品 ID" width="130" show-overflow-tooltip />
         <el-table-column prop="product_code" label="货号" width="110" show-overflow-tooltip />
@@ -276,5 +320,41 @@ onMounted(load)
   align-items: center;
   justify-content: space-between;
   gap: 12px;
+  flex-wrap: wrap;
+}
+.summary-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.shop-stat-card {
+  border: 1px solid var(--el-border-color-light);
+  border-radius: 8px;
+  padding: 12px;
+  margin-bottom: 8px;
+  background: var(--el-fill-color-blank);
+}
+.shop-stat-title {
+  font-size: 14px;
+  font-weight: 600;
+  margin-bottom: 8px;
+}
+.shop-stat-values {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 13px;
+  color: var(--el-text-color-regular);
+}
+.shop-stat-values .active {
+  color: var(--el-color-success);
+}
+.shop-stat-values .delisted {
+  color: var(--el-text-color-secondary);
+}
+.table-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
 }
 </style>

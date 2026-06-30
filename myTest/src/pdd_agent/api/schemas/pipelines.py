@@ -25,6 +25,7 @@ class IntegratedPipelineStartRequest(BaseModel):
     auto_limited_time_setup: bool = True
     continue_after_limited_time_failure: bool = False
     continue_after_activity_failure: bool = False
+    activity_limited_time_success_only: bool = False
     activity_delay_hours: float = Field(default=24.0, ge=0)
     demo_mode: bool = False
     platform_listing_code: str = ""
@@ -64,6 +65,7 @@ class IntegratedPipelineBatchStartRequest(BaseModel):
     auto_limited_time_setup: bool = True
     continue_after_limited_time_failure: bool = False
     continue_after_activity_failure: bool = False
+    activity_limited_time_success_only: bool = False
     activity_delay_hours: float = Field(default=24.0, ge=0)
     demo_mode: bool = False
     platform_listing_code: str = ""
@@ -143,6 +145,7 @@ class IntegratedPipelineResponse(BaseModel):
     auto_limited_time_setup: bool = True
     continue_after_limited_time_failure: bool = False
     continue_after_activity_failure: bool = False
+    activity_limited_time_success_only: bool = False
     limited_time_outcome: str = ""
     limited_time_skip_reason: str = ""
     activity_delay_hours: float
@@ -162,6 +165,8 @@ class IntegratedPipelineResponse(BaseModel):
     campaign_skip_reason: str = ""
     listing_outcome: str = ""
     listing_skip_reason: str = ""
+    activity_pdd_product_ids: list[str] = Field(default_factory=list)
+    limited_time_success_detail: str = ""
     listing_unit_statuses: list[IntegratedPipelineListingUnitStatus] = Field(default_factory=list)
     campaign_results: list[IntegratedPipelineCampaignResult] = Field(default_factory=list)
     steps: list[IntegratedPipelineStepInfo] = []

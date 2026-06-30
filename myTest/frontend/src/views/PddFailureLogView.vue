@@ -13,6 +13,7 @@ import type {
   PddFailureLogListResponse,
   PddFailureLogRecord,
   FailureSequentialJob,
+  FailureSequentialStuckJob,
 } from '@/types'
 
 const loading = ref(false)
@@ -35,6 +36,9 @@ const dismissBlockerLoading = ref(false)
 const sequentialJobsLoading = ref(false)
 const sequentialJobs = ref<FailureSequentialJob[]>([])
 const sequentialBatchActive = ref(false)
+const stuckJobsLoading = ref(false)
+const resetStuckLoading = ref(false)
+const stuckJobs = ref<FailureSequentialStuckJob[]>([])
 let watchRefreshTimer: ReturnType<typeof setInterval> | null = null
 
 type ManualTriggerRow = Pick<
@@ -198,17 +202,67 @@ function stageStatusType(status: string) {
   return 'info'
 }
 
+async function loadStuckJobs() {
+  stuckJobsLoading.value = true
+  try {
+    const resp = await api.pddFailureSequentialStuckJobs({ limit: 100 })
+    stuckJobs.value = resp.items ?? []
+  } catch (e) {
+    ElMessage.error(e instanceof Error ? e.message : '加载卡死任务失败')
+  } finally {
+    stuckJobsLoading.value = false
+  }
+}
+
 async function loadSequentialJobs() {
   sequentialJobsLoading.value = true
   try {
     const resp = await api.pddFailureSequentialJobs({ limit: 100 })
     sequentialJobs.value = resp.items ?? []
     sequentialBatchActive.value = Boolean(resp.batch_active)
+    await loadStuckJobs()
   } catch (e) {
     ElMessage.error(e instanceof Error ? e.message : '加载分阶段任务失败')
   } finally {
     sequentialJobsLoading.value = false
   }
+}
+
+async function resetStuckSequentialJobs() {
+  if (!stuckJobs.value.length) {
+    ElMessage.info('当前没有卡死的运行中任务')
+    return
+  }
+  try {
+    await ElMessageBox.confirm(
+      `将把 ${stuckJobs.value.length} 条卡死任务重置为「待处理」，调度器会在下一轮继续执行。`,
+      '重置卡死任务',
+      {
+        type: 'warning',
+        confirmButtonText: '重置',
+        cancelButtonText: '取消',
+      },
+    )
+  } catch {
+    return
+  }
+  resetStuckLoading.value = true
+  try {
+    const resp = await api.resetPddFailureSequentialStuckJobs({ limit: 100 })
+    ElMessage.success(`已重置 ${resp.reset_count} 条卡死任务`)
+    await loadSequentialJobs()
+  } catch (e) {
+    ElMessage.error(e instanceof Error ? e.message : '重置卡死任务失败')
+  } finally {
+    resetStuckLoading.value = false
+  }
+}
+
+function stuckStageSummary(row: FailureSequentialStuckJob) {
+  return (row.stuck_stages ?? [])
+    .map((stage) => stage.label || stage.stage)
+    .filter(Boolean)
+    .join('、')
 }
 
 async function loadWatch() {
@@ -537,6 +591,30 @@ onUnmounted(() => {
 
       <template v-if="watchForm.sequential_staged_enabled">
         <el-divider content-position="left">分阶段任务进度</el-divider>
+        <div v-loading="stuckJobsLoading" class="stuck-reset-panel mb-12">
+          <el-button
+            type="warning"
+            :loading="resetStuckLoading"
+            :disabled="!stuckJobs.length"
+            @click="resetStuckSequentialJobs"
+          >
+            重置卡死的运行中任务
+          </el-button>
+          <div v-if="stuckJobs.length" class="stuck-reset-hint">
+            <p class="stuck-reset-count">
+              当前 {{ stuckJobs.length }} 条任务卡死（状态为运行中，但无活跃执行）：
+            </p>
+            <ul class="stuck-reset-list">
+              <li v-for="row in stuckJobs" :key="row.job_id">
+                <strong>{{ row.merchant_code || '—' }}</strong>
+                · {{ row.account_name || '—' }}
+                · 卡死阶段：{{ stuckStageSummary(row) || '—' }}
+                · 更新于 {{ row.updated_at || '—' }}
+              </li>
+            </ul>
+          </div>
+          <p v-else class="stuck-reset-empty">当前无卡死任务</p>
+        </div>
         <el-table
           v-loading="sequentialJobsLoading"
           :data="sequentialJobs"
@@ -857,6 +935,37 @@ onUnmounted(() => {
 
 .mb-12 {
   margin-bottom: 12px;
+}
+
+.stuck-reset-panel {
+  padding: 12px 14px;
+  border: 1px solid var(--el-border-color-light);
+  border-radius: 8px;
+  background: var(--el-fill-color-blank);
+}
+
+.stuck-reset-hint {
+  margin-top: 10px;
+}
+
+.stuck-reset-count {
+  margin: 0 0 8px;
+  color: var(--el-color-warning);
+  font-size: 13px;
+}
+
+.stuck-reset-list {
+  margin: 0;
+  padding-left: 18px;
+  color: var(--el-text-color-regular);
+  font-size: 13px;
+  line-height: 1.7;
+}
+
+.stuck-reset-empty {
+  margin: 8px 0 0;
+  color: var(--el-text-color-secondary);
+  font-size: 13px;
 }
 
 .card-header {

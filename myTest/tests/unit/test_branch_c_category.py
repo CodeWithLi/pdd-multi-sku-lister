@@ -262,3 +262,57 @@ def test_upload_category_branch_c_covers_applies_title_after_upload(monkeypatch)
         label="BD047A",
     )
     assert title == "AI标题"
+
+
+def test_read_branch_c_cover_upload_error_detects_dimension_message(monkeypatch):
+    page = MagicMock()
+    page.run_js.return_value = "尺寸不符合要求"
+    assert listing_upload._read_branch_c_cover_upload_error(page) == "尺寸不符合要求"
+
+
+def test_raise_if_branch_c_cover_upload_rejected_raises(monkeypatch):
+    page = MagicMock()
+    monkeypatch.setattr(
+        listing_upload,
+        "_read_branch_c_cover_upload_error",
+        lambda _page: "尺寸不符合要求",
+    )
+    try:
+        listing_upload._raise_if_branch_c_cover_upload_rejected(
+            page, account_id="store_A", label="BD047A"
+        )
+        raised = False
+    except listing_upload.BranchCCoverImageRejected as exc:
+        raised = True
+        assert exc.platform_message == "尺寸不符合要求"
+
+    assert raised
+
+
+def test_upload_branch_c_cover_files_stops_on_dimension_error(monkeypatch):
+    page = MagicMock()
+    cover_input = MagicMock()
+    monkeypatch.setattr(listing_upload, "time", MagicMock(sleep=lambda *_: None))
+    monkeypatch.setattr(
+        listing_upload,
+        "_raise_if_branch_c_cover_upload_rejected",
+        lambda *_a, **_k: (_ for _ in ()).throw(
+            listing_upload.BranchCCoverImageRejected("尺寸不符合要求", platform_message="尺寸不符合要求")
+        ),
+    )
+
+    try:
+        listing_upload._upload_branch_c_cover_files(
+            page,
+            cover_input,
+            ["/tmp/cover.jpg"],
+            account_id="store_A",
+            label="BD047A",
+            wait_seconds=2,
+        )
+        raised = False
+    except listing_upload.BranchCCoverImageRejected:
+        raised = True
+
+    assert raised
+    cover_input.input.assert_called_once()
