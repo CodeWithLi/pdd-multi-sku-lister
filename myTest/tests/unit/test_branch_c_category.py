@@ -188,3 +188,77 @@ def test_click_category_next_step_burst_skips_extra_when_advanced(monkeypatch):
 
     assert listing_upload._click_category_next_step_burst(page, account_id="store_A", label="BD050B") is True
     assert click_count["n"] == 1
+
+
+def test_branch_c_carousel_upload_count_parses_text(monkeypatch):
+    page = MagicMock()
+    page.run_js.return_value = [3, 10]
+    assert listing_upload._branch_c_carousel_upload_count(page) == (3, 10)
+
+
+def test_click_branch_c_publish_tab_success(monkeypatch):
+    page = MagicMock()
+    page.run_js.return_value = True
+    slept: list[float] = []
+    monkeypatch.setattr(listing_upload, "time", MagicMock(sleep=lambda s: slept.append(s)))
+
+    assert listing_upload._click_branch_c_publish_tab(
+        page, "以图发品", account_id="store_A", label="BD047A"
+    ) is True
+    assert slept
+
+
+def test_upload_category_branch_c_covers_raises_when_both_paths_fail(monkeypatch):
+    page = MagicMock()
+    monkeypatch.setattr(
+        listing_upload,
+        "_ensure_branch_c_covers_on_image_tab",
+        lambda *_a, **_k: False,
+    )
+    monkeypatch.setattr(
+        listing_upload,
+        "_branch_c_search_publish_and_select",
+        lambda *_a, **_k: False,
+    )
+
+    try:
+        listing_upload._upload_category_branch_c_covers(
+            page,
+            "store_A",
+            {"category_keyword": "笔袋"},
+            {"category_keyword": "笔袋", "title": "测试标题"},
+            ["/tmp/cover.jpg"],
+            label="BD047A",
+        )
+        raised = False
+    except RuntimeError as exc:
+        raised = True
+        assert "搜索发品" in str(exc)
+
+    assert raised
+
+
+def test_upload_category_branch_c_covers_applies_title_after_upload(monkeypatch):
+    page = MagicMock()
+    monkeypatch.setattr(
+        listing_upload,
+        "_ensure_branch_c_covers_on_image_tab",
+        lambda *_a, **_k: True,
+    )
+    monkeypatch.setattr(
+        listing_upload,
+        "apply_title_after_cover_upload",
+        lambda *_a, **_k: "AI标题",
+    )
+    monkeypatch.setattr(listing_upload, "time", MagicMock(sleep=lambda *_: None))
+    monkeypatch.setattr(listing_upload, "random", MagicMock(uniform=lambda *_: 1.0))
+
+    title = listing_upload._upload_category_branch_c_covers(
+        page,
+        "store_A",
+        {"title_mode": "page_ai"},
+        {"title": "fallback"},
+        ["/tmp/cover.jpg"],
+        label="BD047A",
+    )
+    assert title == "AI标题"

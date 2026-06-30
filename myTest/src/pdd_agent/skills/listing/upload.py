@@ -34,7 +34,7 @@ from pdd_agent.skills.listing.category_page_flow import (
 from pdd_agent.skills.listing.listing_publish_settings import apply_listing_publish_settings
 from pdd_agent.skills.listing.listing_spec_pipeline import apply_unit_listing_specs
 from pdd_agent.skills.listing.page_ai_title import apply_title_after_cover_upload
-from pdd_agent.skills.listing.spec_labels import ordered_style_names
+from pdd_agent.skills.listing.spec_labels import is_forbidden_spec_code_label, ordered_style_names
 from pdd_agent.skills.listing.title import resolve_listing_title
 from pdd_agent.skills.published.pdd_spec_format import listing_unit_sku_metadata
 
@@ -59,6 +59,17 @@ def _log_unit_spec_snapshot(account_id: str, unit: ListingUnit) -> None:
     label = unit.listing_label
     style_names = ordered_style_names(unit)
     size_names = list(unit.model_codes or [])
+    forbidden: list[str] = []
+    for sku in unit.skus or []:
+        if is_forbidden_spec_code_label(sku.style_name, style_code=sku.style_code):
+            forbidden.append(f"款式={sku.style_name}")
+        if is_forbidden_spec_code_label(sku.model_name, model_code=sku.model_code):
+            forbidden.append(f"尺寸={sku.model_name}")
+    if forbidden:
+        print(
+            f"[{account_id}] [{label}] [警告] 规格名仍含商品编码（禁止）：{', '.join(dict.fromkeys(forbidden))}",
+            flush=True,
+        )
     print(
         f"[{account_id}] [{label}] 规格快照：style_codes={list(unit.style_codes or [])} | "
         f"style_names={style_names} | model_codes={size_names}",
@@ -2380,21 +2391,437 @@ def _click_category_next_step_burst(
     return True
 
 
+def _click_branch_c_publish_tab(
+    page: DpPage,
+    tab_name: str,
+    *,
+    account_id: str = "",
+    label: str = "",
+) -> bool:
+    """点击分支 C 顶部「以图发品 / 搜索发品」标签。"""
+    target = str(tab_name or "").strip()
+    if not target:
+        return False
+    prefix = f"[{account_id}] [{label}] " if account_id and label else (
+        f"[{account_id}] " if account_id else ""
+    )
+    try:
+        clicked = page.run_js(
+            """
+            function isVisible(el) {
+                if (!el) return false;
+                const r = el.getBoundingClientRect();
+                const s = window.getComputedStyle(el);
+                return r.width > 2 && r.height > 2
+                    && s.display !== 'none' && s.visibility !== 'hidden';
+            }
+            const target = arguments[0];
+            for (const el of document.querySelectorAll('div, span, a, button, li, p')) {
+                const t = (el.innerText || el.textContent || '').trim();
+                if (t !== target || !isVisible(el)) continue;
+                el.click();
+                return true;
+            }
+            return false;
+            """,
+            target,
+        )
+        if clicked:
+            print(f"{prefix}分支 C：已切换到「{target}」", flush=True)
+            time.sleep(1.5)
+            return True
+    except Exception:
+        pass
+    tab_el = page.ele(f"text:{target}", timeout=2)
+    if tab_el:
+        try:
+            page.run_js("arguments[0].click();", tab_el)
+        except Exception:
+            tab_el.click()
+        print(f"{prefix}分支 C：已切换到「{target}」", flush=True)
+        time.sleep(1.5)
+        return True
+    print(f"{prefix}分支 C：未找到「{target}」标签", flush=True)
+    return False
+
+
+def _branch_c_carousel_upload_count(page: DpPage) -> tuple[int, int]:
+    """解析轮播图上传进度，如「上传图片 (2/10)」。"""
+    try:
+        result = page.run_js(
+            """
+            const body = document.body?.innerText || '';
+            const m = body.match(/上传图片\\s*[（(]\\s*(\\d+)\\s*\\/\\s*(\\d+)\\s*[）)]/);
+            if (m) return [parseInt(m[1], 10), parseInt(m[2], 10)];
+            let visible = 0;
+            for (const img of document.querySelectorAll(
+                '[class*="carousel"] img, [class*="Carousel"] img, [class*="uploadImg"] img'
+            )) {
+                const r = img.getBoundingClientRect();
+                if (r.width > 30 && r.height > 30) visible++;
+            }
+            return [visible, 10];
+            """
+        )
+        if isinstance(result, list) and len(result) >= 2:
+            return int(result[0]), int(result[1])
+    except Exception:
+        pass
+    return 0, 10
+
+
+def _find_branch_c_cover_input(page: DpPage):
+    for sel in (
+        'css:input[data-tracking-click-viewid="local_upload"]',
+        'css:input[type="file"][accept*="image"]',
+        'css:input[type="file"]:not([data-tracking-click-viewid="detail_img_localfile_upload"])',
+    ):
+        el = page.ele(sel, timeout=1)
+        if el:
+            return el
+    return None
+
+
+def _reveal_branch_c_carousel_section(page: DpPage) -> None:
+    for sel in (
+        "css:.goodsCarousel_btns__22KMn",
+        "css:[class*='goodsCarousel']",
+        "css:[class*='GoodsCarousel']",
+    ):
+        section_ele = page.ele(sel, timeout=0.5)
+        if section_ele:
+            try:
+                page.run_js('arguments[0].style.display = "flex";', section_ele)
+            except Exception:
+                pass
+
+
+def _click_branch_c_upload_placeholder(
+    page: DpPage,
+    *,
+    account_id: str = "",
+    label: str = "",
+) -> bool:
+    prefix = f"[{account_id}] [{label}] " if account_id and label else ""
+    try:
+        clicked = page.run_js(
+            """
+            function isVisible(el) {
+                if (!el) return false;
+                const r = el.getBoundingClientRect();
+                const s = window.getComputedStyle(el);
+                return r.width > 2 && r.height > 2
+                    && s.display !== 'none' && s.visibility !== 'hidden';
+            }
+            for (const el of document.querySelectorAll('div, span, button, label, a')) {
+                const t = (el.innerText || el.textContent || '').trim();
+                if (!t.includes('上传图片') || !isVisible(el)) continue;
+                el.click();
+                return true;
+            }
+            for (const el of document.querySelectorAll(
+                '[class*="upload"], [class*="Upload"], [class*="carousel"], [class*="Carousel"]'
+            )) {
+                if (!isVisible(el)) continue;
+                const t = (el.innerText || el.textContent || '').trim();
+                if (t.includes('+') || t.includes('上传')) {
+                    el.click();
+                    return true;
+                }
+            }
+            return false;
+            """
+        )
+        if clicked:
+            print(f"{prefix}分支 C：已点击上传占位区", flush=True)
+            time.sleep(0.8)
+            return True
+    except Exception:
+        pass
+    return False
+
+
+def _upload_branch_c_cover_files(
+    page: DpPage,
+    cover_input,
+    covers: list[str],
+    *,
+    account_id: str = "",
+    label: str = "",
+    wait_seconds: int = 18,
+) -> bool:
+    paths = [str(p) for p in covers if p]
+    if not paths:
+        print(f"[{account_id}] [{label}] 分支 C：无可用主图路径", flush=True)
+        return False
+    try:
+        page.run_js(
+            """
+            arguments[0].style.display = 'block';
+            arguments[0].style.visibility = 'visible';
+            arguments[0].style.opacity = '1';
+            arguments[0].style.width = '1px';
+            arguments[0].style.height = '1px';
+            """,
+            cover_input,
+        )
+    except Exception:
+        pass
+    try:
+        cover_input.input(paths if len(paths) > 1 else paths[0])
+    except Exception as exc:
+        print(
+            f"[{account_id}] [{label}] 分支 C：主图 input 上传异常：{exc}",
+            flush=True,
+        )
+        return False
+    for sec in range(wait_seconds):
+        time.sleep(1)
+        current, total = _branch_c_carousel_upload_count(page)
+        if current > 0:
+            print(
+                f"[{account_id}] [{label}] 分支 C：主图已上传 {current}/{total}",
+                flush=True,
+            )
+            return True
+        if sec in (4, 9, 14):
+            print(
+                f"[{account_id}] [{label}] 分支 C：等待主图上传完成… ({sec + 1}/{wait_seconds}s)",
+                flush=True,
+            )
+    current, total = _branch_c_carousel_upload_count(page)
+    print(
+        f"[{account_id}] [{label}] 分支 C：主图上传未完成（{current}/{total}）",
+        flush=True,
+    )
+    return False
+
+
+def _ensure_branch_c_covers_on_image_tab(
+    page: DpPage,
+    covers: list[str],
+    *,
+    account_id: str = "",
+    label: str = "",
+) -> bool:
+    if not _click_branch_c_publish_tab(
+        page, "以图发品", account_id=account_id, label=label
+    ):
+        print(
+            f"[{account_id}] [{label}] 分支 C：未能激活「以图发品」，仍尝试上传",
+            flush=True,
+        )
+    _reveal_branch_c_carousel_section(page)
+    time.sleep(1)
+
+    for attempt in range(1, 4):
+        current, total = _branch_c_carousel_upload_count(page)
+        if current > 0:
+            print(
+                f"[{account_id}] [{label}] 分支 C：主图已在页面上（{current}/{total}）",
+                flush=True,
+            )
+            return True
+
+        cover_input = _find_branch_c_cover_input(page)
+        if not cover_input:
+            _click_branch_c_upload_placeholder(
+                page, account_id=account_id, label=label
+            )
+            cover_input = _find_branch_c_cover_input(page)
+        if not cover_input:
+            print(
+                f"[{account_id}] [{label}] 分支 C：第 {attempt}/3 次未找到主图 input",
+                flush=True,
+            )
+            time.sleep(1.5)
+            continue
+
+        if _upload_branch_c_cover_files(
+            page,
+            cover_input,
+            covers,
+            account_id=account_id,
+            label=label,
+        ):
+            return True
+        _click_branch_c_upload_placeholder(page, account_id=account_id, label=label)
+        time.sleep(1)
+
+    return _branch_c_carousel_upload_count(page)[0] > 0
+
+
+def _branch_c_search_publish_and_select(
+    page: DpPage,
+    search_keyword: str,
+    *,
+    account_id: str = "",
+    label: str = "",
+) -> bool:
+    """以图发品上传失败时，切到「搜索发品」搜索并点选首条结果。"""
+    keyword = str(search_keyword or "笔袋").strip() or "笔袋"
+    if not _click_branch_c_publish_tab(
+        page, "搜索发品", account_id=account_id, label=label
+    ):
+        return False
+    time.sleep(1.5)
+
+    search_input = None
+    for sel in (
+        'css:input[placeholder*="搜索"]',
+        'css:input[placeholder*="商品"]',
+        'css:input[type="search"]',
+    ):
+        for inp in page.eles(sel) or []:
+            placeholder = (inp.attr("placeholder") or "").strip()
+            if "关键词搜索分类" in placeholder:
+                continue
+            search_input = inp
+            break
+        if search_input:
+            break
+
+    if not search_input:
+        try:
+            handle = page.run_js(
+                """
+                function isVisible(el) {
+                    if (!el) return false;
+                    const r = el.getBoundingClientRect();
+                    const s = window.getComputedStyle(el);
+                    return r.width > 2 && r.height > 2
+                        && s.display !== 'none' && s.visibility !== 'hidden';
+                }
+                for (const inp of document.querySelectorAll('input')) {
+                    const ph = (inp.getAttribute('placeholder') || '').trim();
+                    if (!ph || ph.includes('关键词搜索分类')) continue;
+                    if (!ph.includes('搜索') && !ph.includes('商品')) continue;
+                    if (!isVisible(inp)) continue;
+                    inp.focus();
+                    inp.click();
+                    return inp;
+                }
+                return null;
+                """
+            )
+            if handle:
+                search_input = handle
+        except Exception:
+            search_input = None
+
+    if not search_input:
+        print(
+            f"[{account_id}] [{label}] 分支 C：搜索发品页未找到搜索框",
+            flush=True,
+        )
+        return False
+
+    try:
+        search_input.click()
+    except Exception:
+        pass
+    time.sleep(0.4)
+    try:
+        search_input.input(keyword, clear=True)
+    except Exception as exc:
+        print(
+            f"[{account_id}] [{label}] 分支 C：搜索发品输入失败：{exc}",
+            flush=True,
+        )
+        return False
+    time.sleep(2.5)
+
+    first_cat = _find_first_category_search_result(page)
+    if first_cat:
+        try:
+            page.run_js("arguments[0].click();", first_cat)
+        except Exception:
+            first_cat.click()
+        print(
+            f"[{account_id}] [{label}] 分支 C：搜索发品已选分类：{keyword}",
+            flush=True,
+        )
+        time.sleep(1.5)
+        return True
+
+    try:
+        clicked = page.run_js(
+            """
+            function isVisible(el) {
+                if (!el) return false;
+                const r = el.getBoundingClientRect();
+                const s = window.getComputedStyle(el);
+                return r.width > 2 && r.height > 2
+                    && s.display !== 'none' && s.visibility !== 'hidden';
+            }
+            const skip = ['以图发品', '搜索发品', '上传图片', '下一步'];
+            const items = Array.from(document.querySelectorAll(
+                'li, div[class*="item"], div[class*="Item"], [class*="search"] li, [class*="result"]'
+            )).filter(el => {
+                const t = (el.innerText || el.textContent || '').trim();
+                if (t.length < 4 || !isVisible(el)) return false;
+                return !skip.some(s => t.includes(s));
+            });
+            if (!items.length) return false;
+            items[0].click();
+            return true;
+            """
+        )
+        if clicked:
+            print(
+                f"[{account_id}] [{label}] 分支 C：搜索发品已选首条结果：{keyword}",
+                flush=True,
+            )
+            time.sleep(1.5)
+            return True
+    except Exception:
+        pass
+
+    print(
+        f"[{account_id}] [{label}] 分支 C：搜索发品无可用结果：{keyword}",
+        flush=True,
+    )
+    return False
+
+
 def _upload_category_branch_c_covers(
     page: DpPage,
     account_id: str,
     product_info: dict[str, Any],
     listing_info: dict[str, Any],
     covers: list[str],
+    *,
+    label: str = "",
 ) -> str:
-    section_ele = page.ele("css:.goodsCarousel_btns__22KMn")
-    if section_ele:
-        page.run_js('arguments[0].style.display = "flex";', section_ele)
-    time.sleep(1)
-    cover_input = page.ele('css:input[data-tracking-click-viewid="local_upload"]')
-    if cover_input:
-        cover_input.input(covers)
-    time.sleep(random.uniform(1.5, 2.5))
+    uploaded = _ensure_branch_c_covers_on_image_tab(
+        page,
+        covers,
+        account_id=account_id,
+        label=label,
+    )
+    if not uploaded:
+        search_keyword = str(
+            listing_info.get("category_keyword")
+            or product_info.get("category_keyword")
+            or "笔袋"
+        ).strip()
+        print(
+            f"[{account_id}] [{label}] 分支 C：以图发品主图未上传，尝试「搜索发品」",
+            flush=True,
+        )
+        if not _branch_c_search_publish_and_select(
+            page,
+            search_keyword,
+            account_id=account_id,
+            label=label,
+        ):
+            raise RuntimeError(
+                f"[{account_id}] [{label}] 分支 C 主图上传失败，且搜索发品未选到类目"
+                if label
+                else f"[{account_id}] 分支 C 主图上传失败，且搜索发品未选到类目"
+            )
+
+    time.sleep(random.uniform(1.0, 2.0))
     title = apply_title_after_cover_upload(
         page, account_id, product_info, listing_info.get("title", "")
     )
@@ -2467,6 +2894,7 @@ def upload_one_listing(
             product_info,
             listing_info,
             covers,
+            label=label,
         )
         manual_category = _category_page_needs_manual_selection(page)
         category_mode = _resolve_category_page_mode(

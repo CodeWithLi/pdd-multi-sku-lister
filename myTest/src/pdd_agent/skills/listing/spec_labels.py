@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 from pdd_agent.domain.models import ListingUnit, SkuCombo
@@ -15,6 +16,7 @@ from pdd_agent.skills.listing.pdd_product_catalog import (
     append_product_type_to_size_label,
     catalog_codes_match,
     catalog_has_code,
+    fallback_sub_category_from_spec,
     find_catalog_entry,
     get_catalog_entry,
     get_pdd_product_catalog,
@@ -32,12 +34,84 @@ def _catalog_codes_match(left: str, right: str) -> bool:
     return catalog_codes_match(left, right)
 
 
+def load_listing_product_catalog() -> dict:
+    """与 catalog.parse 一致：优先飞书快照，再统一商品表。"""
+    try:
+        from pdd_agent.skills.listing.catalog import _load_product_catalog
+
+        catalog = _load_product_catalog()
+        if catalog:
+            return catalog
+    except Exception:
+        pass
+    return get_pdd_product_catalog()
+
+
+_MERCHANT_CODE_RE = re.compile(r"^[A-Z]{2,6}\d+[A-Z0-9]*$")
+
+
+def is_forbidden_spec_code_label(
+    label: str,
+    *,
+    style_code: str = "",
+    model_code: str = "",
+) -> bool:
+    """规格展示名不得使用商品编码（母码/子码）。"""
+    text = str(label or "").strip()
+    if not text:
+        return False
+    if style_code and catalog_codes_match(text, style_code):
+        return True
+    if model_code and catalog_codes_match(text, model_code):
+        return True
+    from pdd_agent.integrations.feishu.listing_feishu_catalog import (
+        SUB_SKU_PREFIXES,
+        normalize_listing_code,
+    )
+
+    norm = normalize_listing_code(text)
+    if not norm:
+        return False
+    if any(norm.startswith(prefix) for prefix in SUB_SKU_PREFIXES):
+        return True
+    return bool(_MERCHANT_CODE_RE.match(norm))
+
+
+def _style_label_from_catalog(style_code: str, catalog: dict) -> str:
+    entry = find_catalog_entry(catalog, style_code)
+    if not entry:
+        return ""
+    return catalog_style_label(entry)
+
+
+def _size_label_from_catalog(
+    style_code: str,
+    model_code: str,
+    catalog: dict,
+    sub_category_cache: dict[str, str] | None = None,
+) -> str:
+    label = resolve_size_label(
+        style_code,
+        model_code,
+        catalog,
+        sub_category_cache=sub_category_cache,
+    )
+    if is_forbidden_spec_code_label(label, style_code=style_code, model_code=model_code):
+        return ""
+    return label
+
+
 def _unique_style_codes(unit: ListingUnit) -> list[str]:
     return list(dict.fromkeys(sku.style_code for sku in unit.skus if sku.style_code))
 
 
 def _unit_has_catalog_styles(unit: ListingUnit) -> bool:
-    return any(catalog_has_code(sku.style_code) for sku in unit.skus if sku.style_code)
+    if not unit.skus:
+        return False
+    catalog = load_listing_product_catalog()
+    if not catalog:
+        return True
+    return any(find_catalog_entry(catalog, sku.style_code) for sku in unit.skus if sku.style_code)
 
 
 def catalog_style_label(entry) -> str:
@@ -46,7 +120,10 @@ def catalog_style_label(entry) -> str:
     if color:
         return color
     spec = entry.color_spec.strip()
-    return spec[:6] if spec else entry.code
+    if spec:
+        return spec[:6]
+    ptype = meaningful_product_type_for_label(entry)
+    return ptype or ""
 
 
 def reconcile_style_color_with_catalog(ai_color: str, entry) -> tuple[str, str]:
@@ -56,7 +133,7 @@ def reconcile_style_color_with_catalog(ai_color: str, entry) -> tuple[str, str]:
     catalog_color = catalog_style_label(entry)
     ai_norm = (ai_color or "").strip()
     if not catalog_color:
-        return ai_norm or entry.code, "ai"
+        return ai_norm or catalog_style_label(entry), "ai"
     if not ai_norm:
         return catalog_color, "catalog"
     if ai_norm in ("白色", "米白色") and catalog_color not in ("白色", "米白色"):
@@ -104,11 +181,16 @@ def disambiguate_style_colors(
     used: set[str] = set()
     final: dict[str, str] = {}
     for code in colors:
-        name = (result.get(code) or code).strip() or code
+        name = (result.get(code) or "").strip()
+        if not name or is_forbidden_spec_code_label(name, style_code=code):
+            name = _style_label_from_catalog(code, catalog)
+        if not name:
+            name = _style_label_from_catalog(code, catalog) or f"款式{len(final)+1}"
         if name in used:
-            candidates = [f"{name}-{code[-1]}", code]
+            candidates = [f"{name}-{code[-1]}", _style_label_from_catalog(code, catalog)]
             for cand in candidates:
-                if cand not in used:
+                cand = (cand or "").strip()
+                if cand and cand not in used and not is_forbidden_spec_code_label(cand, style_code=code):
                     name = cand
                     break
         final[code] = name
@@ -198,7 +280,7 @@ def build_sub_category_cache(unit: ListingUnit, account_id: str = "", *, allow_a
     """
     from pdd_agent.skills.listing.pdd_product_catalog import infer_sub_product_category
 
-    catalog = get_pdd_product_catalog()
+    catalog = load_listing_product_catalog()
     cache: dict[str, str] = {}
     prefix = f"[{account_id}] " if account_id else ""
 
@@ -225,7 +307,7 @@ def build_sub_category_cache(unit: ListingUnit, account_id: str = "", *, allow_a
 
 
 def resolve_style_colors(unit: ListingUnit, account_id: str = "", *, allow_ai: bool = True) -> dict[str, str]:
-    catalog = get_pdd_product_catalog()
+    catalog = load_listing_product_catalog()
     colors: dict[str, str] = {}
     prefix = f"[{account_id}] " if account_id else ""
     for style_code in _unique_style_codes(unit):
@@ -264,7 +346,7 @@ def resolve_style_colors(unit: ListingUnit, account_id: str = "", *, allow_ai: b
                     flush=True,
                 )
             else:
-                colors[style_code] = style_code
+                colors[style_code] = _style_label_from_catalog(style_code, catalog)
             continue
         if image:
             print(f"{prefix}[{unit.listing_label}] AI识别款式颜色：{style_code} ← {image.name}", flush=True)
@@ -292,7 +374,7 @@ def resolve_style_colors(unit: ListingUnit, account_id: str = "", *, allow_ai: b
                 image_path=image_str,
             )
         else:
-            colors[style_code] = style_code
+            colors[style_code] = _style_label_from_catalog(style_code, catalog)
     return colors
 
 
@@ -312,13 +394,21 @@ def apply_spec_labels_to_sku(
     sub_category_cache: dict[str, str],
 ) -> None:
     resolved_style = _style_color_name(style_colors, sku.style_code)
-    sku.style_name = resolved_style or sku.style_name or sku.style_code
-    sku.model_name = resolve_size_label(
+    style_name = resolved_style or _style_label_from_catalog(sku.style_code, catalog) or sku.style_name
+    if is_forbidden_spec_code_label(style_name, style_code=sku.style_code):
+        style_name = _style_label_from_catalog(sku.style_code, catalog)
+    sku.style_name = style_name or sku.style_name or ""
+
+    size_name = _size_label_from_catalog(
         sku.style_code,
         sku.model_code,
         catalog,
         sub_category_cache=sub_category_cache,
     )
+    if size_name:
+        sku.model_name = size_name
+    elif not is_forbidden_spec_code_label(sku.model_name, model_code=sku.model_code):
+        sku.model_name = sku.model_name or ""
 
 
 def _combo_skus_for_style(unit: ListingUnit, style_code: str) -> list[SkuCombo]:
@@ -354,7 +444,21 @@ def _fallback_distinct_size_label(sku: SkuCombo, base_label: str, catalog: dict)
                 base_label,
                 meaningful_product_type_for_label(entry) or tail,
             )
-    return f"{base_label}-{sku.model_code}"
+    tail = fallback_sub_category_from_spec(entry) if entry else ""
+    if tail and not is_forbidden_spec_code_label(tail, model_code=sku.model_code):
+        return append_product_type_to_size_label(base_label, tail)
+    return f"{base_label}-配件"
+
+
+def refresh_unit_spec_code_lists(unit: ListingUnit) -> None:
+    """从 SKU 展示名同步 style_codes / model_codes（槽位对齐后调用）。"""
+    unit.style_codes = list(dict.fromkeys(sku.style_code for sku in unit.skus if sku.style_code))
+    seen_sizes: list[str] = []
+    for sku in unit.skus:
+        name = str(sku.model_name or "").strip()
+        if name and name not in seen_sizes:
+            seen_sizes.append(name)
+    unit.model_codes = seen_sizes
 
 
 def disambiguate_size_labels(
@@ -433,7 +537,7 @@ def enrich_listing_unit_specs(unit: ListingUnit, account_id: str = "", *, allow_
     if not _unit_has_catalog_styles(unit):
         return
 
-    catalog = get_pdd_product_catalog()
+    catalog = load_listing_product_catalog()
     sub_category_cache = build_sub_category_cache(unit, account_id=account_id, allow_ai=allow_ai)
     style_colors = resolve_style_colors(unit, account_id=account_id, allow_ai=allow_ai)
     style_colors = disambiguate_style_colors(style_colors, catalog)
@@ -462,10 +566,12 @@ def dedupe_listing_skus_by_display_spec(unit: ListingUnit, account_id: str = "")
     for sku in unit.skus:
         key = (sku.style_name or "", sku.model_name or "")
         if key in seen_keys:
-            sku.model_name = f"{sku.model_name}-{sku.model_code}"
+            entry = find_catalog_entry(get_pdd_product_catalog(), sku.model_code)
+            tail = fallback_sub_category_from_spec(entry) if entry else "配件"
+            sku.model_name = append_product_type_to_size_label(sku.model_name, tail)
             key = (sku.style_name or "", sku.model_name or "")
             if key in seen_keys:
-                sku.model_name = f"{sku.model_name}-{sku.combo_folder}"
+                sku.model_name = f"{sku.model_name}-{len(seen_keys)}"
                 key = (sku.style_name or "", sku.model_name or "")
             print(
                 f"{prefix}[{unit.listing_label}] 尺寸名兜底：{sku.model_code} → {sku.model_name}",

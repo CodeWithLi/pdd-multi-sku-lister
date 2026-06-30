@@ -26,6 +26,7 @@ import type {
   PddFailureLogListResponse,
   PddFailureCycleRelistWatch,
   PddFailureCycleRelistWatchUpdate,
+  PddFailureCycleRelistDismissBlockerResult,
   FailureSequentialJobListResponse,
   PddFailureCycleRelistCandidateListResponse,
   PddFailureCycleRelistPollResponse,
@@ -872,6 +873,14 @@ export const api = {
   updatePddFailureCycleRelistWatch: (body: PddFailureCycleRelistWatchUpdate) =>
     http
       .put<PddFailureCycleRelistWatch>('/pdd-failure-logs/cycle-relist/watch', body)
+      .then((r) => r.data),
+
+  dismissPddFailureCycleRelistBlocker: (body: { pipeline_id?: string } = {}) =>
+    http
+      .post<PddFailureCycleRelistDismissBlockerResult>(
+        '/pdd-failure-logs/cycle-relist/dismiss-blocker',
+        body,
+      )
       .then((r) => r.data),
 
   pddFailureSequentialJobs: (params?: { limit?: number }) =>

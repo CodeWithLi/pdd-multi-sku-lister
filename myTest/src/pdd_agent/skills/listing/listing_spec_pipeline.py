@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from pdd_agent.domain.models import ListingUnit, PreflightIssue
 from pdd_agent.skills.listing.platform_skip_siblings import filter_listing_unit_skus_by_platform_skip
-from pdd_agent.skills.listing.spec_labels import enrich_listing_unit_specs
+from pdd_agent.skills.listing.spec_labels import enrich_listing_unit_specs, refresh_unit_spec_code_lists
 
 
 def apply_unit_listing_specs(
@@ -39,6 +39,7 @@ def apply_unit_listing_specs(
 
     result = apply_slot_alignment(unit, account_id=account_id)
     if result.ok:
+        refresh_unit_spec_code_lists(unit)
         return []
     return list(result.errors)
 

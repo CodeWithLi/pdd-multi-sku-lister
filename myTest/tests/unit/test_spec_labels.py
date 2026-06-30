@@ -24,6 +24,16 @@ def test_catalog_codes_match_preserves_chinese():
     assert not catalog_codes_match("BD655A", "BD339A")
 
 
+def test_is_forbidden_spec_code_label():
+    from pdd_agent.skills.listing.spec_labels import is_forbidden_spec_code_label
+
+    assert is_forbidden_spec_code_label("BD040A", style_code="BD040A")
+    assert is_forbidden_spec_code_label("BD014A印花KT笔袋", style_code="BD014A印花KT笔袋")
+    assert is_forbidden_spec_code_label("YKL001AC", model_code="YKL001AC")
+    assert not is_forbidden_spec_code_label("灰色")
+    assert not is_forbidden_spec_code_label("笔袋+挂件")
+
+
 def test_enrich_single_style_with_chinese_folder_name(monkeypatch):
     from pdd_agent.domain.models import ListingUnit, SkuCombo
     from pdd_agent.skills.listing import spec_labels
@@ -56,6 +66,7 @@ def test_enrich_single_style_with_chinese_folder_name(monkeypatch):
         "GJ706A": PddProductEntry("GJ706A", "厨师挂件", "挂件"),
     }
     monkeypatch.setattr(spec_labels, "get_pdd_product_catalog", lambda: catalog)
+    monkeypatch.setattr(spec_labels, "load_listing_product_catalog", lambda: catalog)
     monkeypatch.setattr(spec_labels, "pick_style_reference_image", lambda unit, code: Path("solo.png"))
     monkeypatch.setattr(
         spec_labels,
@@ -420,6 +431,7 @@ def test_enrich_listing_unit_specs_dedupes_duplicate_display_rows(monkeypatch):
     }
 
     monkeypatch.setattr(spec_labels, "get_pdd_product_catalog", lambda: catalog)
+    monkeypatch.setattr(spec_labels, "load_listing_product_catalog", lambda: catalog)
     monkeypatch.setattr(
         spec_labels,
         "resolve_style_colors",
@@ -494,6 +506,7 @@ def test_build_sub_category_cache_uses_catalog_not_ai(monkeypatch):
         "YKL001H": PddProductEntry("YKL001H", "黑色KT猫挂件", "亚克力"),
     }
     monkeypatch.setattr(spec_labels, "get_pdd_product_catalog", lambda: catalog)
+    monkeypatch.setattr(spec_labels, "load_listing_product_catalog", lambda: catalog)
 
     cache = build_sub_category_cache(unit, allow_ai=True)
     assert cache["GJ82A"] == "公仔"
@@ -512,6 +525,16 @@ def test_resolve_style_colors_uses_db_cache(monkeypatch, tmp_path):
 
     unit = ListingUnit(product_code="BD716A", image_set="第一套图", root=dir_a)
     unit.style_codes = ["BD716A"]
+    unit.skus = [
+        SkuCombo(
+            style_code="BD716A",
+            style_name="",
+            model_code="BD716A",
+            model_name="",
+            combo_folder="BD716A",
+            preview_image=solo,
+        )
+    ]
 
     calls = {"ai": 0, "upsert": 0}
 
@@ -528,6 +551,7 @@ def test_resolve_style_colors_uses_db_cache(monkeypatch, tmp_path):
     monkeypatch.setattr(spec_labels, "get_cached_style_color", fake_get_cached)
     monkeypatch.setattr(spec_labels, "detect_product_color", fake_detect)
     monkeypatch.setattr(spec_labels, "upsert_cached_style_color", fake_upsert)
+    monkeypatch.setattr(spec_labels, "load_listing_product_catalog", lambda: {})
 
     colors = spec_labels.resolve_style_colors(unit)
     assert colors["BD716A"] == "灰色"

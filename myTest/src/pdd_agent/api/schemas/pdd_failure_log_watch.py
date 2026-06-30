@@ -55,6 +55,9 @@ class PddFailureCycleRelistWatchOut(BaseModel):
     sequential_batch_active: bool = False
     sequential_batch_status: str = ""
     sequential_activity_delay_minutes: int = 5
+    cycle_relist_blocker_pipeline_id: str = ""
+    cycle_relist_blocker_stale: bool = False
+    cycle_relist_blocker_age_hours: float = 0
     recent_actions: list[PddFailureCycleRelistActionOut] = Field(default_factory=list)
 
 
@@ -194,3 +197,19 @@ class FailureSequentialJobListResponse(BaseModel):
 class FailureSequentialTickResponse(BaseModel):
     ok: bool = True
     summary: dict[str, Any] = Field(default_factory=dict)
+
+
+class PddFailureCycleRelistDismissBlockerIn(BaseModel):
+    pipeline_id: str = Field(
+        default="",
+        description="留空则解除当前检测到的阻塞链路",
+    )
+
+
+class PddFailureCycleRelistDismissBlockerOut(BaseModel):
+    ok: bool = True
+    pipeline_id: str = ""
+    dismissed_records: int = 0
+    stale: bool = False
+    message: str = ""
+    error: str = ""

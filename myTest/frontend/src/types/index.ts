@@ -505,7 +505,19 @@ export interface PddFailureCycleRelistWatch {
   sequential_batch_active: boolean
   sequential_batch_status: string
   sequential_activity_delay_minutes: number
+  cycle_relist_blocker_pipeline_id: string
+  cycle_relist_blocker_stale: boolean
+  cycle_relist_blocker_age_hours: number
   recent_actions: PddFailureCycleRelistAction[]
+}
+
+export interface PddFailureCycleRelistDismissBlockerResult {
+  ok: boolean
+  pipeline_id?: string
+  dismissed_records?: number
+  stale?: boolean
+  message?: string
+  error?: string
 }
 
 export interface PddFailureCycleRelistWatchUpdate {

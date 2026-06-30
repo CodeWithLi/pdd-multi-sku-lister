@@ -28,6 +28,8 @@ from pdd_agent.api.schemas.pdd_failure_log_watch import (
     FailureSequentialJobListResponse,
     FailureSequentialJobOut,
     FailureSequentialTickResponse,
+    PddFailureCycleRelistDismissBlockerIn,
+    PddFailureCycleRelistDismissBlockerOut,
 )
 from pdd_agent.api.services.cycle_relist_audit_service import (
     action_log_to_dict,
@@ -197,6 +199,7 @@ def _watch_out() -> PddFailureCycleRelistWatchOut:
     scheduler = get_failure_cycle_relist_watch_scheduler()
     seq_scheduler = get_failure_sequential_scheduler()
     batch_info = get_batch_status()
+    blocker = scheduler.get_blocker_info()
     recent = _recent_actions_out()
     return PddFailureCycleRelistWatchOut(
         enabled=bool(watch.enabled),
@@ -215,6 +218,9 @@ def _watch_out() -> PddFailureCycleRelistWatchOut:
         sequential_batch_active=is_batch_active(),
         sequential_batch_status=str(batch_info.get("status") or ""),
         sequential_activity_delay_minutes=int(watch.sequential_activity_delay_minutes or 0),
+        cycle_relist_blocker_pipeline_id=str(blocker.get("pipeline_id") or ""),
+        cycle_relist_blocker_stale=bool(blocker.get("stale")),
+        cycle_relist_blocker_age_hours=float(blocker.get("age_hours") or 0),
         recent_actions=recent,
     )
 
@@ -301,6 +307,27 @@ def update_cycle_relist_watch(body: PddFailureCycleRelistWatchUpdateIn):
     if body.enabled and sequential_on:
         seq_scheduler.start()
     return _watch_out()
+
+
+@router.post(
+    "/cycle-relist/dismiss-blocker",
+    response_model=PddFailureCycleRelistDismissBlockerOut,
+)
+def dismiss_cycle_relist_blocker(body: PddFailureCycleRelistDismissBlockerIn):
+    scheduler = get_failure_cycle_relist_watch_scheduler()
+    result = scheduler.dismiss_blocker(pipeline_id=body.pipeline_id)
+    if not result.get("ok"):
+        return PddFailureCycleRelistDismissBlockerOut(
+            ok=False,
+            error=str(result.get("error") or "解除阻塞失败"),
+        )
+    return PddFailureCycleRelistDismissBlockerOut(
+        ok=True,
+        pipeline_id=str(result.get("pipeline_id") or ""),
+        dismissed_records=int(result.get("dismissed_records") or 0),
+        stale=bool(result.get("stale")),
+        message=str(result.get("message") or ""),
+    )
 
 
 @router.get("/cycle-relist/sequential/jobs", response_model=FailureSequentialJobListResponse)

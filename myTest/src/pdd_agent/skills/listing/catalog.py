@@ -634,14 +634,14 @@ def _append_skus_from_previews(
                 )
             )
 
-        style_name = lookup_catalog_spec(style_code, catalog) or style_code
-        model_name = lookup_catalog_spec(model_code, catalog) or model_code
-        if catalog and style_entry:
-            style_name = style_code
-            if is_bundle:
-                model_name = BUNDLE_MODEL_CODE
-            else:
-                model_name = model_code if is_combo else style_code
+        # 展示名由 enrich_listing_unit_specs 解析（颜色 + 商品类型分组），此处不用商品编码。
+        style_name = ""
+        if is_bundle:
+            model_name = BUNDLE_MODEL_CODE
+        elif is_combo:
+            model_name = ""
+        else:
+            model_name = ""
 
         if style_code not in unit.style_codes:
             unit.style_codes.append(style_code)

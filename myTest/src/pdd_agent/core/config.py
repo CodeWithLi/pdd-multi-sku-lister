@@ -126,6 +126,9 @@ class EnvSettings(BaseSettings):
     pdd_config_path: str = str(DEFAULT_SETTINGS_PATH)
     database_url: str = ""
     database_echo: bool = False
+    database_pool_size: int = 5
+    database_max_overflow: int = 5
+    database_pool_timeout: int = 30
 
 
 def load_yaml_settings(path: Path | None = None) -> YamlSettings:

@@ -336,8 +336,17 @@ def tick_once() -> dict[str, Any]:
         _refresh_batch_counters(batch_id, list_jobs_by_batch(batch_id))
         return summary
     except Exception as exc:
-        logger.exception("failure sequential tick failed")
-        summary.update(ok=False, action="error", error=str(exc))
+        err = str(exc)
+        if "1040" in err or "Too many connections" in err:
+            logger.warning("failure sequential tick skipped: mysql too many connections")
+            summary.update(
+                ok=False,
+                action="db_busy",
+                error="MySQL 连接数已满，本轮跳过；请检查是否多开了服务或调大 max_connections",
+            )
+        else:
+            logger.exception("failure sequential tick failed")
+            summary.update(ok=False, action="error", error=err)
         return summary
 
 

@@ -292,6 +292,18 @@ def _wait_spec_matrix_rows(
     return count
 
 
+def _select_spec_type_with_fallback(
+    box,
+    type_names: list[str],
+    page,
+    account_id: str,
+) -> str:
+    for type_name in type_names:
+        if _select_spec_type(box, type_name, page, account_id):
+            return type_name
+    return ""
+
+
 def add_style_and_model_specs(
     page,
     account_id: str,
@@ -300,15 +312,16 @@ def add_style_and_model_specs(
 ):
     """
     录入两个规格维度。
-    第 1 组 → 款式（AI 颜色）；第 2 组 → 尺寸（商品类型分组）。
+    第 1 组 → 颜色（AI 识色）；第 2 组 → 尺寸（商品类型 + 颜色规格分组）。
     """
     _, boxes = _spec_row_boxes(page)
     if not boxes:
         print(f"[{account_id}] 未找到 #spec 规格区域")
         return False
 
-    _select_spec_type(boxes[0], "款式", page, account_id)
-    _add_values_to_spec_box(page, boxes[0], account_id, "款式", style_names)
+    first_type = _select_spec_type_with_fallback(boxes[0], ["颜色", "款式"], page, account_id)
+    first_label = first_type or "颜色"
+    _add_values_to_spec_box(page, boxes[0], account_id, first_label, style_names)
     _click_blank_area(page)
     time.sleep(0.5)
 
@@ -1359,6 +1372,52 @@ function fillRowReliable(tr, vals) {
     }
     return inputs.length;
 }
+
+function normFieldText(text) {
+    return String(text || '').replace(/\\s+/g, ' ').trim();
+}
+
+function normPriceText(text) {
+    const t = normFieldText(text);
+    if (!t) return '';
+    const n = parseFloat(t.replace(/[^\\d.+-]/g, ''));
+    if (Number.isFinite(n)) {
+        const rounded = Math.round(n * 100) / 100;
+        return String(rounded);
+    }
+    return t;
+}
+
+function fieldValuesEqual(actual, expected, fieldIdx) {
+    const exp = normFieldText(expected);
+    if (!exp) return true;
+    const act = normFieldText(actual);
+    if (fieldIdx === 1 || fieldIdx === 2) {
+        return normPriceText(act) === normPriceText(exp);
+    }
+    if (fieldIdx === 3) {
+        return act.toUpperCase() === exp.toUpperCase();
+    }
+    return act === exp;
+}
+
+function rowValuesMatch(tr, vals) {
+    const inputs = rowInputs(tr);
+    if (!tr || inputs.length < 4 || !vals || vals.length < 4) return false;
+    for (let i = 0; i < 4; i++) {
+        if (!fieldValuesEqual(inputs[i].value, vals[i], i)) return false;
+    }
+    return true;
+}
+
+function readRowFieldValues(tr) {
+    const inputs = rowInputs(tr);
+    const out = [];
+    for (let i = 0; i < 4; i++) {
+        out.push(inputs[i] ? normFieldText(inputs[i].value) : '');
+    }
+    return out;
+}
 """
 
 _FILL_ROWS_JS = (
@@ -1450,6 +1509,28 @@ function isValidSpecPair(style, size, styleNames, sizeNames) {
     return styleNames.includes(ns) && sizeNames.includes(nm);
 }
 
+function classifySpecCellText(text, td, foundStyle, styleNames, sizeNames) {
+    if (!text) return null;
+    const inStyle = styleNames.includes(text);
+    const inSize = sizeNames.includes(text);
+    if (inStyle && inSize) {
+        // 主款槽：款式列与尺寸列文案相同（如 BD025A / BD025A），第二列应视为尺寸
+        if (foundStyle && normSpecLabel(text) === normSpecLabel(foundStyle)) {
+            return 'size';
+        }
+        if (td && td.getAttribute('rowspan')) {
+            return 'style';
+        }
+        if (!foundStyle) {
+            return 'style';
+        }
+        return 'size';
+    }
+    if (inStyle) return 'style';
+    if (inSize) return 'size';
+    return null;
+}
+
 function parseRowStyleSize(tr, styleNames, sizeNames, currentStyle) {
     if (!tr || !styleNames.length || !sizeNames.length) return null;
     let foundStyle = '';
@@ -1459,10 +1540,11 @@ function parseRowStyleSize(tr, styleNames, sizeNames, currentStyle) {
         if (cellHasDataInput(td)) break;
         const text = normCellText(td);
         if (!text) continue;
-        if (styleNames.includes(text)) {
+        const role = classifySpecCellText(text, td, foundStyle, styleNames, sizeNames);
+        if (role === 'style') {
             foundStyle = text;
             if (td.getAttribute('rowspan')) carryStyle = text;
-        } else if (sizeNames.includes(text)) {
+        } else if (role === 'size') {
             foundSize = text;
         }
     }
@@ -1500,10 +1582,13 @@ function scanVisibleSpecPairs(pairMap, ctx, doStamp, state) {
             if (cellHasDataInput(td)) break;
             const text = normCellText(td);
             if (!text) continue;
-            if (ctx.styleNames.includes(text)) {
+            const role = classifySpecCellText(
+                text, td, rowStyle, ctx.styleNames, ctx.sizeNames
+            );
+            if (role === 'style') {
                 rowStyle = text;
                 if (td.getAttribute('rowspan')) state.currentStyle = text;
-            } else if (ctx.sizeNames.includes(text)) {
+            } else if (role === 'size') {
                 rowSize = text;
             }
         }
@@ -1571,10 +1656,11 @@ function parseRowsWithRowspanContext(rows, styleNames, sizeNames) {
             if (cellHasDataInput(td)) break;
             const text = normCellText(td);
             if (!text) continue;
-            if (styleNames.includes(text)) {
+            const role = classifySpecCellText(text, td, rowStyle, styleNames, sizeNames);
+            if (role === 'style') {
                 rowStyle = text;
                 if (td.getAttribute('rowspan')) currentStyle = text;
-            } else if (sizeNames.includes(text)) {
+            } else if (role === 'size') {
                 rowSize = text;
             }
         }
@@ -1584,6 +1670,34 @@ function parseRowsWithRowspanContext(rows, styleNames, sizeNames) {
         }
     }
     return out;
+}
+
+function resolveRowSpecItem(tr, styleNames, sizeNames) {
+    if (!tr) return null;
+    const allRows = collectSkuDataRowElements();
+    let idx = -1;
+    for (let i = 0; i < allRows.length; i++) {
+        if (allRows[i] === tr) {
+            idx = i;
+            break;
+        }
+    }
+    if (idx < 0) {
+        const parsedOne = parseRowsWithRowspanContext([tr], styleNames, sizeNames);
+        return parsedOne.length ? parsedOne[0] : null;
+    }
+    const parsed = parseRowsWithRowspanContext(allRows.slice(0, idx + 1), styleNames, sizeNames);
+    for (let i = parsed.length - 1; i >= 0; i--) {
+        if (parsed[i].tr === tr) return parsed[i];
+    }
+    return parsed.length ? parsed[parsed.length - 1] : null;
+}
+
+function rowMatchesSpec(tr, style, size, styleNames, sizeNames) {
+    const item = resolveRowSpecItem(tr, styleNames, sizeNames);
+    if (!item) return false;
+    return normSpecLabel(item.style) === normSpecLabel(style)
+        && normSpecLabel(item.size) === normSpecLabel(size);
 }
 
 function stampRowSpec(tr, style, size, styleNames, sizeNames) {
@@ -2005,6 +2119,16 @@ function verifyRowFilledBySpec(style, size, styleNamesJson, sizeNamesJson) {
     return tr ? rowHasRequiredValues(tr) : false;
 }
 
+function verifyRowFilledBySpecValues(style, size, vals, styleNamesJson, sizeNamesJson) {
+    const ctx = parseSpecLists(styleNamesJson, sizeNamesJson);
+    scrollFindStyleSizeRow(style, size, styleNamesJson, sizeNamesJson);
+    const tr = getRowBySpec(style, size, styleNamesJson, sizeNamesJson);
+    if (!tr || !rowMatchesSpec(tr, style, size, ctx.styleNames, ctx.sizeNames)) {
+        return false;
+    }
+    return rowValuesMatch(tr, vals);
+}
+
 function prepareSkuTableForFill(styleNamesJson, sizeNamesJson) {
     return stampGlobalRowIndices(styleNamesJson, sizeNamesJson);
 }
@@ -2085,9 +2209,12 @@ const size = arguments[1] || '';
 const vals = JSON.parse(arguments[2]);
 const styleNamesJson = arguments[3] || '[]';
 const sizeNamesJson = arguments[4] || '[]';
+const ctx = parseSpecLists(styleNamesJson, sizeNamesJson);
 const tr = getRowBySpec(style, size, styleNamesJson, sizeNamesJson);
-if (!tr) return 0;
-return fillRowReliable(tr, vals);
+if (!tr || !rowMatchesSpec(tr, style, size, ctx.styleNames, ctx.sizeNames)) return 0;
+const filled = fillRowReliable(tr, vals);
+if (filled < 4) return 0;
+return rowValuesMatch(tr, vals) ? filled : 0;
 """
 )
 
@@ -2099,6 +2226,7 @@ const styleNamesJson = arguments[1] || '[]';
 const sizeNamesJson = arguments[2] || '[]';
 let ok = 0;
 const failed = [];
+const ctx = parseSpecLists(styleNamesJson, sizeNamesJson);
 for (const item of items) {
     scrollFindStyleSizeRow(item.style, item.size, styleNamesJson, sizeNamesJson);
     const tr = getRowBySpec(item.style, item.size, styleNamesJson, sizeNamesJson);
@@ -2106,8 +2234,16 @@ for (const item of items) {
         failed.push({style: item.style || '', size: item.size || '', reason: 'row_not_found'});
         continue;
     }
-    if (fillRowReliable(tr, item.vals) >= 4) ok++;
-    else failed.push({style: item.style || '', size: item.size || '', reason: 'fill_failed'});
+    if (!rowMatchesSpec(tr, item.style, item.size, ctx.styleNames, ctx.sizeNames)) {
+        failed.push({style: item.style || '', size: item.size || '', reason: 'row_mismatch'});
+        continue;
+    }
+    if (fillRowReliable(tr, item.vals) >= 4) {
+        if (rowValuesMatch(tr, item.vals)) ok++;
+        else failed.push({style: item.style || '', size: item.size || '', reason: 'value_mismatch'});
+    } else {
+        failed.push({style: item.style || '', size: item.size || '', reason: 'fill_failed'});
+    }
 }
 return JSON.stringify({ok: ok, failed: failed});
 """
@@ -2186,6 +2322,20 @@ return verifyRowFilledBySpec(
     arguments[1] || '',
     arguments[2] || '[]',
     arguments[3] || '[]'
+);
+"""
+)
+
+_VERIFY_ROW_VALUES_BY_SPEC_JS = (
+    _SKU_TABLE_SCROLL_JS
+    + """
+const vals = JSON.parse(arguments[2]);
+return verifyRowFilledBySpecValues(
+    arguments[0] || '',
+    arguments[1] || '',
+    vals,
+    arguments[3] || '[]',
+    arguments[4] || '[]'
 );
 """
 )
@@ -2501,6 +2651,37 @@ def _stamp_global_row_indices(page, style_names: list[str], size_names: list[str
         return 0
 
 
+def _row_data_from_sku(sku, defaults: dict) -> dict:
+    return {
+        "inventory": getattr(sku, "inventory", None) or defaults.get("inventory", "10"),
+        "group_price": getattr(sku, "group_price", None) or defaults.get("group_price", "199.9"),
+        "single_price": getattr(sku, "single_price", None) or defaults.get("single_price", "299.9"),
+        "sku_code": sku.combo_folder,
+    }
+
+
+def _row_vals_json(row_data: dict) -> str:
+    return json.dumps(
+        [
+            str(row_data.get("inventory", "")),
+            str(row_data.get("group_price", "")),
+            str(row_data.get("single_price", "")),
+            str(row_data.get("sku_code", "")),
+        ],
+        ensure_ascii=False,
+    )
+
+
+def _sku_by_cell_map(skus: list, defaults: dict) -> dict[tuple[str, str], dict]:
+    out: dict[tuple[str, str], dict] = {}
+    for sku in skus:
+        style = getattr(sku, "style_name", "") or ""
+        size = getattr(sku, "model_name", "") or ""
+        if style and size:
+            out[(style, size)] = _row_data_from_sku(sku, defaults)
+    return out
+
+
 def _verify_row_filled(
     page,
     index: int,
@@ -2522,9 +2703,21 @@ def _verify_row_filled_by_spec(
     *,
     style_names: list[str] | None = None,
     size_names: list[str] | None = None,
+    expected: dict | None = None,
 ) -> bool:
     styles_json, sizes_json = _spec_lists_json(style_names, size_names)
     try:
+        if expected:
+            return bool(
+                page.run_js(
+                    _VERIFY_ROW_VALUES_BY_SPEC_JS,
+                    style_name,
+                    size_name,
+                    _row_vals_json(expected),
+                    styles_json,
+                    sizes_json,
+                )
+            )
         return bool(
             page.run_js(
                 _VERIFY_ROW_FILLED_BY_SPEC_JS,
@@ -2536,6 +2729,25 @@ def _verify_row_filled_by_spec(
         )
     except Exception:
         return False
+
+
+def _verify_row_values_by_spec(
+    page,
+    style_name: str,
+    size_name: str,
+    row_data: dict,
+    *,
+    style_names: list[str] | None = None,
+    size_names: list[str] | None = None,
+) -> bool:
+    return _verify_row_filled_by_spec(
+        page,
+        style_name,
+        size_name,
+        style_names=style_names,
+        size_names=size_names,
+        expected=row_data,
+    )
 
 
 def _spec_order_row_index(
@@ -2600,18 +2812,37 @@ def _count_filled_matrix_cells(
     page,
     style_names: list[str],
     size_names: list[str],
+    *,
+    sku_by_cell: dict[tuple[str, str], dict] | None = None,
 ) -> tuple[int, list[dict]]:
-    """按页面规格矩阵格计数，而非 SKU 条数。"""
+    """按页面规格矩阵格计数；提供 sku_by_cell 时校验值与目标 SKU 一致。"""
     ok = 0
     empty: list[dict] = []
     for style in style_names:
         for size in size_names:
-            if _verify_row_filled_by_spec(
-                page, style, size, style_names=style_names, size_names=size_names
-            ):
+            expected = (sku_by_cell or {}).get((style, size))
+            if expected is not None:
+                matched = _verify_row_values_by_spec(
+                    page,
+                    style,
+                    size,
+                    expected,
+                    style_names=style_names,
+                    size_names=size_names,
+                )
+            else:
+                matched = _verify_row_filled_by_spec(
+                    page,
+                    style,
+                    size,
+                    style_names=style_names,
+                    size_names=size_names,
+                )
+            if matched:
                 ok += 1
             else:
-                empty.append({"style": style, "size": size, "reason": "matrix_cell_empty"})
+                reason = "matrix_value_mismatch" if expected is not None else "matrix_cell_empty"
+                empty.append({"style": style, "size": size, "reason": reason})
     return ok, empty
 
 
@@ -2676,26 +2907,28 @@ def _fill_skus_by_spec_order(
                 }
             )
             continue
-        row_data = {
-            "inventory": getattr(sku, "inventory", None) or defaults.get("inventory", "10"),
-            "group_price": getattr(sku, "group_price", None) or defaults.get("group_price", "199.9"),
-            "single_price": getattr(sku, "single_price", None) or defaults.get("single_price", "299.9"),
-            "sku_code": sku.combo_folder,
-        }
+        row_data = _row_data_from_sku(sku, defaults)
         print(
             f"[{account_id}]  填表行 #{idx + 1} ← {label} | 编码={sku.combo_folder} | "
             f"库存={row_data['inventory']} 拼团={row_data['group_price']} 单买={row_data['single_price']}",
             flush=True,
         )
-        success = _fill_row_at_index(
+        success = _fill_row_by_style_size(
+            page,
+            sku.style_name,
+            sku.model_name,
+            row_data,
+            style_names=style_names,
+            size_names=size_names,
+        )
+        if not success and _fill_row_at_index(
             page,
             idx,
             row_data,
             style_names=style_names,
             size_names=size_names,
-        )
-        if not success:
-            success = _fill_row_by_style_size(
+        ):
+            success = _verify_row_values_by_spec(
                 page,
                 sku.style_name,
                 sku.model_name,
@@ -2704,30 +2937,18 @@ def _fill_skus_by_spec_order(
                 size_names=size_names,
             )
         if success:
-            success = _verify_row_filled_at_index(
-                page,
-                idx,
-                style_names=style_names,
-                size_names=size_names,
-            )
-        if not success:
-            success = _verify_row_filled_by_spec(
-                page,
-                sku.style_name,
-                sku.model_name,
-                style_names=style_names,
-                size_names=size_names,
-            )
-        if success:
             ok += 1
-            print(f"[{account_id}]    → 文字字段填写成功", flush=True)
+            print(f"[{account_id}]    → 文字字段填写成功（已校验编码/价格）", flush=True)
         else:
-            print(f"[{account_id}]    → 文字字段填写失败（行无输入框或 JS 填值失败）", flush=True)
+            print(
+                f"[{account_id}]    → 文字字段填写失败（行不匹配或编码/价格未写入正确格）",
+                flush=True,
+            )
             failed.append(
                 {
                     "style": sku.style_name,
                     "size": sku.model_name,
-                    "reason": "fill_by_index_failed",
+                    "reason": "value_verify_failed",
                 }
             )
             if probe_budget > 0:
@@ -2742,7 +2963,10 @@ def _fill_skus_by_spec_order(
                 )
                 probe_budget -= 1
     matrix_need = len(style_names) * len(size_names)
-    matrix_ok, matrix_empty = _count_filled_matrix_cells(page, style_names, size_names)
+    sku_by_cell = _sku_by_cell_map(skus, defaults)
+    matrix_ok, matrix_empty = _count_filled_matrix_cells(
+        page, style_names, size_names, sku_by_cell=sku_by_cell
+    )
     if matrix_empty:
         for item in matrix_empty:
             if not any(
@@ -2763,12 +2987,7 @@ def _sku_fill_items(skus: list, defaults: dict) -> list[dict]:
         {
             "style": getattr(sku, "style_name", "") or "",
             "size": getattr(sku, "model_name", "") or "",
-            "vals": [
-                str(getattr(sku, "inventory", None) or defaults.get("inventory", "10")),
-                str(getattr(sku, "group_price", None) or defaults.get("group_price", "199.9")),
-                str(getattr(sku, "single_price", None) or defaults.get("single_price", "299.9")),
-                sku.combo_folder,
-            ],
+            "vals": list(json.loads(_row_vals_json(_row_data_from_sku(sku, defaults)))),
         }
         for sku in skus
     ]
@@ -2782,7 +3001,7 @@ def _fill_skus_by_style_size(
     style_names: list[str] | None = None,
     size_names: list[str] | None = None,
 ) -> tuple[int, list[dict]]:
-    """按「款式+尺寸」定位行并填写，返回 (成功数, 失败列表)。"""
+    """按「款式+尺寸」定位行并填写；填完后逐格校验，避免填错行仍算成功。"""
     payload = json.dumps(_sku_fill_items(skus, defaults), ensure_ascii=False)
     styles_json, sizes_json = _spec_lists_json(style_names, size_names)
     try:
@@ -2790,9 +3009,50 @@ def _fill_skus_by_style_size(
         result = json.loads(raw) if isinstance(raw, str) else raw
         if not isinstance(result, dict):
             return 0, []
-        return int(result.get("ok") or 0), list(result.get("failed") or [])
     except Exception:
         return 0, []
+
+    js_failed: dict[tuple[str, str], str] = {}
+    for item in result.get("failed") or []:
+        if not isinstance(item, dict):
+            continue
+        key = (str(item.get("style") or ""), str(item.get("size") or ""))
+        js_failed[key] = str(item.get("reason") or "fill_failed")
+
+    verified_ok = 0
+    failed: list[dict] = []
+    for sku in skus:
+        style = getattr(sku, "style_name", "") or ""
+        size = getattr(sku, "model_name", "") or ""
+        row_data = _row_data_from_sku(sku, defaults)
+        if _verify_row_values_by_spec(
+            page,
+            style,
+            size,
+            row_data,
+            style_names=style_names,
+            size_names=size_names,
+        ):
+            verified_ok += 1
+            continue
+        if _fill_row_by_style_size(
+            page,
+            style,
+            size,
+            row_data,
+            style_names=style_names,
+            size_names=size_names,
+        ):
+            verified_ok += 1
+            continue
+        failed.append(
+            {
+                "style": style,
+                "size": size,
+                "reason": js_failed.get((style, size), "value_verify_failed"),
+            }
+        )
+    return verified_ok, failed
 
 
 def _diagnose_fill_state(
@@ -2936,15 +3196,7 @@ def _fill_row_by_style_size(
     style_names: list[str] | None = None,
     size_names: list[str] | None = None,
 ) -> bool:
-    vals = json.dumps(
-        [
-            str(row_data.get("inventory", "")),
-            str(row_data.get("group_price", "")),
-            str(row_data.get("single_price", "")),
-            str(row_data.get("sku_code", "")),
-        ],
-        ensure_ascii=False,
-    )
+    vals = _row_vals_json(row_data)
     styles_json, sizes_json = _spec_lists_json(style_names, size_names)
     try:
         _scroll_spec_row_into_view(
@@ -2962,7 +3214,16 @@ def _fill_row_by_style_size(
             styles_json,
             sizes_json,
         ) or 0
-        return count >= 4
+        if count < 4:
+            return False
+        return _verify_row_filled_by_spec(
+            page,
+            style_name,
+            size_name,
+            style_names=style_names,
+            size_names=size_names,
+            expected=row_data,
+        )
     except Exception:
         return False
 
@@ -3165,6 +3426,7 @@ def fill_multi_spec_rows(
         page, account_id, "before_fill", style_names, size_names
     )
     _audit_sku_spec_coverage(account_id, skus, style_names, size_names)
+    sku_by_cell = _sku_by_cell_map(skus, defaults)
 
     t = _now()
     use_style_size_fill = _prefer_style_size_fill(style_names, size_names)
@@ -3217,7 +3479,9 @@ def fill_multi_spec_rows(
                 )
         if text_filled > filled:
             filled = text_filled
-        filled, matrix_empty = _count_filled_matrix_cells(page, style_names, size_names)
+        filled, matrix_empty = _count_filled_matrix_cells(
+            page, style_names, size_names, sku_by_cell=sku_by_cell
+        )
         if matrix_empty:
             failed = matrix_empty
         _log_step(account_id, f"文字匹配补填后 {filled}/{matrix_need} 格", t)
@@ -3260,35 +3524,28 @@ def fill_multi_spec_rows(
         ]
         for sku in retry_skus:
             label = f"{sku.style_name} / {sku.model_name}"
-            row_data = {
-                "inventory": getattr(sku, "inventory", None) or defaults.get("inventory", "10"),
-                "group_price": getattr(sku, "group_price", None) or defaults.get("group_price", "199.9"),
-                "single_price": getattr(sku, "single_price", None) or defaults.get("single_price", "299.9"),
-                "sku_code": sku.combo_folder,
-            }
+            row_data = _row_data_from_sku(sku, defaults)
             try:
                 t = _now()
                 idx = _spec_order_row_index(
                     sku.style_name, sku.model_name, style_names, size_names
                 )
-                ok = False
-                if idx is not None:
-                    ok = _fill_row_at_index(
-                        page,
-                        idx,
-                        row_data,
-                        style_names=style_names,
-                        size_names=size_names,
-                    )
-                    if ok:
-                        ok = _verify_row_filled_at_index(
-                            page,
-                            idx,
-                            style_names=style_names,
-                            size_names=size_names,
-                        )
-                if not ok:
-                    ok = _fill_row_by_style_size(
+                ok = _fill_row_by_style_size(
+                    page,
+                    sku.style_name,
+                    sku.model_name,
+                    row_data,
+                    style_names=style_names,
+                    size_names=size_names,
+                )
+                if not ok and idx is not None and _fill_row_at_index(
+                    page,
+                    idx,
+                    row_data,
+                    style_names=style_names,
+                    size_names=size_names,
+                ):
+                    ok = _verify_row_values_by_spec(
                         page,
                         sku.style_name,
                         sku.model_name,
@@ -3296,18 +3553,10 @@ def fill_multi_spec_rows(
                         style_names=style_names,
                         size_names=size_names,
                     )
-                    if ok:
-                        ok = _verify_row_filled_by_spec(
-                            page,
-                            sku.style_name,
-                            sku.model_name,
-                            style_names=style_names,
-                            size_names=size_names,
-                        )
                 if ok:
-                    _log_step(account_id, f"补填 {label}", t)
+                    _log_step(account_id, f"补填 {label}（已校验编码/价格）", t)
                 else:
-                    print(f"[{account_id}] 补填失败：{label}", flush=True)
+                    print(f"[{account_id}] 补填失败：{label}（行或编码/价格不匹配）", flush=True)
             except Exception as exc:
                 print(f"[{account_id}] 补填异常 [{label}]：{_safe_exc(exc)}", flush=True)
         for style, size in failed_keys:
@@ -3318,7 +3567,9 @@ def fill_multi_spec_rows(
                 flush=True,
             )
         if style_names and size_names:
-            filled, failed = _count_filled_matrix_cells(page, style_names, size_names)
+            filled, failed = _count_filled_matrix_cells(
+                page, style_names, size_names, sku_by_cell=sku_by_cell
+            )
         _log_step(account_id, f"补填后合计 {filled}/{matrix_need} 格（已校验）", t)
         sku_dbg.log_fill_progress(
             account_id,

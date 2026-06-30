@@ -2347,6 +2347,42 @@ def list_failure_cycle_relist_action_logs(*, limit: int = 100) -> list[FailureCy
         return rows
 
 
+def list_failure_cycle_relist_waiting_for_pipeline(
+    *,
+    pipeline_id: str,
+    limit: int = 300,
+) -> list[FailureCycleRelistActionLogORM]:
+    """查找因指定 pipeline 阻塞而处于 waiting 的最近动作记录（按 record 去重）。"""
+    if not is_database_available():
+        return []
+    pid = str(pipeline_id or "").strip()
+    if not pid:
+        return []
+    limit = max(1, min(500, limit))
+    pattern = f"%{pid}%"
+    with session_scope() as session:
+        rows = (
+            session.query(FailureCycleRelistActionLogORM)
+            .filter(FailureCycleRelistActionLogORM.status == "waiting")
+            .filter(FailureCycleRelistActionLogORM.message.like(pattern))
+            .order_by(
+                FailureCycleRelistActionLogORM.action_at.desc(),
+                FailureCycleRelistActionLogORM.action_log_id.desc(),
+            )
+            .limit(limit * 3)
+            .all()
+        )
+        latest: dict[str, FailureCycleRelistActionLogORM] = {}
+        for row in rows:
+            rid = str(row.feishu_record_id or "").strip()
+            if rid and rid not in latest:
+                latest[rid] = row
+        out = list(latest.values())[:limit]
+        for row in out:
+            session.expunge(row)
+        return out
+
+
 def list_failure_cycle_relist_poll_logs(*, limit: int = 20) -> list[FailureCycleRelistPollLogORM]:
     if not is_database_available():
         return []

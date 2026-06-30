@@ -236,6 +236,9 @@ def init_database() -> bool:
             echo=env.database_echo,
             pool_pre_ping=True,
             pool_recycle=1800,
+            pool_size=max(1, int(env.database_pool_size or 5)),
+            max_overflow=max(0, int(env.database_max_overflow or 5)),
+            pool_timeout=max(5, int(env.database_pool_timeout or 30)),
             future=True,
         )
         Base.metadata.create_all(engine)

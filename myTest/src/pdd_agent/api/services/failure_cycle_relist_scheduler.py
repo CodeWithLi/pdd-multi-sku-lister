@@ -26,6 +26,16 @@ from pdd_agent.integrations.feishu.pdd_failure_cycle_relist_trigger import (
 
 logger = get_logger(__name__)
 _TERMINAL_PIPELINE_STATUSES = {"completed", "failed", "canceled"}
+_STALE_BLOCKER_HOURS = 6
+
+
+def _pipeline_age_hours(row) -> float:
+    updated = getattr(row, "updated_at", None)
+    if not updated:
+        return 9999.0
+    from datetime import datetime
+
+    return max(0.0, (datetime.now() - updated).total_seconds() / 3600.0)
 
 
 class FailureCycleRelistWatchScheduler:
@@ -121,14 +131,23 @@ class FailureCycleRelistWatchScheduler:
         failure_reason = str(failure_reason or item.get("failure_reason") or "")
         report_platform = str(report_platform or item.get("report_platform") or "")
         action_at = utc_now_iso()
+        status_text = str(status or "")
+        message_text = str(message or "")
+        prior = self._record_actions.get(rid) or {}
+        if (
+            prior.get("status") == status_text
+            and prior.get("message") == message_text
+            and prior.get("pipeline_id") == str(pipeline_id or "")
+        ):
+            return
         entry = {
             "at": action_at,
             "record_id": rid,
             "merchant_code": merchant_code,
             "account_name": account_name,
             "failure_reason": failure_reason,
-            "status": str(status or ""),
-            "message": str(message or ""),
+            "status": status_text,
+            "message": message_text,
             "pipeline_id": str(pipeline_id or ""),
             "trigger_source": str(trigger_source or "auto_watch"),
         }
@@ -402,7 +421,183 @@ class FailureCycleRelistWatchScheduler:
             "pipeline_triggers": pipeline_triggers,
         }
 
-    def _find_active_cycle_relist_pipeline_id(self) -> str:
+    def get_blocker_info(self) -> dict[str, Any]:
+        """返回当前阻塞自动循环上架的整合链路信息。"""
+        pid, row, stale = self._resolve_blocker_pipeline(include_stale=True)
+        if not pid or not row:
+            return {
+                "pipeline_id": "",
+                "status": "",
+                "stale": False,
+                "age_hours": 0.0,
+                "updated_at": "",
+                "blocking": False,
+            }
+        updated = ""
+        if getattr(row, "updated_at", None):
+            updated = row.updated_at.isoformat(timespec="seconds")
+        blocking = bool(pid) and not stale
+        return {
+            "pipeline_id": pid,
+            "status": str(getattr(row, "status", "") or ""),
+            "stale": stale,
+            "age_hours": round(_pipeline_age_hours(row), 2),
+            "updated_at": updated,
+            "blocking": blocking,
+        }
+
+    def dismiss_blocker(self, *, pipeline_id: str = "") -> dict[str, Any]:
+        """手动解除阻塞：终止僵尸链路，将等待记录标为失败并允许下一轮重试。"""
+        pid, row, stale = self._resolve_blocker_pipeline(
+            pipeline_id=pipeline_id,
+            include_stale=True,
+        )
+        if not pid:
+            return {"ok": True, "pipeline_id": "", "dismissed_records": 0, "message": "当前无阻塞链路"}
+        err_msg = "手动解除阻塞（僵尸链路已终止，可重新处理）"
+        try:
+            from pdd_agent.api.services.pipeline_service import cancel_integrated_pipeline
+
+            if row and str(row.status or "").lower() not in _TERMINAL_PIPELINE_STATUSES:
+                cancel_integrated_pipeline(pid)
+            else:
+                from pdd_agent.db.repositories import update_integrated_pipeline
+
+                update_integrated_pipeline(
+                    pid,
+                    status="failed",
+                    current_step="failed",
+                    error=err_msg,
+                )
+        except Exception as exc:
+            logger.warning("dismiss blocker cancel pipeline failed pipeline=%s error=%s", pid, exc)
+            try:
+                from pdd_agent.db.repositories import update_integrated_pipeline
+
+                update_integrated_pipeline(
+                    pid,
+                    status="failed",
+                    current_step="failed",
+                    error=err_msg,
+                )
+            except Exception:
+                logger.exception("dismiss blocker force-fail pipeline failed pipeline=%s", pid)
+
+        dismissed = self._mark_waiting_records_dismissed(pid, err_msg)
+        logger.info(
+            "cycle relist blocker dismissed pipeline=%s stale=%s dismissed_records=%s",
+            pid,
+            stale,
+            dismissed,
+        )
+        return {
+            "ok": True,
+            "pipeline_id": pid,
+            "dismissed_records": dismissed,
+            "stale": stale,
+            "message": err_msg,
+        }
+
+    def _mark_waiting_records_dismissed(self, pipeline_id: str, message: str) -> int:
+        pid = str(pipeline_id or "").strip()
+        if not pid:
+            return 0
+        seen: set[str] = set()
+        targets: list[dict[str, Any]] = []
+
+        for rid, action in list(self._record_actions.items()):
+            if action.get("status") != "waiting":
+                continue
+            if pid not in str(action.get("message") or "") and action.get("pipeline_id") != pid:
+                continue
+            if rid in seen:
+                continue
+            seen.add(rid)
+            targets.append({"record_id": rid, **action})
+
+        for item in self._all_items:
+            rid = str(item.get("record_id") or "").strip()
+            if not rid or rid in seen:
+                continue
+            action = self._record_actions.get(rid) or {}
+            if action.get("status") == "waiting":
+                seen.add(rid)
+                targets.append({"record_id": rid, **action, **item})
+
+        try:
+            from pdd_agent.db.repositories import list_failure_cycle_relist_waiting_for_pipeline
+
+            for row in list_failure_cycle_relist_waiting_for_pipeline(pipeline_id=pid, limit=300):
+                rid = str(row.feishu_record_id or "").strip()
+                if not rid or rid in seen:
+                    continue
+                seen.add(rid)
+                targets.append(
+                    {
+                        "record_id": rid,
+                        "merchant_code": row.merchant_code,
+                        "account_name": row.account_name,
+                        "failure_reason": row.failure_reason,
+                    }
+                )
+        except Exception:
+            logger.exception("list waiting actions for dismiss failed pipeline=%s", pid)
+
+        for target in targets:
+            rid = str(target.get("record_id") or "").strip()
+            if not rid:
+                continue
+            self._was_candidate[rid] = False
+            self.record_action(
+                record_id=rid,
+                merchant_code=str(target.get("merchant_code") or ""),
+                account_name=str(target.get("account_name") or ""),
+                failure_reason=str(target.get("failure_reason") or ""),
+                status="failed",
+                message=message,
+                pipeline_id=pid,
+                trigger_source="manual_dismiss",
+            )
+        return len(targets)
+
+    def _resolve_blocker_pipeline(
+        self,
+        *,
+        pipeline_id: str = "",
+        include_stale: bool = False,
+    ) -> tuple[str, Any, bool]:
+        pid = str(pipeline_id or "").strip()
+        row = None
+        if pid:
+            try:
+                from pdd_agent.db.repositories import get_integrated_pipeline
+
+                row = get_integrated_pipeline(pid)
+            except Exception:
+                row = None
+            if row:
+                status = str(row.status or "").strip().lower()
+                if status in _TERMINAL_PIPELINE_STATUSES:
+                    return "", None, False
+                stale = _pipeline_age_hours(row) >= _STALE_BLOCKER_HOURS
+                if stale and not include_stale:
+                    return "", None, True
+                return pid, row, stale
+            return pid, None, False
+
+        pid = self._find_active_cycle_relist_pipeline_id(include_stale=include_stale)
+        if not pid:
+            return "", None, False
+        try:
+            from pdd_agent.db.repositories import get_integrated_pipeline
+
+            row = get_integrated_pipeline(pid)
+        except Exception:
+            row = None
+        stale = bool(row and _pipeline_age_hours(row) >= _STALE_BLOCKER_HOURS)
+        return pid, row, stale
+
+    def _find_active_cycle_relist_pipeline_id(self, *, include_stale: bool = False) -> str:
         """查找仍在执行中的失败日志循环链路 pipeline_id。"""
         try:
             rows = list_integrated_pipelines(limit=200, offset=0)
@@ -419,8 +614,16 @@ class FailureCycleRelistWatchScheduler:
             if source != "failure_log_watch":
                 continue
             pid = str(getattr(row, "pipeline_id", "") or "").strip()
-            if pid:
-                return pid
+            if not pid:
+                continue
+            if not include_stale and _pipeline_age_hours(row) >= _STALE_BLOCKER_HOURS:
+                logger.info(
+                    "ignore stale cycle relist blocker pipeline=%s age_hours=%.1f",
+                    pid,
+                    _pipeline_age_hours(row),
+                )
+                continue
+            return pid
         return ""
 
     async def _loop(self) -> None:

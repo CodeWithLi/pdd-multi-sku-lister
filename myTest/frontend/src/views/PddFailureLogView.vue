@@ -31,6 +31,7 @@ const pollLogs = ref<PddFailureCycleRelistPollLog[]>([])
 const expandedPollId = ref('')
 const triggeringRecordId = ref('')
 const manualPolling = ref(false)
+const dismissBlockerLoading = ref(false)
 const sequentialJobsLoading = ref(false)
 const sequentialJobs = ref<FailureSequentialJob[]>([])
 const sequentialBatchActive = ref(false)
@@ -94,7 +95,7 @@ function actionStatusLabel(status: string) {
     failed: '失败',
     skipped: '已跳过',
     pending: '待处理',
-    waiting: '监控中',
+    waiting: '等待中',
   }
   return map[status] || status || '—'
 }
@@ -103,6 +104,7 @@ function triggerSourceLabel(source: string) {
   const map: Record<string, string> = {
     auto_watch: '自动',
     manual_api: '手动',
+    manual_dismiss: '解除阻塞',
     prime_skip: '启动忽略',
   }
   return map[source] || source || '—'
@@ -123,7 +125,48 @@ function actionStatusType(status: string) {
   if (status === 'failed') return 'danger'
   if (status === 'skipped') return 'warning'
   if (status === 'pending') return 'primary'
+  if (status === 'waiting') return 'info'
   return 'info'
+}
+
+const hasCycleRelistBlocker = computed(() =>
+  Boolean(watchConfig.value?.cycle_relist_blocker_pipeline_id),
+)
+
+async function dismissCycleRelistBlocker() {
+  const pid = watchConfig.value?.cycle_relist_blocker_pipeline_id || ''
+  const stale = Boolean(watchConfig.value?.cycle_relist_blocker_stale)
+  const hint = stale
+    ? `检测到僵尸链路 ${pid}（已超过 6 小时未更新），解除后将标为失败并允许重新处理。`
+    : `将终止阻塞链路 ${pid}，相关「等待中」记录会标为失败，下一轮可重新跑。`
+  try {
+    await ElMessageBox.confirm(hint, '解除循环上架阻塞', {
+      type: 'warning',
+      confirmButtonText: '解除阻塞',
+      cancelButtonText: '取消',
+    })
+  } catch {
+    return
+  }
+  dismissBlockerLoading.value = true
+  try {
+    const resp = await api.dismissPddFailureCycleRelistBlocker(
+      pid ? { pipeline_id: pid } : {},
+    )
+    if (!resp.ok) {
+      ElMessage.error(resp.error || '解除阻塞失败')
+      return
+    }
+    ElMessage.success(
+      resp.message ||
+        `已解除阻塞（${resp.dismissed_records ?? 0} 条记录已标为失败）`,
+    )
+    await Promise.all([loadWatch(), loadCandidates()])
+  } catch (e) {
+    ElMessage.error(e instanceof Error ? e.message : '解除阻塞失败')
+  } finally {
+    dismissBlockerLoading.value = false
+  }
 }
 
 function applyWatch(data: PddFailureCycleRelistWatch) {
@@ -558,6 +601,36 @@ onUnmounted(() => {
         </el-table>
       </template>
 
+      <el-alert
+        v-if="hasCycleRelistBlocker"
+        :type="watchConfig?.cycle_relist_blocker_stale ? 'warning' : 'error'"
+        show-icon
+        :closable="false"
+        class="mb-12"
+      >
+        <template #title>
+          {{
+            watchConfig?.cycle_relist_blocker_stale
+              ? `检测到僵尸整合链路（${watchConfig?.cycle_relist_blocker_pipeline_id}，已 ${watchConfig?.cycle_relist_blocker_age_hours} 小时未更新）`
+              : `整合链路阻塞中：${watchConfig?.cycle_relist_blocker_pipeline_id}`
+          }}
+        </template>
+        <template #default>
+          <span>
+            轮询时会把候选标为「等待中」。若实际没在跑，可点解除阻塞：终止该链路、相关记录标为失败，下一轮重新处理。
+          </span>
+          <el-button
+            class="ml-12"
+            type="danger"
+            size="small"
+            :loading="dismissBlockerLoading"
+            @click="dismissCycleRelistBlocker"
+          >
+            解除阻塞
+          </el-button>
+        </template>
+      </el-alert>
+
       <el-divider content-position="left">最近处理记录</el-divider>
       <el-table
         :data="recentActions"
@@ -818,6 +891,10 @@ onUnmounted(() => {
   display: flex;
   gap: 8px;
   align-items: center;
+}
+
+.ml-12 {
+  margin-left: 12px;
 }
 
 .watch-form {
