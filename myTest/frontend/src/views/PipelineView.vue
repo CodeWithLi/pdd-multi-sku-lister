@@ -138,6 +138,7 @@ const autoUploadConfig = ref<AutoUploadConfig>({
   enabled: false,
   trigger_mode: 'new_product_folder',
   account_id: '',
+  account_ids: [],
   activity_ids: ['20981'],
   category_keyword: '玩偶',
   auto_promotion: true,
@@ -783,7 +784,13 @@ async function loadExcelFallbackSetting() {
 }
 
 function applyAutoUploadConfig(cfg: AutoUploadConfig) {
-  autoUploadConfig.value = { ...cfg }
+  const accountIds =
+    cfg.account_ids?.length ? [...cfg.account_ids] : cfg.account_id ? [cfg.account_id] : []
+  autoUploadConfig.value = {
+    ...cfg,
+    account_ids: accountIds,
+    account_id: accountIds[0] || cfg.account_id || '',
+  }
   autoUploadEnabled.value = !!cfg.enabled
   autoUploadTriggerMode.value = cfg.trigger_mode || 'new_product_folder'
 }
@@ -794,11 +801,18 @@ async function loadAutoUploadConfig() {
 }
 
 function buildAutoUploadPayload(overrides: Partial<AutoUploadConfig> = {}): AutoUploadConfig {
+  const accountIds =
+    autoUploadConfig.value.account_ids?.length
+      ? [...autoUploadConfig.value.account_ids]
+      : autoUploadConfig.value.account_id
+        ? [autoUploadConfig.value.account_id]
+        : []
   return {
     ...autoUploadConfig.value,
     enabled: autoUploadEnabled.value,
     trigger_mode: autoUploadTriggerMode.value,
-    account_id: autoUploadConfig.value.account_id || accountId.value,
+    account_ids: accountIds,
+    account_id: accountIds[0] || accountId.value,
     ...overrides,
   }
 }
@@ -811,8 +825,8 @@ async function saveAutoUploadConfig(
   if (manageSaving) autoUploadSaving.value = true
   try {
     const payload = buildAutoUploadPayload(overrides)
-    if (payload.enabled && !payload.account_id) {
-      throw new Error('开启自动上架时请选择店铺')
+    if (payload.enabled && !payload.account_ids.length) {
+      throw new Error('开启自动上架时请选择至少一家店铺')
     }
     if (payload.enabled && !payload.activity_ids.length) {
       throw new Error('开启自动上架时请至少选择一个活动')
@@ -865,7 +879,8 @@ async function confirmAutoUploadConfig() {
   try {
     await saveAutoUploadConfig(
       {
-      account_id: autoUploadConfig.value.account_id,
+      account_ids: autoUploadConfig.value.account_ids,
+      account_id: autoUploadConfig.value.account_ids[0] || autoUploadConfig.value.account_id,
       trigger_mode: autoUploadConfig.value.trigger_mode,
       activity_ids: autoUploadConfig.value.activity_ids,
       category_keyword: autoUploadConfig.value.category_keyword,
@@ -2585,7 +2600,14 @@ onUnmounted(() => {
       </p>
       <el-form label-width="110px" class="auto-upload-config-form">
         <el-form-item label="店铺" required>
-          <el-select v-model="autoUploadConfig.account_id" placeholder="选择店铺" style="width: 100%">
+          <el-select
+            v-model="autoUploadConfig.account_ids"
+            multiple
+            collapse-tags
+            collapse-tags-tooltip
+            placeholder="选择一家或多家店铺（串行执行）"
+            style="width: 100%"
+          >
             <el-option
               v-for="acc in enabledAccounts"
               :key="acc.account_id"
@@ -2593,6 +2615,7 @@ onUnmounted(() => {
               :value="acc.account_id"
             />
           </el-select>
+          <div class="form-tip">多家店铺时按顺序串行：先跑完上架与限时限量购，到期后再串行跑活动/推广。</div>
         </el-form-item>
         <el-form-item label="触发范围">
           <el-select v-model="autoUploadConfig.trigger_mode" style="width: 100%">

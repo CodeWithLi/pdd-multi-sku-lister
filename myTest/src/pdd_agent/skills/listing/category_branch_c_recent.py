@@ -258,6 +258,7 @@ def ensure_branch_c_category_selected(
     account_id: str,
     label: str,
     category_keyword: str,
+    listing_info: dict[str, Any] | None = None,
 ) -> bool:
     """
     确保分支 C 类目已选：已自动选中则跳过；否则点「最近使用」；再不行走关键词搜索。
@@ -271,6 +272,22 @@ def ensure_branch_c_category_selected(
     if branch_c_category_path_ready_strict(page):
         _log(account_id, label, "分支 C：类目已选（自动/已选分类），可直接点下一步")
         return True
+
+    from pdd_agent.skills.listing.category_branch_c_titled_picker import (
+        branch_c_needs_titled_manual_category_pick,
+        run_branch_c_titled_manual_category_pick,
+    )
+
+    info = listing_info if isinstance(listing_info, dict) else {"title_mode": "page_ai"}
+    if branch_c_needs_titled_manual_category_pick(page, info):
+        _log(account_id, label, "分支 C 带标题：尝试「选择分类」→ 最近使用 → 确认")
+        if run_branch_c_titled_manual_category_pick(
+            page,
+            account_id,
+            label,
+            info,
+        ):
+            return True
 
     if branch_c_needs_recent_category_pick(page):
         _log(account_id, label, "分支 C：未检测到完整类目，尝试「最近使用」")

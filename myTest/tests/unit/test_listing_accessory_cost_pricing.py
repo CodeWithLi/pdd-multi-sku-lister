@@ -1,12 +1,19 @@
-"""配件成本定价模式单元测试。"""
+"""配件成本定价 — 浮动继承与同配件同价。"""
 
 from __future__ import annotations
 
 import pytest
 
+from pdd_agent.domain.models import ListingUnit, SkuCombo
+from pdd_agent.skills.listing.listing_accessory_cost_float_registry import (
+    _SkuPricingRow,
+    accessory_align_key,
+    reconcile_accessory_cost_floats,
+)
 from pdd_agent.skills.listing.listing_accessory_cost_pricing import (
     activate_accessory_cost_pricing,
     deactivate_accessory_cost_pricing,
+    reconcile_accessory_cost_prices_for_unit,
     resolve_accessory_cost_pricing,
     resolve_sku_pricing_with_accessory_cost_if_enabled,
     split_main_and_accessory_codes,
@@ -40,6 +47,42 @@ def test_split_main_and_accessory_codes():
     ) == ("BD032D", ["YKL020A", "YKL004L"])
 
 
+def test_accessory_align_key_only_single_accessory():
+    assert accessory_align_key(["YKL001A"]) == "YKL001A"
+    assert accessory_align_key(["YKL001A", "YKL020A"]) == ""
+
+
+def test_main_group_inherits_float_across_solo_combo_bundle():
+    rows = [
+        _SkuPricingRow(0, "BD037A", 10.0, 0.0, "", False),
+        _SkuPricingRow(1, "BD037A", 10.0, 2.0, "YKL001A", True),
+        _SkuPricingRow(2, "BD037A", 10.0, 7.0, "", True),
+    ]
+    result = reconcile_accessory_cost_floats(rows, listing_scope="BD037/第一套图", float_min=3.0, float_max=3.0)
+    assert result[0][0] == 3.0
+    assert result[0][1] == 13.0
+    assert result[1][1] == 15.0
+    assert result[2][0] == 3.0
+    assert result[2][1] == 20.0
+
+
+def test_shared_accessory_combo_price_across_mains():
+    rows = [
+        _SkuPricingRow(0, "BD037A", 10.0, 0.0, "", False),
+        _SkuPricingRow(1, "BD037A", 10.0, 2.0, "YKL001A", True),
+        _SkuPricingRow(2, "BD037B", 8.0, 0.0, "", False),
+        _SkuPricingRow(3, "BD037B", 8.0, 2.0, "YKL001A", True),
+        _SkuPricingRow(4, "BD037C", 9.0, 0.0, "", False),
+        _SkuPricingRow(5, "BD037C", 9.0, 1.5, "YKL001P", True),
+    ]
+    result = reconcile_accessory_cost_floats(rows, listing_scope="BD037/第一套图", float_min=3.0, float_max=3.0)
+    assert result[1][1] == 15.0
+    assert result[3][1] == 15.0
+    assert result[3][0] == 5.0
+    assert result[2][1] == 13.0
+    assert result[5][1] == 13.5
+
+
 def test_resolve_accessory_cost_pricing_combo_uses_main_price_and_accessory_cost():
     catalog = {
         "BD716A": PddProductEntry("BD716A", "灰色笔袋", "笔袋", 100, 20.0),
@@ -62,33 +105,66 @@ def test_resolve_accessory_cost_pricing_combo_uses_main_price_and_accessory_cost
     assert sp == "23.2"
 
 
-def test_resolve_accessory_cost_pricing_bundle_sums_accessory_costs_only_once():
+def test_reconcile_accessory_cost_prices_for_unit_updates_skus():
     catalog = {
-        "BD032D": PddProductEntry("BD032D", "棕色笔袋", "笔袋", 100, 14.0),
-        "YKL020A": PddProductEntry("YKL020A", "磁吸夹", "亚克力", 80, 4.0),
-        "YKL004L": PddProductEntry("YKL004L", "套尺", "亚克力", 60, 5.0),
+        "BD037A": PddProductEntry("BD037A", "A笔袋", "笔袋", 100, 10.0),
+        "BD037B": PddProductEntry("BD037B", "B笔袋", "笔袋", 100, 8.0),
+        "YKL001A": PddProductEntry("YKL001A", "配件", "亚克力", 50, 5.0),
     }
-    activate_accessory_cost_pricing(
-        cost_map={"YKL020A": 4.09, "YKL004L": 5.09},
-        float_min=1.0,
-        float_max=1.0,
+    activate_accessory_cost_pricing(cost_map={"YKL001A": 2.0}, float_min=3.0, float_max=3.0)
+    unit = ListingUnit(
+        product_code="BD037A",
+        family_code="BD037",
+        image_set="第一套图",
+        root=__import__("pathlib").Path("."),
+        skus=[
+            SkuCombo(
+                style_code="BD037A",
+                style_name="",
+                model_code="BD037A",
+                model_name="",
+                combo_folder="BD037A",
+                preview_image=__import__("pathlib").Path("a.png"),
+                group_price="0",
+                single_price="0",
+            ),
+            SkuCombo(
+                style_code="BD037A",
+                style_name="",
+                model_code="YKL001A",
+                model_name="",
+                combo_folder="BD037A+YKL001A",
+                preview_image=__import__("pathlib").Path("b.png"),
+                group_price="0",
+                single_price="0",
+            ),
+            SkuCombo(
+                style_code="BD037B",
+                style_name="",
+                model_code="BD037B",
+                model_name="",
+                combo_folder="BD037B",
+                preview_image=__import__("pathlib").Path("c.png"),
+                group_price="0",
+                single_price="0",
+            ),
+            SkuCombo(
+                style_code="BD037B",
+                style_name="",
+                model_code="YKL001A",
+                model_name="",
+                combo_folder="BD037B+YKL001A",
+                preview_image=__import__("pathlib").Path("d.png"),
+                group_price="0",
+                single_price="0",
+            ),
+        ],
     )
-    _, gp, _ = resolve_accessory_cost_pricing(
-        "BD032D",
-        BUNDLE_MODEL_CODE,
-        catalog,
-        {},
-        bundle_components=["BD032D", "YKL020A", "YKL004L"],
-        listing_scope="BD032/第一套图",
-    )
-    assert gp == "24.18"
-
-
-def test_resolve_accessory_cost_pricing_single_adds_one_float():
-    catalog = {"BD716A": PddProductEntry("BD716A", "灰色笔袋", "笔袋", 100, 10.0)}
-    activate_accessory_cost_pricing(cost_map={}, float_min=3.0, float_max=3.0)
-    _, gp, _ = resolve_accessory_cost_pricing("BD716A", "BD716A", catalog, {}, listing_scope="scope")
-    assert gp == "13"
+    reconcile_accessory_cost_prices_for_unit(unit, catalog, {})
+    assert unit.skus[0].group_price == "13"
+    assert unit.skus[1].group_price == "15"
+    assert unit.skus[2].group_price == "13"
+    assert unit.skus[3].group_price == "15"
 
 
 def test_resolve_accessory_cost_pricing_missing_cost_raises():
@@ -102,8 +178,13 @@ def test_resolve_accessory_cost_pricing_missing_cost_raises():
     assert exc.value.reason == "jushuitan_cost_missing"
 
 
-def test_resolve_sku_pricing_with_accessory_cost_if_enabled_returns_none_when_inactive():
+def test_resolve_sku_pricing_with_accessory_cost_if_enabled_returns_none_when_inactive(monkeypatch):
     catalog = {"BD716A": PddProductEntry("BD716A", "灰色笔袋", "笔袋", 100, 10.0)}
+    monkeypatch.setattr(
+        "pdd_agent.skills.listing.listing_accessory_cost_pricing.accessory_cost_pricing_enabled",
+        lambda cfg=None: False,
+    )
+    deactivate_accessory_cost_pricing()
     assert (
         resolve_sku_pricing_with_accessory_cost_if_enabled(
             style_code="BD716A",

@@ -247,7 +247,7 @@ class IntegratedPipelineORM(Base):
     error: Mapped[str] = mapped_column(Text, default="", nullable=False)
     meta: Mapped[dict] = mapped_column(MySQLJSON, default=dict, nullable=False)
     created_at: Mapped[datetime] = mapped_column(
-        DateTime, server_default=func.now(), nullable=False
+        DateTime, server_default=func.now(), index=True, nullable=False
     )
     updated_at: Mapped[datetime] = mapped_column(
         DateTime, server_default=func.now(), onupdate=func.now(), nullable=False

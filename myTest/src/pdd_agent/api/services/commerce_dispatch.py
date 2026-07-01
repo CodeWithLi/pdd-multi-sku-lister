@@ -445,6 +445,13 @@ def _pipeline_lifecycle_status(row: IntegratedPipelineORM) -> tuple[str, str, da
 def sync_lifecycle_from_integrated_pipeline(row: IntegratedPipelineORM) -> None:
     if not commerce_enabled():
         return
+    try:
+        from pdd_agent.api.services.pipeline_mq_auto_commerce import should_mq_pipeline_skip_commerce_sync
+
+        if should_mq_pipeline_skip_commerce_sync(row):
+            return
+    except Exception:
+        logger.exception("mq commerce sync skip check failed pipeline=%s", getattr(row, "pipeline_id", ""))
     account_id = str(row.account_id or "").strip()
     pipeline_id = str(row.pipeline_id or "").strip()
     if not account_id or not pipeline_id:
@@ -1197,6 +1204,13 @@ def sync_lifecycle_from_active_pipelines() -> int:
     for row in list_integrated_pipelines(limit=200):
         if str(row.status or "") in TERMINAL_PIPELINE_STATUSES:
             continue
+        try:
+            from pdd_agent.api.services.pipeline_mq_auto_commerce import should_mq_pipeline_skip_commerce_sync
+
+            if should_mq_pipeline_skip_commerce_sync(row):
+                continue
+        except Exception:
+            logger.exception("mq commerce active sync skip failed pipeline=%s", row.pipeline_id)
         lc = _get_account_lifecycle(str(row.account_id or ""))
         try:
             if not lc:

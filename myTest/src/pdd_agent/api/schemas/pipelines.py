@@ -251,6 +251,7 @@ class AutoUploadConfigResponse(BaseModel):
     enabled: bool = False
     trigger_mode: str = "new_product_folder"
     account_id: str = ""
+    account_ids: list[str] = Field(default_factory=list)
     activity_ids: list[str] = Field(default_factory=lambda: ["20981"])
     category_keyword: str = "玩偶"
     auto_promotion: bool = True
@@ -268,6 +269,7 @@ class AutoUploadConfigUpdateIn(BaseModel):
     enabled: bool = False
     trigger_mode: str = "new_product_folder"
     account_id: str = ""
+    account_ids: list[str] = Field(default_factory=list)
     activity_ids: list[str] = Field(default_factory=lambda: ["20981"])
     category_keyword: str = "玩偶"
     auto_promotion: bool = True
@@ -290,4 +292,11 @@ class AutoUploadConfigUpdateIn(BaseModel):
         if self.enabled and not ids:
             raise ValueError("开启自动上架时请至少选择一个活动")
         self.activity_ids = list(dict.fromkeys(ids))
+        account_ids = [str(x).strip() for x in self.account_ids if str(x).strip()]
+        if not account_ids and self.account_id:
+            account_ids = [str(self.account_id).strip()]
+        if self.enabled and not account_ids:
+            raise ValueError("开启自动上架时请至少选择一家店铺")
+        self.account_ids = list(dict.fromkeys(account_ids))
+        self.account_id = self.account_ids[0] if self.account_ids else ""
         return self

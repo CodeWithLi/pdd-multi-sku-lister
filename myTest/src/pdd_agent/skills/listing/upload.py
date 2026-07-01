@@ -44,8 +44,12 @@ from pdd_agent.skills.listing.listing_spec_pipeline import apply_unit_listing_sp
 from pdd_agent.skills.listing.pdd_page_image_errors import (
     BranchCCoverImageRejected,
     PddImageDimensionRejected,
+    PddImageFileSizeRejected,
+    PddImageUploadRejected,
     raise_if_pdd_image_dimension_rejected,
+    raise_if_pdd_image_upload_rejected,
     read_pdd_image_dimension_error,
+    read_pdd_image_file_size_error,
 )
 from pdd_agent.skills.listing.page_ai_title import apply_title_after_cover_upload
 from pdd_agent.skills.listing.spec_labels import is_forbidden_spec_code_label, ordered_style_names
@@ -189,6 +193,57 @@ def _finish_listing(
             page_url=page_url,
         )
     return result
+
+
+def _image_upload_rejection_finish(
+    run_id: str,
+    account_id: str,
+    unit: ListingUnit,
+    exc: PddImageUploadRejected,
+    *,
+    image_kind: str,
+    phase: str,
+    step: str,
+    page_url: str = "",
+) -> dict[str, Any]:
+    sku_label = str(exc.sku_label or "").strip()
+    platform_msg = str(exc.platform_message or exc).strip()
+    if isinstance(exc, PddImageFileSizeRejected):
+        if image_kind == "preview":
+            reason = ListingErrorCode.PREVIEW_IMAGE_FILE_SIZE_REJECTED
+            summary = "预览图大小不能超过3MB"
+        else:
+            reason = ListingErrorCode.CAROUSEL_IMAGE_FILE_SIZE_REJECTED
+            summary = "主图大小不能超过3MB"
+    else:
+        if image_kind == "preview":
+            reason = ListingErrorCode.PREVIEW_IMAGE_DIMENSION_REJECTED
+            summary = "预览图尺寸不符合要求"
+        else:
+            reason = ListingErrorCode.CAROUSEL_IMAGE_DIMENSION_REJECTED
+            summary = "主图尺寸不符合要求"
+    error_text = (
+        f"{summary} [{sku_label}]：{platform_msg}"
+        if sku_label
+        else f"{summary}：{platform_msg}" if platform_msg else summary
+    )
+    return _finish_listing(
+        run_id,
+        account_id,
+        unit,
+        status="failed",
+        reason=reason,
+        error=error_text,
+        retryable=False,
+        legacy_status="failed",
+        extra={
+            "preview_sku_label": sku_label,
+            "platform_message": platform_msg,
+        },
+        phase=phase,
+        step=step,
+        page_url=page_url,
+    )
 
 
 def _normalize_match_text(value: str) -> str:
@@ -3102,7 +3157,7 @@ def _find_branch_c_cover_input(page: DpPage):
 
 
 def _read_branch_c_cover_upload_error(page: DpPage) -> str:
-    return read_pdd_image_dimension_error(page)
+    return read_pdd_image_file_size_error(page) or read_pdd_image_dimension_error(page)
 
 
 def _raise_if_branch_c_cover_upload_rejected(
@@ -3111,7 +3166,7 @@ def _raise_if_branch_c_cover_upload_rejected(
     account_id: str = "",
     label: str = "",
 ) -> None:
-    raise_if_pdd_image_dimension_rejected(
+    raise_if_pdd_image_upload_rejected(
         page,
         account_id=account_id,
         label=label,
@@ -3558,17 +3613,23 @@ def _upload_product_material_image(
         return False
     time.sleep(1.5)
     try:
-        raise_if_pdd_image_dimension_rejected(
+        raise_if_pdd_image_upload_rejected(
             page,
             account_id=account_id,
             label=label,
             image_kind="material",
         )
-    except PddImageDimensionRejected as exc:
-        print(
-            f"[{account_id}] [{label}] 商品素材尺寸不合规：{exc.platform_message or exc}",
-            flush=True,
-        )
+    except PddImageUploadRejected as exc:
+        if isinstance(exc, PddImageFileSizeRejected):
+            print(
+                f"[{account_id}] [{label}] 商品素材大小超限：{exc.platform_message or exc}",
+                flush=True,
+            )
+        else:
+            print(
+                f"[{account_id}] [{label}] 商品素材尺寸不合规：{exc.platform_message or exc}",
+                flush=True,
+            )
         return False
     print(f"[{account_id}] [{label}] 商品素材已上传", flush=True)
     return True
@@ -3705,16 +3766,12 @@ def upload_one_listing(
             )
         except BranchCCoverImageRejected as exc:
             _clear_beforeunload(page)
-            platform_msg = str(exc.platform_message or exc).strip()
-            return _finish_listing(
+            return _image_upload_rejection_finish(
                 run_id,
                 account_id,
                 unit,
-                status="failed",
-                reason=ListingErrorCode.CAROUSEL_IMAGE_DIMENSION_REJECTED,
-                error=platform_msg or "主图尺寸不符合要求",
-                retryable=False,
-                legacy_status="failed",
+                exc,
+                image_kind="carousel",
                 phase="upload",
                 step="branch_c_cover_upload",
             )
@@ -3899,29 +3956,14 @@ def upload_one_listing(
             style_names=style_names,
             size_names=size_names,
         )
-    except PddImageDimensionRejected as exc:
+    except PddImageUploadRejected as exc:
         _clear_beforeunload(page)
-        sku_label = str(exc.sku_label or "").strip()
-        platform_msg = str(exc.platform_message or exc).strip()
-        error_text = (
-            f"预览图尺寸不符合要求 [{sku_label}]：{platform_msg}"
-            if sku_label
-            else f"预览图尺寸不符合要求：{platform_msg}"
-        )
-        return _finish_listing(
+        return _image_upload_rejection_finish(
             run_id,
             account_id,
             unit,
-            status="failed",
-            reason=ListingErrorCode.PREVIEW_IMAGE_DIMENSION_REJECTED,
-            error=error_text,
-            title=listing_info.get("title", ""),
-            retryable=False,
-            legacy_status="failed",
-            extra={
-                "preview_sku_label": sku_label,
-                "platform_message": platform_msg,
-            },
+            exc,
+            image_kind="preview",
             phase="preview",
             step="upload_preview_image",
             page_url=str(page.url or ""),

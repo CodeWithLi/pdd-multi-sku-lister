@@ -4,8 +4,8 @@ import time
 
 from pdd_agent.skills.listing import _sku_table_debug as sku_dbg
 from pdd_agent.skills.listing.pdd_page_image_errors import (
-    PddImageDimensionRejected,
-    raise_if_pdd_image_dimension_rejected,
+    PddImageUploadRejected,
+    raise_if_pdd_image_upload_rejected,
 )
 
 
@@ -1106,7 +1106,7 @@ def _wait_preview_uploaded(
     sku_label = f"{style_name} / {size_name}".strip(" /")
     deadline = _now() + timeout
     while _now() < deadline:
-        raise_if_pdd_image_dimension_rejected(
+        raise_if_pdd_image_upload_rejected(
             page,
             account_id=account_id,
             label=sku_label,
@@ -1236,7 +1236,7 @@ def upload_row_preview(
                 t,
             )
             time.sleep(_PREVIEW_POST_INPUT_WAIT)
-            raise_if_pdd_image_dimension_rejected(
+            raise_if_pdd_image_upload_rejected(
                 page,
                 account_id=account_id,
                 label=label,
@@ -1268,7 +1268,7 @@ def upload_row_preview(
                 f"  预览图校验未通过 #{index + 1} (第{attempt}次)",
                 t,
             )
-            raise_if_pdd_image_dimension_rejected(
+            raise_if_pdd_image_upload_rejected(
                 page,
                 account_id=account_id,
                 label=label,
@@ -1304,7 +1304,7 @@ def upload_row_preview(
             flush=True,
         )
         return False
-    except PddImageDimensionRejected:
+    except PddImageUploadRejected:
         raise
     except Exception as e:
         err = _safe_exc(e)
@@ -3682,7 +3682,7 @@ def fill_multi_spec_rows(
                 size_names=size_names,
             ):
                 uploaded += 1
-        except PddImageDimensionRejected:
+        except PddImageUploadRejected:
             raise
         except Exception as exc:
             err = _safe_exc(exc)

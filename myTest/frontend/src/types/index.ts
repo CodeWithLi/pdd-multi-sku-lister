@@ -1048,6 +1048,7 @@ export interface AutoUploadConfig {
   enabled: boolean
   trigger_mode: AutoUploadTriggerMode
   account_id: string
+  account_ids: string[]
   activity_ids: string[]
   category_keyword: string
   auto_promotion: boolean

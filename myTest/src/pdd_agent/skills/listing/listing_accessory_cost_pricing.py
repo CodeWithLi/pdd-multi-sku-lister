@@ -1,10 +1,12 @@
 """配件成本定价模式（整合链路可选）。
 
-开启后拼单价 = 主商品拼多多定价 + Σ(子商品聚水潭成本) + 一次 0~5 元浮动。
+开启后拼单价 = 主商品拼多多定价 + Σ(子商品聚水潭成本) + 一次浮动。
 主商品：规格图文件名首段 / 单款时的款式码（来自飞书「拼多多比价定价」）。
 子商品：组合里的配件码，或套装文件名 + 段中除首段外的所有段（来自飞书「聚水潭ERP商品列表」成本）。
 
-本模块独立封装，关闭开关后原有 resolve_combo_pricing 逻辑不变。
+浮动规则（listing_accessory_cost_float_registry）：
+- 同一主商品组内继承同一浮动（单款先随机 0~5，组合/套装沿用）；
+- 同套图跨主商品时，单配件组合若子商品编码相同则拼单价对齐，反推该主商品组浮动。
 """
 
 from __future__ import annotations
@@ -14,6 +16,12 @@ from contextvars import ContextVar
 from typing import Any
 
 from pdd_agent.integrations.feishu.config import FeishuConfig, accessory_cost_pricing_enabled, load_feishu_config
+from pdd_agent.skills.listing.listing_accessory_cost_float_registry import (
+    accessory_align_key,
+    apply_reconciled_prices_to_unit,
+    main_group_key,
+    reconcile_accessory_cost_floats,
+)
 from pdd_agent.skills.listing.pdd_product_catalog import (
     BUNDLE_MODEL_CODE,
     ComboPricingError,
@@ -22,14 +30,22 @@ from pdd_agent.skills.listing.pdd_product_catalog import (
     _norm_code,
     catalog_codes_match,
     find_catalog_entry,
+    resolve_listing_price_scope,
 )
+
+if True:
+    from pdd_agent.domain.models import ListingUnit
 
 _active_ctx: ContextVar[bool] = ContextVar("accessory_cost_pricing_active", default=False)
 _cost_map_ctx: ContextVar[dict[str, float]] = ContextVar("accessory_cost_pricing_cost_map", default={})
 _float_min_ctx: ContextVar[float] = ContextVar("accessory_cost_pricing_float_min", default=0.0)
 _float_max_ctx: ContextVar[float] = ContextVar("accessory_cost_pricing_float_max", default=5.0)
-_float_cache_ctx: ContextVar[dict[tuple[str, str], float]] = ContextVar(
-    "accessory_cost_pricing_float_cache",
+_main_float_ctx: ContextVar[dict[tuple[str, str], float]] = ContextVar(
+    "accessory_cost_pricing_main_float",
+    default={},
+)
+_combo_anchor_ctx: ContextVar[dict[tuple[str, str], float]] = ContextVar(
+    "accessory_cost_pricing_combo_anchor",
     default={},
 )
 
@@ -67,13 +83,15 @@ def activate_accessory_cost_pricing(
     _cost_map_ctx.set(dict(cost_map or {}))
     _float_min_ctx.set(max(0.0, float(float_min)))
     _float_max_ctx.set(max(_float_min_ctx.get(), float(float_max)))
-    _float_cache_ctx.set({})
+    _main_float_ctx.set({})
+    _combo_anchor_ctx.set({})
 
 
 def deactivate_accessory_cost_pricing() -> None:
     _active_ctx.set(False)
     _cost_map_ctx.set({})
-    _float_cache_ctx.set({})
+    _main_float_ctx.set({})
+    _combo_anchor_ctx.set({})
 
 
 def accessory_cost_pricing_config(cfg: FeishuConfig | None = None) -> dict[str, Any]:
@@ -135,20 +153,43 @@ def _require_main_entry(code: str, catalog: dict[str, PddProductEntry]) -> PddPr
     return entry
 
 
-def _sku_float_key(listing_scope: str, style_code: str, model_code: str, accessory_codes: list[str]) -> tuple[str, str]:
+def _resolve_float_delta(
+    *,
+    listing_scope: str,
+    catalog: dict[str, PddProductEntry],
+    main_code: str,
+    main_price: float,
+    accessory_codes: list[str],
+    accessory_cost_sum: float,
+) -> float:
+    """增量定价时按继承规则取浮动（单元 reconcile 后会再次统一校正）。"""
     scope = str(listing_scope or "").strip() or "__default__"
-    accessory_sig = "+".join(_norm_code(code) for code in accessory_codes)
-    model_sig = _norm_code(model_code) or style_code
-    return scope, f"{_norm_code(style_code)}|{model_sig}|{accessory_sig}"
+    main_key = main_group_key(catalog, main_code)
+    main_sk = (scope, main_key)
+    align_key = accessory_align_key(accessory_codes)
+    align_sk = (scope, align_key) if align_key else None
 
+    main_floats = dict(_main_float_ctx.get())
+    combo_anchors = dict(_combo_anchor_ctx.get())
 
-def _final_float_delta(listing_scope: str, style_code: str, model_code: str, accessory_codes: list[str]) -> float:
-    key = _sku_float_key(listing_scope, style_code, model_code, accessory_codes)
-    cache = dict(_float_cache_ctx.get())
-    if key not in cache:
-        cache[key] = round(random.uniform(_float_min_ctx.get(), _float_max_ctx.get()), 2)
-        _float_cache_ctx.set(cache)
-    return cache[key]
+    if align_sk and align_sk in combo_anchors:
+        float_delta = round(combo_anchors[align_sk] - main_price - accessory_cost_sum, 2)
+        main_floats[main_sk] = float_delta
+        _main_float_ctx.set(main_floats)
+        return float_delta
+
+    if main_sk in main_floats:
+        float_delta = main_floats[main_sk]
+    else:
+        float_delta = round(random.uniform(_float_min_ctx.get(), _float_max_ctx.get()), 2)
+        main_floats[main_sk] = float_delta
+        _main_float_ctx.set(main_floats)
+
+    if align_sk and align_sk not in combo_anchors:
+        combo_anchors[align_sk] = round(main_price + accessory_cost_sum + float_delta, 2)
+        _combo_anchor_ctx.set(combo_anchors)
+
+    return float_delta
 
 
 def _resolve_inventory(
@@ -189,7 +230,7 @@ def resolve_accessory_cost_pricing(
     listing_scope: str = "",
     bundle_components: list[str] | None = None,
 ) -> tuple[str, str, str]:
-    """配件成本模式拼单价：主商品定价 + 子商品成本 + 一次浮动。"""
+    """配件成本模式拼单价：主商品定价 + 子商品成本 + 继承浮动。"""
     _ = defaults
     cost_map = _cost_map_ctx.get()
     main_code, accessory_codes = split_main_and_accessory_codes(
@@ -207,8 +248,22 @@ def resolve_accessory_cost_pricing(
     for code in accessory_codes:
         accessory_cost_sum += _lookup_accessory_cost(code, cost_map=cost_map, catalog=catalog)
 
-    float_delta = _final_float_delta(listing_scope, style_code, model_code, accessory_codes)
+    float_delta = _resolve_float_delta(
+        listing_scope=listing_scope,
+        catalog=catalog,
+        main_code=main_code,
+        main_price=main_price,
+        accessory_codes=accessory_codes,
+        accessory_cost_sum=accessory_cost_sum,
+    )
     group_price = round(main_price + accessory_cost_sum + float_delta, 2)
+    align_key = accessory_align_key(accessory_codes)
+    if align_key:
+        scope = str(listing_scope or "").strip() or "__default__"
+        anchor = _combo_anchor_ctx.get().get((scope, align_key))
+        if anchor is not None:
+            group_price = round(float(anchor), 2)
+
     if group_price <= 0:
         raise ComboPricingError(invalid_codes=[main_entry.code], reason="pricing_invalid")
 
@@ -223,6 +278,43 @@ def resolve_accessory_cost_pricing(
         model_code=model_code,
     )
     return inventory, _format_price(group_price), _format_price(single_price)
+
+
+def reconcile_accessory_cost_prices_for_unit(
+    unit: ListingUnit,
+    catalog: dict[str, PddProductEntry],
+    defaults: dict[str, str],
+) -> None:
+    """上架单元解析完成后，按浮动继承与同配件同价规则重算全部 SKU 拼单价。"""
+    _ = defaults
+    if not ensure_accessory_cost_pricing_active() or not unit.skus:
+        return
+
+    from pdd_agent.skills.listing.catalog import _parse_combo_component_codes
+    from pdd_agent.skills.listing.listing_price_float import get_listing_price_float_registry
+
+    listing_scope = resolve_listing_price_scope(
+        family_code=unit.family_code,
+        image_set=unit.image_set,
+        listing_label=unit.listing_label,
+    )
+    registry = get_listing_price_float_registry()
+
+    apply_reconciled_prices_to_unit(
+        unit,
+        catalog,
+        listing_scope=listing_scope,
+        float_min=_float_min_ctx.get(),
+        float_max=_float_max_ctx.get(),
+        cost_map=_cost_map_ctx.get(),
+        lookup_accessory_cost=_lookup_accessory_cost,
+        split_main_and_accessory_codes=split_main_and_accessory_codes,
+        bundle_model_code=BUNDLE_MODEL_CODE,
+        parse_combo_component_codes=_parse_combo_component_codes,
+        resolve_inventory=_resolve_inventory,
+        format_price=_format_price,
+        effective_single_price=registry.effective_single_price,
+    )
 
 
 def resolve_sku_pricing_with_accessory_cost_if_enabled(
@@ -245,3 +337,17 @@ def resolve_sku_pricing_with_accessory_cost_if_enabled(
         listing_scope=listing_scope,
         bundle_components=bundle_components,
     )
+
+
+__all__ = [
+    "accessory_cost_pricing_config",
+    "activate_accessory_cost_pricing",
+    "deactivate_accessory_cost_pricing",
+    "ensure_accessory_cost_pricing_active",
+    "is_accessory_cost_pricing_active",
+    "reconcile_accessory_cost_floats",
+    "reconcile_accessory_cost_prices_for_unit",
+    "resolve_accessory_cost_pricing",
+    "resolve_sku_pricing_with_accessory_cost_if_enabled",
+    "split_main_and_accessory_codes",
+]

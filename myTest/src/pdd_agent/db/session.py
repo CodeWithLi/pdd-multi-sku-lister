@@ -213,6 +213,26 @@ def _ensure_daily_listing_records_columns(engine: Engine) -> None:
         return
 
 
+def _ensure_integrated_pipelines_created_at_index(engine: Engine) -> None:
+    """为 integrated_pipelines.created_at 补充索引（list 按时间倒序）。"""
+    try:
+        inspector = inspect(engine)
+        if "integrated_pipelines" not in inspector.get_table_names():
+            return
+        existing = {idx["name"] for idx in inspector.get_indexes("integrated_pipelines")}
+        if "ix_integrated_pipelines_created_at" in existing:
+            return
+        with engine.begin() as conn:
+            conn.execute(
+                text(
+                    "CREATE INDEX ix_integrated_pipelines_created_at "
+                    "ON integrated_pipelines (created_at)"
+                )
+            )
+    except Exception:
+        return
+
+
 def _ensure_listed_folders_backfill(engine: Engine) -> None:
     try:
         inspector = inspect(engine)
@@ -275,11 +295,13 @@ def init_database() -> bool:
         _ensure_failure_sequential_job_columns(engine)
         _ensure_failure_sequential_batch_columns(engine)
         _ensure_daily_listing_records_columns(engine)
-        _ensure_listed_folders_backfill(engine)
+        _ensure_integrated_pipelines_created_at_index(engine)
         _engine = engine
         _sessionmaker = sessionmaker(bind=engine, expire_on_commit=False, future=True)
         _available = True
         _last_error = ""
+        # backfill 会调用 is_database_available()，须在 _available=True 之后执行，避免 init 重入
+        _ensure_listed_folders_backfill(engine)
         return True
     except Exception as exc:
         _engine = None

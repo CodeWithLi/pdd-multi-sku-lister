@@ -274,14 +274,33 @@ def test_read_branch_c_cover_upload_error_detects_dimension_message(monkeypatch)
     page = MagicMock()
     monkeypatch.setattr(
         listing_upload,
+        "read_pdd_image_file_size_error",
+        lambda _page: "",
+    )
+    monkeypatch.setattr(
+        listing_upload,
         "read_pdd_image_dimension_error",
         lambda _page: "尺寸不符合要求",
     )
     assert listing_upload._read_branch_c_cover_upload_error(page) == "尺寸不符合要求"
 
 
+def test_read_branch_c_cover_upload_error_detects_file_size_message(monkeypatch):
+    page = MagicMock()
+    monkeypatch.setattr(
+        listing_upload,
+        "read_pdd_image_file_size_error",
+        lambda _page: "上传图片大小不能超过 3MB",
+    )
+    assert listing_upload._read_branch_c_cover_upload_error(page) == "上传图片大小不能超过 3MB"
+
+
 def test_raise_if_branch_c_cover_upload_rejected_raises(monkeypatch):
     page = MagicMock()
+    monkeypatch.setattr(
+        "pdd_agent.skills.listing.pdd_page_image_errors.read_pdd_image_file_size_error",
+        lambda _page: "",
+    )
     monkeypatch.setattr(
         "pdd_agent.skills.listing.pdd_page_image_errors.read_pdd_image_dimension_error",
         lambda _page: "尺寸不符合要求",

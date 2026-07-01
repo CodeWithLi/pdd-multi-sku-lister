@@ -12,6 +12,7 @@ import yaml
 from pydantic import BaseModel, Field, model_validator
 
 from pdd_agent.core.logging import get_logger
+from pdd_agent.integrations.minio.config import DEFAULT_MINIO_CONFIG_PATH
 from pdd_agent.integrations.minio.rabbitmq_file_log import (
     EVENT_PIPELINE_QUEUED,
     EVENT_PIPELINE_START,
@@ -34,6 +35,7 @@ class AutoPipelineConfig(BaseModel):
     enabled: bool = False
     trigger_mode: AutoTriggerMode = "new_product_folder"
     account_id: str = ""
+    account_ids: list[str] = Field(default_factory=list)
     activity_ids: list[str] = Field(default_factory=lambda: ["20981"])
     category_keyword: str = "玩偶"
     auto_promotion: bool = True
@@ -49,10 +51,18 @@ class AutoPipelineConfig(BaseModel):
     @model_validator(mode="after")
     def normalize(self) -> "AutoPipelineConfig":
         self.activity_ids = list(dict.fromkeys(str(x).strip() for x in self.activity_ids if str(x).strip()))
-        self.account_id = str(self.account_id or "").strip()
+        ids = list(dict.fromkeys(str(x).strip() for x in self.account_ids if str(x).strip()))
+        if not ids and self.account_id:
+            ids = [str(self.account_id).strip()]
+        self.account_ids = ids
+        self.account_id = ids[0] if ids else ""
         self.category_keyword = str(self.category_keyword or "玩偶").strip() or "玩偶"
         self.material_source = str(self.material_source or "minio").strip().lower() or "minio"
         return self
+
+
+def resolve_auto_pipeline_account_ids(cfg: AutoPipelineConfig) -> list[str]:
+    return list(cfg.account_ids or [])
 
 
 def _load_minio_yaml_raw(path: Path | None = None) -> tuple[Path, dict]:
@@ -153,8 +163,9 @@ def batch_should_broadcast_upload(batch_summary: dict[str, Any]) -> bool:
     return bool(extract_auto_pipeline_product_codes(batch_summary, cfg.trigger_mode))
 
 
-def _dedup_key(account_id: str, product_codes: list[str]) -> str:
-    return f"{account_id}|{'|'.join(sorted(product_codes))}"
+def _dedup_key(account_ids: list[str], product_codes: list[str]) -> str:
+    stores = "|".join(sorted(str(x).strip() for x in account_ids if str(x).strip()))
+    return f"{stores}|{'|'.join(sorted(product_codes))}"
 
 
 def _mark_dedup(key: str) -> bool:
@@ -235,21 +246,26 @@ def _sync_full_image_sets_blocking(selectors: list[str]) -> str:
 
 def _run_auto_pipeline(
     *,
-    account_id: str,
+    account_ids: list[str],
     product_codes: list[str],
     cfg: AutoPipelineConfig,
     batch_summary: dict[str, Any] | None = None,
 ) -> None:
     try:
         from pdd_agent.api.services.config_service import get_account_or_none
-        from pdd_agent.api.services.pipeline_service import start_integrated_pipeline
+        from pdd_agent.api.services.pipeline_service import (
+            start_integrated_pipeline,
+            start_integrated_pipeline_batch,
+        )
         from pdd_agent.db.session import is_database_available
 
         if not is_database_available():
             logger.warning("auto pipeline skipped: database unavailable")
             return
-        if not get_account_or_none(account_id):
-            logger.warning("auto pipeline skipped: unknown account %s", account_id)
+
+        valid_accounts = [aid for aid in account_ids if get_account_or_none(aid)]
+        if not valid_accounts:
+            logger.warning("auto pipeline skipped: unknown accounts %s", account_ids)
             return
 
         material_source = cfg.material_source or "minio"
@@ -260,7 +276,7 @@ def _run_auto_pipeline(
                 log_rabbitmq_event(
                     EVENT_SYNC_START,
                     "追加图片：开始全量同步套图",
-                    account_id=account_id,
+                    account_ids=valid_accounts,
                     product_codes=product_codes,
                     selectors=set_selectors,
                     sync_mode="full_image_set",
@@ -271,7 +287,7 @@ def _run_auto_pipeline(
                     log_rabbitmq_event(
                         EVENT_SYNC_FAILED,
                         sync_err,
-                        account_id=account_id,
+                        account_ids=valid_accounts,
                         product_codes=product_codes,
                         selectors=set_selectors,
                     )
@@ -279,7 +295,7 @@ def _run_auto_pipeline(
                 log_rabbitmq_event(
                     EVENT_SYNC_DONE,
                     "套图全量同步完成",
-                    account_id=account_id,
+                    account_ids=valid_accounts,
                     product_codes=product_codes,
                     selectors=set_selectors,
                 )
@@ -287,7 +303,7 @@ def _run_auto_pipeline(
                 log_rabbitmq_event(
                     EVENT_SYNC_START,
                     "开始同步 MinIO 素材",
-                    account_id=account_id,
+                    account_ids=valid_accounts,
                     product_codes=product_codes,
                     sync_mode="product_codes",
                 )
@@ -297,31 +313,81 @@ def _run_auto_pipeline(
                     log_rabbitmq_event(
                         EVENT_SYNC_FAILED,
                         sync_err,
-                        account_id=account_id,
+                        account_ids=valid_accounts,
                         product_codes=product_codes,
                     )
                     return
                 log_rabbitmq_event(
                     EVENT_SYNC_DONE,
                     "MinIO 素材同步完成",
-                    account_id=account_id,
+                    account_ids=valid_accounts,
                     product_codes=product_codes,
                 )
 
-        pipeline = start_integrated_pipeline(
-            account_id=account_id,
-            product_codes=product_codes,
+        activity_delay_hours = 0 if cfg.demo_mode else cfg.activity_delay_hours
+        common_kwargs = dict(
             activity_ids=cfg.activity_ids,
             category_keyword=cfg.category_keyword,
             auto_promotion=cfg.auto_promotion,
             auto_limited_time_setup=cfg.auto_limited_time_setup,
-            continue_after_limited_time_failure=cfg.continue_after_limited_time_failure,
+            continue_after_limited_time_failure=True,
             continue_after_activity_failure=cfg.continue_after_activity_failure,
-            activity_delay_hours=0 if cfg.demo_mode else cfg.activity_delay_hours,
+            activity_delay_hours=activity_delay_hours,
             demo_mode=cfg.demo_mode,
             slot_alignment_test=cfg.slot_alignment_test,
             material_source=material_source,
+        )
+
+        if len(valid_accounts) >= 2:
+            items = [{"account_id": aid, "product_codes": product_codes} for aid in valid_accounts]
+            pipeline = start_integrated_pipeline_batch(
+                items=items,
+                store_sequential_enabled=True,
+                trigger_source="rabbitmq_auto",
+                **common_kwargs,
+            )
+            pipeline_id = ""
+            if pipeline.get("pipelines"):
+                pipeline_id = str(pipeline["pipelines"][0].get("pipeline_id") or "")
+            if pipeline.get("commerce_queued"):
+                logger.info(
+                    "auto pipeline batch queued accounts=%s products=%s intent=%s",
+                    valid_accounts,
+                    product_codes,
+                    pipeline.get("intent_id"),
+                )
+                log_rabbitmq_event(
+                    EVENT_PIPELINE_QUEUED,
+                    "多店铺串行整合链路进入商务排队",
+                    account_ids=valid_accounts,
+                    product_codes=product_codes,
+                    intent_id=pipeline.get("intent_id"),
+                    block_reason=pipeline.get("block_reason"),
+                )
+                return
+            logger.info(
+                "auto pipeline batch triggered batch_id=%s stores=%s products=%s first_pipeline=%s",
+                pipeline.get("batch_id"),
+                len(valid_accounts),
+                product_codes,
+                pipeline_id,
+            )
+            log_rabbitmq_event(
+                EVENT_PIPELINE_START,
+                "已启动多店铺串行整合链路",
+                account_ids=valid_accounts,
+                product_codes=product_codes,
+                pipeline_id=pipeline_id,
+                batch_id=pipeline.get("batch_id"),
+            )
+            return
+
+        account_id = valid_accounts[0]
+        pipeline = start_integrated_pipeline(
+            account_id=account_id,
+            product_codes=product_codes,
             trigger_source="rabbitmq_auto",
+            **common_kwargs,
         )
         if pipeline.get("commerce_queued"):
             logger.info(
@@ -354,13 +420,13 @@ def _run_auto_pipeline(
             pipeline_id=pipeline.get("pipeline_id"),
         )
     except Exception:
-        logger.exception("auto pipeline trigger failed account=%s products=%s", account_id, product_codes)
+        logger.exception("auto pipeline trigger failed accounts=%s products=%s", account_ids, product_codes)
 
 
 def format_auto_pipeline_reason(reason: str) -> str:
     labels = {
         "disabled": "自动上架未开启",
-        "missing_account_id": "未配置店铺，请在「自动化配置」中选择店铺并保存",
+        "missing_account_id": "未配置店铺，请在「自动化配置」中选择至少一家店铺并保存",
         "missing_activity_ids": "未配置营销活动",
         "no_matching_groups": "上传类型与触发范围不匹配（当前为追加图片，需选「仅追加文件」或「都可以」）",
         "dedup": "近期已触发过相同商品（120 秒内去重）",
@@ -387,8 +453,8 @@ def maybe_trigger_auto_pipeline(batch_summary: dict[str, Any]) -> dict[str, Any]
         result["reason_label"] = format_auto_pipeline_reason("no_indexed_files")
         return result
 
-    account_id = cfg.account_id
-    if not account_id:
+    account_ids = resolve_auto_pipeline_account_ids(cfg)
+    if not account_ids:
         result["reason"] = "missing_account_id"
         result["reason_label"] = format_auto_pipeline_reason("missing_account_id")
         return result
@@ -408,7 +474,7 @@ def maybe_trigger_auto_pipeline(batch_summary: dict[str, Any]) -> dict[str, Any]
         )
         return result
 
-    dedup = _dedup_key(account_id, product_codes)
+    dedup = _dedup_key(account_ids, product_codes)
     if _mark_dedup(dedup):
         result["reason"] = "dedup"
         result["product_codes"] = product_codes
@@ -422,7 +488,7 @@ def maybe_trigger_auto_pipeline(batch_summary: dict[str, Any]) -> dict[str, Any]
     thread = threading.Thread(
         target=_run_auto_pipeline,
         kwargs={
-            "account_id": account_id,
+            "account_ids": account_ids,
             "product_codes": product_codes,
             "cfg": cfg,
             "batch_summary": batch_summary,
@@ -433,6 +499,7 @@ def maybe_trigger_auto_pipeline(batch_summary: dict[str, Any]) -> dict[str, Any]
     thread.start()
     result["triggered"] = True
     result["product_codes"] = product_codes
-    result["account_id"] = account_id
+    result["account_ids"] = account_ids
+    result["account_id"] = account_ids[0]
     result["trigger_mode"] = cfg.trigger_mode
     return result

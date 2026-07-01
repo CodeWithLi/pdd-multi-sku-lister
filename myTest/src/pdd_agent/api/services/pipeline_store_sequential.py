@@ -48,6 +48,7 @@ def build_store_sequential_common_params(
     listing_per_batch_limited_time_enabled: bool,
     listing_per_batch_campaign_enabled: bool,
     delist_spec_code_search_enabled: bool = False,
+    trigger_source: str = "manual",
 ) -> dict[str, Any]:
     return {
         "activity_id": activity_id,
@@ -73,6 +74,7 @@ def build_store_sequential_common_params(
         "listing_per_batch_limited_time_enabled": listing_per_batch_limited_time_enabled,
         "listing_per_batch_campaign_enabled": listing_per_batch_campaign_enabled,
         "delist_spec_code_search_enabled": bool(delist_spec_code_search_enabled),
+        "trigger_source": str(trigger_source or "manual"),
     }
 
 

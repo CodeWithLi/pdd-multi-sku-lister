@@ -445,8 +445,15 @@ def wait_branch_c_category_advance_with_ai_nudge(
         return True
 
     _log(account_id, label, f"分支 C AI 标题页：继续监听页面跳转，最多 {max_wait}s…")
+    from pdd_agent.skills.listing.category_branch_c_overlay_dismiss import (
+        ensure_branch_c_blocking_overlays_cleared,
+    )
+
     for sec in range(max_wait):
         time.sleep(1)
+        ensure_branch_c_blocking_overlays_cleared(
+            page, account_id, label, max_attempts=1
+        )
         if not listing_upload._is_still_on_category_publish_step(page):
             _log(account_id, label, f"分支 C AI 标题页：已跳转到详情页 ({sec + 1}s)")
             return True
@@ -455,6 +462,9 @@ def wait_branch_c_category_advance_with_ai_nudge(
                 account_id,
                 label,
                 f"分支 C AI 标题页：仍在等待跳转 ({sec + 1}/{max_wait}s)，定向激活后重试下一步",
+            )
+            ensure_branch_c_blocking_overlays_cleared(
+                page, account_id, label, max_attempts=2
             )
             nudge_then_retry_branch_c_category_next(page, account_id, label)
 

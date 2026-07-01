@@ -810,6 +810,11 @@ def parse_new_listing_unit(
         _append_no_sku_material_diagnostics(unit, sibling_dirs)
         unit.warnings.append(ListingErrors.Msg.NO_SKU_PARSED.format(label=label))
     else:
+        from pdd_agent.skills.listing.listing_accessory_cost_pricing import (
+            reconcile_accessory_cost_prices_for_unit,
+        )
+
+        reconcile_accessory_cost_prices_for_unit(unit, catalog, defaults)
         for msg in apply_unit_listing_specs(
             unit,
             allow_ai=False,

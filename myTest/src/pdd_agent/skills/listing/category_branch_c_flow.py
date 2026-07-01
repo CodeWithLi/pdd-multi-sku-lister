@@ -22,6 +22,9 @@ from pdd_agent.skills.listing.category_branch_c_page_ai_title import (
 from pdd_agent.skills.listing.category_branch_c_recent import (
     log_branch_c_recent_diagnostics,
 )
+from pdd_agent.skills.listing.category_branch_c_titled_picker import (
+    log_branch_c_titled_picker_diagnostics,
+)
 
 if TYPE_CHECKING:
     from pdd_agent.browser.dp_compat_sync import DpPage
@@ -102,6 +105,7 @@ def run_branch_c_category_after_covers(
     )
     log_modal_diagnostics(page, account_id, label)
     log_branch_c_recent_diagnostics(page, account_id, label)
+    log_branch_c_titled_picker_diagnostics(page, account_id, label, listing_info)
     log_branch_c_category_diagnostics(page, account_id, label)
     log_branch_c_picker_diagnostics(page, account_id, label)
 
@@ -153,27 +157,46 @@ def run_branch_c_category_after_covers(
     elif listing_upload._branch_c_category_already_selected(page) and category_mode == "render_wait":
         _log(account_id, label, "分支 C：类目已选，等待渲染后点「下一步」")
     elif manual_category:
-        _log(account_id, label, "分支 C-手动：打开选择分类并搜索")
-        prepare_category_before_next(
-            page,
-            account_id,
-            label,
-            mode="render_wait",
-            burst_demo=False,
+        from pdd_agent.skills.listing.category_branch_c_titled_picker import (
+            branch_c_needs_titled_manual_category_pick,
+            run_branch_c_titled_manual_category_pick,
         )
-        if not listing_upload._open_category_selector_panel(page):
-            _log(account_id, label, "分支 C-手动：未找到「选择分类」入口")
-            return False, "not_found", category_mode
-        if not listing_upload._select_category_by_keyword_search(
-            page,
-            account_id,
-            label,
-            keyword,
-        ):
-            _log(account_id, label, "分支 C-手动：分类搜索失败")
-            return False, "not_found", "manual_picker"
-        category_mode = "manual_picker"
-        _log(account_id, label, "分支 C-手动：分类搜索完成，mode=manual_picker")
+
+        if branch_c_needs_titled_manual_category_pick(page, listing_info):
+            _log(account_id, label, "分支 C-带标题：选择分类 → 最近使用 → 确认")
+            if run_branch_c_titled_manual_category_pick(
+                page,
+                account_id,
+                label,
+                listing_info,
+            ):
+                category_mode = "manual_picker"
+                _log(account_id, label, "分支 C-带标题：选类完成，准备点下一步")
+            else:
+                _log(account_id, label, "分支 C-带标题：选类失败")
+                return False, "not_found", category_mode
+        else:
+            _log(account_id, label, "分支 C-手动：打开选择分类并搜索")
+            prepare_category_before_next(
+                page,
+                account_id,
+                label,
+                mode="render_wait",
+                burst_demo=False,
+            )
+            if not listing_upload._open_category_selector_panel(page):
+                _log(account_id, label, "分支 C-手动：未找到「选择分类」入口")
+                return False, "not_found", category_mode
+            if not listing_upload._select_category_by_keyword_search(
+                page,
+                account_id,
+                label,
+                keyword,
+            ):
+                _log(account_id, label, "分支 C-手动：分类搜索失败")
+                return False, "not_found", "manual_picker"
+            category_mode = "manual_picker"
+            _log(account_id, label, "分支 C-手动：分类搜索完成，mode=manual_picker")
     else:
         prepare_branch_c_category_before_next(
             page,

@@ -22,6 +22,8 @@ class ListingErrorCode:
     IMAGE_FILE_MISSING = "image_file_missing"
     CAROUSEL_IMAGE_DIMENSION_REJECTED = "carousel_image_dimension_rejected"
     PREVIEW_IMAGE_DIMENSION_REJECTED = "preview_image_dimension_rejected"
+    CAROUSEL_IMAGE_FILE_SIZE_REJECTED = "carousel_image_file_size_rejected"
+    PREVIEW_IMAGE_FILE_SIZE_REJECTED = "preview_image_file_size_rejected"
     CATALOG_PARSE_WARNING = "catalog_parse_warning"
     NO_VALID_UNITS = "no_valid_units"
     SLOT_ALIGNMENT_FAILED = "slot_alignment_failed"
@@ -106,6 +108,8 @@ class ListingErrors:
         ListingErrorCode.IMAGE_FILE_MISSING: "图片文件不存在或无法读取",
         ListingErrorCode.CAROUSEL_IMAGE_DIMENSION_REJECTED: "主图尺寸不符合平台要求",
         ListingErrorCode.PREVIEW_IMAGE_DIMENSION_REJECTED: "预览图尺寸不符合平台要求",
+        ListingErrorCode.CAROUSEL_IMAGE_FILE_SIZE_REJECTED: "主图大小不能超过3MB",
+        ListingErrorCode.PREVIEW_IMAGE_FILE_SIZE_REJECTED: "预览图大小不能超过3MB",
         ListingErrorCode.PRICE_FILL_PARTIAL: "价格表文字字段未全部填写（库存/拼团价/单买价/编码）",
         ListingErrorCode.PRICE_FILL_ROW_NOT_FOUND: "价格表找不到对应规格行",
         ListingErrorCode.PRICE_FILL_BY_INDEX_FAILED: "按行号填写价格表失败",
@@ -203,6 +207,8 @@ class ListingErrors:
         ListingErrorCode.IMAGE_FILE_MISSING: "图片文件不存在或打不开",
         ListingErrorCode.CAROUSEL_IMAGE_DIMENSION_REJECTED: "主图尺寸不符合要求",
         ListingErrorCode.PREVIEW_IMAGE_DIMENSION_REJECTED: "预览图尺寸不符合要求",
+        ListingErrorCode.CAROUSEL_IMAGE_FILE_SIZE_REJECTED: "主图大小不能超过3MB",
+        ListingErrorCode.PREVIEW_IMAGE_FILE_SIZE_REJECTED: "预览图大小不能超过3MB",
         ListingErrorCode.PRICE_FILL_PARTIAL: "价格表没填完整（库存/拼团价/单买价/编码）",
         ListingErrorCode.PRICE_FILL_ROW_NOT_FOUND: "价格表找不到对应规格行",
         ListingErrorCode.PRICE_FILL_BY_INDEX_FAILED: "按行号填写价格表失败",
@@ -329,6 +335,8 @@ class ListingErrors:
             ListingErrorCode.LISTED,
             ListingErrorCode.CAROUSEL_IMAGE_DIMENSION_REJECTED,
             ListingErrorCode.PREVIEW_IMAGE_DIMENSION_REJECTED,
+            ListingErrorCode.CAROUSEL_IMAGE_FILE_SIZE_REJECTED,
+            ListingErrorCode.PREVIEW_IMAGE_FILE_SIZE_REJECTED,
             ListingErrorCode.FEISHU_PRODUCT_CATALOG_MISSING,
         }
     )
@@ -757,6 +765,18 @@ class ListingErrors:
             return cleaned[0][:500]
         return "，".join(f"{idx}、{line}" for idx, line in enumerate(cleaned, 1))[:500]
 
+    @staticmethod
+    def _is_file_size_error_text(text: str) -> bool:
+        compact = re.sub(r"\s+", "", str(text or ""))
+        upper = compact.upper()
+        if "大小不能超过" in compact:
+            return True
+        if "不能超过3MB" in upper or "不能超过3M" in upper:
+            return True
+        if "文件大小不能超过" in compact or "图片过大" in compact:
+            return True
+        return False
+
     @classmethod
     def compact_feishu_line(
         cls,
@@ -882,6 +902,13 @@ class ListingErrors:
         if "未找到 9 商品素材图" in text or text == cls.Msg.MATERIAL_EMPTY:
             code = str(merchant_code or "").strip().upper()
             return cls.Msg.FEISHU_MATERIAL_MISSING.format(code=code) if code else "商品素材图缺失"
+        if cls._is_file_size_error_text(text):
+            code = str(merchant_code or "").strip().upper()
+            if "预览图" in text:
+                brief = "预览图大小不能超过3MB"
+            else:
+                brief = "主图大小不能超过3MB"
+            return f"{code}{brief}" if code else brief
         if "尺寸不符合" in text:
             code = str(merchant_code or "").strip().upper()
             if "预览图" in text:

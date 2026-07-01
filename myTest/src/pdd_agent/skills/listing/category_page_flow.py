@@ -92,6 +92,41 @@ def prepare_category_before_next(
     listing_upload._dismiss_category_search_overlay(page, account_id, label)
 
 
+def _wait_category_page_advance(
+    page: DpPage,
+    account_id: str,
+    label: str,
+    *,
+    max_wait: int,
+    mode: CategoryPageMode,
+    ui_type: str,
+) -> bool:
+    """分支 C 走专用等待（含图片空间弹窗关闭）；其余分支沿用 upload 逻辑。"""
+    if ui_type == "C":
+        from pdd_agent.skills.listing.category_branch_c_overlay_dismiss import (
+            wait_branch_c_category_page_advance,
+        )
+
+        return wait_branch_c_category_page_advance(
+            page,
+            account_id,
+            label,
+            max_wait=max_wait,
+            mode=mode,
+            ui_type=ui_type,
+        )
+    from pdd_agent.skills.listing import upload as listing_upload
+
+    return listing_upload._wait_for_category_page_advance(
+        page,
+        account_id,
+        label,
+        max_wait=max_wait,
+        mode=mode,
+        ui_type=ui_type,
+    )
+
+
 def click_category_next_and_advance(
     page: DpPage,
     account_id: str,
@@ -122,7 +157,7 @@ def click_category_next_and_advance(
             page, ui_type=ui_type, account_id=account_id, label=label
         ):
             return False, "not_found"
-        if not listing_upload._wait_for_category_page_advance(
+        if not _wait_category_page_advance(
             page,
             account_id,
             label,
@@ -142,7 +177,7 @@ def click_category_next_and_advance(
             page, ui_type=ui_type, account_id=account_id, label=label
         ):
             return False, "not_found"
-        if not listing_upload._wait_for_category_page_advance(
+        if not _wait_category_page_advance(
             page,
             account_id,
             label,
@@ -162,7 +197,7 @@ def click_category_next_and_advance(
             page, ui_type=ui_type, account_id=account_id, label=label
         ):
             return False, "not_found"
-        if not listing_upload._wait_for_category_page_advance(
+        if not _wait_category_page_advance(
             page,
             account_id,
             label,
@@ -177,7 +212,7 @@ def click_category_next_and_advance(
         page, ui_type=ui_type, account_id=account_id, label=label
     ):
         return False, "not_found"
-    if not listing_upload._wait_for_category_page_advance(
+    if not _wait_category_page_advance(
         page,
         account_id,
         label,

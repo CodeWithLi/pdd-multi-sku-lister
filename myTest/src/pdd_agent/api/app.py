@@ -37,6 +37,7 @@ from pdd_agent.api.services.failure_cycle_relist_scheduler import (
 )
 from pdd_agent.failure_sequential.scheduler import get_failure_sequential_scheduler
 from pdd_agent.api.services.commerce_dispatch_scheduler import get_commerce_dispatch_scheduler
+from pdd_agent.api.services.mq_auto_phase2_scheduler import get_mq_auto_phase2_scheduler
 from pdd_agent.api.services.platform_skip_dedupe_scheduler import get_platform_skip_dedupe_scheduler
 from pdd_agent.api.services.traffic_report_scheduler import get_traffic_report_scheduler
 from pdd_agent.api.services.task_queue import TaskQueueWorker
@@ -48,6 +49,7 @@ failure_cycle_relist_watch_scheduler = get_failure_cycle_relist_watch_scheduler(
 failure_sequential_scheduler = get_failure_sequential_scheduler()
 platform_skip_dedupe_scheduler = get_platform_skip_dedupe_scheduler()
 commerce_dispatch_scheduler = get_commerce_dispatch_scheduler()
+mq_auto_phase2_scheduler = get_mq_auto_phase2_scheduler()
 
 
 @asynccontextmanager
@@ -72,6 +74,7 @@ async def lifespan(app: FastAPI):
     failure_sequential_scheduler.start()
     platform_skip_dedupe_scheduler.start()
     commerce_dispatch_scheduler.start()
+    mq_auto_phase2_scheduler.start()
 
     from pdd_agent.integrations.minio.broadcast import bind_event_loop
     from pdd_agent.integrations.minio.rabbitmq_consumer import get_minio_rabbitmq_consumer
@@ -229,6 +232,7 @@ async def lifespan(app: FastAPI):
     await failure_cycle_relist_watch_scheduler.stop()
     await platform_skip_dedupe_scheduler.stop()
     await commerce_dispatch_scheduler.stop()
+    await mq_auto_phase2_scheduler.stop()
     await traffic_report_scheduler.stop()
     await worker.stop()
     logger.info("PDD Agent API stopped")

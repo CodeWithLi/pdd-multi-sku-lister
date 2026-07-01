@@ -233,7 +233,9 @@ def ensure_branch_c_category_ready_for_ai_title_flow(
             "分支 C 简化页（AI 标题）：无传统选类区，跳过选类直接点「下一步」",
         )
         return True
-    return ensure_branch_c_category_selected(page, account_id, label, category_keyword)
+    return ensure_branch_c_category_selected(
+        page, account_id, label, category_keyword, listing_info
+    )
 
 
 def click_branch_c_category_next_with_ai_burst(

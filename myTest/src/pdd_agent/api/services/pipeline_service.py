@@ -963,6 +963,19 @@ def _step_infos(row) -> list[dict[str, Any]]:
     limited_time_skip_reason = str((row.meta or {}).get("limited_time_skip_reason") or "")
 
     activity_detail = "等待限时限量购完成后预约"
+    if str(row.current_step or "") == "waiting_mq_phase2":
+        from pdd_agent.api.services.pipeline_mq_auto_commerce import format_mq_phase2_wait_detail
+
+        wait_detail = format_mq_phase2_wait_detail(meta)
+        if meta.get("mq_phase2_wait_reason"):
+            activity_detail = wait_detail
+        elif row.scheduled_activity_at and row.scheduled_activity_at > datetime.now():
+            activity_detail = (
+                f"上架与限时限量购已完成，店铺已释放；"
+                f"计划于 {row.scheduled_activity_at:%Y-%m-%d %H:%M} 后启动活动/推广"
+            )
+        else:
+            activity_detail = "上架与限时限量购已完成，店铺已释放；活动/推广到期后等待店铺空闲再执行"
     if listing_lt_phase_done and row.current_step in {"waiting_activity", "campaign_queued"}:
         activity_detail = "上架与限时限量购已完成，活动按预约时间执行"
     if row.scheduled_activity_at and campaign_status == "scheduled":
@@ -1284,6 +1297,8 @@ def start_integrated_pipeline(
         "commerce_trigger_source": str(trigger_source or "manual"),
         **listing_input_meta,
     }
+    if str(trigger_source or "") == "rabbitmq_auto":
+        meta["mq_auto_deferred_phase2"] = True
     if batch_id:
         meta["batch_id"] = batch_id
     if extra_meta:
@@ -1586,6 +1601,7 @@ def start_integrated_pipeline_batch(
     store_sequential_enabled: bool = False,
     delist_spec_code_search_enabled: bool = False,
     activity_limited_time_success_only: bool = False,
+    trigger_source: str = "manual",
 ) -> dict[str, Any]:
     """批量创建整合链路；默认各店按启动间隔错开并行入队；串行模式下一家跑完再跑下一家。"""
     from pdd_agent.api.services.pipeline_store_sequential import (
@@ -1630,6 +1646,7 @@ def start_integrated_pipeline_batch(
         listing_per_batch_campaign_enabled=listing_per_batch_campaign_enabled,
         delist_spec_code_search_enabled=delist_spec_code_search_enabled,
         activity_limited_time_success_only=activity_limited_time_success_only,
+        trigger_source=trigger_source,
     )
 
     if store_sequential_enabled:
@@ -2300,6 +2317,9 @@ def _on_campaign_finished(row, *, run_id: str, success: bool, result: dict[str, 
             error=final_error,
             meta_patch=meta_patch,
         )
+        from pdd_agent.api.services.pipeline_mq_auto_phase2 import maybe_complete_mq_phase2
+
+        maybe_complete_mq_phase2(get_integrated_pipeline(row.pipeline_id) or row)
         return
 
     _enqueue_pipeline_traffic(refreshed, meta_patch=meta_patch)
@@ -2331,6 +2351,17 @@ def _on_limited_time_finished(row, *, run_id: str, success: bool, result: dict[s
         run_id=run_id,
         success=success,
         error=error,
+    ):
+        return
+
+    from pdd_agent.api.services.pipeline_mq_auto_phase2 import handle_mq_auto_limited_time_finished
+
+    if handle_mq_auto_limited_time_finished(
+        row,
+        run_id=run_id,
+        success=success,
+        error=error or "",
+        advance_store_sequential_fn=_try_advance_store_sequential_after_listing_limited_time,
     ):
         return
 
@@ -2476,6 +2507,10 @@ def _on_traffic_finished(row, *, run_id: str, success: bool, error: str) -> None
             "traffic_finish_handled": True,
         },
     )
+    from pdd_agent.api.services.pipeline_mq_auto_phase2 import maybe_complete_mq_phase2_on_traffic_finished
+
+    refreshed = get_integrated_pipeline(row.pipeline_id) or row
+    maybe_complete_mq_phase2_on_traffic_finished(refreshed)
 
 
 def _run_status_value(status) -> str:

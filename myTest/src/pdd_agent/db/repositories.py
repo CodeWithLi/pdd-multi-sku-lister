@@ -476,6 +476,28 @@ def list_busy_account_ids() -> set[str]:
         return busy
 
 
+def count_account_queue_tasks(
+    account_id: str,
+    *,
+    statuses: tuple[str, ...] = ("queued",),
+) -> int:
+    """统计某店铺在任务队列中指定状态的任务数。"""
+    if not is_database_available():
+        return 0
+    account_id = str(account_id or "").strip()
+    if not account_id:
+        return 0
+    with session_scope() as session:
+        stmt = (
+            select(func.count())
+            .select_from(TaskQueueORM)
+            .where(TaskQueueORM.account_id == account_id)
+        )
+        if statuses:
+            stmt = stmt.where(TaskQueueORM.status.in_(statuses))
+        return int(session.scalar(stmt) or 0)
+
+
 def claim_due_task(max_concurrent: int) -> TaskQueueORM | None:
     if not is_database_available():
         return None
@@ -1831,6 +1853,56 @@ def list_integrated_pipelines(
         if batch_id:
             stmt = stmt.where(IntegratedPipelineORM.meta["batch_id"].as_string() == batch_id)
         stmt = stmt.offset(max(0, int(offset))).limit(max(1, min(limit, 200)))
+        rows = session.scalars(stmt).all()
+        for row in rows:
+            session.expunge(row)
+        return list(rows)
+
+
+def list_mq_auto_phase2_due_pipelines(*, limit: int = 10) -> list[IntegratedPipelineORM]:
+    """已到期的 MQ 阶段二候选（waiting_mq_phase2 + scheduled_activity_at <= now）。"""
+    if not is_database_available():
+        return []
+    now = datetime.now()
+    with session_scope() as session:
+        stmt = (
+            select(IntegratedPipelineORM)
+            .where(
+                IntegratedPipelineORM.current_step == "waiting_mq_phase2",
+                IntegratedPipelineORM.scheduled_activity_at.is_not(None),
+                IntegratedPipelineORM.scheduled_activity_at <= now,
+            )
+            .order_by(IntegratedPipelineORM.scheduled_activity_at.asc())
+            .limit(max(1, min(limit * 5, 100)))
+        )
+        rows = session.scalars(stmt).all()
+        due: list[IntegratedPipelineORM] = []
+        for row in rows:
+            meta = row.meta if isinstance(row.meta, dict) else {}
+            if not meta.get("mq_auto_deferred_phase2"):
+                continue
+            if meta.get("mq_phase2_status") != "pending":
+                continue
+            session.expunge(row)
+            due.append(row)
+            if len(due) >= max(1, limit):
+                break
+        return due
+
+
+def list_mq_auto_phase2_running_pipelines(*, limit: int = 20) -> list[IntegratedPipelineORM]:
+    """阶段二进行中的 MQ 链路（用于串行互斥）。"""
+    if not is_database_available():
+        return []
+    with session_scope() as session:
+        stmt = (
+            select(IntegratedPipelineORM)
+            .where(
+                IntegratedPipelineORM.meta["mq_phase2_status"].as_string() == "running",
+            )
+            .order_by(IntegratedPipelineORM.updated_at.asc())
+            .limit(max(1, min(limit, 100)))
+        )
         rows = session.scalars(stmt).all()
         for row in rows:
             session.expunge(row)

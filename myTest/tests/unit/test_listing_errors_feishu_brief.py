@@ -1,6 +1,6 @@
 """飞书失败原因短格式。"""
 
-from pdd_agent.domain.listing_errors import ListingErrors
+from pdd_agent.domain.listing_errors import ListingErrorCode, ListingErrors
 
 
 def test_format_numbered_joins_multiple_lines():
@@ -210,3 +210,18 @@ def test_feishu_brief_detail_and_material_missing():
         merchant_code="BD046A",
     )
     assert material == "BD046A商品素材图缺失"
+
+
+def test_feishu_brief_preview_file_size_rejected():
+    line = ListingErrors.compact_feishu_line(
+        "预览图大小不能超过3MB [绿色 / 笔袋]：上传图片大小不能超过 3MB",
+        merchant_code="BD201A",
+    )
+    assert line == "BD201A预览图大小不能超过3MB"
+
+    by_code = ListingErrors.compact_feishu_line(
+        "",
+        reason_code=ListingErrorCode.PREVIEW_IMAGE_FILE_SIZE_REJECTED,
+        merchant_code="BD201A",
+    )
+    assert by_code == "预览图大小不能超过3MB"
