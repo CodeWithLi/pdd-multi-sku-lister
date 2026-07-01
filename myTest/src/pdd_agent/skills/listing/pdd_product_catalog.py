@@ -218,6 +218,8 @@ class ComboPricingError(Exception):
         label = "、".join(codes)
         if self.reason == "pricing_invalid":
             super().__init__(f"商品表编码[{label}]拼多多定价无效")
+        elif self.reason == "jushuitan_cost_missing":
+            super().__init__(f"聚水潭成本缺失[{label}]")
         else:
             super().__init__(f"商品表无编码[{label}]，无法定价")
 

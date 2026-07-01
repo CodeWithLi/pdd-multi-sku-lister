@@ -237,6 +237,16 @@ class PipelinePlatformSkipDedupeUpdateIn(BaseModel):
     enabled: bool
 
 
+class PipelineAccessoryCostPricingOut(BaseModel):
+    enabled: bool
+    float_min: float = 0.0
+    float_max: float = 5.0
+
+
+class PipelineAccessoryCostPricingUpdateIn(BaseModel):
+    enabled: bool
+
+
 class AutoUploadConfigResponse(BaseModel):
     enabled: bool = False
     trigger_mode: str = "new_product_folder"

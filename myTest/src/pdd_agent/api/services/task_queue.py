@@ -194,6 +194,7 @@ class TaskQueueWorker:
                     slot_alignment_test=bool(payload.get("slot_alignment_test")),
                     category_next_burst_demo=bool(payload.get("category_next_burst_demo", True)),
                     material_source=str(payload.get("material_source") or ""),
+                    pipeline_id=str(payload.get("pipeline_id") or ""),
                 )
             elif row.agent == AgentKind.DELIST.value:
                 result = await execute_delist(

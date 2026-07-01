@@ -76,8 +76,10 @@ def test_branch_c_details_page_applies_page_ai():
         "pdd_agent.skills.listing.page_ai_title.is_page_ai_title_mode",
         return_value=True,
     ), patch(
+        "pdd_agent.skills.listing.page_ai_title.try_apply_branch_c_ai_title_generate_dropdown",
+        return_value="蕾丝心形笔袋优雅收纳",
+    ) as mock_dropdown, patch(
         "pdd_agent.skills.listing.page_ai_title.apply_title_after_cover_upload",
-        return_value="详情页AI标题",
     ) as mock_apply:
         title = apply_title_after_branch_c_category_advance(
             page,
@@ -86,5 +88,6 @@ def test_branch_c_details_page_applies_page_ai():
             "",
             label="AXBD001A",
         )
-    assert title == "详情页AI标题"
-    mock_apply.assert_called_once()
+    assert title == "蕾丝心形笔袋优雅收纳"
+    mock_dropdown.assert_called_once()
+    mock_apply.assert_not_called()

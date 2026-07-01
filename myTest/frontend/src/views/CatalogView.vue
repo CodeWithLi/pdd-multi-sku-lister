@@ -478,7 +478,7 @@ async function uploadFolderToMinio() {
         ElMessage.success(autoHint)
       } else if (
         result.local_process?.auto_pipeline?.reason &&
-        !['disabled', 'append_only_batch'].includes(result.local_process.auto_pipeline.reason)
+        !['disabled'].includes(result.local_process.auto_pipeline.reason)
       ) {
         ElMessage.warning(autoHint)
       }

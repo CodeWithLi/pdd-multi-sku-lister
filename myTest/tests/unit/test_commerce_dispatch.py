@@ -344,6 +344,10 @@ def test_reset_account_clears_intents_and_lifecycle(mock_db, monkeypatch):
         "pdd_agent.db.repositories.get_integrated_pipeline",
         lambda _pid: None,
     )
+    monkeypatch.setattr(
+        "pdd_agent.api.services.commerce_queue_reset.cancel_account_queue_tasks",
+        lambda _aid: {"ok": True, "canceled_count": 0, "canceled_run_ids": []},
+    )
     result = cd.reset_account_commerce_state("store_a", cancel_pipelines=False)
     assert result["ok"] is True
     assert result["canceled_intents"] == 1

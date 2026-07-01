@@ -195,12 +195,13 @@ pdd_product_catalog:
 # 上架库存：聚水潭 ERP 可用数（按商品编码匹配）
 jushuitan_erp_inventory:
   enabled: true
-  table_id: ""
+  table_id: tblQCVKFhXF8TdfQ
   table_name: 聚水潭ERP商品列表
   cache_seconds: 300
   field_names:
     product_code: 商品编码
     available_qty: 可用数
+    cost: 成本
 
 # pdd.xls 控价区间 → 飞书「拼多多比价定价」
 pdd_price_compare:
@@ -223,3 +224,6 @@ pipeline:
   platform_skip_dedupe_enabled: false
   platform_skip_dedupe_sync_seconds: 300
   platform_skip_dedupe_fetch_limit: 2000
+  accessory_cost_pricing_enabled: false
+  accessory_cost_float_min: 0
+  accessory_cost_float_max: 5

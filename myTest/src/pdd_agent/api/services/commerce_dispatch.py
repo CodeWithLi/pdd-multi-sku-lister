@@ -805,6 +805,9 @@ def get_commerce_overview(*, intent_limit: int = 100) -> dict[str, Any]:
             "pending_total": 0,
             "pending_by_account": {},
         }
+    from pdd_agent.api.services.commerce_overview_sync import refresh_commerce_overview_state
+
+    refresh_commerce_overview_state(dispatch_pending=False)
     lifecycles = list_active_account_lifecycles()
     pending = list_pending_intents(limit=intent_limit)
     pending_by_account: dict[str, int] = {}
@@ -1037,6 +1040,11 @@ def reset_account_commerce_state(
         outcome = cancel_commerce_intents(account_id=account_id)
         canceled_intents = int(outcome.get("canceled_count") or 0)
 
+    from pdd_agent.api.services.commerce_queue_reset import cancel_account_queue_tasks
+
+    queue_outcome = cancel_account_queue_tasks(account_id)
+    canceled_queue_tasks = int(queue_outcome.get("canceled_count") or 0)
+
     lifecycle_cleared = False
     if reconcile_stale:
         lc = _get_account_lifecycle(account_id)
@@ -1055,12 +1063,13 @@ def reset_account_commerce_state(
     if clear_lifecycle and not lifecycle_cleared:
         lifecycle_cleared = _force_clear_account_lifecycle(account_id, reason="reset_force")
 
-    had_work = bool(canceled_pipelines or canceled_intents or lifecycle_cleared)
+    had_work = bool(canceled_pipelines or canceled_intents or lifecycle_cleared or canceled_queue_tasks)
     result: dict[str, Any] = {
         "ok": had_work or not pipeline_errors,
         "account_id": account_id,
         "canceled_pipelines": canceled_pipelines,
         "canceled_intents": canceled_intents,
+        "canceled_queue_tasks": canceled_queue_tasks,
         "lifecycle_cleared": lifecycle_cleared,
         "pipeline_errors": pipeline_errors,
     }
@@ -1091,6 +1100,10 @@ def reset_commerce_state(
             aid = str(item.get("account_id") or "").strip()
             if aid:
                 targets.add(aid)
+        from pdd_agent.api.services.commerce_queue_reset import list_accounts_with_active_queue_tasks
+
+        for aid in list_accounts_with_active_queue_tasks():
+            targets.add(aid)
     else:
         for aid in account_ids or []:
             aid = str(aid or "").strip()
@@ -1099,12 +1112,26 @@ def reset_commerce_state(
 
     if not targets:
         stale = reconcile_stale_lifecycles()
+        from pdd_agent.api.services.commerce_queue_reset import (
+            cancel_account_queue_tasks,
+            list_accounts_with_active_queue_tasks,
+        )
+
+        queue_cleared = 0
+        for aid in list_accounts_with_active_queue_tasks():
+            outcome = cancel_account_queue_tasks(aid)
+            queue_cleared += int(outcome.get("canceled_count") or 0)
         return {
-            "ok": stale > 0,
+            "ok": stale > 0 or queue_cleared > 0,
             "count": 0,
             "stale_cleared": stale,
+            "queue_tasks_cleared": queue_cleared,
             "results": [],
-            "message": "没有需要重置的店铺" if stale <= 0 else f"已清理 {stale} 条残留周期",
+            "message": (
+                "没有需要重置的店铺"
+                if stale <= 0 and queue_cleared <= 0
+                else f"已清理残留（周期 {stale}，队列任务 {queue_cleared}）"
+            ),
         }
 
     results = [
@@ -1124,6 +1151,7 @@ def reset_commerce_state(
         "results": results,
         "canceled_pipelines_total": sum(len(r.get("canceled_pipelines") or []) for r in results),
         "canceled_intents_total": sum(int(r.get("canceled_intents") or 0) for r in results),
+        "canceled_queue_tasks_total": sum(int(r.get("canceled_queue_tasks") or 0) for r in results),
         "lifecycle_cleared_total": sum(1 for r in results if r.get("lifecycle_cleared")),
     }
 

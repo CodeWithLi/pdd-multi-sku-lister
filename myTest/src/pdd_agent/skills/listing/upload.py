@@ -33,7 +33,6 @@ from pdd_agent.skills.listing.multi_spec_page import (
 from pdd_agent.skills.listing.category_branch_c_flow import run_branch_c_category_after_covers
 from pdd_agent.skills.listing.category_branch_title import (
     apply_title_after_branch_c_category_advance,
-    apply_title_after_branch_c_cover_upload,
 )
 from pdd_agent.skills.listing.category_page_flow import (
     CategoryPageMode,
@@ -468,6 +467,10 @@ def _click_submit(page: DpPage, account_id: str, label: str) -> tuple[bool, date
 
 
 def _open_goods_list(page: DpPage, account_id: str, tab_text: str = "在售中") -> bool:
+    from pdd_agent.skills.listing.listing_pdd_overlay_dismiss import (
+        ensure_post_publish_modals_cleared,
+    )
+
     for url in GOODS_LIST_URLS:
         try:
             page.get(url)
@@ -478,6 +481,8 @@ def _open_goods_list(page: DpPage, account_id: str, tab_text: str = "在售中")
                 break
         except Exception:
             continue
+
+    ensure_post_publish_modals_cleared(page, account_id, "", max_attempts=3)
 
     try:
         tab = page.ele(f"text:{tab_text}", timeout=3)
@@ -1659,7 +1664,11 @@ def _resolve_category_page_mode(
 
 def _category_direct_next_ready(page: DpPage) -> bool:
     """已选完整类目且下一步可点：以图/搜索发品或底部已选分类条。"""
-    if not _branch_c_category_already_selected(page):
+    from pdd_agent.skills.listing.category_branch_c_recent import (
+        branch_c_category_path_ready_strict,
+    )
+
+    if not branch_c_category_path_ready_strict(page):
         return False
     try:
         ready = page.run_js(
@@ -2280,56 +2289,16 @@ def _branch_c_category_already_selected(page: DpPage) -> bool:
         body_text_indicates_recommendation_modal,
         is_modal_blocking_category_advance,
     )
+    from pdd_agent.skills.listing.category_branch_c_recent import (
+        branch_c_category_path_ready_strict,
+    )
 
     body = _category_page_body_text(page)
     if body_text_indicates_recommendation_modal(body) or is_modal_blocking_category_advance(page):
         return False
-    compact = body.replace(" ", "").replace("\n", "")
-    modal_open = _is_image_category_recommendation_modal_visible(page)
-    if ("已选分类" in body or "已选分类" in compact) and not modal_open:
-        has_next = bool(
-            page.ele("#bottomSubmitBtnId", timeout=0.5) or page.ele("text:下一步", timeout=0.5)
-        )
-        if has_next and body.count(">") >= 2:
-            return True
-    if modal_open:
+    if _is_image_category_recommendation_modal_visible(page):
         return False
-    if "暂无推荐的分类" in body:
-        return False
-    if "暂无推荐" in body:
-        return False
-    has_next = bool(
-        page.ele("#bottomSubmitBtnId", timeout=0.5) or page.ele("text:下一步", timeout=0.5)
-    )
-    if has_next and "商品分类" in body and body.count(">") >= 2:
-        return True
-    try:
-        selected = page.run_js(
-            """
-            function isVisible(el) {
-                if (!el) return false;
-                const r = el.getBoundingClientRect();
-                const s = window.getComputedStyle(el);
-                return r.width > 2 && r.height > 2
-                    && s.display !== 'none' && s.visibility !== 'hidden';
-            }
-            for (const el of document.querySelectorAll(
-                '[class*="selected"], [class*="Selected"], [class*="active"], [class*="checked"], [class*="current"]'
-            )) {
-                if (!isVisible(el)) continue;
-                const t = (el.innerText || el.textContent || '').trim();
-                if (t.includes('>') && t.split('>').length >= 2) return true;
-            }
-            const bodyText = document.body?.innerText || '';
-            if (!bodyText.includes('商品分类')) return false;
-            const pathMatch = bodyText.match(/[^\\n>]{2,30}\\s*>\\s*[^\\n>]{2,30}\\s*>\\s*[^\\n>]{2,30}/);
-            if (pathMatch && !bodyText.includes('暂无推荐的分类') && !bodyText.includes('暂无推荐')) return true;
-            return false;
-            """
-        )
-        return bool(selected)
-    except Exception:
-        return False
+    return branch_c_category_path_ready_strict(page)
 
 
 def _open_category_selector_panel(page: DpPage) -> bool:
@@ -2711,7 +2680,8 @@ def _read_category_submit_state(page: DpPage) -> dict[str, Any]:
                     || el.getAttribute('aria-disabled') === 'true'
                     || (el.className || '').includes('disabled');
             }
-            const blocking = body.includes('请选择完整的分类');
+            const blocking = body.includes('请选择完整的分类')
+                || body.includes('请选择完整分类');
             const manualPickerOpen = !!Array.from(document.querySelectorAll(
                 'input[placeholder="请输入关键词搜索分类"], div, span, li, button'
             )).find((el) => {
@@ -2719,12 +2689,27 @@ def _read_category_submit_state(page: DpPage) -> dict[str, Any]:
                 if (!isVisible(el)) return false;
                 return t.includes('搜索类目') || t.includes('分类选择');
             });
-            let selectedPathReady = compact.includes('已选分类') && body.includes('>');
+            function isInRecentSection(el) {
+                let node = el;
+                for (let i = 0; i < 10 && node; i++) {
+                    const t = (node.innerText || node.textContent || '').slice(0, 120);
+                    if (t.includes('最近使用')) return true;
+                    node = node.parentElement;
+                }
+                return false;
+            }
+            let selectedPathReady = false;
+            if (compact.includes('已根据主轮播图选择分类')) {
+                selectedPathReady = true;
+            }
+            if (!selectedPathReady && compact.includes('已选分类') && body.includes('>')) {
+                selectedPathReady = true;
+            }
             if (!selectedPathReady) {
                 for (const el of document.querySelectorAll(
                     '[class*="selected"], [class*="Selected"], [class*="active"], [class*="checked"], [class*="current"], div, span, li'
                 )) {
-                    if (!isVisible(el)) continue;
+                    if (!isVisible(el) || isInRecentSection(el)) continue;
                     const t = (el.innerText || el.textContent || '').replace(/\\s+/g, ' ').trim();
                     if (!t.includes('>')) continue;
                     const parts = t.split('>').map((x) => x.trim()).filter(Boolean);
@@ -2734,6 +2719,7 @@ def _read_category_submit_state(page: DpPage) -> dict[str, Any]:
                     }
                 }
             }
+            if (blocking) selectedPathReady = false;
             let btn = document.querySelector('[data-e2e-id="e2e-publish-button"]')
                 || document.getElementById('bottomSubmitBtnId');
             let visible = btn ? isVisible(btn) : false;
@@ -2753,7 +2739,7 @@ def _read_category_submit_state(page: DpPage) -> dict[str, Any]:
             const r = btn.getBoundingClientRect();
             const readyByPath = visible && !disabled && selectedPathReady && !blocking;
             return {
-                ready: readyByPath || (visible && !disabled && !blocking),
+                ready: readyByPath,
                 blocking,
                 disabled,
                 visible,
@@ -3186,6 +3172,13 @@ def _click_branch_c_upload_placeholder(
         if clicked:
             print(f"{prefix}分支 C：已点击上传占位区", flush=True)
             time.sleep(0.8)
+            from pdd_agent.skills.listing.listing_pdd_overlay_dismiss import (
+                ensure_image_space_modal_cleared,
+            )
+
+            ensure_image_space_modal_cleared(
+                page, account_id or "", label or "", max_attempts=2
+            )
             return True
     except Exception:
         pass
@@ -3228,6 +3221,13 @@ def _upload_branch_c_cover_files(
         return False
     for sec in range(wait_seconds):
         time.sleep(1)
+        from pdd_agent.skills.listing.listing_pdd_overlay_dismiss import (
+            ensure_image_space_modal_cleared,
+        )
+
+        ensure_image_space_modal_cleared(
+            page, account_id or "", label or "", max_attempts=1
+        )
         _raise_if_branch_c_cover_upload_rejected(
             page, account_id=account_id, label=label
         )
@@ -3612,13 +3612,19 @@ def _upload_category_branch_c_covers(
             )
 
     time.sleep(random.uniform(1.0, 2.0))
-    title = apply_title_after_branch_c_cover_upload(
+    from pdd_agent.skills.listing.category_branch_c_page_ai_title import (
+        META_KEY_CATEGORY_AI_APPLIED,
+        prepare_branch_c_cover_upload_title,
+    )
+
+    title, ai_on_category = prepare_branch_c_cover_upload_title(
         page,
         account_id,
         product_info,
         listing_info.get("title", ""),
         label=label,
     )
+    listing_info[META_KEY_CATEGORY_AI_APPLIED] = ai_on_category
     time.sleep(1)
     return title
 
@@ -3678,6 +3684,11 @@ def upload_one_listing(
     time.sleep(5)
     if _dismiss_address_required_page(page, account_id, label):
         time.sleep(2)
+    from pdd_agent.skills.listing.listing_pdd_overlay_dismiss import (
+        ensure_image_space_modal_cleared,
+    )
+
+    ensure_image_space_modal_cleared(page, account_id, label, max_attempts=2)
 
     ui_type = _detect_category_ui_type(page)
     print(f"[{account_id}] [{label}] 路由判定：分支 {ui_type}")
@@ -4111,6 +4122,11 @@ def upload_one_listing(
         wait_seconds = 20 if ok else 35
         print(f"[{account_id}] [{label}] 等待 {wait_seconds} 秒后核验在售/驳回状态", flush=True)
         time.sleep(wait_seconds)
+        from pdd_agent.skills.listing.listing_pdd_overlay_dismiss import (
+            ensure_post_publish_modals_cleared,
+        )
+
+        ensure_post_publish_modals_cleared(page, account_id, label, max_attempts=4)
         capture = _capture_publish_outcome(
             page,
             account_id,
@@ -4297,6 +4313,17 @@ def _persist_unit_progress(run_id: str, item: dict[str, Any]) -> None:
     if not isinstance(compacted, dict):
         compacted = item
     TaskRunStore().append_listing_result(run_id, compacted)
+    try:
+        from pdd_agent.api.services.pipeline_listing_batch_resume import (
+            persist_batch_unit_outcome_for_run,
+        )
+
+        persist_batch_unit_outcome_for_run(
+            run_id,
+            compacted if isinstance(compacted, dict) else item,
+        )
+    except Exception:
+        pass
 
 
 def run_listing_uploads(

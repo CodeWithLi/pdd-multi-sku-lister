@@ -1226,6 +1226,7 @@ async def execute_listing(
     slot_alignment_test: bool = False,
     category_next_burst_demo: bool = True,
     material_source: str | None = None,
+    pipeline_id: str = "",
 ) -> dict[str, Any]:
     """执行 listing 子图，更新 RunRecord。"""
     from pdd_agent.integrations.minio.material import prepare_listing_assets
@@ -1243,6 +1244,29 @@ async def execute_listing(
         return {"error": f"unknown account: {account_id}"}
 
     codes = product_codes or account.product_codes
+    batch_resume_plan = None
+    pipeline_id = str(pipeline_id or "").strip()
+    if pipeline_id:
+        from pdd_agent.api.services.pipeline_listing_batch_resume import (
+            finish_listing_if_batch_already_complete,
+            merge_resumed_listing_graph_result,
+            prepare_listing_batch_resume,
+        )
+
+        codes, batch_resume_plan = prepare_listing_batch_resume(
+            pipeline_id=pipeline_id,
+            run_id=run_id,
+            product_codes=list(codes),
+        )
+        if batch_resume_plan is not None:
+            early = finish_listing_if_batch_already_complete(
+                run_id=run_id,
+                account_id=account_id,
+                plan=batch_resume_plan,
+            )
+            if early is not None:
+                return early
+
     store.update_status(run_id, RunStatus.RUNNING)
     store.update_phase(run_id, TaskPhase.PREFLIGHT)
 
@@ -1286,18 +1310,38 @@ async def execute_listing(
         logger.exception("platform skip dedupe filter failed run_id=%s", run_id)
 
     try:
-        from pdd_agent.integrations.feishu.config import load_feishu_config
+        from pdd_agent.integrations.feishu.config import accessory_cost_pricing_enabled, load_feishu_config
+        from pdd_agent.skills.listing.listing_accessory_cost_pricing import (
+            activate_accessory_cost_pricing,
+            deactivate_accessory_cost_pricing,
+        )
         from pdd_agent.skills.listing.listing_price_float import reset_listing_price_float_registry
 
         feishu_cfg = load_feishu_config()
         cat_cfg = feishu_cfg.pdd_product_catalog
-        reset_listing_price_float_registry(
-            float_min=cat_cfg.price_float_min,
-            float_max=cat_cfg.price_float_max,
-            enabled=cat_cfg.price_float_enabled,
-            single_float_min=cat_cfg.single_price_float_min,
-            single_float_max=cat_cfg.single_price_float_max,
-        )
+        if accessory_cost_pricing_enabled(feishu_cfg):
+            from pdd_agent.integrations.feishu.jushuitan_erp_inventory import load_jushuitan_cost_map
+
+            pipe_cfg = feishu_cfg.pipeline
+            activate_accessory_cost_pricing(
+                cost_map=load_jushuitan_cost_map(config=feishu_cfg),
+                float_min=pipe_cfg.accessory_cost_float_min,
+                float_max=pipe_cfg.accessory_cost_float_max,
+            )
+            reset_listing_price_float_registry(
+                enabled=False,
+                single_float_min=cat_cfg.single_price_float_min,
+                single_float_max=cat_cfg.single_price_float_max,
+            )
+        else:
+            deactivate_accessory_cost_pricing()
+            reset_listing_price_float_registry(
+                float_min=cat_cfg.price_float_min,
+                float_max=cat_cfg.price_float_max,
+                enabled=cat_cfg.price_float_enabled,
+                single_float_min=cat_cfg.single_price_float_min,
+                single_float_max=cat_cfg.single_price_float_max,
+            )
     except Exception:
         logger.exception("reset listing price float registry failed run_id=%s", run_id)
 
@@ -1419,6 +1463,8 @@ async def execute_listing(
             }
         )
         result = _json_safe(raw)
+        if batch_resume_plan is not None:
+            result = merge_resumed_listing_graph_result(batch_resume_plan, result)
         if dedupe_skipped_results:
             merged = list(dedupe_skipped_results) + list(result.get("results") or [])
             result["results"] = merged

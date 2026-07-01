@@ -189,6 +189,13 @@ def maybe_advance_sequential_store_after_listing_limited_time(row) -> dict[str, 
     """
     if not row:
         return None
+    from pdd_agent.api.services.pipeline_per_batch_lt_failure_policy import (
+        should_block_sequential_store_advance,
+    )
+
+    if should_block_sequential_store_advance(row):
+        return None
+
     meta = row.meta if isinstance(row.meta, dict) else {}
     if meta.get(STORE_SEQUENTIAL_ADVANCE_TRIGGERED_KEY):
         return None
@@ -224,6 +231,13 @@ def maybe_advance_sequential_store(finished_row) -> dict[str, Any] | None:
     """
     if not finished_row:
         return None
+    from pdd_agent.api.services.pipeline_per_batch_lt_failure_policy import (
+        should_block_sequential_store_advance,
+    )
+
+    if should_block_sequential_store_advance(finished_row):
+        return None
+
     meta = finished_row.meta if isinstance(finished_row.meta, dict) else {}
     if meta.get(STORE_SEQUENTIAL_ADVANCE_TRIGGERED_KEY):
         return None

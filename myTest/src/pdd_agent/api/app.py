@@ -59,6 +59,14 @@ async def lifespan(app: FastAPI):
     if db["configured"] and not db["available"]:
         logger.warning("Database unavailable: %s", db["error"])
     worker.start()
+    try:
+        from pdd_agent.api.services.commerce_overview_sync import refresh_commerce_overview_state
+        from pdd_agent.db.session import is_database_available
+
+        if is_database_available():
+            refresh_commerce_overview_state(dispatch_pending=False)
+    except Exception:
+        logger.exception("commerce overview sync on startup failed")
     traffic_report_scheduler.start()
     failure_cycle_relist_watch_scheduler.start()
     failure_sequential_scheduler.start()

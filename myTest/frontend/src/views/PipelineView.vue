@@ -93,12 +93,12 @@ const commerceResettingAll = ref(false)
 const accountId = ref('')
 const productCodes = ref<string[]>([])
 const checkedProductsBySet = ref<Record<string, string[]>>({})
-const activityIds = ref<string[]>(['20981'])
-const categoryKeyword = ref('玩偶')
+const activityIds = ref<string[]>(['20981', '21365'])
+const categoryKeyword = ref('笔袋')
 const autoPromotion = ref(true)
 const continueAfterLimitedTimeFailure = ref(false)
 const continueAfterActivityFailure = ref(false)
-const demoMode = ref(true)
+const demoMode = ref(false)
 const activityDelayHours = ref(24)
 const slotAlignmentTest = ref(true)
 const categoryNextBurstDemo = ref(true)
@@ -118,6 +118,10 @@ const platformSkipDedupeEnabled = ref(false)
 const platformSkipDedupeSaving = ref(false)
 const platformSkipDedupeCodeCount = ref(0)
 const platformSkipDedupeUpdatedAt = ref('')
+const accessoryCostPricingEnabled = ref(false)
+const accessoryCostPricingSaving = ref(false)
+const accessoryCostPricingFloatMin = ref(0)
+const accessoryCostPricingFloatMax = ref(5)
 const pipelineBatchEnabled = ref(false)
 const storeSequentialEnabled = ref(false)
 const batchAccountIds = ref<string[]>([])
@@ -173,7 +177,7 @@ const {
         pipelinePage.value = 1
         await refreshPipelines()
         startPolling()
-      } else if (data.auto_pipeline?.reason !== 'append_only_batch') {
+      } else if (data.auto_pipeline?.reason) {
         ElMessage.warning(autoHint)
       }
       return
@@ -799,8 +803,12 @@ function buildAutoUploadPayload(overrides: Partial<AutoUploadConfig> = {}): Auto
   }
 }
 
-async function saveAutoUploadConfig(overrides: Partial<AutoUploadConfig> = {}) {
-  autoUploadSaving.value = true
+async function saveAutoUploadConfig(
+  overrides: Partial<AutoUploadConfig> = {},
+  options: { manageSaving?: boolean } = {},
+) {
+  const manageSaving = options.manageSaving !== false
+  if (manageSaving) autoUploadSaving.value = true
   try {
     const payload = buildAutoUploadPayload(overrides)
     if (payload.enabled && !payload.account_id) {
@@ -813,7 +821,7 @@ async function saveAutoUploadConfig(overrides: Partial<AutoUploadConfig> = {}) {
     applyAutoUploadConfig(saved)
     return saved
   } finally {
-    autoUploadSaving.value = false
+    if (manageSaving) autoUploadSaving.value = false
   }
 }
 
@@ -844,12 +852,19 @@ async function openAutoUploadConfigDialog() {
   if (!autoUploadConfig.value.activity_ids.length && activityIds.value.length) {
     autoUploadConfig.value.activity_ids = [...activityIds.value]
   }
+  try {
+    await loadAccessoryCostPricingSetting()
+  } catch (e) {
+    ElMessage.error(e instanceof Error ? e.message : '读取配件成本定价配置失败')
+  }
   autoUploadConfigVisible.value = true
 }
 
 async function confirmAutoUploadConfig() {
+  autoUploadSaving.value = true
   try {
-    await saveAutoUploadConfig({
+    await saveAutoUploadConfig(
+      {
       account_id: autoUploadConfig.value.account_id,
       trigger_mode: autoUploadConfig.value.trigger_mode,
       activity_ids: autoUploadConfig.value.activity_ids,
@@ -862,11 +877,19 @@ async function confirmAutoUploadConfig() {
       slot_alignment_test: autoUploadConfig.value.slot_alignment_test,
       material_source: autoUploadConfig.value.material_source,
       auto_sync_minio: autoUploadConfig.value.auto_sync_minio,
-    })
+      },
+      { manageSaving: false },
+    )
+    const pricing = await api.updatePipelineAccessoryCostPricing(accessoryCostPricingEnabled.value)
+    accessoryCostPricingEnabled.value = !!pricing.enabled
+    accessoryCostPricingFloatMin.value = Number(pricing.float_min ?? 0)
+    accessoryCostPricingFloatMax.value = Number(pricing.float_max ?? 5)
     autoUploadConfigVisible.value = false
     ElMessage.success('自动上架配置已保存')
   } catch (e) {
     ElMessage.error(e instanceof Error ? e.message : String(e))
+  } finally {
+    autoUploadSaving.value = false
   }
 }
 
@@ -887,6 +910,29 @@ async function onExcelFallbackChange(enabled: boolean) {
     ElMessage.error(e instanceof Error ? e.message : String(e))
   } finally {
     excelFallbackSaving.value = false
+  }
+}
+
+async function loadAccessoryCostPricingSetting() {
+  const data = await api.getPipelineAccessoryCostPricing()
+  accessoryCostPricingEnabled.value = !!data.enabled
+  accessoryCostPricingFloatMin.value = Number(data.float_min ?? 0)
+  accessoryCostPricingFloatMax.value = Number(data.float_max ?? 5)
+}
+
+async function onAccessoryCostPricingChange(enabled: boolean) {
+  accessoryCostPricingSaving.value = true
+  try {
+    const data = await api.updatePipelineAccessoryCostPricing(enabled)
+    accessoryCostPricingEnabled.value = !!data.enabled
+    accessoryCostPricingFloatMin.value = Number(data.float_min ?? 0)
+    accessoryCostPricingFloatMax.value = Number(data.float_max ?? 5)
+    ElMessage.success(enabled ? '已开启配件成本定价' : '已关闭配件成本定价')
+  } catch (e) {
+    accessoryCostPricingEnabled.value = !enabled
+    ElMessage.error(e instanceof Error ? e.message : String(e))
+  } finally {
+    accessoryCostPricingSaving.value = false
   }
 }
 
@@ -1356,6 +1402,7 @@ onMounted(async () => {
     await loadMinioHealth()
     await loadBaseData()
     await loadExcelFallbackSetting()
+    await loadAccessoryCostPricingSetting()
     await loadLogSpecSkuRowsSetting()
     await loadPlatformSkipDedupeSetting()
     await loadAutoUploadConfig()
@@ -1814,7 +1861,7 @@ onUnmounted(() => {
               <el-row :gutter="16">
                 <el-col :span="12">
                   <el-form-item label="类目关键词">
-                    <el-input v-model="categoryKeyword" placeholder="上架类目，默认玩偶" />
+                    <el-input v-model="categoryKeyword" placeholder="上架类目，默认笔袋" />
                   </el-form-item>
                 </el-col>
                 <el-col :span="12">
@@ -1884,6 +1931,14 @@ onUnmounted(() => {
                       @change="onPlatformSkipDedupeChange"
                     />
                   </div>
+                  <div class="switch-row">
+                    <span class="switch-label">配件成本定价</span>
+                    <el-switch
+                      v-model="accessoryCostPricingEnabled"
+                      :loading="accessoryCostPricingSaving"
+                      @change="onAccessoryCostPricingChange"
+                    />
+                  </div>
                 </div>
                 <div v-if="categoryNextBurstDemo" class="form-tip">
                   演示拼多多分类页渲染延迟：随机等待 20–45 秒（5 秒步长）后点击「下一步」；未跳转则随机连点 3–5 次并监听 30 秒。关闭后仅单次点击（便于对比复现 bug）。
@@ -1927,6 +1982,12 @@ onUnmounted(() => {
                 </div>
                 <div v-else class="form-tip">
                   默认关闭：每次上架仍会走笔袋视图校验，不适用商品会写入失败日志表。
+                </div>
+                <div v-if="accessoryCostPricingEnabled" class="form-tip">
+                  已开启：拼单价 = 主商品拼多多定价 + 所有子商品聚水潭成本 + {{ accessoryCostPricingFloatMin }}~{{ accessoryCostPricingFloatMax }} 元浮动（仅浮动一次）。主商品仍读「拼多多比价定价」，子商品读「聚水潭ERP商品列表」成本。
+                </div>
+                <div v-else class="form-tip">
+                  默认关闭：拼单价按飞书「拼多多比价定价」各组件定价相加，并分别加浮动。
                 </div>
               </el-form-item>
             </div>
@@ -2596,6 +2657,16 @@ onUnmounted(() => {
               <span class="switch-label">上架前同步 MinIO</span>
               <el-switch v-model="autoUploadConfig.auto_sync_minio" />
             </div>
+            <div class="switch-row">
+              <span class="switch-label">配件成本定价</span>
+              <el-switch v-model="accessoryCostPricingEnabled" />
+            </div>
+          </div>
+          <div v-if="accessoryCostPricingEnabled" class="form-tip">
+            拼单价 = 主商品拼多多定价 + 所有子商品聚水潭成本 + {{ accessoryCostPricingFloatMin }}~{{
+              accessoryCostPricingFloatMax
+            }}
+            元浮动（仅浮动一次）。与下方「活动与推广」共用同一开关，RabbitMQ 自动上架同样生效。
           </div>
         </el-form-item>
       </el-form>

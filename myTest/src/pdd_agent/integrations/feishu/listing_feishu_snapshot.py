@@ -15,8 +15,9 @@ from pdd_agent.integrations.feishu.bitable import (
 from pdd_agent.integrations.feishu.client import FeishuClient
 from pdd_agent.integrations.feishu.config import FeishuConfig, load_feishu_config
 from pdd_agent.integrations.feishu.jushuitan_erp_inventory import (
+    JushuitanErpEntry,
     apply_jushuitan_inventory_to_catalog,
-    load_jushuitan_inventory_map,
+    load_jushuitan_erp_map,
 )
 from pdd_agent.integrations.feishu.pdd_product_catalog_sync import _entry_from_feishu_fields
 from pdd_agent.integrations.feishu.listing_feishu_catalog import (
@@ -53,7 +54,13 @@ class ListingFeishuSnapshot:
     _color_spec_field: str = ""
     _product_type_field: str = ""
     _inventory_field: str = ""
-    _jushuitan_inventory: dict[str, int] = field(default_factory=dict)
+    _jushuitan_erp: dict[str, JushuitanErpEntry] = field(default_factory=dict)
+
+    def jushuitan_cost_map(self) -> dict[str, float]:
+        return {code: entry.cost for code, entry in self._jushuitan_erp.items()}
+
+    def jushuitan_inventory_map(self) -> dict[str, int]:
+        return {code: entry.available_qty for code, entry in self._jushuitan_erp.items()}
 
     def record_items(self) -> list[dict[str, Any]]:
         return [{"fields": fields} for fields in self.records_by_code.values()]
@@ -91,7 +98,7 @@ class ListingFeishuSnapshot:
                 catalog[entry.code] = entry
         return apply_jushuitan_inventory_to_catalog(
             catalog,
-            self._jushuitan_inventory,
+            self.jushuitan_inventory_map(),
             enabled=cfg.jushuitan_erp_inventory.enabled,
         )
 
@@ -296,12 +303,12 @@ def warm_listing_feishu_snapshot(
     snapshot.source = "feishu" if snapshot.records_by_code else "feishu_empty"
     if cfg.jushuitan_erp_inventory.enabled:
         try:
-            inv_map = load_jushuitan_inventory_map(
+            erp_map = load_jushuitan_erp_map(
                 codes=to_fetch,
                 config=cfg,
                 client=api,
             )
-            snapshot._jushuitan_inventory.update(inv_map)
+            snapshot._jushuitan_erp.update(erp_map)
         except Exception:
             logger.exception("load jushuitan inventory for listing snapshot failed codes=%s", to_fetch)
     logger.info(
@@ -309,6 +316,6 @@ def warm_listing_feishu_snapshot(
         len(to_fetch),
         len(records),
         len(found),
-        len(snapshot._jushuitan_inventory),
+        len(snapshot._jushuitan_erp),
     )
     return snapshot

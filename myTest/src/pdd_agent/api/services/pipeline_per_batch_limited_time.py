@@ -117,18 +117,21 @@ def maybe_run_per_batch_limited_time_after_listing(
         return False
 
     throttle = _throttle_state(row)
-    batch_index = int(throttle.get("batch_index") or 0)
+    from pdd_agent.api.services.pipeline_listing_throttle import _throttle_base_from_meta
+
+    base_throttle = _throttle_base_from_meta(throttle, listing_meta)
+    batch_index = int(base_throttle.get("batch_index") or 0)
     merged_pdd, merged_map = merge_throttle_accumulated_products(
-        throttle,
+        base_throttle,
         pdd_ids=pdd_ids,
         mapping_ids=mapping_ids,
     )
-    more_batches = has_more_listing_batches(throttle)
-    interval_minutes = max(1, int(throttle.get("interval_minutes") or 1))
+    more_batches = has_more_listing_batches(base_throttle)
+    interval_minutes = max(1, int(base_throttle.get("interval_minutes") or 1))
 
     meta_patch = dict(listing_meta or {})
     meta_patch["listing_throttle"] = {
-        **throttle,
+        **base_throttle,
         "accumulated_pdd_ids": merged_pdd,
         "accumulated_mapping_ids": merged_map,
     }
@@ -162,7 +165,7 @@ def maybe_run_per_batch_limited_time_after_listing(
         "pipeline %s per-batch limited time queued batch=%s/%s run_id=%s pdd_ids=%s more_batches=%s",
         row.pipeline_id,
         batch_index + 1,
-        throttle.get("total_batches"),
+        base_throttle.get("total_batches"),
         run_id,
         pdd_ids,
         more_batches,
@@ -195,7 +198,7 @@ def maybe_continue_after_per_batch_limited_time(
 
     from pdd_agent.api.services.pipeline_per_batch_campaign import is_per_batch_campaign_enabled
 
-    if is_per_batch_campaign_enabled(row):
+    if is_per_batch_campaign_enabled(row) and success:
         return False
 
     pending = dict(state.get("pending") or {})

@@ -653,9 +653,12 @@ def build_listing_unit_statuses(row) -> list[dict[str, Any]]:
 
     preflight_errors: dict[str, str] = {}
     valid_labels: set[str] = set()
-    result_by_label: dict[str, dict[str, Any]] = {}
+    current_run_results: dict[str, dict[str, Any]] = {}
     run_status = ""
     run_phase = ""
+
+    throttle = dict(meta.get("listing_throttle") or {})
+    accumulated_results = dict(throttle.get("unit_results_by_label") or {})
 
     if row.listing_run_id:
         record = TaskRunStore().load(row.listing_run_id)
@@ -671,6 +674,43 @@ def build_listing_unit_statuses(row) -> list[dict[str, Any]]:
                     continue
                 label = str(item.get("listing_label") or "").strip()
                 if label:
+                    current_run_results[label] = item
+
+    result_by_label = dict(accumulated_results)
+    result_by_label.update(current_run_results)
+
+    if throttle.get("enabled"):
+        store = TaskRunStore()
+        seen_run_ids: set[str] = set()
+        if row.listing_run_id:
+            seen_run_ids.add(str(row.listing_run_id))
+        run_ids_to_scan = [
+            str(item).strip() for item in (throttle.get("batch_run_ids") or []) if str(item).strip()
+        ]
+        pipeline_id = str(getattr(row, "pipeline_id", "") or "").strip()
+        if pipeline_id:
+            try:
+                from pdd_agent.db.repositories import list_listing_run_ids_for_pipeline
+
+                for rid in list_listing_run_ids_for_pipeline(pipeline_id):
+                    if rid not in run_ids_to_scan:
+                        run_ids_to_scan.append(rid)
+            except Exception:
+                pass
+        for run_id in run_ids_to_scan:
+            rid = str(run_id or "").strip()
+            if not rid or rid in seen_run_ids:
+                continue
+            seen_run_ids.add(rid)
+            prior = store.load(rid)
+            if not prior:
+                continue
+            prior_result = dict(prior.result or {})
+            for item in prior_result.get("results") or []:
+                if not isinstance(item, dict):
+                    continue
+                label = str(item.get("listing_label") or "").strip()
+                if label and label not in result_by_label:
                     result_by_label[label] = item
 
     for label in meta.get("listing_failed_labels") or []:
@@ -1881,6 +1921,11 @@ def _continue_pipeline_after_listing(
         "listing_summary": _summarize_run_message(run_id),
     }
     listing_meta.update(_listing_failure_meta(result))
+    throttle_for_units = dict((refreshed.meta or {}).get("listing_throttle") or {})
+    if throttle_for_units.get("enabled"):
+        from pdd_agent.api.services.pipeline_listing_throttle import merge_unit_results_into_throttle
+
+        listing_meta["listing_throttle"] = merge_unit_results_into_throttle(throttle_for_units, result)
     if error_hint:
         listing_meta["listing_batch_last_error"] = error_hint
         if not listing_meta.get("listing_outcome"):
@@ -2320,7 +2365,48 @@ def _on_limited_time_finished(row, *, run_id: str, success: bool, result: dict[s
     if not success:
         meta_patch["limited_time_outcome"] = "failed"
         failure_message = error or "限时限量购设置失败"
-        if _pipeline_continue_after_limited_time_failure(row):
+        from pdd_agent.api.services.pipeline_per_batch_lt_failure_policy import (
+            should_absorb_per_batch_limited_time_failure,
+        )
+
+        if should_absorb_per_batch_limited_time_failure(row, run_id=run_id):
+            from pdd_agent.api.services.pipeline_per_batch_lt_failure_policy import (
+                build_per_batch_limited_time_failure_meta,
+                has_pending_throttled_listing_batches,
+                is_per_batch_limited_time_pipeline,
+                log_absorbed_limited_time_failure,
+            )
+
+            meta_patch.update(build_per_batch_limited_time_failure_meta(failure_message))
+            refreshed = get_integrated_pipeline(row.pipeline_id) or row
+            if is_per_batch_limited_time_pipeline(refreshed) and has_pending_throttled_listing_batches(
+                refreshed
+            ):
+                if maybe_continue_after_per_batch_limited_time(
+                    refreshed,
+                    run_id=run_id,
+                    success=False,
+                    error=failure_message,
+                ):
+                    log_absorbed_limited_time_failure(
+                        refreshed, run_id=run_id, error=failure_message
+                    )
+                    return
+                log_absorbed_limited_time_failure(
+                    refreshed, run_id=run_id, error=failure_message
+                )
+                update_integrated_pipeline(
+                    row.pipeline_id,
+                    status="running",
+                    current_step="waiting_limited_time_per_batch",
+                    error="",
+                    meta_patch=meta_patch,
+                )
+                logger.warning(
+                    "pipeline %s per-batch limited time failed mid-batch but next listing batch not scheduled",
+                    row.pipeline_id,
+                )
+                return
             meta_patch["limited_time_skip_reason"] = failure_message
             update_integrated_pipeline(
                 row.pipeline_id,
@@ -2506,16 +2592,13 @@ def _reconcile_stuck_pipeline_row(row) -> Any:
         if (
             run_id == _pipeline_limited_time_run_id(row)
             and run_status == RunStatus.FAILED
-            and _pipeline_continue_after_limited_time_failure(row)
         ):
-            refreshed = get_integrated_pipeline(row.pipeline_id) or row
-            refreshed_meta = refreshed.meta if isinstance(refreshed.meta, dict) else {}
-            if not refreshed.campaign_run_id and not refreshed.scheduled_activity_at:
-                if refreshed_meta.get("limited_time_finish_handled"):
-                    logger.warning(
-                        "reconcile pipeline %s limited_time failed with stale finish flag",
-                        row.pipeline_id,
-                    )
+            from pdd_agent.api.services.pipeline_per_batch_lt_failure_policy import (
+                should_absorb_per_batch_limited_time_failure,
+            )
+
+            if should_absorb_per_batch_limited_time_failure(row, run_id=run_id):
+                refreshed = get_integrated_pipeline(row.pipeline_id) or row
                 _on_limited_time_finished(
                     refreshed,
                     run_id=run_id,
@@ -2523,7 +2606,24 @@ def _reconcile_stuck_pipeline_row(row) -> Any:
                     result=record.result if isinstance(record.result, dict) else {},
                     error=str(record.message or "").strip() or "限时限量购设置失败",
                 )
-            continue
+                continue
+            if _pipeline_continue_after_limited_time_failure(row):
+                refreshed = get_integrated_pipeline(row.pipeline_id) or row
+                refreshed_meta = refreshed.meta if isinstance(refreshed.meta, dict) else {}
+                if not refreshed.campaign_run_id and not refreshed.scheduled_activity_at:
+                    if refreshed_meta.get("limited_time_finish_handled"):
+                        logger.warning(
+                            "reconcile pipeline %s limited_time failed with stale finish flag",
+                            row.pipeline_id,
+                        )
+                    _on_limited_time_finished(
+                        refreshed,
+                        run_id=run_id,
+                        success=False,
+                        result=record.result if isinstance(record.result, dict) else {},
+                        error=str(record.message or "").strip() or "限时限量购设置失败",
+                    )
+                continue
         if (
             run_id == row.campaign_run_id
             and run_status == RunStatus.FAILED
@@ -2587,10 +2687,14 @@ def _ensure_pipeline_failed_after_task(
         return
     if (
         agent == AgentKind.CAMPAIGN.value
-        and _pipeline_limited_time_run_id(row) == run_id
-        and _pipeline_continue_after_limited_time_failure(row)
+        and _pipeline_limited_time_run_id(row) == str(run_id or "").strip()
     ):
-        return
+        from pdd_agent.api.services.pipeline_per_batch_lt_failure_policy import (
+            should_absorb_per_batch_limited_time_failure,
+        )
+
+        if should_absorb_per_batch_limited_time_failure(row, run_id=run_id):
+            return
     if (
         agent == AgentKind.CAMPAIGN.value
         and _pipeline_limited_time_run_id(row) != run_id
@@ -2651,6 +2755,24 @@ def list_pipelines(
     }
 
 
+def _collect_pipeline_cancel_run_ids(row) -> list[str]:
+    """整合链路取消时需停止的全部子任务 run_id（含限时限量购与分批上架）。"""
+    run_ids: list[str] = []
+    for rid in (row.listing_run_id, row.campaign_run_id, row.traffic_run_id):
+        rid = str(rid or "").strip()
+        if rid:
+            run_ids.append(rid)
+    lt_rid = _pipeline_limited_time_run_id(row)
+    if lt_rid:
+        run_ids.append(lt_rid)
+    pipeline_id = str(row.pipeline_id or "").strip()
+    if pipeline_id:
+        from pdd_agent.db.repositories import list_listing_run_ids_for_pipeline
+
+        run_ids.extend(list_listing_run_ids_for_pipeline(pipeline_id))
+    return list(dict.fromkeys(run_ids))
+
+
 def cancel_integrated_pipeline(pipeline_id: str) -> dict[str, Any]:
     """取消整合链路：停止排队/运行中的子任务，后续步骤不再执行。"""
     pipeline_id = str(pipeline_id or "").strip()
@@ -2663,7 +2785,7 @@ def cancel_integrated_pipeline(pipeline_id: str) -> dict[str, Any]:
     if row.status in TERMINAL_PIPELINE_STATUSES:
         raise ValueError(f"pipeline already {row.status}")
 
-    run_ids = [rid for rid in (row.listing_run_id, row.campaign_run_id, row.traffic_run_id) if rid]
+    run_ids = _collect_pipeline_cancel_run_ids(row)
     pending_run_ids: list[str] = []
     store = TaskRunStore()
     for run_id in run_ids:

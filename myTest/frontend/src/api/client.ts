@@ -682,6 +682,21 @@ export const api = {
       .put<{ enabled: boolean }>('/pipelines/integrated/excel-fallback', { enabled })
       .then((r) => r.data),
 
+  getPipelineAccessoryCostPricing: () =>
+    http
+      .get<{ enabled: boolean; float_min: number; float_max: number }>(
+        '/pipelines/integrated/accessory-cost-pricing',
+      )
+      .then((r) => r.data),
+
+  updatePipelineAccessoryCostPricing: (enabled: boolean) =>
+    http
+      .put<{ enabled: boolean; float_min: number; float_max: number }>(
+        '/pipelines/integrated/accessory-cost-pricing',
+        { enabled },
+      )
+      .then((r) => r.data),
+
   getPipelineLogSpecSkuRows: () =>
     http.get<{ enabled: boolean }>('/pipelines/integrated/log-spec-sku-rows').then((r) => r.data),
 

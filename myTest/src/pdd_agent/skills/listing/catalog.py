@@ -72,17 +72,32 @@ def _resolve_sku_pricing_or_warn(
     bundle_components: list[str] | None = None,
     combo_stem: str = "",
 ) -> tuple[str, str, str] | None:
+    listing_scope = resolve_listing_price_scope(
+        family_code=unit.family_code,
+        image_set=unit.image_set,
+        listing_label=unit.listing_label,
+    )
+    from pdd_agent.skills.listing.listing_accessory_cost_pricing import (
+        resolve_sku_pricing_with_accessory_cost_if_enabled,
+    )
+
     try:
+        accessory_pricing = resolve_sku_pricing_with_accessory_cost_if_enabled(
+            style_code=style_code,
+            model_code=model_code,
+            catalog=catalog,
+            defaults=defaults,
+            listing_scope=listing_scope,
+            bundle_components=bundle_components,
+        )
+        if accessory_pricing is not None:
+            return accessory_pricing
         return resolve_combo_pricing(
             style_code,
             model_code,
             catalog,
             defaults,
-            listing_scope=resolve_listing_price_scope(
-                family_code=unit.family_code,
-                image_set=unit.image_set,
-                listing_label=unit.listing_label,
-            ),
+            listing_scope=listing_scope,
             bundle_components=bundle_components,
         )
     except ComboPricingError as exc:
@@ -99,6 +114,11 @@ def _resolve_sku_pricing_or_warn(
                 unit.warnings.append(
                     ListingErrors.Msg.CATALOG_PRICING_INVALID.format(prefix=prefix, codes=codes)
                 )
+        elif exc.reason == "jushuitan_cost_missing":
+            if combo:
+                unit.warnings.append(f"{prefix} {combo} 子商品[{codes}]聚水潭成本缺失")
+            else:
+                unit.warnings.append(f"{prefix} 子商品[{codes}]聚水潭成本缺失")
         elif combo:
             unit.warnings.append(
                 ListingErrors.Msg.CATALOG_CODE_PRICING_MISSING_COMBO.format(

@@ -122,7 +122,7 @@ export function useMinioMaterialRefresh(options: {
             ElMessage.success(autoHint)
           } else if (
             data.auto_pipeline?.reason &&
-            !['disabled', 'append_only_batch'].includes(data.auto_pipeline.reason)
+            !['disabled'].includes(data.auto_pipeline.reason)
           ) {
             ElMessage.warning(autoHint)
           }

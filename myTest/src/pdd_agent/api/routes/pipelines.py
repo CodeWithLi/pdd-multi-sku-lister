@@ -18,6 +18,8 @@ from pdd_agent.api.schemas.pipelines import (
     PipelineLogSpecSkuRowsUpdateIn,
     PipelinePlatformSkipDedupeOut,
     PipelinePlatformSkipDedupeUpdateIn,
+    PipelineAccessoryCostPricingOut,
+    PipelineAccessoryCostPricingUpdateIn,
 )
 from pdd_agent.api.services.config_service import get_account_or_none
 from pdd_agent.api.services.pipeline_service import (
@@ -31,8 +33,11 @@ from pdd_agent.core.config import load_yaml_settings
 from pdd_agent.db.session import is_database_available
 from pdd_agent.api.schemas.feishu_inspect import FeishuInspectListingPricesOut
 from pdd_agent.integrations.feishu.config import (
+    accessory_cost_pricing_enabled,
     excel_fallback_enabled,
     platform_skip_dedupe_enabled,
+    load_feishu_config,
+    save_pipeline_accessory_cost_pricing_to_config,
     save_pipeline_excel_fallback_to_config,
     save_pipeline_platform_skip_dedupe_to_config,
     save_pdd_upload_log_spec_rows_to_config,
@@ -90,6 +95,31 @@ def update_integrated_excel_fallback(body: PipelineExcelFallbackUpdateIn):
     save_pipeline_excel_fallback_to_config(body.enabled)
     _clear_excel_data_caches()
     return PipelineExcelFallbackOut(enabled=bool(body.enabled))
+
+
+@router.get("/integrated/accessory-cost-pricing", response_model=PipelineAccessoryCostPricingOut)
+def get_integrated_accessory_cost_pricing():
+    """读取整合链路「配件成本定价」开关。"""
+    cfg = load_feishu_config()
+    pipe = cfg.pipeline
+    return PipelineAccessoryCostPricingOut(
+        enabled=accessory_cost_pricing_enabled(cfg),
+        float_min=float(pipe.accessory_cost_float_min),
+        float_max=float(pipe.accessory_cost_float_max),
+    )
+
+
+@router.put("/integrated/accessory-cost-pricing", response_model=PipelineAccessoryCostPricingOut)
+def update_integrated_accessory_cost_pricing(body: PipelineAccessoryCostPricingUpdateIn):
+    """保存整合链路「配件成本定价」开关（写入 feishu.yaml）。"""
+    save_pipeline_accessory_cost_pricing_to_config(body.enabled)
+    cfg = load_feishu_config()
+    pipe = cfg.pipeline
+    return PipelineAccessoryCostPricingOut(
+        enabled=bool(body.enabled),
+        float_min=float(pipe.accessory_cost_float_min),
+        float_max=float(pipe.accessory_cost_float_max),
+    )
 
 
 @router.get("/integrated/log-spec-sku-rows", response_model=PipelineLogSpecSkuRowsOut)

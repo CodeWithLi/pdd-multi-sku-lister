@@ -20,9 +20,30 @@ from pdd_agent.integrations.minio.events import (
     apply_minio_upload_event,
     parse_rabbitmq_upload_message,
 )
-from pdd_agent.integrations.minio.auto_pipeline import maybe_trigger_auto_pipeline
+from pdd_agent.integrations.minio.auto_pipeline import (
+    batch_should_broadcast_upload,
+    maybe_trigger_auto_pipeline,
+)
+from pdd_agent.integrations.minio.rabbitmq_file_log import (
+    EVENT_AUTO_PIPELINE,
+    EVENT_BATCH_DONE,
+    EVENT_BATCH_START,
+    EVENT_CONSUMER_CONNECTED,
+    EVENT_CONSUMER_ERROR,
+    EVENT_CONSUMER_SKIP,
+    EVENT_CONSUMER_START,
+    EVENT_CONSUMER_STOP,
+    EVENT_DEBOUNCE_FLUSH,
+    EVENT_LOCAL_PROCESS,
+    EVENT_MESSAGE_ACK,
+    EVENT_MESSAGE_NACK,
+    EVENT_MESSAGE_RECEIVED,
+    EVENT_SSE_PUSH,
+    log_rabbitmq_event,
+    summarize_auto_pipeline,
+    summarize_batch_groups,
+)
 from pdd_agent.integrations.minio.upload_batch import (
-    batch_introduces_new_products,
     prepare_upload_batch,
 )
 
@@ -78,6 +99,16 @@ class _UploadDebouncer:
             self._timer = None
         if not batch:
             return
+        object_keys = sorted({event.object_key for event in batch if event.object_key})
+        log_rabbitmq_event(
+            EVENT_DEBOUNCE_FLUSH,
+            "防抖窗口结束，开始处理合并批次",
+            source="mq",
+            raw_message_count=raw_count,
+            event_count=len(batch),
+            object_keys=object_keys[:50],
+            object_key_truncated=len(object_keys) > 50,
+        )
         self._on_flush(batch, raw_count)
 
     def cancel(self) -> None:
@@ -124,6 +155,12 @@ class MinioRabbitMQConsumer:
         cfg = load_minio_config()
         if not minio_rabbitmq_enabled(cfg):
             logger.info("minio rabbitmq consumer skipped (refresh_mode=%s)", cfg.refresh_mode)
+            log_rabbitmq_event(
+                EVENT_CONSUMER_SKIP,
+                "消费者未启动",
+                refresh_mode=minio_refresh_mode(cfg),
+                reason="refresh_mode 不是 rabbitmq 或 MinIO 未配置",
+            )
             return
         if self._running:
             return
@@ -143,6 +180,16 @@ class MinioRabbitMQConsumer:
             cfg.rabbitmq.port,
             cfg.rabbitmq.settle_seconds,
         )
+        log_rabbitmq_event(
+            EVENT_CONSUMER_START,
+            "消费者启动",
+            queue=cfg.rabbitmq.queue,
+            host=cfg.rabbitmq.host,
+            port=cfg.rabbitmq.port,
+            exchange=cfg.rabbitmq.exchange,
+            routing_key=cfg.rabbitmq.routing_key,
+            settle_seconds=cfg.rabbitmq.settle_seconds,
+        )
 
     def stop(self) -> None:
         self._stop.set()
@@ -152,10 +199,32 @@ class MinioRabbitMQConsumer:
         if self._thread and self._thread.is_alive():
             self._thread.join(timeout=3)
         self._thread = None
+        was_running = self._running
         self._running = False
+        if was_running:
+            log_rabbitmq_event(EVENT_CONSUMER_STOP, "消费者停止")
 
     def _on_upload_batch(self, events: list[MinioUploadEvent], raw_message_count: int) -> None:
+        self._process_upload_batch(events, raw_message_count=raw_message_count, source="mq")
+
+    def _process_upload_batch(
+        self,
+        events: list[MinioUploadEvent],
+        *,
+        raw_message_count: int,
+        source: str,
+    ) -> dict[str, Any]:
         cfg = load_minio_config()
+        object_keys = sorted({event.object_key for event in events if event.object_key})
+        log_rabbitmq_event(
+            EVENT_BATCH_START,
+            "开始处理上传批次",
+            source=source,
+            raw_message_count=raw_message_count,
+            event_count=len(events),
+            object_keys=object_keys[:50],
+            object_key_truncated=len(object_keys) > 50,
+        )
         batch_summary, _snapshot = prepare_upload_batch(
             events,
             raw_message_count=raw_message_count,
@@ -178,17 +247,43 @@ class MinioRabbitMQConsumer:
 
         batch_summary["ts"] = time.time()
         if indexed:
-            if batch_introduces_new_products(batch_summary):
-                batch_summary["auto_pipeline"] = maybe_trigger_auto_pipeline(batch_summary)
-            else:
-                batch_summary["auto_pipeline"] = {
-                    "triggered": False,
-                    "reason": "append_only_batch",
-                    "reason_label": "本批次为追加图片或重复通知，已跳过自动上架",
-                }
+            batch_summary["auto_pipeline"] = maybe_trigger_auto_pipeline(batch_summary)
+        elif source == "local_api":
+            batch_summary["auto_pipeline"] = {"triggered": False, "reason": "no_indexed_files"}
         record_rabbitmq_upload_batch(batch_summary)
-        if indexed and batch_introduces_new_products(batch_summary):
+
+        auto_result = batch_summary.get("auto_pipeline") if isinstance(batch_summary.get("auto_pipeline"), dict) else {}
+        log_rabbitmq_event(
+            EVENT_BATCH_DONE,
+            str(batch_summary.get("summary") or "批次处理完成"),
+            source=source,
+            status=batch_summary.get("status"),
+            raw_message_count=raw_message_count,
+            matched_file_count=batch_summary.get("matched_file_count"),
+            indexed_file_count=batch_summary.get("indexed_file_count"),
+            selectors=batch_summary.get("selectors"),
+            product_codes=batch_summary.get("product_codes"),
+            groups=summarize_batch_groups(batch_summary),
+        )
+        log_rabbitmq_event(
+            EVENT_AUTO_PIPELINE,
+            "已触发自动上架" if auto_result.get("triggered") else "未触发自动上架",
+            source=source,
+            **summarize_auto_pipeline(auto_result),
+        )
+
+        sse_sent = False
+        if indexed and batch_should_broadcast_upload(batch_summary):
             publish_minio_event(batch_summary)
+            sse_sent = True
+            log_rabbitmq_event(
+                EVENT_SSE_PUSH,
+                "已推送 SSE 到前端",
+                source=source,
+                summary=batch_summary.get("summary"),
+                selectors=batch_summary.get("selectors"),
+            )
+        if source == "mq":
             logger.info(
                 "minio upload batch summary=%s raw=%s matched=%s auto=%s",
                 batch_summary.get("summary"),
@@ -196,44 +291,33 @@ class MinioRabbitMQConsumer:
                 batch_summary.get("matched_file_count"),
                 batch_summary.get("auto_pipeline"),
             )
+        return batch_summary
 
     def process_upload_events(self, events: list[MinioUploadEvent]) -> dict[str, Any]:
         """本地处理上传事件（素材检查上传 / 测试接口；真实 MQ 仍走 _on_message）。"""
         if not events:
             return {"indexed": 0, "selectors": [], "product_codes": []}
-        cfg = load_minio_config()
-        batch_summary, _snapshot = prepare_upload_batch(events, raw_message_count=len(events), config=cfg)
-        indexed: list[MinioUploadEvent] = []
-        seen: set[str] = set()
-        for event in events:
-            if event.object_key in seen:
-                continue
-            seen.add(event.object_key)
-            if apply_minio_upload_event(event, config=cfg) is not None:
-                indexed.append(event)
-        batch_summary["indexed_file_count"] = len(indexed)
-        batch_summary["ts"] = time.time()
-        if indexed and batch_introduces_new_products(batch_summary):
-            batch_summary["auto_pipeline"] = maybe_trigger_auto_pipeline(batch_summary)
-        elif indexed:
-            batch_summary["auto_pipeline"] = {
-                "triggered": False,
-                "reason": "append_only_batch",
-                "reason_label": "本批次为追加图片，已跳过自动上架",
-            }
-        else:
-            batch_summary["auto_pipeline"] = {"triggered": False, "reason": "no_indexed_files"}
-        record_rabbitmq_upload_batch(batch_summary)
-        if not indexed:
+        log_rabbitmq_event(
+            EVENT_LOCAL_PROCESS,
+            "本地模拟处理（非 MQ 拉取）",
+            event_count=len(events),
+            object_keys=sorted({event.object_key for event in events if event.object_key}),
+        )
+        batch_summary = self._process_upload_batch(
+            events,
+            raw_message_count=len(events),
+            source="local_api",
+        )
+        indexed_count = int(batch_summary.get("indexed_file_count") or 0)
+        if not indexed_count:
             return {
                 "indexed": 0,
                 "selectors": [],
                 "product_codes": [],
                 "auto_pipeline": batch_summary.get("auto_pipeline"),
             }
-        publish_minio_event(batch_summary)
         return {
-            "indexed": len(indexed),
+            "indexed": indexed_count,
             "selectors": batch_summary.get("selectors", []),
             "product_codes": batch_summary.get("product_codes", []),
             "summary": batch_summary.get("summary", ""),
@@ -266,19 +350,61 @@ class MinioRabbitMQConsumer:
                 def _on_message(ch, method, _properties, body):
                     if self._stop.is_set():
                         ch.basic_nack(method.delivery_tag, requeue=True)
+                        log_rabbitmq_event(
+                            EVENT_MESSAGE_NACK,
+                            "消费者停止中，消息重新入队",
+                            delivery_tag=method.delivery_tag,
+                            requeue=True,
+                        )
                         return
+                    body_preview = body.decode("utf-8", errors="replace") if isinstance(body, bytes) else str(body)
+                    if len(body_preview) > 500:
+                        body_preview = f"{body_preview[:500]}...(共{len(body_preview)}字)"
                     try:
                         events = parse_rabbitmq_upload_message(body)
+                        parsed_keys = [event.object_key for event in events if event.object_key]
+                        log_rabbitmq_event(
+                            EVENT_MESSAGE_RECEIVED,
+                            "收到 MQ 消息",
+                            source="mq",
+                            queue=rabbit.queue,
+                            delivery_tag=method.delivery_tag,
+                            body_preview=body_preview,
+                            parsed_event_count=len(events),
+                            object_keys=parsed_keys[:20],
+                            object_key_truncated=len(parsed_keys) > 20,
+                        )
                         if self._debouncer is not None:
                             self._debouncer.add(events)
                         ch.basic_ack(method.delivery_tag)
-                    except Exception:
+                        log_rabbitmq_event(
+                            EVENT_MESSAGE_ACK,
+                            "消息已 ACK",
+                            delivery_tag=method.delivery_tag,
+                            parsed_event_count=len(events),
+                        )
+                    except Exception as exc:
                         logger.exception("minio rabbitmq message handling failed")
                         ch.basic_nack(method.delivery_tag, requeue=False)
+                        log_rabbitmq_event(
+                            EVENT_MESSAGE_NACK,
+                            "消息处理失败，已丢弃",
+                            delivery_tag=method.delivery_tag,
+                            requeue=False,
+                            error=str(exc),
+                            body_preview=body_preview,
+                        )
 
                 channel.basic_consume(queue=rabbit.queue, on_message_callback=_on_message, auto_ack=False)
                 self._last_error = ""
                 logger.info("minio rabbitmq consumer connected queue=%s", rabbit.queue)
+                log_rabbitmq_event(
+                    EVENT_CONSUMER_CONNECTED,
+                    "已连接并开始消费",
+                    queue=rabbit.queue,
+                    host=rabbit.host,
+                    port=rabbit.port,
+                )
                 while not self._stop.is_set():
                     connection.process_data_events(time_limit=1)
                 try:
@@ -289,6 +415,14 @@ class MinioRabbitMQConsumer:
             except Exception as exc:
                 self._last_error = str(exc)
                 logger.warning("minio rabbitmq consumer error: %s", exc)
+                log_rabbitmq_event(
+                    EVENT_CONSUMER_ERROR,
+                    "连接或消费异常，5 秒后重试",
+                    error=str(exc),
+                    queue=rabbit.queue,
+                    host=rabbit.host,
+                    port=rabbit.port,
+                )
                 if self._stop.wait(5):
                     break
         self._running = False

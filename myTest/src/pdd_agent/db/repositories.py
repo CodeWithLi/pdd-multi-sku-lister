@@ -249,22 +249,36 @@ def enqueue_task(
 def requeue_interrupted_tasks() -> int:
     if not is_database_available():
         return 0
+    terminal_pipeline_statuses = frozenset({"completed", "failed", "canceled"})
     with session_scope() as session:
         rows = session.scalars(
             select(TaskQueueORM).where(TaskQueueORM.status == "running")
         ).all()
         now = datetime.now()
-        account_ids = {row.account_id for row in rows if row.account_id}
+        account_ids: set[str] = set()
+        requeued = 0
         for row in rows:
+            payload = dict(row.payload or {})
+            pipeline_id = str(payload.get("pipeline_id") or "").strip()
+            if pipeline_id:
+                pipe = session.get(IntegratedPipelineORM, pipeline_id)
+                if pipe and str(pipe.status or "") in terminal_pipeline_statuses:
+                    row.status = "canceled"
+                    row.finished_at = now
+                    row.error = "pipeline terminal; skip requeue after worker restart"
+                    continue
             row.status = "queued"
             row.error = "requeued after worker restart"
             row.started_at = None
             row.scheduled_at = now
+            if row.account_id:
+                account_ids.add(row.account_id)
+            requeued += 1
         for account_id in account_ids:
             lock = session.get(AccountLockORM, account_id)
             if lock:
                 session.delete(lock)
-        return len(rows)
+        return requeued
 
 
 def count_running_queue_tasks() -> int:
@@ -277,6 +291,33 @@ def count_running_queue_tasks() -> int:
             )
             or 0
         )
+
+
+def list_listing_run_ids_for_pipeline(pipeline_id: str) -> list[str]:
+    """按创建顺序返回整合链路上架子任务的 run_id（用于分批状态回填）。"""
+    if not is_database_available():
+        return []
+    pipeline_id = str(pipeline_id or "").strip()
+    if not pipeline_id:
+        return []
+    with session_scope() as session:
+        rows = session.scalars(
+            select(TaskQueueORM.run_id)
+            .where(
+                TaskQueueORM.agent == "listing",
+                TaskQueueORM.payload["pipeline_id"].as_string() == pipeline_id,
+            )
+            .order_by(TaskQueueORM.created_at.asc())
+        ).all()
+    seen: set[str] = set()
+    ordered: list[str] = []
+    for run_id in rows:
+        rid = str(run_id or "").strip()
+        if not rid or rid in seen:
+            continue
+        seen.add(rid)
+        ordered.append(rid)
+    return ordered
 
 
 def queue_status_counts() -> dict[str, int]:
@@ -1741,6 +1782,25 @@ def get_integrated_pipeline(pipeline_id: str) -> IntegratedPipelineORM | None:
         return None
     with session_scope() as session:
         row = session.get(IntegratedPipelineORM, pipeline_id)
+        if row:
+            session.expunge(row)
+        return row
+
+
+def get_integrated_pipeline_by_listing_run_id(run_id: str) -> IntegratedPipelineORM | None:
+    """按当前 listing_run_id 查找整合链路（批内续跑落库用）。"""
+    if not is_database_available():
+        return None
+    run_id = str(run_id or "").strip()
+    if not run_id:
+        return None
+    with session_scope() as session:
+        row = session.scalar(
+            select(IntegratedPipelineORM)
+            .where(IntegratedPipelineORM.listing_run_id == run_id)
+            .order_by(IntegratedPipelineORM.updated_at.desc())
+            .limit(1)
+        )
         if row:
             session.expunge(row)
         return row

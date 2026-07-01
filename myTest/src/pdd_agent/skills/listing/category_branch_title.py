@@ -98,6 +98,7 @@ def apply_title_after_branch_c_category_advance(
         _read_title_from_input,
         apply_title_after_cover_upload,
         is_page_ai_title_mode,
+        try_apply_branch_c_ai_title_generate_dropdown,
     )
 
     existing = _read_title_from_input(page)
@@ -106,7 +107,12 @@ def apply_title_after_branch_c_category_advance(
         return existing
 
     if is_page_ai_title_mode(product_info):
-        _log(account_id, label, "分支 C 详情页：开始 page_ai 标题（「立即使用」/ AI生成）")
+        _log(account_id, label, "分支 C 详情页：开始 page_ai 标题（AI生成标题下拉首条 / 立即使用）")
+        dropdown_title = try_apply_branch_c_ai_title_generate_dropdown(
+            page, account_id, label=label
+        )
+        if dropdown_title:
+            return dropdown_title
         try:
             return apply_title_after_cover_upload(page, account_id, product_info, resolved_title)
         except RuntimeError as exc:

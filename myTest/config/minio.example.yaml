@@ -53,7 +53,8 @@ rabbitmq:
 auto_pipeline:
   enabled: false
   # new_product_folder | append_to_product | all
-  trigger_mode: new_product_folder
+  # append_to_product / all：追加图片会先全量同步对应套图（含删图清理）再上架
+  trigger_mode: all
   account_id: ""
   activity_ids:
     - "20981"

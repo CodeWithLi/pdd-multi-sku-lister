@@ -12,7 +12,14 @@ import yaml
 from pydantic import BaseModel, Field, model_validator
 
 from pdd_agent.core.logging import get_logger
-from pdd_agent.integrations.minio.config import DEFAULT_MINIO_CONFIG_PATH
+from pdd_agent.integrations.minio.rabbitmq_file_log import (
+    EVENT_PIPELINE_QUEUED,
+    EVENT_PIPELINE_START,
+    EVENT_SYNC_DONE,
+    EVENT_SYNC_FAILED,
+    EVENT_SYNC_START,
+    log_rabbitmq_event,
+)
 
 logger = get_logger(__name__)
 
@@ -104,6 +111,48 @@ def extract_auto_pipeline_product_codes(
     return list(dict.fromkeys(codes))
 
 
+def selectors_from_product_codes(product_codes: list[str]) -> list[str]:
+    """商品 selector（family/套图/商品）→ 套图 selector（family/套图）。"""
+    selectors: list[str] = []
+    seen: set[str] = set()
+    for raw in product_codes:
+        parts = [part.strip() for part in str(raw or "").strip().strip("/").split("/") if part.strip()]
+        if len(parts) < 2:
+            continue
+        selector = f"{parts[0]}/{parts[1]}"
+        if selector in seen:
+            continue
+        seen.add(selector)
+        selectors.append(selector)
+    return selectors
+
+
+def listing_includes_append_products(
+    product_codes: list[str],
+    batch_summary: dict[str, Any] | None,
+) -> bool:
+    if not batch_summary:
+        return False
+    append_codes = set(extract_auto_pipeline_product_codes(batch_summary, "append_to_product"))
+    return any(code in append_codes for code in product_codes)
+
+
+def batch_should_broadcast_upload(batch_summary: dict[str, Any]) -> bool:
+    """是否向前端 SSE 推送本批次（新商品或符合自动上架触发范围的追加）。"""
+    if batch_summary.get("status") not in {"success", "partial"}:
+        return False
+    if not int(batch_summary.get("indexed_file_count") or 0):
+        return False
+    from pdd_agent.integrations.minio.upload_batch import batch_introduces_new_products
+
+    if batch_introduces_new_products(batch_summary):
+        return True
+    cfg = load_auto_pipeline_config()
+    if not cfg.enabled:
+        return False
+    return bool(extract_auto_pipeline_product_codes(batch_summary, cfg.trigger_mode))
+
+
 def _dedup_key(account_id: str, product_codes: list[str]) -> str:
     return f"{account_id}|{'|'.join(sorted(product_codes))}"
 
@@ -152,11 +201,44 @@ def _sync_minio_blocking(product_codes: list[str]) -> str:
     return "MinIO 同步超时"
 
 
+def _sync_full_image_sets_blocking(selectors: list[str]) -> str:
+    """追加/换图场景：按套图全量同步 MinIO→本地，并清理已删文件与空商品目录。"""
+    from pdd_agent.integrations.minio.config import load_minio_config, minio_configured
+    from pdd_agent.integrations.minio.staging import stage_minio_image_set
+
+    if not selectors:
+        return "未解析出需同步的套图"
+    cfg = load_minio_config()
+    if not minio_configured(cfg):
+        return "MinIO 未配置"
+
+    mismatches: list[str] = []
+    for selector in selectors:
+        parts = [part.strip() for part in str(selector or "").strip().split("/", 1)]
+        if len(parts) != 2 or not parts[0] or not parts[1]:
+            continue
+        family_code, image_set = parts
+        logger.info("auto pipeline append sync full image set %s/%s", family_code, image_set)
+        _, _, _, _, batch_mismatches = stage_minio_image_set(
+            family_code=family_code,
+            image_set=image_set,
+            config=cfg,
+        )
+        mismatches.extend(batch_mismatches)
+    if mismatches:
+        preview = "；".join(mismatches[:3])
+        if len(mismatches) > 3:
+            preview += f" 等 {len(mismatches)} 项"
+        return f"MinIO 套图同步校验失败：{preview}"
+    return ""
+
+
 def _run_auto_pipeline(
     *,
     account_id: str,
     product_codes: list[str],
     cfg: AutoPipelineConfig,
+    batch_summary: dict[str, Any] | None = None,
 ) -> None:
     try:
         from pdd_agent.api.services.config_service import get_account_or_none
@@ -171,11 +253,60 @@ def _run_auto_pipeline(
             return
 
         material_source = cfg.material_source or "minio"
-        if material_source == "minio" and cfg.auto_sync_minio:
-            sync_err = _sync_minio_blocking(product_codes)
-            if sync_err:
-                logger.error("auto pipeline minio sync failed: %s", sync_err)
-                return
+        if material_source == "minio":
+            append_listing = listing_includes_append_products(product_codes, batch_summary)
+            if append_listing:
+                set_selectors = selectors_from_product_codes(product_codes)
+                log_rabbitmq_event(
+                    EVENT_SYNC_START,
+                    "追加图片：开始全量同步套图",
+                    account_id=account_id,
+                    product_codes=product_codes,
+                    selectors=set_selectors,
+                    sync_mode="full_image_set",
+                )
+                sync_err = _sync_full_image_sets_blocking(set_selectors)
+                if sync_err:
+                    logger.error("auto pipeline append full-set sync failed: %s", sync_err)
+                    log_rabbitmq_event(
+                        EVENT_SYNC_FAILED,
+                        sync_err,
+                        account_id=account_id,
+                        product_codes=product_codes,
+                        selectors=set_selectors,
+                    )
+                    return
+                log_rabbitmq_event(
+                    EVENT_SYNC_DONE,
+                    "套图全量同步完成",
+                    account_id=account_id,
+                    product_codes=product_codes,
+                    selectors=set_selectors,
+                )
+            elif cfg.auto_sync_minio:
+                log_rabbitmq_event(
+                    EVENT_SYNC_START,
+                    "开始同步 MinIO 素材",
+                    account_id=account_id,
+                    product_codes=product_codes,
+                    sync_mode="product_codes",
+                )
+                sync_err = _sync_minio_blocking(product_codes)
+                if sync_err:
+                    logger.error("auto pipeline minio sync failed: %s", sync_err)
+                    log_rabbitmq_event(
+                        EVENT_SYNC_FAILED,
+                        sync_err,
+                        account_id=account_id,
+                        product_codes=product_codes,
+                    )
+                    return
+                log_rabbitmq_event(
+                    EVENT_SYNC_DONE,
+                    "MinIO 素材同步完成",
+                    account_id=account_id,
+                    product_codes=product_codes,
+                )
 
         pipeline = start_integrated_pipeline(
             account_id=account_id,
@@ -200,12 +331,27 @@ def _run_auto_pipeline(
                 pipeline.get("intent_id"),
                 pipeline.get("block_reason"),
             )
+            log_rabbitmq_event(
+                EVENT_PIPELINE_QUEUED,
+                "整合链路进入商务排队",
+                account_id=account_id,
+                product_codes=product_codes,
+                intent_id=pipeline.get("intent_id"),
+                block_reason=pipeline.get("block_reason"),
+            )
             return
         logger.info(
             "auto pipeline triggered pipeline_id=%s account=%s products=%s",
             pipeline.get("pipeline_id"),
             account_id,
             product_codes,
+        )
+        log_rabbitmq_event(
+            EVENT_PIPELINE_START,
+            "已启动整合链路",
+            account_id=account_id,
+            product_codes=product_codes,
+            pipeline_id=pipeline.get("pipeline_id"),
         )
     except Exception:
         logger.exception("auto pipeline trigger failed account=%s products=%s", account_id, product_codes)
@@ -269,9 +415,18 @@ def maybe_trigger_auto_pipeline(batch_summary: dict[str, Any]) -> dict[str, Any]
         result["reason_label"] = format_auto_pipeline_reason("dedup")
         return result
 
+    if listing_includes_append_products(product_codes, batch_summary):
+        result["append_sync_full_image_set"] = True
+        result["synced_selectors"] = selectors_from_product_codes(product_codes)
+
     thread = threading.Thread(
         target=_run_auto_pipeline,
-        kwargs={"account_id": account_id, "product_codes": product_codes, "cfg": cfg},
+        kwargs={
+            "account_id": account_id,
+            "product_codes": product_codes,
+            "cfg": cfg,
+            "batch_summary": batch_summary,
+        },
         name="auto-pipeline-trigger",
         daemon=True,
     )

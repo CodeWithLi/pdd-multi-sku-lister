@@ -13,7 +13,6 @@ const REASON_LABELS: Record<string, string> = {
   no_matching_groups:
     '上传类型与触发范围不匹配（当前为追加图片，需选「仅追加文件」或「都可以」）',
   dedup: '近期已触发过相同商品（120 秒内去重）',
-  append_only_batch: '本批次为追加图片或重复通知，已跳过自动上架',
   no_indexed_files: '没有成功索引的图片',
   batch_not_success: '上传批次未成功，未触发自动上架',
 }
@@ -29,7 +28,11 @@ export function formatAutoPipelineFeedback(result: AutoPipelineResult | undefine
   if (!result) return ''
   if (result.triggered) {
     const codes = result.product_codes?.length ? result.product_codes.join('、') : '新商品'
-    return `已自动启动整合链路：${codes}`
+    const syncHint =
+      (result as AutoPipelineResult & { append_sync_full_image_set?: boolean }).append_sync_full_image_set
+        ? '（已先全量同步套图）'
+        : ''
+    return `已自动启动整合链路${syncHint}：${codes}`
   }
   const label = autoPipelineReasonLabel(result)
   if (!label) return ''

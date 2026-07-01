@@ -129,6 +129,61 @@ def throttle_listing_detail(throttle_state: dict[str, Any] | None) -> str:
     return f"分批上架 {batch_index}/{total}（每批 {per_batch} 套，间隔 {interval} 分钟）"
 
 
+def _append_batch_run_id(pipeline_id: str, run_id: str) -> None:
+    """记录每批上架 run_id，便于状态面板回填历史批次结果。"""
+    pipeline_id = str(pipeline_id or "").strip()
+    run_id = str(run_id or "").strip()
+    if not pipeline_id or not run_id:
+        return
+    row = get_integrated_pipeline(pipeline_id)
+    if not row:
+        return
+    meta = dict(row.meta or {})
+    throttle = dict(meta.get("listing_throttle") or {})
+    if not throttle.get("enabled"):
+        return
+    run_ids = [str(item).strip() for item in (throttle.get("batch_run_ids") or []) if str(item).strip()]
+    if run_id in run_ids:
+        return
+    run_ids.append(run_id)
+    throttle["batch_run_ids"] = run_ids
+    update_integrated_pipeline(pipeline_id, meta_patch={"listing_throttle": throttle})
+
+
+def merge_unit_results_into_throttle(
+    throttle_state: dict[str, Any],
+    result: dict[str, Any] | None,
+) -> dict[str, Any]:
+    """分批上架：把本批单元结果写入 meta，供跨批次状态展示。"""
+    throttle = dict(throttle_state or {})
+    accumulated = dict(throttle.get("unit_results_by_label") or {})
+    for item in list((result or {}).get("results") or []):
+        if not isinstance(item, dict):
+            continue
+        label = str(item.get("listing_label") or "").strip()
+        if not label:
+            continue
+        accumulated[label] = {
+            "listing_label": label,
+            "status": item.get("status"),
+            "pdd_product_id": item.get("pdd_product_id"),
+            "reason": item.get("reason") or item.get("reason_code"),
+        }
+    throttle["unit_results_by_label"] = accumulated
+    return throttle
+
+
+def _throttle_base_from_meta(
+    throttle_state: dict[str, Any],
+    listing_meta: dict[str, Any] | None,
+) -> dict[str, Any]:
+    """合并 listing_meta 中已更新的 throttle（如 unit_results_by_label）。"""
+    from_meta = dict((listing_meta or {}).get("listing_throttle") or {})
+    if from_meta:
+        return {**dict(throttle_state or {}), **from_meta}
+    return dict(throttle_state or {})
+
+
 def merge_throttle_accumulated_products(
     throttle_state: dict[str, Any],
     *,
@@ -183,6 +238,7 @@ def enqueue_listing_batch_for_pipeline(
         update_integrated_pipeline(pipeline_id, listing_run_id=run_id, meta_patch=patch)
     else:
         update_integrated_pipeline(pipeline_id, meta_patch=patch)
+    _append_batch_run_id(pipeline_id, run_id)
     logger.info(
         "pipeline listing batch queued pipeline_id=%s run_id=%s products=%s at=%s",
         pipeline_id,
@@ -211,18 +267,28 @@ def schedule_next_listing_batch_after_finish(
     if not throttle.get("enabled"):
         return False
 
+    base_throttle = _throttle_base_from_meta(throttle, listing_meta)
+    finished_run_id = str(row.listing_run_id or "").strip()
+    if finished_run_id:
+        prior_run_ids = [
+            str(item).strip()
+            for item in (base_throttle.get("batch_run_ids") or [])
+            if str(item).strip()
+        ]
+        if finished_run_id not in prior_run_ids:
+            base_throttle["batch_run_ids"] = [*prior_run_ids, finished_run_id]
     merged_pdd, merged_map = merge_throttle_accumulated_products(
-        throttle,
+        base_throttle,
         pdd_ids=pdd_ids,
         mapping_ids=mapping_ids,
     )
-    batch_index = int(throttle.get("batch_index") or 0)
-    batches = list(throttle.get("batches") or [])
+    batch_index = int(base_throttle.get("batch_index") or 0)
+    batches = list(base_throttle.get("batches") or [])
     next_index = batch_index + 1
 
     meta_patch = dict(listing_meta or {})
     meta_patch["listing_throttle"] = {
-        **throttle,
+        **base_throttle,
         "accumulated_pdd_ids": merged_pdd,
         "accumulated_mapping_ids": merged_map,
     }
@@ -233,9 +299,9 @@ def schedule_next_listing_batch_after_finish(
         update_integrated_pipeline(row.pipeline_id, meta_patch=meta_patch)
         return False
 
-    interval_minutes = max(1, int(throttle.get("interval_minutes") or 1))
+    interval_minutes = max(1, int(base_throttle.get("interval_minutes") or 1))
     scheduled_at = datetime.now() + timedelta(minutes=interval_minutes)
-    payload_base = dict(throttle.get("listing_payload_base") or {})
+    payload_base = dict(base_throttle.get("listing_payload_base") or {})
 
     meta_patch["listing_throttle"]["batch_index"] = next_index
     meta_patch["listing_throttle"]["next_batch_scheduled_at"] = scheduled_at.isoformat(

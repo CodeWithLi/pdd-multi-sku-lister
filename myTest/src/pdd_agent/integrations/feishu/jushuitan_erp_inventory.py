@@ -1,9 +1,9 @@
-"""聚水潭 ERP 商品列表 — 按商品编码读取可用数（上架库存）。"""
+"""聚水潭 ERP 商品列表 — 按商品编码读取可用数、成本等（上架库存等）。"""
 
 from __future__ import annotations
 
 import time
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from typing import Any
 
 from pdd_agent.core.logging import get_logger
@@ -20,12 +20,21 @@ from pdd_agent.skills.listing.pdd_product_catalog import PddProductEntry, _norm_
 
 logger = get_logger(__name__)
 
-_CACHE: dict[str, Any] = {"loaded_at": 0.0, "inventory": None}
+_CACHE: dict[str, Any] = {"loaded_at": 0.0, "entries": None}
+
+
+@dataclass(frozen=True)
+class JushuitanErpEntry:
+    """聚水潭 ERP 单行：商品编码 + 可用数 + 成本。"""
+
+    code: str
+    available_qty: int = 0
+    cost: float = 0.0
 
 
 def clear_jushuitan_inventory_cache() -> None:
     _CACHE["loaded_at"] = 0.0
-    _CACHE["inventory"] = None
+    _CACHE["entries"] = None
 
 
 def resolve_jushuitan_erp_table_id(
@@ -50,28 +59,34 @@ def resolve_jushuitan_erp_table_id(
     return str(found or "").strip()
 
 
-def _parse_inventory_row(
+def _parse_erp_row(
     fields: dict[str, Any],
     *,
     code_field: str,
     qty_field: str,
-) -> tuple[str, int] | None:
+    cost_field: str,
+) -> JushuitanErpEntry | None:
     raw_code = _field_text(fields, code_field)
     code = _norm_code(raw_code)
     if not code:
         return None
     qty = _field_number(fields, qty_field)
-    return code, int(qty or 0)
+    cost = _field_number(fields, cost_field)
+    return JushuitanErpEntry(
+        code=code,
+        available_qty=int(qty or 0),
+        cost=round(float(cost or 0.0), 2),
+    )
 
 
-def load_jushuitan_inventory_map(
+def load_jushuitan_erp_map(
     *,
     codes: list[str] | None = None,
     config: FeishuConfig | None = None,
     client: FeishuClient | None = None,
     force_refresh: bool = False,
-) -> dict[str, int]:
-    """读取聚水潭 ERP 表：商品编码 -> 可用数。"""
+) -> dict[str, JushuitanErpEntry]:
+    """读取聚水潭 ERP 表：商品编码 -> {可用数, 成本}。"""
     cfg = config or load_feishu_config()
     inv_cfg = cfg.jushuitan_erp_inventory
     if not inv_cfg.enabled:
@@ -84,10 +99,10 @@ def load_jushuitan_inventory_map(
         not force_refresh
         and cache_seconds > 0
         and use_full_cache
-        and isinstance(_CACHE.get("inventory"), dict)
+        and isinstance(_CACHE.get("entries"), dict)
         and time.time() - float(_CACHE.get("loaded_at") or 0) < cache_seconds
     ):
-        return dict(_CACHE["inventory"])
+        return dict(_CACHE["entries"])
 
     app_token = str(cfg.bitable_app_token or "").strip()
     if not app_token or not cfg.app_id or not cfg.app_secret:
@@ -106,8 +121,9 @@ def load_jushuitan_inventory_map(
     names = inv_cfg.field_names
     code_field = resolve_table_field_name(api, app_token, table_id, names.product_code)
     qty_field = resolve_table_field_name(api, app_token, table_id, names.available_qty)
+    cost_field = resolve_table_field_name(api, app_token, table_id, names.cost)
 
-    inventory: dict[str, int] = {}
+    entries: dict[str, JushuitanErpEntry] = {}
     try:
         if normalized_codes:
             records = search_records_by_field_values(
@@ -125,21 +141,64 @@ def load_jushuitan_inventory_map(
 
     for item in records:
         fields = item.get("fields") if isinstance(item.get("fields"), dict) else {}
-        parsed = _parse_inventory_row(fields, code_field=code_field, qty_field=qty_field)
+        parsed = _parse_erp_row(
+            fields,
+            code_field=code_field,
+            qty_field=qty_field,
+            cost_field=cost_field,
+        )
         if parsed:
-            inventory[parsed[0]] = parsed[1]
+            entries[parsed.code] = parsed
 
     if use_full_cache and cache_seconds > 0:
         _CACHE["loaded_at"] = time.time()
-        _CACHE["inventory"] = dict(inventory)
+        _CACHE["entries"] = dict(entries)
 
     logger.info(
-        "jushuitan erp inventory loaded rows=%s codes=%s scoped=%s",
+        "jushuitan erp loaded rows=%s codes=%s scoped=%s fields=商品编码,可用数,成本",
         len(records),
-        len(inventory),
+        len(entries),
         bool(normalized_codes),
     )
-    return inventory
+    return entries
+
+
+def load_jushuitan_inventory_map(
+    *,
+    codes: list[str] | None = None,
+    config: FeishuConfig | None = None,
+    client: FeishuClient | None = None,
+    force_refresh: bool = False,
+) -> dict[str, int]:
+    """读取聚水潭 ERP 表：商品编码 -> 可用数。"""
+    return {
+        code: entry.available_qty
+        for code, entry in load_jushuitan_erp_map(
+            codes=codes,
+            config=config,
+            client=client,
+            force_refresh=force_refresh,
+        ).items()
+    }
+
+
+def load_jushuitan_cost_map(
+    *,
+    codes: list[str] | None = None,
+    config: FeishuConfig | None = None,
+    client: FeishuClient | None = None,
+    force_refresh: bool = False,
+) -> dict[str, float]:
+    """读取聚水潭 ERP 表：商品编码 -> 成本。"""
+    return {
+        code: entry.cost
+        for code, entry in load_jushuitan_erp_map(
+            codes=codes,
+            config=config,
+            client=client,
+            force_refresh=force_refresh,
+        ).items()
+    }
 
 
 def apply_jushuitan_inventory_to_catalog(
@@ -168,16 +227,20 @@ def enrich_catalog_with_jushuitan_inventory(
     config: FeishuConfig | None = None,
     client: FeishuClient | None = None,
     inventory_map: dict[str, int] | None = None,
+    erp_map: dict[str, JushuitanErpEntry] | None = None,
 ) -> dict[str, PddProductEntry]:
     cfg = config or load_feishu_config()
     if not cfg.jushuitan_erp_inventory.enabled:
         return catalog
     inv_map = inventory_map
     if inv_map is None:
-        try:
-            lookup_codes = codes or list(catalog.keys())
-            inv_map = load_jushuitan_inventory_map(codes=lookup_codes, config=cfg, client=client)
-        except Exception:
-            logger.exception("load jushuitan erp inventory for catalog enrich failed")
-            return catalog
+        if erp_map is not None:
+            inv_map = {code: entry.available_qty for code, entry in erp_map.items()}
+        else:
+            try:
+                lookup_codes = codes or list(catalog.keys())
+                inv_map = load_jushuitan_inventory_map(codes=lookup_codes, config=cfg, client=client)
+            except Exception:
+                logger.exception("load jushuitan erp inventory for catalog enrich failed")
+                return catalog
     return apply_jushuitan_inventory_to_catalog(catalog, inv_map, enabled=True)

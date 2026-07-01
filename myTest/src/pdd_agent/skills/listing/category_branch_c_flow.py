@@ -16,6 +16,12 @@ from pdd_agent.skills.listing.category_branch_c_picker import (
     prepare_branch_c_category_before_next,
     run_branch_c_keyword_category_pick,
 )
+from pdd_agent.skills.listing.category_branch_c_page_ai_title import (
+    ensure_branch_c_category_ready_for_ai_title_flow,
+)
+from pdd_agent.skills.listing.category_branch_c_recent import (
+    log_branch_c_recent_diagnostics,
+)
 
 if TYPE_CHECKING:
     from pdd_agent.browser.dp_compat_sync import DpPage
@@ -95,6 +101,7 @@ def run_branch_c_category_after_covers(
         wait_seconds=10,
     )
     log_modal_diagnostics(page, account_id, label)
+    log_branch_c_recent_diagnostics(page, account_id, label)
     log_branch_c_category_diagnostics(page, account_id, label)
     log_branch_c_picker_diagnostics(page, account_id, label)
 
@@ -109,17 +116,25 @@ def run_branch_c_category_after_covers(
         or "笔袋"
     ).strip() or "笔袋"
 
-    if branch_c_needs_keyword_category_pick(page):
-        _log(account_id, label, "分支 C：检测到列选器/搜索框且类目未选完整，开始关键词选类")
-        if not run_branch_c_keyword_category_pick(
-            page,
-            account_id,
-            label,
-            keyword,
-        ):
-            _log(account_id, label, "分支 C：关键词选类失败")
-            return False, "not_found", "manual_picker"
-        log_branch_c_picker_diagnostics(page, account_id, label)
+    from pdd_agent.skills.listing.category_branch_c_page_ai_title_retry import (
+        ensure_branch_c_page_ai_title_before_category,
+    )
+
+    ensure_branch_c_page_ai_title_before_category(
+        page,
+        account_id,
+        listing_info,
+        listing_info,
+        label=label,
+    )
+
+    if not ensure_branch_c_category_ready_for_ai_title_flow(
+        page, account_id, label, listing_info, keyword
+    ):
+        _log(account_id, label, "分支 C：选类未完成（最近使用/关键词均失败）")
+        return False, "not_found", "manual_picker"
+    log_branch_c_recent_diagnostics(page, account_id, label)
+    log_branch_c_picker_diagnostics(page, account_id, label)
 
     manual_category = listing_upload._category_page_needs_manual_selection(page)
     category_mode = listing_upload._resolve_category_page_mode(
@@ -175,16 +190,19 @@ def run_branch_c_category_after_covers(
         ensure_branch_c_recommendation_modal_cleared(page, account_id, label, wait_seconds=0)
 
     from pdd_agent.skills.listing.category_branch_c_next import log_branch_c_next_diagnostics
+    from pdd_agent.skills.listing.category_branch_c_page_ai_title import (
+        click_branch_c_category_next_with_ai_burst,
+    )
 
     log_branch_c_next_diagnostics(page, account_id, label)
 
-    next_ok, next_err = click_category_next_and_advance(
+    next_ok, next_err = click_branch_c_category_next_with_ai_burst(
         page,
         account_id,
         label,
-        ui_type="C",
-        mode=category_mode,
-        burst_demo=category_next_burst_demo and category_mode == "render_wait",
+        listing_info,
+        category_mode=category_mode,
+        category_next_burst_demo=category_next_burst_demo,
     )
     if next_ok:
         _log(account_id, label, "分支 C：已点击「下一步」并进入详情页")
@@ -198,25 +216,25 @@ def run_branch_c_category_after_covers(
                     label,
                     keyword,
                 ):
-                    next_ok, next_err = click_category_next_and_advance(
+                    next_ok, next_err = click_branch_c_category_next_with_ai_burst(
                         page,
                         account_id,
                         label,
-                        ui_type="C",
-                        mode="manual_picker",
-                        burst_demo=False,
+                        listing_info,
+                        category_mode="manual_picker",
+                        category_next_burst_demo=False,
                     )
             elif ensure_branch_c_recommendation_modal_cleared(
                 page, account_id, label, wait_seconds=2
             ):
                 _log(account_id, label, "分支 C：弹窗已确认，重试点击「下一步」")
-                next_ok, next_err = click_category_next_and_advance(
+                next_ok, next_err = click_branch_c_category_next_with_ai_burst(
                     page,
                     account_id,
                     label,
-                    ui_type="C",
-                    mode=category_mode,
-                    burst_demo=category_next_burst_demo and category_mode == "render_wait",
+                    listing_info,
+                    category_mode=category_mode,
+                    category_next_burst_demo=category_next_burst_demo,
                 )
         if next_ok:
             _log(account_id, label, "分支 C：重试后已进入详情页")

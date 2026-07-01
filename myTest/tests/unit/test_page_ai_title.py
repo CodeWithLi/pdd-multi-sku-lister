@@ -7,6 +7,36 @@ from unittest.mock import MagicMock
 from pdd_agent.skills.listing import page_ai_title
 
 
+def test_try_click_ai_generate_title_picks_first_suggestion(monkeypatch):
+    page = MagicMock()
+    btn = MagicMock()
+    page.ele.return_value = btn
+
+    reads = iter(["", "蕾丝心形笔袋优雅收纳"])
+    picks = iter(["蕾丝心形笔袋优雅收纳", ""])
+    monkeypatch.setattr(page_ai_title, "_read_title_from_input", lambda _page: next(reads, "蕾丝心形笔袋优雅收纳"))
+    monkeypatch.setattr(page_ai_title, "_click_first_ai_title_suggestion", lambda _page: next(picks, ""))
+    monkeypatch.setattr(page_ai_title, "time", MagicMock(sleep=lambda *_: None))
+
+    title = page_ai_title._try_click_ai_generate_title(page, "store_A")
+    assert title == "蕾丝心形笔袋优雅收纳"
+    btn.click.assert_called_once()
+
+
+def test_try_apply_branch_c_ai_title_generate_dropdown(monkeypatch):
+    page = MagicMock()
+    reads = iter(["", "首条AI标题"])
+    monkeypatch.setattr(page_ai_title, "_read_title_from_input", lambda _page: next(reads, "首条AI标题"))
+    monkeypatch.setattr(page_ai_title, "_click_ai_generate_title_button", lambda _page: True)
+    monkeypatch.setattr(page_ai_title, "_click_first_ai_title_suggestion", lambda _page: "首条推荐文案")
+    monkeypatch.setattr(page_ai_title, "time", MagicMock(sleep=lambda *_: None))
+
+    title = page_ai_title.try_apply_branch_c_ai_title_generate_dropdown(
+        page, "store_A", label="BD023A"
+    )
+    assert title == "首条AI标题"
+
+
 def test_try_click_ai_generate_returns_title(monkeypatch):
     page = MagicMock()
     btn = MagicMock()

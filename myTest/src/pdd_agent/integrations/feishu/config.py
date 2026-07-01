@@ -168,6 +168,7 @@ class JushuitanErpInventoryFieldNames(BaseModel):
 
     product_code: str = "商品编码"
     available_qty: str = "可用数"
+    cost: str = "成本"
 
 
 class JushuitanErpInventoryConfig(BaseModel):
@@ -230,6 +231,12 @@ class PipelineIntegrationConfig(BaseModel):
         le=5000,
         description="同步失败日志表时最多读取行数",
     )
+    accessory_cost_pricing_enabled: bool = Field(
+        default=False,
+        description="开启后拼单价=主商品拼多多定价+子商品聚水潭成本+一次0~5元浮动",
+    )
+    accessory_cost_float_min: float = Field(default=0.0, ge=0, description="配件成本定价模式：拼单价总浮动下限（元）")
+    accessory_cost_float_max: float = Field(default=5.0, ge=0, description="配件成本定价模式：拼单价总浮动上限（元）")
 
 
 class PddActivityLogConfig(BaseModel):
@@ -669,6 +676,12 @@ def platform_skip_dedupe_enabled(cfg: FeishuConfig | None = None) -> bool:
     return bool(cfg.pipeline.platform_skip_dedupe_enabled)
 
 
+def accessory_cost_pricing_enabled(cfg: FeishuConfig | None = None) -> bool:
+    """整合链路「配件成本定价」开关。"""
+    cfg = cfg or load_feishu_config()
+    return bool(cfg.pipeline.accessory_cost_pricing_enabled)
+
+
 def load_feishu_config(path: Path | None = None) -> FeishuConfig:
     """合并 feishu.yaml 与 .env 中的飞书凭据。"""
     cfg_path = path or Path(os.getenv("FEISHU_CONFIG_PATH", DEFAULT_FEISHU_CONFIG_PATH))
@@ -910,6 +923,23 @@ def save_pipeline_platform_skip_dedupe_to_config(enabled: bool, path: Path | Non
     if not isinstance(pipeline_raw, dict):
         pipeline_raw = {}
     pipeline_raw["platform_skip_dedupe_enabled"] = bool(enabled)
+    data["pipeline"] = pipeline_raw
+    cfg_path.parent.mkdir(parents=True, exist_ok=True)
+    with open(cfg_path, "w", encoding="utf-8") as f:
+        yaml.dump(data, f, allow_unicode=True, default_flow_style=False, sort_keys=False)
+
+
+def save_pipeline_accessory_cost_pricing_to_config(enabled: bool, path: Path | None = None) -> None:
+    """整合链路：写入「配件成本定价」开关到 feishu.yaml。"""
+    cfg_path = path or Path(os.getenv("FEISHU_CONFIG_PATH", DEFAULT_FEISHU_CONFIG_PATH))
+    data: dict = {}
+    if cfg_path.is_file():
+        with open(cfg_path, encoding="utf-8") as f:
+            data = yaml.safe_load(f) or {}
+    pipeline_raw = data.get("pipeline")
+    if not isinstance(pipeline_raw, dict):
+        pipeline_raw = {}
+    pipeline_raw["accessory_cost_pricing_enabled"] = bool(enabled)
     data["pipeline"] = pipeline_raw
     cfg_path.parent.mkdir(parents=True, exist_ok=True)
     with open(cfg_path, "w", encoding="utf-8") as f:
