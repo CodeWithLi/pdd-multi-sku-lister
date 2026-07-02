@@ -19,6 +19,7 @@ class ListingErrorCode:
     PREFLIGHT_NO_DETAIL = "preflight_no_detail"
     PREFLIGHT_NO_MATERIAL = "preflight_no_material"
     PREFLIGHT_CATALOG = "preflight_catalog"
+    COMBO_PREVIEW_NAMING_MISMATCH = "combo_preview_naming_mismatch"
     IMAGE_FILE_MISSING = "image_file_missing"
     CAROUSEL_IMAGE_DIMENSION_REJECTED = "carousel_image_dimension_rejected"
     PREVIEW_IMAGE_DIMENSION_REJECTED = "preview_image_dimension_rejected"
@@ -105,6 +106,7 @@ class ListingErrors:
         ListingErrorCode.PREFLIGHT_NO_DETAIL: "上架前校验：详情图为空",
         ListingErrorCode.PREFLIGHT_NO_MATERIAL: "上架前校验：商品素材图为空",
         ListingErrorCode.PREFLIGHT_CATALOG: "上架前校验：商品表或素材目录问题",
+        ListingErrorCode.COMBO_PREVIEW_NAMING_MISMATCH: "组合图文件名未以文件夹名开头",
         ListingErrorCode.IMAGE_FILE_MISSING: "图片文件不存在或无法读取",
         ListingErrorCode.CAROUSEL_IMAGE_DIMENSION_REJECTED: "主图尺寸不符合平台要求",
         ListingErrorCode.PREVIEW_IMAGE_DIMENSION_REJECTED: "预览图尺寸不符合平台要求",
@@ -204,6 +206,7 @@ class ListingErrors:
         ListingErrorCode.PREFLIGHT_NO_DETAIL: "缺少详情图（需 6-8 编号图）",
         ListingErrorCode.PREFLIGHT_NO_MATERIAL: "缺少商品素材图（需 9 编号图）",
         ListingErrorCode.PREFLIGHT_CATALOG: "商品目录或素材有问题",
+        ListingErrorCode.COMBO_PREVIEW_NAMING_MISMATCH: "组合图文件名未以文件夹名开头",
         ListingErrorCode.IMAGE_FILE_MISSING: "图片文件不存在或打不开",
         ListingErrorCode.CAROUSEL_IMAGE_DIMENSION_REJECTED: "主图尺寸不符合要求",
         ListingErrorCode.PREVIEW_IMAGE_DIMENSION_REJECTED: "预览图尺寸不符合要求",
@@ -303,6 +306,7 @@ class ListingErrors:
             ListingErrorCode.PREFLIGHT_NO_DETAIL,
             ListingErrorCode.PREFLIGHT_NO_MATERIAL,
             ListingErrorCode.PREFLIGHT_CATALOG,
+            ListingErrorCode.COMBO_PREVIEW_NAMING_MISMATCH,
             ListingErrorCode.CATALOG_PARSE_WARNING,
             ListingErrorCode.NO_VALID_UNITS,
             ListingErrorCode.IMAGE_FILE_MISSING,

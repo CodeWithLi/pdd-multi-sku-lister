@@ -11,6 +11,10 @@ from pdd_agent.core.config import YamlSettings
 from pdd_agent.domain.models import PreflightIssue, PreflightReport
 from pdd_agent.skills.base import Skill
 from pdd_agent.skills.listing.catalog import parse_listing_target
+from pdd_agent.skills.listing.combo_preview_naming import (
+    format_combo_preview_naming_issue,
+    validate_listing_unit_combo_preview_naming,
+)
 
 
 def _warning_issue_level(message: str) -> tuple[str, str]:
@@ -56,6 +60,15 @@ def run_preflight(
             continue
         for unit in units:
             report.units.append(unit)
+            for naming_issue in validate_listing_unit_combo_preview_naming(unit):
+                report.issues.append(
+                    PreflightIssue(
+                        level="error",
+                        message=format_combo_preview_naming_issue(naming_issue),
+                        listing_label=unit.listing_label,
+                        reason_code=ListingErrorCode.COMBO_PREVIEW_NAMING_MISMATCH,
+                    )
+                )
             if not unit.skus:
                 report.issues.append(
                     PreflightIssue(
