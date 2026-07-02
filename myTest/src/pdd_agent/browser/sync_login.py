@@ -27,7 +27,9 @@ def ensure_login_sync(account: AccountConfig, page: Page) -> DpPage:
     account_id = account.account_id
     print(f"\n--- [{account_id}] 正在检查登录状态 ---")
 
-    dp.get(HOME_URL)
+    from pdd_agent.browser.sync_login_home_goto_retry import goto_home_with_aborted_retry
+
+    goto_home_with_aborted_retry(page, HOME_URL)
     time.sleep(2)
 
     if not is_login_url(dp.url):

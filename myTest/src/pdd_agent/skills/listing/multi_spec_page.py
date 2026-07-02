@@ -3625,104 +3625,25 @@ def fill_multi_spec_rows(
             page, account_id, "fill_final", style_names, size_names
         )
 
-    print(f"[{account_id}] 文字字段填完，开始上传预览图...", flush=True)
+    print(f"[{account_id}] 文字字段填完，开始按规格编码上传预览图...", flush=True)
     t = _now()
-    _scroll_sku_table_to_load(
+    from pdd_agent.skills.listing.listing_spec_code_preview_upload import (
+        upload_previews_by_spec_code,
+    )
+
+    preview_result = upload_previews_by_spec_code(
         page,
-        len(skus),
-        style_names=style_names,
-        size_names=size_names,
+        account_id,
+        skus,
+        prepare_table=True,
     )
-    if style_names and size_names:
-        _stamp_global_row_indices(page, style_names, size_names)
-    preview_count = _mark_preview_inputs(page)
-    _log_step(account_id, f"预览图上传位 {preview_count} 个（虚拟滚动下可能少于 SKU 数）", t)
-
-    uploaded = 0
-    need_upload = len(
-        {
-            (sku.style_name or "", sku.model_name or "")
-            for sku in skus
-            if sku.preview_image
-        }
-    )
-    for i, sku in enumerate(skus):
-        label = f"{sku.style_name} / {sku.model_name}"
-        row_idx = (
-            _spec_order_row_index(sku.style_name, sku.model_name, style_names, size_names)
-            if style_names and size_names
-            else (row_indices[i] if i < len(row_indices) else i)
-        )
-        if row_idx is None:
-            row_idx = i
-        if sku.style_name and sku.model_name:
-            found_idx = _ensure_style_size_row_visible(
-                page,
-                sku.style_name,
-                sku.model_name,
-                style_names=style_names,
-                size_names=size_names,
-            )
-            if found_idx is not None and not (style_names and size_names):
-                row_idx = found_idx
-        if not sku.preview_image:
-            continue
-        sku_start = _now()
-        print(f"[{account_id}] >>> 预览图 {i + 1}/{len(skus)}：{label}", flush=True)
-        try:
-            if upload_row_preview(
-                page,
-                row_idx,
-                str(sku.preview_image.resolve()),
-                account_id,
-                label,
-                style_name=sku.style_name or "",
-                size_name=sku.model_name or "",
-                style_names=style_names,
-                size_names=size_names,
-            ):
-                uploaded += 1
-        except PddImageUploadRejected:
-            raise
-        except Exception as exc:
-            err = _safe_exc(exc)
-            if "连接已断开" in err or "disconnect" in err.lower():
-                raise
-            print(f"[{account_id}] 预览图异常 [{label}]：{err}", flush=True)
-        _log_step(account_id, f"SKU {i + 1} 整行合计（含预览图）", sku_start)
-
-    verified = 0
-    seen_keys: set[tuple[str, str]] = set()
-    for i, sku in enumerate(skus):
-        if not sku.preview_image:
-            continue
-        key = (sku.style_name or "", sku.model_name or "")
-        if key in seen_keys:
-            continue
-        seen_keys.add(key)
-        row_idx = row_indices[i] if i < len(row_indices) else i
-        found_idx = _ensure_style_size_row_visible(
-            page,
-            key[0],
-            key[1],
-            style_names=style_names,
-            size_names=size_names,
-        )
-        if found_idx is not None:
-            row_idx = found_idx
-        if _preview_is_uploaded(
-            page,
-            row_idx,
-            style_name=key[0],
-            size_name=key[1],
-            style_names=style_names,
-            size_names=size_names,
-        ):
-            verified += 1
-    print(
-        f"[{account_id}] 预览图结果：上传成功 {uploaded}/{need_upload}，"
-        f"页面校验 {verified}/{need_upload}",
-        flush=True,
+    uploaded = preview_result.uploaded
+    need_upload = preview_result.need_upload
+    verified = preview_result.verified
+    _log_step(
+        account_id,
+        f"按规格编码预览图 {uploaded}/{need_upload}（校验 {verified}）",
+        t,
     )
     if verified < need_upload:
         print(f"[{account_id}] [警告] 仍有预览图未上传，提交可能失败", flush=True)
