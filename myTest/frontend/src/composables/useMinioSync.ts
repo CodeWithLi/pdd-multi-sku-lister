@@ -35,6 +35,8 @@ export function useMinioSync() {
               job.pruned_dirs ? `，清理多余文件夹 ${job.pruned_dirs} 个` : ''
             }${
               job.pruned_files ? `，清理已删图片 ${job.pruned_files} 张` : ''
+            }${
+              job.pruned_sets ? `，清理废弃套图 ${job.pruned_sets} 套` : ''
             }`,
           )
         } else if (job.status === 'failed') {

@@ -192,6 +192,7 @@ export interface MinioSyncJob {
   skipped_files: number
   pruned_dirs?: number
   pruned_files?: number
+  pruned_sets?: number
   error: string
   progress_percent: number
   started_at: number

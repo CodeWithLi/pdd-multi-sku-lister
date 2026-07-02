@@ -127,8 +127,9 @@ def test_stage_minio_image_set_prunes_after_download(tmp_path, monkeypatch):
     fake_client.fget_object.side_effect = lambda bucket, key, dest: Path(dest).write_bytes(b"new")
 
     monkeypatch.setattr(staging, "get_minio_client", lambda config=None: fake_client)
+    monkeypatch.setattr(staging, "prune_stale_local_image_sets_for_family", lambda *args, **kwargs: (0, []))
 
-    downloaded, skipped, pruned_dirs, pruned_files, mismatches = staging.stage_minio_image_set(
+    downloaded, skipped, pruned_dirs, pruned_files, pruned_sets, mismatches = staging.stage_minio_image_set(
         family_code="BD043",
         image_set="第一套图",
         config=cfg,
@@ -138,6 +139,7 @@ def test_stage_minio_image_set_prunes_after_download(tmp_path, monkeypatch):
     assert downloaded == 1
     assert pruned_dirs == 1
     assert pruned_files == 0
+    assert pruned_sets == 0
     assert mismatches == []
     assert not stale.exists()
     assert (set_dir / "BD043B帕恰狗印花笔袋" / "1.png").is_file()
@@ -189,8 +191,9 @@ def test_stage_minio_image_set_prunes_stale_files_within_product_folder(tmp_path
     fake_client.fget_object.side_effect = lambda bucket, key, dest: Path(dest).write_bytes(b"new")
 
     monkeypatch.setattr(staging, "get_minio_client", lambda config=None: fake_client)
+    monkeypatch.setattr(staging, "prune_stale_local_image_sets_for_family", lambda *args, **kwargs: (0, []))
 
-    downloaded, skipped, pruned_dirs, pruned_files, mismatches = staging.stage_minio_image_set(
+    downloaded, skipped, pruned_dirs, pruned_files, pruned_sets, mismatches = staging.stage_minio_image_set(
         family_code="BD328",
         image_set="第一套图",
         config=cfg,
@@ -200,6 +203,7 @@ def test_stage_minio_image_set_prunes_stale_files_within_product_folder(tmp_path
     assert downloaded == 5
     assert pruned_dirs == 0
     assert pruned_files == 3
+    assert pruned_sets == 0
     assert mismatches == []
     assert sorted(p.name for p in product_dir.iterdir() if p.is_file()) == [
         "1.png",
@@ -208,6 +212,42 @@ def test_stage_minio_image_set_prunes_stale_files_within_product_folder(tmp_path
         "4.png",
         "5.png",
     ]
+
+
+def test_stage_minio_image_set_prunes_stale_local_image_sets(tmp_path, monkeypatch):
+    cfg = MagicMock()
+    cfg.bucket = "beilemei-images"
+    monkeypatch.setattr(staging, "minio_configured", lambda config=None: True)
+    monkeypatch.setattr(staging, "load_minio_config", lambda: cfg)
+    monkeypatch.setattr(staging, "resolve_minio_set_prefix", lambda family, image_set, config=None: "笔袋/AXBC001/第一套图/")
+    monkeypatch.setattr(
+        staging,
+        "prune_stale_local_image_sets_for_family",
+        lambda family_code, **kwargs: (2, ["第二套图", "第三套图"]),
+    )
+
+    class FakeObj:
+        def __init__(self, name: str):
+            self.object_name = name
+
+    fake_client = MagicMock()
+    fake_client.list_objects.return_value = [
+        FakeObj("笔袋/AXBC001/第一套图/AXBC001A/1.png"),
+    ]
+    fake_client.stat_object.side_effect = Exception("force download")
+    fake_client.fget_object.side_effect = lambda bucket, key, dest: Path(dest).write_bytes(b"new")
+    monkeypatch.setattr(staging, "get_minio_client", lambda config=None: fake_client)
+
+    downloaded, skipped, pruned_dirs, pruned_files, pruned_sets, mismatches = staging.stage_minio_image_set(
+        family_code="AXBC001",
+        image_set="第一套图",
+        config=cfg,
+        cache_root=tmp_path,
+    )
+
+    assert downloaded == 1
+    assert pruned_sets == 2
+    assert mismatches == []
 
 
 def test_format_sync_mismatch_reports_count_diff(tmp_path):
@@ -240,7 +280,7 @@ def test_stage_minio_for_product_codes_raises_when_counts_mismatch(tmp_path, mon
     monkeypatch.setattr(
         staging,
         "stage_minio_image_set",
-        lambda **kwargs: (0, 0, 0, 0, ["BD328/第一套图/BD328A: MinIO 5 张，本地 8 张；多 6.png, 7.png, 8.png"]),
+        lambda **kwargs: (0, 0, 0, 0, 0, ["BD328/第一套图/BD328A: MinIO 5 张，本地 8 张；多 6.png, 7.png, 8.png"]),
     )
 
     try:

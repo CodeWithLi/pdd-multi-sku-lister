@@ -230,7 +230,7 @@ def _sync_full_image_sets_blocking(selectors: list[str]) -> str:
             continue
         family_code, image_set = parts
         logger.info("auto pipeline append sync full image set %s/%s", family_code, image_set)
-        _, _, _, _, batch_mismatches = stage_minio_image_set(
+        _, _, _, _, _, batch_mismatches = stage_minio_image_set(
             family_code=family_code,
             image_set=image_set,
             config=cfg,

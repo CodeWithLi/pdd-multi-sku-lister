@@ -21,6 +21,7 @@ from pdd_agent.skills.listing.catalog import (
 )
 from pdd_agent.integrations.minio.client import get_minio_client
 from pdd_agent.integrations.minio.config import MinioConfig, load_minio_config, minio_cache_root, minio_configured
+from pdd_agent.integrations.minio.local_cache_prune import prune_stale_local_image_sets_for_family
 
 logger = get_logger(__name__)
 
@@ -195,11 +196,11 @@ def stage_minio_image_set(
     image_set: str,
     config: MinioConfig | None = None,
     cache_root: Path | None = None,
-) -> tuple[int, int, int, int, list[str]]:
-    """下载某套图下全部兄弟商品文件夹到本地缓存，返回 (downloaded, skipped, pruned_dirs, pruned_files, mismatches)。"""
+) -> tuple[int, int, int, int, int, list[str]]:
+    """下载某套图下全部兄弟商品文件夹到本地缓存，返回 (downloaded, skipped, pruned_dirs, pruned_files, pruned_sets, mismatches)。"""
     cfg = config or load_minio_config()
     if not minio_configured(cfg):
-        return 0, 0, 0, 0, []
+        return 0, 0, 0, 0, 0, []
 
     client = get_minio_client(cfg)
     dest_root = cache_root or minio_cache_root(cfg)
@@ -275,18 +276,24 @@ def stage_minio_image_set(
         image_set=image_set,
         remote_product_folders=remote_folders,
     )
-    if written or skipped or pruned_dirs or pruned_files or mismatches:
+    pruned_sets, _ = prune_stale_local_image_sets_for_family(
+        family_code,
+        config=cfg,
+        cache_root=dest_root,
+    )
+    if written or skipped or pruned_dirs or pruned_files or pruned_sets or mismatches:
         logger.info(
-            "minio staged set %s/%s -> downloaded=%s skipped=%s pruned_dirs=%s pruned_files=%s mismatches=%s",
+            "minio staged set %s/%s -> downloaded=%s skipped=%s pruned_dirs=%s pruned_files=%s pruned_sets=%s mismatches=%s",
             family_code,
             image_set,
             written,
             skipped,
             pruned_dirs,
             pruned_files,
+            pruned_sets,
             len(mismatches),
         )
-    return written, skipped, pruned_dirs, pruned_files, mismatches
+    return written, skipped, pruned_dirs, pruned_files, pruned_sets, mismatches
 
 
 def stage_minio_for_product_codes(product_codes: list[str], config: MinioConfig | None = None) -> Path:
@@ -300,9 +307,10 @@ def stage_minio_for_product_codes(product_codes: list[str], config: MinioConfig 
     skipped = 0
     pruned_dirs = 0
     pruned_files = 0
+    pruned_sets = 0
     mismatches: list[str] = []
     for family_code, image_set in sorted(sets):
-        d, s, p, f, batch_mismatches = stage_minio_image_set(
+        d, s, p, f, ps, batch_mismatches = stage_minio_image_set(
             family_code=family_code,
             image_set=image_set,
             config=cfg,
@@ -312,15 +320,17 @@ def stage_minio_for_product_codes(product_codes: list[str], config: MinioConfig 
         skipped += s
         pruned_dirs += p
         pruned_files += f
+        pruned_sets += ps
         mismatches.extend(batch_mismatches)
     logger.info(
-        "minio staged product_codes=%s sets=%s downloaded=%s skipped=%s pruned_dirs=%s pruned_files=%s mismatches=%s",
+        "minio staged product_codes=%s sets=%s downloaded=%s skipped=%s pruned_dirs=%s pruned_files=%s pruned_sets=%s mismatches=%s",
         product_codes,
         len(sets),
         downloaded,
         skipped,
         pruned_dirs,
         pruned_files,
+        pruned_sets,
         len(mismatches),
     )
     if mismatches:

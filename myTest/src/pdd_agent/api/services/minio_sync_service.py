@@ -31,6 +31,7 @@ class MinioSyncJob:
     skipped_files: int = 0
     pruned_dirs: int = 0
     pruned_files: int = 0
+    pruned_sets: int = 0
     error: str = ""
     started_at: float = 0.0
     finished_at: float = 0.0
@@ -54,6 +55,7 @@ class MinioSyncJob:
             "skipped_files": self.skipped_files,
             "pruned_dirs": self.pruned_dirs,
             "pruned_files": self.pruned_files,
+            "pruned_sets": self.pruned_sets,
             "error": self.error,
             "progress_percent": percent,
             "started_at": self.started_at,
@@ -135,7 +137,7 @@ def _run_sync_job(job_id: str) -> None:
                 if job.status == "failed":
                     return
                 job.current_label = f"{family_code}/{image_set}"
-            downloaded, skipped, pruned_dirs, pruned_files, mismatches = stage_minio_image_set(
+            downloaded, skipped, pruned_dirs, pruned_files, pruned_sets, mismatches = stage_minio_image_set(
                 family_code=family_code,
                 image_set=image_set,
                 config=cfg,
@@ -146,6 +148,7 @@ def _run_sync_job(job_id: str) -> None:
                 job.skipped_files += skipped
                 job.pruned_dirs += pruned_dirs
                 job.pruned_files += pruned_files
+                job.pruned_sets += pruned_sets
             if mismatches:
                 preview = "；".join(mismatches[:3])
                 if len(mismatches) > 3:
@@ -156,13 +159,14 @@ def _run_sync_job(job_id: str) -> None:
             job.current_label = ""
             job.finished_at = time.time()
         logger.info(
-            "minio sync job %s done sets=%s downloaded=%s skipped=%s pruned_dirs=%s pruned_files=%s",
+            "minio sync job %s done sets=%s downloaded=%s skipped=%s pruned_dirs=%s pruned_files=%s pruned_sets=%s",
             job_id,
             job.total_sets,
             job.downloaded_files,
             job.skipped_files,
             job.pruned_dirs,
             job.pruned_files,
+            job.pruned_sets,
         )
     except Exception as exc:
         logger.exception("minio sync job %s failed", job_id)
