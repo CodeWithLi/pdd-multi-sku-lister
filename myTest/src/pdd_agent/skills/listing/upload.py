@@ -3508,6 +3508,153 @@ _MATERIAL_UPLOAD_VIEWIDS = (
 )
 
 
+def _product_material_section_js() -> str:
+    return """
+    function isVisible(el) {
+        if (!el) return false;
+        const r = el.getBoundingClientRect();
+        const s = window.getComputedStyle(el);
+        return r.width > 0 && r.height > 0 && s.display !== 'none' && s.visibility !== 'hidden';
+    }
+    function findProductMaterialSection() {
+        const tracked = document.querySelector('[data-tracking-impr-viewid="upload_white_bg_img"]');
+        if (tracked) return tracked;
+        const labels = Array.from(document.querySelectorAll('*')).filter((el) => {
+            if (!isVisible(el)) return false;
+            const t = (el.innerText || '').trim();
+            return t === '商品素材';
+        });
+        for (const label of labels) {
+            let node = label;
+            for (let depth = 0; depth < 10 && node; depth++) {
+                if (
+                    node.querySelector('[class*="DeleteIcon"], [class*="imageWrapper"], [class*="MaterialModalButton"]')
+                ) {
+                    return node;
+                }
+                node = node.parentElement;
+            }
+        }
+        return null;
+    }
+    function hasExistingMaterialImage(section) {
+        if (!section) return false;
+        const deleteIcon = section.querySelector(
+            '[class*="DeleteIcon"], i[class*="delete"], [class*="deleteIcon"]'
+        );
+        if (deleteIcon && isVisible(deleteIcon)) return true;
+        const wrapper = section.querySelector('[class*="imageWrapper"], [class*="ImageWrapper"]');
+        if (wrapper) {
+            const bg = window.getComputedStyle(wrapper).backgroundImage || '';
+            if (bg && bg !== 'none' && !bg.includes('svg+xml')) return true;
+            const img = wrapper.querySelector('img');
+            if (img && img.src && !img.src.startsWith('data:')) return true;
+        }
+        const imgs = section.querySelectorAll('img[src]');
+        for (const img of imgs) {
+            if (!isVisible(img)) continue;
+            const src = (img.src || '').trim();
+            if (src && !src.startsWith('data:')) return true;
+        }
+        return false;
+    }
+    function clickDeleteMaterialImage(section) {
+        if (!section) return false;
+        const deleteIcon = section.querySelector(
+            '[class*="DeleteIcon"], i[class*="delete"], [class*="deleteIcon"]'
+        );
+        if (!deleteIcon || !isVisible(deleteIcon)) return false;
+        deleteIcon.click();
+        return true;
+    }
+    function clickLocalUploadButton(section) {
+        if (!section) return false;
+        const candidates = section.querySelectorAll('button, div, span, a');
+        for (const el of candidates) {
+            if (!isVisible(el)) continue;
+            const t = (el.innerText || '').trim();
+            if (t === '本地上传') {
+                el.click();
+                return true;
+            }
+        }
+        return false;
+    }
+    """
+
+
+def _product_material_has_existing_image(page: DpPage) -> bool:
+    """拼多多「商品素材」区是否已有平台自动生成的白底图。"""
+    try:
+        return bool(
+            page.run_js(
+                _product_material_section_js()
+                + """
+                const section = findProductMaterialSection();
+                return hasExistingMaterialImage(section);
+                """
+            )
+        )
+    except Exception:
+        return False
+
+
+def _delete_existing_product_material_image(
+    page: DpPage,
+    account_id: str,
+    label: str,
+    *,
+    wait_seconds: int = 8,
+) -> bool:
+    """点击白底图缩略图右上角删除按钮，等待恢复为空上传态。"""
+    try:
+        clicked = bool(
+            page.run_js(
+                _product_material_section_js()
+                + """
+                const section = findProductMaterialSection();
+                if (!hasExistingMaterialImage(section)) return false;
+                return clickDeleteMaterialImage(section);
+                """
+            )
+        )
+    except Exception as exc:
+        print(
+            f"[{account_id}] [{label}] 删除已有商品素材失败：{_safe_exc(exc)}",
+            flush=True,
+        )
+        return False
+    if not clicked:
+        return False
+    print(f"[{account_id}] [{label}] 已点击删除平台自动白底图，等待清空…", flush=True)
+    for _ in range(wait_seconds):
+        time.sleep(1)
+        if not _product_material_has_existing_image(page):
+            print(f"[{account_id}] [{label}] 平台白底图已删除", flush=True)
+            return True
+    print(
+        f"[{account_id}] [{label}] 删除平台白底图后仍检测到已有图片",
+        flush=True,
+    )
+    return False
+
+
+def _click_product_material_local_upload(page: DpPage) -> bool:
+    """空态下点击「本地上传」，确保 file input 可用。"""
+    try:
+        return bool(
+            page.run_js(
+                _product_material_section_js()
+                + """
+                const section = findProductMaterialSection();
+                return clickLocalUploadButton(section);
+                """
+            )
+        )
+    except Exception:
+        return False
+
+
 def _find_product_material_upload_input(page: DpPage):
     """定位「基本信息」-「商品素材」-「白底图」上传框。"""
     for vid in _MATERIAL_UPLOAD_VIEWIDS:
@@ -3594,7 +3741,24 @@ def _upload_product_material_image(
         time.sleep(0.3)
     except Exception:
         pass
+    if _product_material_has_existing_image(page):
+        print(
+            f"[{account_id}] [{label}] 检测到平台已自动生成白底图，先删除再上传本地 9.png",
+            flush=True,
+        )
+        if not _delete_existing_product_material_image(page, account_id, label):
+            print(
+                f"[{account_id}] [{label}] 无法删除已有白底图，仍尝试上传本地 9.png",
+                flush=True,
+            )
+        else:
+            _click_product_material_local_upload(page)
+            time.sleep(0.5)
     material_input = _find_product_material_upload_input(page)
+    if not material_input:
+        _click_product_material_local_upload(page)
+        time.sleep(0.5)
+        material_input = _find_product_material_upload_input(page)
     if not material_input:
         print(f"[{account_id}] [{label}] 未找到商品素材上传框，跳过 9.png", flush=True)
         return False

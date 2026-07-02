@@ -2346,6 +2346,12 @@ def _on_limited_time_finished(row, *, run_id: str, success: bool, result: dict[s
     ):
         return
 
+    from pdd_agent.api.services.pipeline_lt_accumulate_success_for_activity_policy import (
+        accumulate_per_batch_limited_time_success,
+    )
+
+    row = accumulate_per_batch_limited_time_success(row, run_id=run_id, result=result) or row
+
     if maybe_continue_after_per_batch_limited_time(
         row,
         run_id=run_id,
@@ -2365,7 +2371,33 @@ def _on_limited_time_finished(row, *, run_id: str, success: bool, result: dict[s
     ):
         return
 
+    from pdd_agent.api.services.pipeline_lt_middle_batch_success_only_policy import (
+        maybe_handle_middle_batch_before_success_only_finish,
+    )
+
+    if maybe_handle_middle_batch_before_success_only_finish(
+        row,
+        run_id=run_id,
+        success=success,
+        error=error,
+    ):
+        return
+
     if is_activity_limited_time_success_only_row(row):
+        from pdd_agent.api.services.pipeline_lt_accumulate_success_for_activity_policy import (
+            maybe_finalize_limited_time_success_only_with_accumulation,
+        )
+
+        if maybe_finalize_limited_time_success_only_with_accumulation(
+            row,
+            run_id=run_id,
+            success=success,
+            result=result,
+            error=error,
+            schedule_activity_fn=_schedule_pipeline_activity_after_limited_time,
+            advance_store_sequential_fn=_try_advance_store_sequential_after_listing_limited_time,
+        ):
+            return
         if handle_pipeline_limited_time_finished_for_activity(
             row,
             run_id=run_id,
