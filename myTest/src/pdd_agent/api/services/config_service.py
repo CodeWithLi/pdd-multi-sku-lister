@@ -17,6 +17,7 @@ from pdd_agent.api.schemas.config import (
     ListingConfigIn,
     MultiSpecConfigIn,
     PathsConfigIn,
+    PipelineConfigIn,
     RuntimeConfigOut,
     RuntimeConfigUpdateIn,
 )
@@ -29,6 +30,7 @@ from pdd_agent.core.config import (
     ListingConfig,
     MultiSpecConfig,
     PathsConfig,
+    PipelineConfig,
     YamlSettings,
     get_env_settings,
     load_yaml_settings,
@@ -193,6 +195,7 @@ def get_runtime_config() -> RuntimeConfigOut:
         listing=ListingConfigIn(**settings.listing.model_dump()),
         delist=DelistConfigIn(**settings.delist.model_dump()),
         batch=BatchConfigIn(**settings.batch.model_dump()),
+        pipeline=PipelineConfigIn(**settings.pipeline.model_dump()),
     )
 
 
@@ -205,5 +208,6 @@ def update_runtime_config(body: RuntimeConfigUpdateIn) -> RuntimeConfigOut:
     settings.listing = ListingConfig(**body.listing.model_dump())
     settings.delist = DelistConfig(**body.delist.model_dump())
     settings.batch = BatchConfig(**body.batch.model_dump())
+    settings.pipeline = PipelineConfig(**body.pipeline.model_dump())
     save_yaml_settings(settings)
     return get_runtime_config()

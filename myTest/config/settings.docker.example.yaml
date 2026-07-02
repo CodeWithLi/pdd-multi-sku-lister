@@ -40,6 +40,9 @@ batch:
   store_start_delay_max_seconds: 180
   activity_schedule_jitter_max_seconds: 1800
 
+pipeline:
+  lt_failure_skip_activity_promotion_product_source: listing_success
+
 accounts:
   - account_id: store_A
     enabled: true

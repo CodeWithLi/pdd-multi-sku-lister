@@ -64,6 +64,9 @@ const form = reactive<RuntimeConfig>({
     store_start_delay_max_seconds: 180,
     activity_schedule_jitter_max_seconds: 1800,
   },
+  pipeline: {
+    lt_failure_skip_activity_promotion_product_source: 'listing_success',
+  },
 })
 
 function applyConfig(cfg: RuntimeConfig) {
@@ -81,6 +84,12 @@ function applyConfig(cfg: RuntimeConfig) {
   form.listing = { ...cfg.listing }
   form.delist = { ...cfg.delist, account_ids: [...cfg.delist.account_ids] }
   form.batch = { ...cfg.batch }
+  form.pipeline = {
+    lt_failure_skip_activity_promotion_product_source:
+      cfg.pipeline?.lt_failure_skip_activity_promotion_product_source === 'limited_time_success'
+        ? 'limited_time_success'
+        : 'listing_success',
+  }
 }
 
 async function load() {
@@ -408,6 +417,21 @@ onMounted(load)
               <div class="form-tip">整合链路上架完成后，活动任务在基础延迟上再随机 0～该值 秒，避免几百条同时到期。默认 1800（30 分钟）。</div>
             </el-form-item>
             <div class="form-tip">批量任务会先启动一家店，再随机等待这个区间后启动下一家。</div>
+          </el-form>
+        </el-card>
+
+        <el-card class="settings-card" shadow="never">
+          <template #header>整合链路</template>
+          <el-form label-width="220px">
+            <el-form-item label="限时失败跳过活动后推广 ID">
+              <el-radio-group v-model="form.pipeline.lt_failure_skip_activity_promotion_product_source">
+                <el-radio value="listing_success">上架成功的商品</el-radio>
+                <el-radio value="limited_time_success">限时提交成功的商品</el-radio>
+              </el-radio-group>
+              <div class="form-tip">
+                仅当链路开启「限时失败仍推广」且限时失败导致活动不跑时生效。选「上架成功」且无商品时不创建推广；选「限时成功」且无成功 ID 时链路仍失败。
+              </div>
+            </el-form-item>
           </el-form>
         </el-card>
       </el-col>

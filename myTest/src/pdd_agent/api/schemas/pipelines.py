@@ -25,6 +25,7 @@ class IntegratedPipelineStartRequest(BaseModel):
     auto_limited_time_setup: bool = True
     continue_after_limited_time_failure: bool = False
     continue_after_activity_failure: bool = False
+    promote_after_limited_time_failure: bool = False
     activity_limited_time_success_only: bool = False
     activity_delay_hours: float = Field(default=24.0, ge=0)
     demo_mode: bool = False
@@ -65,6 +66,7 @@ class IntegratedPipelineBatchStartRequest(BaseModel):
     auto_limited_time_setup: bool = True
     continue_after_limited_time_failure: bool = False
     continue_after_activity_failure: bool = False
+    promote_after_limited_time_failure: bool = False
     activity_limited_time_success_only: bool = False
     activity_delay_hours: float = Field(default=24.0, ge=0)
     demo_mode: bool = False
@@ -145,6 +147,7 @@ class IntegratedPipelineResponse(BaseModel):
     auto_limited_time_setup: bool = True
     continue_after_limited_time_failure: bool = False
     continue_after_activity_failure: bool = False
+    promote_after_limited_time_failure: bool = False
     activity_limited_time_success_only: bool = False
     limited_time_outcome: str = ""
     limited_time_skip_reason: str = ""

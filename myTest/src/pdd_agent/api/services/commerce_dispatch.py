@@ -672,6 +672,7 @@ _PIPELINE_PAYLOAD_KEYS = frozenset(
         "auto_limited_time_setup",
         "continue_after_limited_time_failure",
         "continue_after_activity_failure",
+        "promote_after_limited_time_failure",
         "activity_delay_hours",
         "demo_mode",
         "platform_listing_code",

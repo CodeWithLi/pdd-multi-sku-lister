@@ -98,6 +98,7 @@ const categoryKeyword = ref('笔袋')
 const autoPromotion = ref(true)
 const continueAfterLimitedTimeFailure = ref(false)
 const continueAfterActivityFailure = ref(false)
+const promoteAfterLimitedTimeFailure = ref(false)
 const demoMode = ref(false)
 const activityDelayHours = ref(24)
 const slotAlignmentTest = ref(true)
@@ -1235,6 +1236,7 @@ async function startPipeline() {
         auto_promotion: autoPromotion.value,
         continue_after_limited_time_failure: continueAfterLimitedTimeFailure.value,
         continue_after_activity_failure: continueAfterActivityFailure.value,
+        promote_after_limited_time_failure: promoteAfterLimitedTimeFailure.value,
         activity_delay_hours: demoMode.value ? 0 : activityDelayHours.value,
         demo_mode: demoMode.value,
         slot_alignment_test: slotAlignmentTest.value,
@@ -1280,6 +1282,7 @@ async function startPipeline() {
         auto_promotion: autoPromotion.value,
         continue_after_limited_time_failure: continueAfterLimitedTimeFailure.value,
         continue_after_activity_failure: continueAfterActivityFailure.value,
+        promote_after_limited_time_failure: promoteAfterLimitedTimeFailure.value,
         activity_delay_hours: demoMode.value ? 0 : activityDelayHours.value,
         demo_mode: demoMode.value,
         slot_alignment_test: slotAlignmentTest.value,
@@ -1917,6 +1920,14 @@ onUnmounted(() => {
                   <div class="switch-row">
                     <span class="switch-label">活动失败仍继续</span>
                     <el-switch v-model="continueAfterActivityFailure" />
+                  </div>
+                  <div class="switch-row">
+                    <span class="switch-label">限时失败仍推广</span>
+                    <el-switch v-model="promoteAfterLimitedTimeFailure" :disabled="!autoPromotion" />
+                  </div>
+                  <div v-if="promoteAfterLimitedTimeFailure" class="form-tip option-tip">
+                    限时限量购失败导致活动不跑时，跳过活动并立即创建推广；推广商品 ID 来源见系统设置。
+                    限时成功时仍按原流程：先活动、后推广。分批模式下须等全部批次限时跑完再决策。
                   </div>
                   <div class="switch-row">
                     <span class="switch-label">演示模式</span>

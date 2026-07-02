@@ -166,6 +166,14 @@ def load_limited_time_run_result(run_id: str) -> dict[str, Any]:
 
 def resolve_activity_product_ids_for_row(row) -> tuple[list[str], list[str]]:
     """活动/推广应使用的商品 ID：开关开启时读 meta 过滤结果，否则读 pipeline 全量。"""
+    from pdd_agent.api.services.pipeline_lt_failure_promotion_policy import (
+        resolve_traffic_product_ids_if_lt_skip,
+    )
+
+    lt_skip = resolve_traffic_product_ids_if_lt_skip(row)
+    if lt_skip:
+        return lt_skip
+
     meta = row.meta if isinstance(row.meta, dict) else {}
     if is_activity_limited_time_success_only(meta):
         pdd_ids = list(meta.get(META_ACTIVITY_PDD_IDS_KEY) or meta.get(META_LT_SUCCESS_PDD_IDS_KEY) or [])
@@ -254,6 +262,22 @@ def handle_pipeline_limited_time_finished_for_activity(
         return True
 
     failure_message = error or "限时限量购失败，且无成功商品可报活动"
+    from pdd_agent.api.services.pipeline_lt_failure_promotion_policy import (
+        maybe_lt_failure_skip_activity_and_enqueue_promotion,
+    )
+
+    if maybe_lt_failure_skip_activity_and_enqueue_promotion(
+        row,
+        run_id=run_id,
+        success=False,
+        result=result,
+        error=failure_message,
+        enqueue_traffic_fn=_pipeline_enqueue_traffic_for_lt_failure_promotion,
+        advance_store_sequential_fn=advance_store_sequential_fn,
+        summarize_run_message_fn=_summarize_limited_time_run_message,
+    ):
+        return True
+
     meta_patch["limited_time_outcome"] = "failed"
     update_integrated_pipeline(
         row.pipeline_id,
@@ -270,6 +294,17 @@ def handle_pipeline_limited_time_finished_for_activity(
     refreshed = get_integrated_pipeline(row.pipeline_id) or row
     advance_store_sequential_fn(refreshed)
     return True
+
+
+def _summarize_limited_time_run_message(run_id: str) -> str:
+    record = TaskRunStore().load(run_id)
+    return str(record.message or "") if record else ""
+
+
+def _pipeline_enqueue_traffic_for_lt_failure_promotion(row, *, meta_patch: dict | None = None) -> None:
+    from pdd_agent.api.services.pipeline_service import _enqueue_pipeline_traffic
+
+    _enqueue_pipeline_traffic(row, meta_patch=meta_patch)
 
 
 def filter_products_for_per_batch_campaign_after_limited_time(

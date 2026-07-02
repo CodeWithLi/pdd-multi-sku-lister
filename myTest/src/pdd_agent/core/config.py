@@ -91,6 +91,24 @@ class BatchConfig(BaseModel):
         return self
 
 
+class PipelineConfig(BaseModel):
+    """整合链路全局策略（settings.yaml pipeline 段）。"""
+
+    # 限时失败跳过活动仍推广时，推广商品 ID 来源：
+    # listing_success = 上架成功的商品；limited_time_success = 限时提交成功的商品
+    lt_failure_skip_activity_promotion_product_source: str = "listing_success"
+
+    @model_validator(mode="after")
+    def validate_promotion_product_source(self) -> "PipelineConfig":
+        allowed = {"listing_success", "limited_time_success"}
+        value = str(self.lt_failure_skip_activity_promotion_product_source or "").strip()
+        if value not in allowed:
+            self.lt_failure_skip_activity_promotion_product_source = "listing_success"
+        else:
+            self.lt_failure_skip_activity_promotion_product_source = value
+        return self
+
+
 class YamlSettings(BaseModel):
     """config/settings.yaml 的完整结构。"""
 
@@ -101,6 +119,7 @@ class YamlSettings(BaseModel):
     listing: ListingConfig = Field(default_factory=ListingConfig)
     delist: DelistConfig = Field(default_factory=DelistConfig)
     batch: BatchConfig = Field(default_factory=BatchConfig)
+    pipeline: PipelineConfig = Field(default_factory=PipelineConfig)
     accounts: list[AccountConfig] = Field(default_factory=list)
 
 

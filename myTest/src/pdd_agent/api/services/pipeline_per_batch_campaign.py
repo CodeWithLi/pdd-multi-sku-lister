@@ -415,6 +415,30 @@ def maybe_start_per_batch_campaign_after_limited_time(
             )
         )
         if not should_continue:
+            from pdd_agent.api.services.pipeline_lt_failure_promotion_policy import (
+                maybe_lt_failure_skip_activity_and_enqueue_promotion,
+            )
+            from pdd_agent.api.services.pipeline_activity_limited_time_success import (
+                load_limited_time_run_result,
+            )
+            from pdd_agent.api.services.pipeline_service import (
+                _enqueue_pipeline_traffic,
+                _summarize_run_message,
+                _try_advance_store_sequential_after_listing_limited_time,
+            )
+
+            lt_result = load_limited_time_run_result(run_id)
+            if maybe_lt_failure_skip_activity_and_enqueue_promotion(
+                row,
+                run_id=run_id,
+                success=False,
+                result=lt_result,
+                error=block_reason or error or "限时限量购无成功商品",
+                enqueue_traffic_fn=_enqueue_pipeline_traffic,
+                advance_store_sequential_fn=_try_advance_store_sequential_after_listing_limited_time,
+                summarize_run_message_fn=_summarize_run_message,
+            ):
+                return True
             update_integrated_pipeline(
                 row.pipeline_id,
                 status="failed",

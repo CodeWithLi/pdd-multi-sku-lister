@@ -366,6 +366,11 @@ def _pipeline_continue_after_activity_failure(row) -> bool:
     return bool((row.meta or {}).get("continue_after_activity_failure"))
 
 
+def _pipeline_promote_after_limited_time_failure(row) -> bool:
+    """限时限量购失败导致活动不跑时，仍跳过活动并创建推广。"""
+    return bool((row.meta or {}).get("promote_after_limited_time_failure"))
+
+
 def _limited_time_completed(row) -> bool:
     run_id = _pipeline_limited_time_run_id(row)
     if not run_id:
@@ -1077,6 +1082,19 @@ def _step_infos(row) -> list[dict[str, Any]]:
                     step["detail"] = "已取消"
                 elif step["key"] == "listing":
                     step["detail"] = "已取消"
+    from pdd_agent.api.services.pipeline_lt_failure_promotion_policy import (
+        enrich_pipeline_step_infos,
+    )
+
+    enrich_pipeline_step_infos(
+        steps,
+        row,
+        meta=meta,
+        limited_time_outcome=limited_time_outcome,
+        campaign_outcome=campaign_outcome,
+        campaign_skip_reason=campaign_skip_reason,
+        auto_promotion=bool(row.auto_promotion),
+    )
     return steps
 
 
@@ -1095,6 +1113,7 @@ def pipeline_to_dict(row) -> dict[str, Any]:
         "auto_limited_time_setup": _pipeline_auto_limited_time(row),
         "continue_after_limited_time_failure": _pipeline_continue_after_limited_time_failure(row),
         "continue_after_activity_failure": _pipeline_continue_after_activity_failure(row),
+        "promote_after_limited_time_failure": _pipeline_promote_after_limited_time_failure(row),
         "activity_limited_time_success_only": _pipeline_activity_limited_time_success_only(row),
         "activity_pdd_product_ids": list(
             (row.meta or {}).get("activity_pdd_product_ids")
@@ -1169,6 +1188,7 @@ def start_integrated_pipeline(
     auto_limited_time_setup: bool = True,
     continue_after_limited_time_failure: bool = False,
     continue_after_activity_failure: bool = False,
+    promote_after_limited_time_failure: bool = False,
     activity_delay_hours: float = 24.0,
     demo_mode: bool = False,
     platform_listing_code: str = "",
@@ -1245,6 +1265,7 @@ def start_integrated_pipeline(
                 "auto_limited_time_setup": auto_limited_time_setup,
                 "continue_after_limited_time_failure": continue_after_limited_time_failure,
                 "continue_after_activity_failure": continue_after_activity_failure,
+                "promote_after_limited_time_failure": promote_after_limited_time_failure,
                 "activity_delay_hours": activity_delay_hours,
                 "demo_mode": demo_mode,
                 "platform_listing_code": platform_listing_code,
@@ -1288,6 +1309,7 @@ def start_integrated_pipeline(
         "auto_limited_time_setup": bool(normalized_activity_ids),
         "continue_after_limited_time_failure": bool(continue_after_limited_time_failure),
         "continue_after_activity_failure": bool(continue_after_activity_failure),
+        "promote_after_limited_time_failure": bool(promote_after_limited_time_failure),
         "activity_limited_time_success_only": bool(activity_limited_time_success_only),
         "activity_ids": normalized_activity_ids,
         "campaign_activity_index": 0,
@@ -1581,6 +1603,7 @@ def start_integrated_pipeline_batch(
     auto_limited_time_setup: bool = True,
     continue_after_limited_time_failure: bool = False,
     continue_after_activity_failure: bool = False,
+    promote_after_limited_time_failure: bool = False,
     activity_delay_hours: float = 24.0,
     demo_mode: bool = False,
     platform_listing_code: str = "",
@@ -1630,6 +1653,7 @@ def start_integrated_pipeline_batch(
         auto_limited_time_setup=auto_limited_time_setup,
         continue_after_limited_time_failure=continue_after_limited_time_failure,
         continue_after_activity_failure=continue_after_activity_failure,
+        promote_after_limited_time_failure=promote_after_limited_time_failure,
         activity_delay_hours=activity_delay_hours,
         demo_mode=demo_mode,
         platform_listing_code=platform_listing_code,
@@ -1719,6 +1743,7 @@ def start_integrated_pipeline_batch(
             auto_limited_time_setup=auto_limited_time_setup,
             continue_after_limited_time_failure=continue_after_limited_time_failure,
             continue_after_activity_failure=continue_after_activity_failure,
+            promote_after_limited_time_failure=promote_after_limited_time_failure,
             activity_delay_hours=activity_delay_hours,
             demo_mode=demo_mode,
             platform_listing_code=platform_listing_code,
@@ -2485,6 +2510,21 @@ def _on_limited_time_finished(row, *, run_id: str, success: bool, result: dict[s
                 row.pipeline_id,
                 failure_message,
             )
+            return
+        from pdd_agent.api.services.pipeline_lt_failure_promotion_policy import (
+            maybe_lt_failure_skip_activity_and_enqueue_promotion,
+        )
+
+        if maybe_lt_failure_skip_activity_and_enqueue_promotion(
+            row,
+            run_id=run_id,
+            success=success,
+            result=result,
+            error=failure_message,
+            enqueue_traffic_fn=_enqueue_pipeline_traffic,
+            advance_store_sequential_fn=_try_advance_store_sequential_after_listing_limited_time,
+            summarize_run_message_fn=_summarize_run_message,
+        ):
             return
         update_integrated_pipeline(
             row.pipeline_id,

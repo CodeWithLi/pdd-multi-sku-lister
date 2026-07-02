@@ -109,6 +109,20 @@ class BatchConfigIn(BaseModel):
         return self
 
 
+class PipelineConfigIn(BaseModel):
+    lt_failure_skip_activity_promotion_product_source: str = "listing_success"
+
+    @model_validator(mode="after")
+    def validate_promotion_product_source(self) -> "PipelineConfigIn":
+        allowed = {"listing_success", "limited_time_success"}
+        value = str(self.lt_failure_skip_activity_promotion_product_source or "").strip()
+        if value not in allowed:
+            self.lt_failure_skip_activity_promotion_product_source = "listing_success"
+        else:
+            self.lt_failure_skip_activity_promotion_product_source = value
+        return self
+
+
 class RuntimeConfigOut(BaseModel):
     app: AppConfigIn
     paths: PathsConfigIn
@@ -117,6 +131,7 @@ class RuntimeConfigOut(BaseModel):
     listing: ListingConfigIn
     delist: DelistConfigIn
     batch: BatchConfigIn
+    pipeline: PipelineConfigIn
 
 
 class RuntimeConfigUpdateIn(RuntimeConfigOut):

@@ -57,6 +57,9 @@ export interface RuntimeConfig {
     store_start_delay_max_seconds: number
     activity_schedule_jitter_max_seconds: number
   }
+  pipeline: {
+    lt_failure_skip_activity_promotion_product_source: 'listing_success' | 'limited_time_success'
+  }
 }
 
 export interface Account {
@@ -917,6 +920,7 @@ export interface IntegratedPipeline {
   auto_limited_time_setup?: boolean
   continue_after_limited_time_failure?: boolean
   continue_after_activity_failure?: boolean
+  promote_after_limited_time_failure?: boolean
   activity_limited_time_success_only?: boolean
   limited_time_outcome?: string
   limited_time_skip_reason?: string
@@ -1074,6 +1078,7 @@ export interface IntegratedPipelineStartPayload {
   auto_limited_time_setup?: boolean
   continue_after_limited_time_failure?: boolean
   continue_after_activity_failure?: boolean
+  promote_after_limited_time_failure?: boolean
   activity_limited_time_success_only?: boolean
   activity_delay_hours?: number
   demo_mode?: boolean
@@ -1102,6 +1107,7 @@ export interface IntegratedPipelineBatchStartPayload {
   auto_limited_time_setup?: boolean
   continue_after_limited_time_failure?: boolean
   continue_after_activity_failure?: boolean
+  promote_after_limited_time_failure?: boolean
   activity_limited_time_success_only?: boolean
   activity_delay_hours?: number
   demo_mode?: boolean
