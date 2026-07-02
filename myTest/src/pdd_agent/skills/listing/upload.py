@@ -39,6 +39,7 @@ from pdd_agent.skills.listing.category_page_flow import (
     click_category_next_and_advance,
     prepare_category_before_next,
 )
+from pdd_agent.skills.listing.listing_bulk_discount_guard import ensure_bulk_discount_before_submit
 from pdd_agent.skills.listing.listing_publish_settings import apply_listing_publish_settings
 from pdd_agent.skills.listing.listing_detail_carousel_guard import (
     ensure_detail_page_carousel_before_title,
@@ -4306,6 +4307,7 @@ def upload_one_listing(
         )
 
     publish_settings = apply_listing_publish_settings(page, account_id, label)
+    publish_settings = ensure_bulk_discount_before_submit(page, account_id, label, publish_settings)
     if not publish_settings.get("ok"):
         shipping = publish_settings.get("shipping_template") or {}
         bulk = publish_settings.get("bulk_discount") or {}
