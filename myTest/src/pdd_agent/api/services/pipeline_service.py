@@ -2356,11 +2356,21 @@ def _on_limited_time_finished(row, *, run_id: str, success: bool, result: dict[s
         is_activity_limited_time_success_only_row,
     )
     from pdd_agent.api.services.pipeline_per_batch_limited_time import (
+        _per_batch_batch_log_context,
         maybe_continue_after_per_batch_limited_time,
         prepare_pipeline_row_for_post_listing_steps,
     )
     from pdd_agent.api.services.pipeline_per_batch_campaign import (
         maybe_start_per_batch_campaign_after_limited_time,
+    )
+
+    logger.info(
+        "pipeline %s limited_time finished enter run_id=%s success=%s error=%s ctx=%s",
+        row.pipeline_id,
+        str(run_id or "").strip(),
+        success,
+        str(error or "").strip()[:200],
+        _per_batch_batch_log_context(row),
     )
 
     if maybe_start_per_batch_campaign_after_limited_time(
@@ -2369,6 +2379,11 @@ def _on_limited_time_finished(row, *, run_id: str, success: bool, result: dict[s
         success=success,
         error=error,
     ):
+        logger.info(
+            "pipeline %s limited_time finished handled by per-batch campaign run_id=%s",
+            row.pipeline_id,
+            run_id,
+        )
         return
 
     from pdd_agent.api.services.pipeline_lt_accumulate_success_for_activity_policy import (
@@ -2383,6 +2398,12 @@ def _on_limited_time_finished(row, *, run_id: str, success: bool, result: dict[s
         success=success,
         error=error,
     ):
+        logger.info(
+            "pipeline %s limited_time finished handled by per-batch continue run_id=%s ctx=%s",
+            row.pipeline_id,
+            run_id,
+            _per_batch_batch_log_context(get_integrated_pipeline(row.pipeline_id) or row),
+        )
         return
 
     from pdd_agent.api.services.pipeline_mq_auto_phase2 import handle_mq_auto_limited_time_finished
@@ -2406,6 +2427,12 @@ def _on_limited_time_finished(row, *, run_id: str, success: bool, result: dict[s
         success=success,
         error=error,
     ):
+        logger.info(
+            "pipeline %s limited_time finished handled by middle-batch policy run_id=%s ctx=%s",
+            row.pipeline_id,
+            run_id,
+            _per_batch_batch_log_context(get_integrated_pipeline(row.pipeline_id) or row),
+        )
         return
 
     if is_activity_limited_time_success_only_row(row):
@@ -2629,6 +2656,27 @@ def _reconcile_limited_time_to_activity(row) -> Any:
     if run_status == RunStatus.FAILED and not _pipeline_continue_after_limited_time_failure(row):
         return row
 
+    from pdd_agent.api.services.pipeline_per_batch_limited_time import (
+        _per_batch_batch_log_context,
+        is_per_batch_limited_time_continue_handled,
+    )
+
+    if is_per_batch_limited_time_continue_handled(row, lt_run_id):
+        logger.info(
+            "pipeline %s reconcile limited_time->activity skip: continue already handled run_id=%s ctx=%s",
+            row.pipeline_id,
+            lt_run_id,
+            _per_batch_batch_log_context(row),
+        )
+        return row
+
+    logger.warning(
+        "pipeline %s reconcile limited_time->activity invoking finish run_id=%s status=%s ctx=%s",
+        row.pipeline_id,
+        lt_run_id,
+        run_status,
+        _per_batch_batch_log_context(row),
+    )
     _on_limited_time_finished(
         row,
         run_id=lt_run_id,
@@ -2703,9 +2751,29 @@ def _reconcile_stuck_pipeline_row(row) -> Any:
             from pdd_agent.api.services.pipeline_per_batch_lt_failure_policy import (
                 should_absorb_per_batch_limited_time_failure,
             )
+            from pdd_agent.api.services.pipeline_per_batch_limited_time import (
+                _per_batch_batch_log_context,
+                is_per_batch_limited_time_continue_handled,
+            )
 
+            if is_per_batch_limited_time_continue_handled(row, run_id):
+                logger.info(
+                    "pipeline %s reconcile stuck skip absorbed LT failure: already handled run_id=%s step=%s ctx=%s",
+                    row.pipeline_id,
+                    run_id,
+                    row.current_step,
+                    _per_batch_batch_log_context(row),
+                )
+                continue
             if should_absorb_per_batch_limited_time_failure(row, run_id=run_id):
                 refreshed = get_integrated_pipeline(row.pipeline_id) or row
+                logger.warning(
+                    "pipeline %s reconcile stuck invoking absorbed LT failure run_id=%s error=%s ctx=%s",
+                    row.pipeline_id,
+                    run_id,
+                    error[:200],
+                    _per_batch_batch_log_context(refreshed),
+                )
                 _on_limited_time_finished(
                     refreshed,
                     run_id=run_id,

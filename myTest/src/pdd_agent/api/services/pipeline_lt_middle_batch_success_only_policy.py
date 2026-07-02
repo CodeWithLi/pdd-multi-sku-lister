@@ -58,16 +58,32 @@ def should_skip_success_only_limited_time_finish(row) -> bool:
 
 def _rebuild_pending_from_throttle(row) -> dict[str, Any] | None:
     from pdd_agent.api.services.pipeline_listing_throttle import has_more_listing_batches
-    from pdd_agent.api.services.pipeline_per_batch_limited_time import _throttle_state
+    from pdd_agent.api.services.pipeline_per_batch_limited_time import (
+        _per_batch_batch_log_context,
+        _throttle_state,
+    )
 
     throttle = _throttle_state(row)
     batch_index = int(throttle.get("batch_index") or 0)
     if not has_more_listing_batches(throttle):
+        logger.info(
+            "pipeline %s middle-batch LT rebuild pending skipped: no more batches ctx=%s",
+            row.pipeline_id,
+            _per_batch_batch_log_context(row),
+        )
         return None
-    return {
+    pending = {
         "next_batch_index": batch_index + 1,
         "interval_minutes": max(1, int(throttle.get("interval_minutes") or 1)),
     }
+    logger.warning(
+        "pipeline %s middle-batch LT rebuild pending from throttle batch_index=%s -> next_batch_index=%s ctx=%s",
+        row.pipeline_id,
+        batch_index,
+        pending["next_batch_index"],
+        _per_batch_batch_log_context(row),
+    )
+    return pending
 
 
 def _ensure_per_batch_continue_ready(row, *, run_id: str):
@@ -75,6 +91,8 @@ def _ensure_per_batch_continue_ready(row, *, run_id: str):
     from pdd_agent.api.services.pipeline_per_batch_limited_time import (
         META_STATE_KEY,
         _per_batch_state,
+        _per_batch_batch_log_context,
+        is_per_batch_limited_time_continue_handled,
     )
     from pdd_agent.api.services.pipeline_per_batch_lt_failure_policy import (
         pipeline_limited_time_run_id,
@@ -83,10 +101,25 @@ def _ensure_per_batch_continue_ready(row, *, run_id: str):
     meta_patch: dict[str, Any] = {}
     rid = str(run_id or "").strip()
     if rid and pipeline_limited_time_run_id(row) != rid:
+        logger.warning(
+            "pipeline %s middle-batch LT sync limited_time_run_id %s -> %s ctx=%s",
+            row.pipeline_id,
+            pipeline_limited_time_run_id(row),
+            rid,
+            _per_batch_batch_log_context(row),
+        )
         meta_patch["limited_time_run_id"] = rid
 
     state = dict(_per_batch_state(row))
     if not state.get("pending"):
+        if is_per_batch_limited_time_continue_handled(row, run_id):
+            logger.info(
+                "pipeline %s middle-batch LT ensure ready skip rebuild: continue already handled run_id=%s ctx=%s",
+                row.pipeline_id,
+                rid,
+                _per_batch_batch_log_context(row),
+            )
+            return row
         pending = _rebuild_pending_from_throttle(row)
         if pending:
             meta_patch[META_STATE_KEY] = {
@@ -122,7 +155,9 @@ def _continue_next_listing_batch_relaxed(
     from pdd_agent.api.services.pipeline_per_batch_limited_time import (
         META_STATE_KEY,
         _per_batch_state,
+        _per_batch_batch_log_context,
         _throttle_state,
+        mark_per_batch_limited_time_continue_handled,
     )
 
     pending = dict(_per_batch_state(row).get("pending") or {})
@@ -196,12 +231,19 @@ def _continue_next_listing_batch_relaxed(
         listing_payload_base=payload_base,
         scheduled_at=scheduled_at,
     )
+    mark_per_batch_limited_time_continue_handled(row, run_id)
     logger.info(
-        "pipeline %s middle-batch LT policy relaxed scheduled listing batch %s/%s at %s",
+        "pipeline %s middle-batch LT policy relaxed scheduled listing batch %s/%s at %s "
+        "run_id=%s batch_index %s->%s pending_was=%s ctx=%s",
         row.pipeline_id,
         next_index + 1,
         len(batches),
         scheduled_at,
+        str(run_id or "").strip(),
+        int(throttle.get("batch_index") or 0),
+        next_index,
+        pending,
+        _per_batch_batch_log_context(row),
     )
     return True
 
@@ -222,7 +264,17 @@ def maybe_handle_middle_batch_before_success_only_finish(
         return False
 
     from pdd_agent.api.services.pipeline_per_batch_limited_time import (
+        _per_batch_batch_log_context,
         maybe_continue_after_per_batch_limited_time,
+    )
+
+    logger.info(
+        "pipeline %s middle-batch LT policy enter run_id=%s success=%s error=%s ctx=%s",
+        row.pipeline_id,
+        str(run_id or "").strip(),
+        success,
+        str(error or "").strip()[:200],
+        _per_batch_batch_log_context(row),
     )
 
     refreshed = _ensure_per_batch_continue_ready(row, run_id=run_id)

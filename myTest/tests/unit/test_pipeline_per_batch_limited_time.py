@@ -247,6 +247,43 @@ def test_maybe_continue_after_lt_failure_still_schedules_next_listing_batch(
     assert all("limited_time_finish_handled" not in patch for patch in failure_updates)
 
 
+@patch("pdd_agent.api.services.pipeline_per_batch_limited_time.mark_per_batch_limited_time_continue_handled")
+@patch("pdd_agent.api.services.pipeline_per_batch_limited_time.enqueue_listing_batch_for_pipeline")
+@patch("pdd_agent.api.services.pipeline_per_batch_limited_time.get_integrated_pipeline")
+@patch("pdd_agent.api.services.pipeline_per_batch_limited_time.update_integrated_pipeline")
+def test_maybe_continue_is_idempotent_for_same_run_id(
+    mock_update,
+    mock_get,
+    mock_enqueue_listing,
+    mock_mark_handled,
+):
+    meta = _throttle_meta(batch_index=0, total_batches=16)
+    meta["limited_time_run_id"] = "lt_run_1"
+    meta["per_batch_limited_time_continue_handled_run_ids"] = ["lt_run_1"]
+    meta["listing_per_batch_limited_time"] = {
+        "enabled": True,
+        "last_batch_index": 0,
+        "awaiting_final_activity": False,
+        "pending": {
+            "next_batch_index": 1,
+            "interval_minutes": 3,
+        },
+    }
+    row = _row(meta=meta)
+    mock_get.return_value = row
+
+    handled = maybe_continue_after_per_batch_limited_time(
+        row,
+        run_id="lt_run_1",
+        success=False,
+        error="活动价格不符合价格区间，不继续创建活动",
+    )
+
+    assert handled is True
+    mock_enqueue_listing.assert_not_called()
+    mock_mark_handled.assert_not_called()
+
+
 def test_maybe_continue_returns_false_for_final_batch():
     meta = _throttle_meta(batch_index=2, total_batches=3)
     meta["limited_time_run_id"] = "lt_run_final"

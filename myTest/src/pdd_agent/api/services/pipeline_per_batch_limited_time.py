@@ -25,6 +25,70 @@ logger = get_logger(__name__)
 POST_LISTING_LIMITED_TIME_DELAY_SECONDS = 5
 META_ENABLED_KEY = "listing_per_batch_limited_time_enabled"
 META_STATE_KEY = "listing_per_batch_limited_time"
+CONTINUE_HANDLED_RUN_IDS_KEY = "per_batch_limited_time_continue_handled_run_ids"
+
+
+def _continue_handled_run_ids(meta: dict[str, Any] | None) -> list[str]:
+    raw = (meta or {}).get(CONTINUE_HANDLED_RUN_IDS_KEY) or []
+    if not isinstance(raw, list):
+        return []
+    return list(dict.fromkeys(str(item).strip() for item in raw if str(item).strip()))
+
+
+def is_per_batch_limited_time_continue_handled(row, run_id: str) -> bool:
+    """同一批限时 run 是否已触发过「继续下一批上架」（防 reconcile 重复推进）。"""
+    rid = str(run_id or "").strip()
+    if not row or not rid:
+        return False
+    meta = row.meta if isinstance(getattr(row, "meta", None), dict) else {}
+    return rid in set(_continue_handled_run_ids(meta))
+
+
+def mark_per_batch_limited_time_continue_handled(row, run_id: str) -> None:
+    rid = str(run_id or "").strip()
+    if not row or not rid:
+        return
+    merged = _continue_handled_run_ids(row.meta if isinstance(getattr(row, "meta", None), dict) else {})
+    if rid in merged:
+        logger.info(
+            "pipeline %s per-batch LT continue mark skipped (already recorded) run_id=%s handled=%s",
+            row.pipeline_id,
+            rid,
+            merged,
+        )
+        return
+    update_integrated_pipeline(
+        row.pipeline_id,
+        meta_patch={CONTINUE_HANDLED_RUN_IDS_KEY: [*merged, rid]},
+    )
+    logger.info(
+        "pipeline %s per-batch LT continue marked handled run_id=%s handled=%s %s",
+        row.pipeline_id,
+        rid,
+        [*merged, rid],
+        _per_batch_batch_log_context(row),
+    )
+
+
+def _per_batch_batch_log_context(row) -> dict[str, Any]:
+    """分批限时链路诊断用：当前批次 / pending / step 快照。"""
+    throttle = _throttle_state(row)
+    state = _per_batch_state(row)
+    batch_index = int(throttle.get("batch_index") or 0)
+    total = int(throttle.get("total_batches") or 0)
+    pending = dict(state.get("pending") or {})
+    return {
+        "step": str(getattr(row, "current_step", "") or ""),
+        "batch_index": batch_index,
+        "batch_display": f"{batch_index + 1}/{total}" if total else str(batch_index + 1),
+        "total_batches": total,
+        "last_batch_index": state.get("last_batch_index"),
+        "pending_next_batch_index": pending.get("next_batch_index"),
+        "awaiting_final_activity": state.get("awaiting_final_activity"),
+        "continue_handled_run_ids": _continue_handled_run_ids(
+            row.meta if isinstance(getattr(row, "meta", None), dict) else {}
+        ),
+    }
 
 
 def per_batch_limited_time_meta_patch(*, enabled: bool) -> dict[str, Any]:
@@ -162,13 +226,15 @@ def maybe_run_per_batch_limited_time_after_listing(
         scheduled_at=limited_time_at,
     )
     logger.info(
-        "pipeline %s per-batch limited time queued batch=%s/%s run_id=%s pdd_ids=%s more_batches=%s",
+        "pipeline %s per-batch limited time queued batch=%s/%s run_id=%s pdd_ids=%s more_batches=%s pending_next=%s ctx=%s",
         row.pipeline_id,
         batch_index + 1,
         base_throttle.get("total_batches"),
         run_id,
         pdd_ids,
         more_batches,
+        per_batch_patch.get("pending", {}).get("next_batch_index") if more_batches else None,
+        _per_batch_batch_log_context(row),
     )
     return True
 
@@ -183,26 +249,78 @@ def maybe_continue_after_per_batch_limited_time(
     """
     限时限量购完成后调用。若本模块已接管后续（入队下一批上架或失败收尾）返回 True。
     """
+    ctx = _per_batch_batch_log_context(row)
+    rid = str(run_id or "").strip()
+    logger.info(
+        "pipeline %s per-batch LT continue enter run_id=%s success=%s error=%s ctx=%s",
+        getattr(row, "pipeline_id", ""),
+        rid,
+        success,
+        str(error or "").strip()[:200],
+        ctx,
+    )
+
     if not _should_handle(row):
+        logger.info(
+            "pipeline %s per-batch LT continue skip: not per-batch pipeline ctx=%s",
+            getattr(row, "pipeline_id", ""),
+            ctx,
+        )
         return False
 
     current_lt_run_id = str((row.meta or {}).get("limited_time_run_id") or "").strip()
-    if current_lt_run_id != str(run_id or "").strip():
+    if current_lt_run_id != rid:
+        logger.warning(
+            "pipeline %s per-batch LT continue skip: run_id mismatch current=%s incoming=%s ctx=%s",
+            row.pipeline_id,
+            current_lt_run_id,
+            rid,
+            ctx,
+        )
         return False
+
+    if is_per_batch_limited_time_continue_handled(row, run_id):
+        logger.info(
+            "pipeline %s per-batch LT continue skip: already handled run_id=%s ctx=%s",
+            row.pipeline_id,
+            run_id,
+            _per_batch_batch_log_context(row),
+        )
+        return True
 
     state = _per_batch_state(row)
     if not state.get("enabled"):
+        logger.info(
+            "pipeline %s per-batch LT continue skip: per-batch state disabled ctx=%s",
+            row.pipeline_id,
+            ctx,
+        )
         return False
     if state.get("awaiting_final_activity"):
+        logger.info(
+            "pipeline %s per-batch LT continue skip: awaiting final activity ctx=%s",
+            row.pipeline_id,
+            ctx,
+        )
         return False
 
     from pdd_agent.api.services.pipeline_per_batch_campaign import is_per_batch_campaign_enabled
 
     if is_per_batch_campaign_enabled(row) and success:
+        logger.info(
+            "pipeline %s per-batch LT continue skip: per-batch campaign will handle success ctx=%s",
+            row.pipeline_id,
+            ctx,
+        )
         return False
 
     pending = dict(state.get("pending") or {})
     if not pending:
+        logger.warning(
+            "pipeline %s per-batch LT continue skip: no pending next batch ctx=%s",
+            row.pipeline_id,
+            _per_batch_batch_log_context(row),
+        )
         return False
 
     failure_message = error or "限时限量购设置失败"
@@ -250,9 +368,12 @@ def maybe_continue_after_per_batch_limited_time(
     next_index = int(pending.get("next_batch_index") or 0)
     if next_index < 0 or next_index >= len(batches):
         logger.warning(
-            "pipeline %s per-batch limited time pending batch index out of range: %s",
+            "pipeline %s per-batch limited time pending batch index out of range: %s total=%s pending=%s ctx=%s",
             row.pipeline_id,
             next_index,
+            len(batches),
+            pending,
+            _per_batch_batch_log_context(refreshed),
         )
         return False
 
@@ -291,12 +412,19 @@ def maybe_continue_after_per_batch_limited_time(
         listing_payload_base=payload_base,
         scheduled_at=scheduled_at,
     )
+    mark_per_batch_limited_time_continue_handled(refreshed, run_id)
     logger.info(
-        "pipeline %s per-batch limited time done, next listing batch %s/%s scheduled at %s",
+        "pipeline %s per-batch limited time done, next listing batch %s/%s scheduled at %s "
+        "run_id=%s batch_index %s->%s pending_was=%s ctx=%s",
         refreshed.pipeline_id,
         next_index + 1,
         len(batches),
         scheduled_at,
+        rid,
+        int(throttle.get("batch_index") or 0),
+        next_index,
+        pending,
+        _per_batch_batch_log_context(refreshed),
     )
     return True
 
