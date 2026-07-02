@@ -296,9 +296,13 @@ def parse_listing_label_from_text(text: str) -> tuple[str, str]:
         label = bracket.group(1).strip()
         return label, _merchant_code_from_label(label)
 
-    slot = re.search(r"兄弟款规格不齐：([A-Z0-9]{3,}[A-Z]?)", raw, flags=re.IGNORECASE)
-    if slot:
-        return "", slot.group(1).upper()
+    for slot_pattern in (
+        r"兄弟款规格不齐：([A-Z0-9]{3,}[A-Z]?)",
+        r"兄弟款规格图命名错误：([A-Z0-9]{3,}[A-Z]?)",
+    ):
+        slot = re.search(slot_pattern, raw, flags=re.IGNORECASE)
+        if slot:
+            return "", slot.group(1).upper()
 
     fail = re.match(r"^失败:\s*([^:]+):", raw)
     if fail:

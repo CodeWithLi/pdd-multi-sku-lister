@@ -891,7 +891,11 @@ def _schedule_feishu_listing_result_log(
         ).strip()
         if issue_reason:
             reason_code = issue_reason
-        elif "兄弟款规格不齐" in message or "槽位对齐" in message:
+        elif (
+            "兄弟款规格不齐" in message
+            or "兄弟款规格图命名错误" in message
+            or "槽位对齐" in message
+        ):
             reason_code = "slot_alignment_failed"
         elif "无有效 SKU" in message or "未解析到任何有效 SKU" in message:
             reason_code = "preflight_no_skus"
@@ -915,7 +919,11 @@ def _schedule_feishu_listing_result_log(
             listing_label=listing_label,
             reason_code=reason_code,
             message=message or listing_label,
-            retryable="兄弟款规格不齐" in message or "槽位对齐" in message,
+            retryable=(
+                "兄弟款规格不齐" in message
+                or "兄弟款规格图命名错误" in message
+                or "槽位对齐" in message
+            ),
             priority=3,
             system_reason=(
                 ListingErrors.build_preflight_no_skus_system_reason(
@@ -930,7 +938,11 @@ def _schedule_feishu_listing_result_log(
         text = str(err or "").strip()
         if not text:
             continue
-        is_slot = "兄弟款规格不齐" in text or "槽位对齐" in text
+        is_slot = (
+            "兄弟款规格不齐" in text
+            or "兄弟款规格图命名错误" in text
+            or "槽位对齐" in text
+        )
         reason_code = "slot_alignment_failed" if is_slot else "unexpected_error"
         _queue_failure(
             message=text,
@@ -1295,6 +1307,31 @@ async def execute_listing(
                     }
                 )
             codes = list(dedupe.get("passed_selectors") or [])
+            if pipeline_id and dedupe_skipped_results:
+                try:
+                    from pdd_agent.api.services.pipeline_listing_skip_record import (
+                        maybe_record_platform_skip_dedupe,
+                    )
+
+                    maybe_record_platform_skip_dedupe(
+                        pipeline_id=pipeline_id,
+                        listing_run_id=run_id,
+                        account_id=account_id,
+                        dedupe_skipped=[
+                            {
+                                "selector": str(item.get("selector") or ""),
+                                "merchant_code": str(item.get("merchant_code") or ""),
+                                "listing_label": str(item.get("listing_label") or ""),
+                            }
+                            for item in (dedupe.get("skipped") or [])
+                            if isinstance(item, dict)
+                        ],
+                    )
+                except Exception:
+                    logger.exception(
+                        "pipeline listing skip record failed pipeline_id=%s kind=platform_skip_dedupe",
+                        pipeline_id,
+                    )
             if not codes and dedupe_skipped_results:
                 result = {"results": dedupe_skipped_results, "errors": [], "platform_skip_dedupe": True}
                 store.finish(
@@ -1379,6 +1416,24 @@ async def execute_listing(
             missing_selectors = [
                 selector for selector, folder in folder_by_selector.items() if folder in missing_folders
             ]
+            if pipeline_id and missing_selectors:
+                try:
+                    from pdd_agent.api.services.pipeline_listing_skip_record import (
+                        maybe_record_bag_view_missing,
+                    )
+
+                    maybe_record_bag_view_missing(
+                        pipeline_id=pipeline_id,
+                        listing_run_id=run_id,
+                        account_id=account_id,
+                        folder_by_selector=folder_by_selector,
+                        missing_folders=missing_folders,
+                    )
+                except Exception:
+                    logger.exception(
+                        "pipeline listing skip record failed pipeline_id=%s kind=bag_view_missing",
+                        pipeline_id,
+                    )
             for selector in missing_selectors:
                 folder = folder_by_selector[selector]
                 schedule_pdd_upload_failure_log(

@@ -66,6 +66,13 @@ def test_compact_slot_mismatch_strips_prefix():
     assert line == "BD716A缺YKL004"
 
 
+def test_compact_slot_mismatch_misnamed_preview_strips_prefix():
+    line = ListingErrors.compact_feishu_line(
+        "兄弟款规格图命名错误：BD046A有规格图未以BD046A开头（BD046B+YKL031D）（应为5个）"
+    )
+    assert line == "BD046A有规格图未以BD046A开头（BD046B+YKL031D）"
+
+
 def test_sanitize_feishu_failure_reason_strips_platform_markers():
     assert (
         ListingErrors.sanitize_feishu_failure_reason("BD023B毛绒小猫笔袋拼多多定价为空")

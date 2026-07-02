@@ -755,6 +755,46 @@ export interface DailyListingRecordListResponse {
   items: DailyListingRecord[]
 }
 
+export interface DailyPipelineListingSkipRecord {
+  record_id: string
+  pipeline_id: string
+  listing_run_id: string
+  account_id: string
+  shop_display_name: string
+  skip_kind: string
+  skip_kind_label: string
+  product_selector: string
+  merchant_code: string
+  listing_label: string
+  message: string
+  created_at: string
+}
+
+export interface DailyPipelineListingSkipShopSummary {
+  account_id: string
+  shop_display_name: string
+  total: number
+  platform_skip_dedupe: number
+  bag_view_missing: number
+}
+
+export interface DailyPipelineListingSkipSummaryResponse {
+  skip_date: string
+  total: number
+  platform_skip_dedupe: number
+  bag_view_missing: number
+  pipeline_count: number
+  by_shop: DailyPipelineListingSkipShopSummary[]
+}
+
+export interface DailyPipelineListingSkipRecordListResponse {
+  skip_date: string
+  total: number
+  platform_skip_dedupe: number
+  bag_view_missing: number
+  items: DailyPipelineListingSkipRecord[]
+}
+
 export interface PublishedProduct {
   mapping_id: string
   account_id: string

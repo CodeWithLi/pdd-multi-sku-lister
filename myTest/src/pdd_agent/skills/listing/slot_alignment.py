@@ -16,6 +16,7 @@ from pdd_agent.skills.listing.catalog import (
     _collect_flat_preview_images,
     _filter_preview_images_for_code_dir,
     _preview_sort_key,
+    _preview_stem_matches_code_dir,
     combo_slot_signature,
 )
 
@@ -44,6 +45,20 @@ def count_style_preview_files(unit: ListingUnit, style_code: str) -> int:
         _collect_flat_preview_images(style_dir),
     )
     return len(previews)
+
+
+def _misnamed_preview_stems(unit: ListingUnit, style_code: str) -> list[str]:
+    """目录里有规格预览图，但文件名未以该文件夹商品编码开头（不计入 SKU）。"""
+    style_dir = _sibling_style_dir(unit, style_code)
+    if style_dir is None:
+        return []
+    dir_name = style_dir.name.strip()
+    stems: list[str] = []
+    for preview in _collect_flat_preview_images(style_dir):
+        stem = preview.stem.strip()
+        if stem and not _preview_stem_matches_code_dir(stem, dir_name):
+            stems.append(stem)
+    return stems
 
 
 def _missing_sku_labels(unit: ListingUnit, style_code: str) -> list[str]:
@@ -77,6 +92,49 @@ def _missing_sku_labels(unit: ListingUnit, style_code: str) -> list[str]:
     return labels
 
 
+def _is_misnamed_preview_slot_mismatch(
+    unit: ListingUnit,
+    style_codes: list[str],
+    display_code: dict[str, str],
+    sku_counts: dict[str, int],
+    target: int,
+) -> bool:
+    """兄弟款 SKU 不齐是否仅因规格图未以文件夹商品编码开头。"""
+    light_codes = [code for code in style_codes if sku_counts[code] < target]
+    if not light_codes:
+        return False
+    for code in light_codes:
+        label = display_code.get(code, code)
+        parsed = sku_counts[code]
+        previews = count_style_preview_files(unit, label)
+        if _missing_sku_labels(unit, label):
+            return False
+        if previews != parsed:
+            return False
+        misnamed = _misnamed_preview_stems(unit, label)
+        if not misnamed or len(misnamed) < target - parsed:
+            return False
+    return True
+
+
+def _format_misnamed_preview_slot_mismatch(
+    unit: ListingUnit,
+    style_codes: list[str],
+    display_code: dict[str, str],
+    sku_counts: dict[str, int],
+    target: int,
+) -> str:
+    parts: list[str] = []
+    for code in style_codes:
+        if sku_counts[code] >= target:
+            continue
+        label = display_code.get(code, code)
+        misnamed = _misnamed_preview_stems(unit, label)
+        if misnamed:
+            parts.append(f"{label}有规格图未以{label}开头（{'/'.join(misnamed)}）")
+    return ListingErrors.format_slot_mismatch_misnamed("，".join(parts), target)
+
+
 def format_slot_mismatch_message(unit: ListingUnit) -> str:
     """短小精悍的兄弟款规格不齐说明，供飞书失败表与前端展示。"""
     style_codes = sorted({sku.style_code.strip().upper() for sku in unit.skus if sku.style_code})
@@ -96,6 +154,11 @@ def format_slot_mismatch_message(unit: ListingUnit) -> str:
     target = max(sku_counts.values())
     if len(set(sku_counts.values())) == 1:
         return ""
+
+    if _is_misnamed_preview_slot_mismatch(unit, style_codes, display_code, sku_counts, target):
+        return _format_misnamed_preview_slot_mismatch(
+            unit, style_codes, display_code, sku_counts, target
+        )
 
     count_parts: list[str] = []
     for code in style_codes:

@@ -8,15 +8,20 @@ import type {
   DailyCycleRelistSummaryResponse,
   DailyListingRecord,
   DailyListingSummaryResponse,
+  DailyPipelineListingSkipRecord,
+  DailyPipelineListingSkipSummaryResponse,
 } from '@/types'
 
 const loading = ref(false)
 const queryDate = ref(formatDate(new Date()))
 const showActiveOnly = ref(false)
+const skipKindFilter = ref('')
 const listingSummary = ref<DailyListingSummaryResponse | null>(null)
 const listingRecords = ref<DailyListingRecord[]>([])
 const cycleSummary = ref<DailyCycleRelistSummaryResponse | null>(null)
 const cycleRecords = ref<DailyCycleRelistRecord[]>([])
+const skipSummary = ref<DailyPipelineListingSkipSummaryResponse | null>(null)
+const skipRecords = ref<DailyPipelineListingSkipRecord[]>([])
 
 const dateLabel = computed(() => queryDate.value || '—')
 const cyclePipelineIdSet = computed(() => {
@@ -86,6 +91,12 @@ function listingStatusType(status: string): 'success' | 'info' {
   return String(status || 'active') === 'active' ? 'success' : 'info'
 }
 
+function skipKindTagType(kind: string): 'warning' | 'danger' | 'info' {
+  if (kind === 'platform_skip_dedupe') return 'warning'
+  if (kind === 'bag_view_missing') return 'danger'
+  return 'info'
+}
+
 async function load() {
   const date = String(queryDate.value || '').trim()
   if (!date) {
@@ -94,7 +105,8 @@ async function load() {
   }
   loading.value = true
   try {
-    const [listingSum, listingRows, cycleSum, cycleRows] = await Promise.all([
+    const [listingSum, listingRows, cycleSum, cycleRows, pipelineSkipSum, pipelineSkipRows] =
+      await Promise.all([
       api.dailyListingSummary({ listed_date: date }),
       api.dailyListingRecords({
         listed_date: date,
@@ -103,16 +115,26 @@ async function load() {
       }),
       api.dailyCycleRelistSummary({ triggered_date: date }),
       api.dailyCycleRelistRecords({ triggered_date: date, limit: 200 }),
+      api.dailyPipelineListingSkipSummary({ skip_date: date }),
+      api.dailyPipelineListingSkipRecords({
+        skip_date: date,
+        skip_kind: skipKindFilter.value || undefined,
+        limit: 200,
+      }),
     ])
     listingSummary.value = listingSum
     listingRecords.value = listingRows.items
     cycleSummary.value = cycleSum
     cycleRecords.value = cycleRows.items
+    skipSummary.value = pipelineSkipSum
+    skipRecords.value = pipelineSkipRows.items
   } catch (e) {
     listingSummary.value = null
     listingRecords.value = []
     cycleSummary.value = null
     cycleRecords.value = []
+    skipSummary.value = null
+    skipRecords.value = []
     ElMessage.error(e instanceof Error ? e.message : '加载失败')
   } finally {
     loading.value = false
@@ -126,7 +148,7 @@ onMounted(load)
   <div class="page" v-loading="loading">
     <PageHeader
       title="每日统计"
-      subtitle="按日期查询上架成功数与失败日志循环跑整合链路次数"
+      subtitle="按日期查询上架成功数、整合链路上架跳过数与失败日志循环跑整合链路次数"
     />
 
     <el-card shadow="never" class="mb-16">
@@ -213,6 +235,78 @@ onMounted(load)
         <el-table-column prop="listing_label" label="套图" width="140" show-overflow-tooltip />
         <el-table-column prop="title" label="标题" min-width="160" show-overflow-tooltip />
         <el-table-column prop="merchant_code" label="平台货号" width="110" show-overflow-tooltip />
+      </el-table>
+    </el-card>
+
+    <el-card shadow="never" class="mb-16">
+      <template #header>
+        <div class="card-header">
+          <span>{{ dateLabel }} 整合链路上架跳过</span>
+          <div class="summary-tags">
+            <el-tag type="warning">共 {{ skipSummary?.total ?? 0 }} 件</el-tag>
+            <el-tag type="info">
+              涉及链路 {{ skipSummary?.pipeline_count ?? 0 }} 条
+            </el-tag>
+            <el-tag>平台去重 {{ skipSummary?.platform_skip_dedupe ?? 0 }} 件</el-tag>
+            <el-tag type="danger">笔袋无编码 {{ skipSummary?.bag_view_missing ?? 0 }} 件</el-tag>
+          </div>
+        </div>
+      </template>
+
+      <el-row v-if="skipSummary?.by_shop?.length" :gutter="12" class="mb-12">
+        <el-col
+          v-for="shop in skipSummary.by_shop"
+          :key="`skip-${shop.account_id}`"
+          :xs="24"
+          :sm="12"
+          :md="8"
+          :lg="6"
+        >
+          <div class="shop-stat-card">
+            <div class="shop-stat-title">{{ shop.shop_display_name || shop.account_id }}</div>
+            <div class="shop-stat-values">
+              <span>跳过 {{ shop.total }} 件</span>
+              <span class="active">平台去重 {{ shop.platform_skip_dedupe }} 件</span>
+              <span class="delisted">笔袋无编码 {{ shop.bag_view_missing }} 件</span>
+            </div>
+          </div>
+        </el-col>
+      </el-row>
+
+      <div class="table-toolbar mb-12">
+        <el-select
+          v-model="skipKindFilter"
+          clearable
+          placeholder="全部跳过类型"
+          style="width: 180px"
+          @change="load"
+        >
+          <el-option label="平台跳过去重" value="platform_skip_dedupe" />
+          <el-option label="笔袋视图无编码" value="bag_view_missing" />
+        </el-select>
+      </div>
+
+      <el-table
+        :data="skipRecords"
+        stripe
+        border
+        size="small"
+        empty-text="该日暂无整合链路上架跳过记录"
+      >
+        <el-table-column label="跳过类型" width="130">
+          <template #default="{ row }: { row: DailyPipelineListingSkipRecord }">
+            <el-tag :type="skipKindTagType(row.skip_kind)" size="small">
+              {{ row.skip_kind_label || row.skip_kind }}
+            </el-tag>
+          </template>
+        </el-table-column>
+        <el-table-column prop="created_at" label="记录时间" width="170" />
+        <el-table-column prop="shop_display_name" label="店铺" width="120" show-overflow-tooltip />
+        <el-table-column prop="merchant_code" label="商品编码" width="110" show-overflow-tooltip />
+        <el-table-column prop="listing_label" label="套图/选择器" min-width="160" show-overflow-tooltip />
+        <el-table-column prop="pipeline_id" label="链路 ID" width="150" show-overflow-tooltip />
+        <el-table-column prop="listing_run_id" label="上架 run_id" width="150" show-overflow-tooltip />
+        <el-table-column prop="message" label="说明" min-width="180" show-overflow-tooltip />
       </el-table>
     </el-card>
 

@@ -411,8 +411,10 @@ class ListingErrors:
 
         # 兄弟款规格
         SLOT_MISMATCH = "兄弟款规格不齐：{detail}（应为{target}个）"
+        SLOT_MISMATCH_MISNAMED_PREVIEW = "兄弟款规格图命名错误：{detail}（应为{target}个）"
         SLOT_MISMATCH_FALLBACK = "兄弟款规格不齐：{code}（主款{reference}{count}个）"
         SLOT_PREFIX = "兄弟款规格不齐："
+        SLOT_MISNAMED_PREFIX = "兄弟款规格图命名错误："
 
         # 槽位对齐（旧格式兼容）
         SLOT_NO_STYLE = "[{label}] 无有效款式编码"
@@ -840,10 +842,11 @@ class ListingErrors:
                 merchant_code = path_msg.group(1).upper()
             text = path_msg.group(2).strip()
 
-        if text.startswith(cls.Msg.SLOT_PREFIX):
-            inner = text[len(cls.Msg.SLOT_PREFIX) :]
-            inner = re.sub(r"[（(]应为\d+个[）)]", "", inner).strip()
-            return inner
+        for slot_prefix in (cls.Msg.SLOT_MISNAMED_PREFIX, cls.Msg.SLOT_PREFIX):
+            if text.startswith(slot_prefix):
+                inner = text[len(slot_prefix) :]
+                inner = re.sub(r"[（(]应为\d+个[）)]", "", inner).strip()
+                return inner
 
         sub = re.search(r"子编码\s+(\S+)\s+(.+)", text, flags=re.I)
         if sub:
@@ -978,6 +981,11 @@ class ListingErrors:
     def format_slot_mismatch(cls, detail: str, target: int) -> str:
         _ = target
         return cls.Msg.SLOT_MISMATCH.format(detail=detail, target=target)
+
+    @classmethod
+    def format_slot_mismatch_misnamed(cls, detail: str, target: int) -> str:
+        _ = target
+        return cls.Msg.SLOT_MISMATCH_MISNAMED_PREVIEW.format(detail=detail, target=target)
 
     @classmethod
     def format_slot_mismatch_feishu(cls, detail: str, target: int) -> str:

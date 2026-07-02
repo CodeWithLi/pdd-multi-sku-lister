@@ -280,6 +280,28 @@ class IntegratedPipelineIssueReportORM(Base):
     )
 
 
+class IntegratedPipelineListingSkipORM(Base):
+    """整合链路上架前跳过明细：平台跳过去重 / 笔袋视图无编码。"""
+
+    __tablename__ = "integrated_pipeline_listing_skips"
+    __table_args__ = (
+        Index("ix_pipeline_listing_skips_pipeline_kind", "pipeline_id", "skip_kind"),
+    )
+
+    record_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    pipeline_id: Mapped[str] = mapped_column(String(64), index=True, nullable=False)
+    listing_run_id: Mapped[str] = mapped_column(String(64), index=True, default="", nullable=False)
+    account_id: Mapped[str] = mapped_column(String(64), index=True, default="", nullable=False)
+    skip_kind: Mapped[str] = mapped_column(String(32), index=True, nullable=False)
+    product_selector: Mapped[str] = mapped_column(String(512), default="", index=True, nullable=False)
+    merchant_code: Mapped[str] = mapped_column(String(128), default="", index=True, nullable=False)
+    listing_label: Mapped[str] = mapped_column(String(255), default="", nullable=False)
+    message: Mapped[str] = mapped_column(Text, default="", nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, server_default=func.now(), index=True, nullable=False
+    )
+
+
 class AccountLockORM(Base):
     """店铺 Profile 运行锁。"""
 

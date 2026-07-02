@@ -33,6 +33,8 @@ const accountId = ref('')
 const batchAccountIds = ref<string[]>([])
 const productCodes = ref<string[]>([])
 const checkedProductsBySet = ref<Record<string, string[]>>({})
+const selectedSetDrawerVisible = ref(false)
+const activeProductDrawerSelector = ref('')
 const platformListingCode = ref('')
 const listingMode = ref<'check' | 'run'>('check')
 const categoryKeyword = ref('玩偶')
@@ -100,6 +102,18 @@ const selectedSetGroups = computed(() =>
   productCodes.value
     .map((sel) => productOptions.value.find((item) => item.selector === sel))
     .filter((item): item is ListingTargetOption => !!item),
+)
+
+const activeProductDrawerGroup = computed(
+  () => selectedSetGroups.value.find((item) => item.selector === activeProductDrawerSelector.value) || null,
+)
+
+const selectedListingProductCount = computed(() =>
+  selectedSetGroups.value.reduce((sum, group) => sum + selectedCountForGroup(group), 0),
+)
+
+const pendingSelectedSetCount = computed(
+  () => selectedSetGroups.value.filter((group) => (group.unlisted_count ?? 0) > 0).length,
 )
 
 const resolvedListingSelectors = computed(() => {
@@ -209,6 +223,22 @@ function updateCheckedProducts(selector: string, codes: string[]) {
   checkedProductsBySet.value = { ...checkedProductsBySet.value, [selector]: codes }
 }
 
+function openProductDrawer(selector: string) {
+  activeProductDrawerSelector.value = selector
+}
+
+function closeProductDrawer() {
+  activeProductDrawerSelector.value = ''
+}
+
+function openSelectedSetDrawer() {
+  selectedSetDrawerVisible.value = true
+}
+
+function closeSelectedSetDrawer() {
+  selectedSetDrawerVisible.value = false
+}
+
 function selectAllMaterialGroups() {
   productCodes.value = visibleProductOptions.value.map((item) => item.selector)
   syncCheckedProductsForSets(productCodes.value)
@@ -217,6 +247,8 @@ function selectAllMaterialGroups() {
 function clearAllMaterialGroups() {
   productCodes.value = []
   checkedProductsBySet.value = {}
+  closeSelectedSetDrawer()
+  closeProductDrawer()
 }
 
 function selectAllListingProducts() {
@@ -233,6 +265,62 @@ function clearAllListingProducts() {
     next[group.selector] = []
   }
   checkedProductsBySet.value = next
+}
+
+function isProductChecked(group: ListingTargetOption, code: string) {
+  return (checkedProductsBySet.value[group.selector] || []).includes(code)
+}
+
+function toggleProductChecked(group: ListingTargetOption, code: string, checked: boolean) {
+  const current = checkedProductsBySet.value[group.selector] || []
+  const next = checked ? Array.from(new Set([...current, code])) : current.filter((item) => item !== code)
+  updateCheckedProducts(group.selector, next)
+}
+
+function selectedCountForGroup(group: ListingTargetOption) {
+  return (checkedProductsBySet.value[group.selector] || []).length
+}
+
+function isGroupFullySelected(group: ListingTargetOption) {
+  return !!group.product_codes.length && selectedCountForGroup(group) === group.product_codes.length
+}
+
+function toggleGroupSelection(group: ListingTargetOption, shouldSelect: boolean) {
+  updateCheckedProducts(group.selector, shouldSelect ? [...group.product_codes] : [])
+}
+
+function toggleGroupSelectionQuick(group: ListingTargetOption) {
+  toggleGroupSelection(group, selectedCountForGroup(group) <= 0)
+}
+
+function productStatusType(group: ListingTargetOption, code: string) {
+  if (isProductListed(group, code)) return 'success'
+  if (isProductChecked(group, code)) return 'primary'
+  return 'info'
+}
+
+function productStatusText(group: ListingTargetOption, code: string) {
+  if (isProductListed(group, code)) return '已上架'
+  if (isProductChecked(group, code)) return '已选中'
+  return '未选中'
+}
+
+function previewProductCodes(group: ListingTargetOption) {
+  const checked = checkedProductsBySet.value[group.selector] || []
+  return checked.slice(0, 4)
+}
+
+function remainingPreviewCount(group: ListingTargetOption) {
+  return Math.max(selectedCountForGroup(group) - previewProductCodes(group).length, 0)
+}
+
+function groupSummaryText(group: ListingTargetOption) {
+  const selected = selectedCountForGroup(group)
+  const total = group.product_codes.length
+  const listed = group.listed_count || 0
+  if (!total) return '当前套图暂无可用商品'
+  if (!selected) return `共 ${total} 个商品，当前未勾选`
+  return `已选 ${selected}/${total} 个商品，已上架 ${listed} 个`
 }
 
 watch(productCodes, (sets) => syncCheckedProductsForSets(sets))
@@ -683,39 +771,33 @@ onMounted(async () => {
                   </span>
                 </span>
               </template>
-              <div class="product-pick-panel">
-                <div v-for="group in selectedSetGroups" :key="group.selector" class="product-pick-group">
-                  <div class="product-pick-group-title">
-                    <span class="pick-family">{{ group.family_code }}</span>
-                    <span class="pick-set-badge">{{ group.image_set }}</span>
-                    <el-tag v-if="group.is_fully_listed" size="small" type="success" class="listed-tag">套图已全部上架</el-tag>
-                    <el-tag v-else-if="group.has_pending_listing" size="small" type="warning" class="listed-tag">
-                      待上架 {{ group.unlisted_count ?? 0 }} 个
-                    </el-tag>
-                    <el-tag v-else-if="(group.listed_count || 0) > 0" size="small" type="info" class="listed-tag">
-                      已上架 {{ group.listed_count }}/{{ group.product_codes.length }}
-                    </el-tag>
+              <div class="selection-overview-card">
+                <div class="selection-overview-metrics">
+                  <div class="selection-metric">
+                    <span class="selection-metric-value">{{ selectedSetGroups.length }}</span>
+                    <span class="selection-metric-label">已选套图</span>
                   </div>
-                  <el-checkbox-group
-                    v-if="group.product_codes.length"
-                    :model-value="checkedProductsBySet[group.selector] || []"
-                    @update:model-value="(val) => updateCheckedProducts(group.selector, val as string[])"
-                  >
-                    <el-checkbox
-                      v-for="code in group.product_codes"
-                      :key="code"
-                      :value="code"
-                      :label="code"
-                    >
-                      {{ code }}
-                      <el-tag v-if="isProductListed(group, code)" size="small" type="success" class="listed-tag">
-                        已上架
-                      </el-tag>
-                    </el-checkbox>
-                  </el-checkbox-group>
-                  <div v-else class="empty-set-tip">
-                    套图目录已存在，但暂无可用商品（需在套图下放入带 1.jpg/1.png 等编号主图的商品文件夹）
+                  <div class="selection-metric">
+                    <span class="selection-metric-value">{{ selectedListingProductCount }}</span>
+                    <span class="selection-metric-label">已选商品</span>
                   </div>
+                  <div class="selection-metric">
+                    <span class="selection-metric-value">{{ pendingSelectedSetCount }}</span>
+                    <span class="selection-metric-label">待上架套图</span>
+                  </div>
+                </div>
+                <div class="selection-overview-actions">
+                  <el-button type="primary" plain size="small" @click="openSelectedSetDrawer">查看已选套图</el-button>
+                  <el-button size="small" @click="selectAllListingProducts">全选商品</el-button>
+                  <el-button size="small" @click="clearAllListingProducts">清空商品</el-button>
+                </div>
+                <div class="selection-overview-preview">
+                  <el-tag v-for="group in selectedSetGroups.slice(0, 3)" :key="group.selector" effect="plain" round>
+                    {{ group.family_code }} · {{ group.image_set }}
+                  </el-tag>
+                  <span v-if="selectedSetGroups.length > 3" class="selection-overview-more">
+                    还有 {{ selectedSetGroups.length - 3 }} 套图
+                  </span>
                 </div>
               </div>
             </el-form-item>
@@ -851,6 +933,135 @@ onMounted(async () => {
         </el-card>
       </el-tab-pane>
     </el-tabs>
+
+    <el-drawer
+      v-model="selectedSetDrawerVisible"
+      title="已选套图"
+      size="860px"
+      append-to-body
+      class="selected-set-drawer"
+      @close="closeSelectedSetDrawer"
+    >
+      <div class="product-pick-panel">
+        <div v-for="group in selectedSetGroups" :key="group.selector" class="product-pick-group">
+          <div class="product-pick-group-head">
+            <div class="product-pick-group-title">
+              <span class="pick-family">{{ group.family_code }}</span>
+              <span class="pick-set-badge">{{ group.image_set }}</span>
+              <el-tag v-if="group.is_fully_listed" size="small" type="success" class="listed-tag">套图已全部上架</el-tag>
+              <el-tag v-else-if="group.has_pending_listing" size="small" type="warning" class="listed-tag">
+                待上架 {{ group.unlisted_count ?? 0 }} 个
+              </el-tag>
+              <el-tag v-else-if="(group.listed_count || 0) > 0" size="small" type="info" class="listed-tag">
+                已上架 {{ group.listed_count }}/{{ group.product_codes.length }}
+              </el-tag>
+              <el-tag v-if="!selectedCountForGroup(group)" size="small" type="info" effect="plain">暂不上架</el-tag>
+              <el-tag
+                class="group-toggle-tag"
+                size="small"
+                :type="selectedCountForGroup(group) > 0 ? 'success' : 'info'"
+                effect="light"
+                @click="toggleGroupSelectionQuick(group)"
+              >
+                {{ selectedCountForGroup(group) > 0 ? '上架中（点设不上架）' : '不上架（点设上架）' }}
+              </el-tag>
+            </div>
+            <div class="product-pick-group-actions">
+              <el-button link type="primary" @click="openProductDrawer(group.selector)">查看商品</el-button>
+            </div>
+          </div>
+          <div class="product-pick-group-summary">{{ groupSummaryText(group) }}</div>
+          <div v-if="group.product_codes.length" class="product-pick-preview">
+            <el-tag
+              v-for="code in previewProductCodes(group)"
+              :key="code"
+              :type="productStatusType(group, code) as any"
+              effect="plain"
+              round
+            >
+              {{ code }}
+            </el-tag>
+            <span v-if="remainingPreviewCount(group)" class="product-pick-more">
+              +{{ remainingPreviewCount(group) }} 个
+            </span>
+          </div>
+          <div v-else class="empty-set-tip">
+            套图目录已存在，但暂无可用商品（需在套图下放入带 1.jpg/1.png 等编号主图的商品文件夹）
+          </div>
+        </div>
+      </div>
+    </el-drawer>
+
+    <el-drawer
+      :model-value="!!activeProductDrawerGroup"
+      size="760px"
+      destroy-on-close
+      append-to-body
+      class="product-detail-drawer"
+      @close="closeProductDrawer"
+    >
+      <template #header>
+        <div v-if="activeProductDrawerGroup" class="product-drawer-header">
+          <div class="product-drawer-title-row">
+            <span class="pick-family">{{ activeProductDrawerGroup.family_code }}</span>
+            <span class="pick-set-badge">{{ activeProductDrawerGroup.image_set }}</span>
+          </div>
+          <div class="product-drawer-meta">
+            {{ groupSummaryText(activeProductDrawerGroup) }}
+          </div>
+        </div>
+      </template>
+
+      <div v-if="activeProductDrawerGroup" class="product-drawer-body">
+        <div class="product-drawer-actions">
+          <el-button size="small" @click="updateCheckedProducts(activeProductDrawerGroup.selector, [])">清空当前套图</el-button>
+          <el-button
+            size="small"
+            type="primary"
+            plain
+            @click="updateCheckedProducts(activeProductDrawerGroup.selector, [...activeProductDrawerGroup.product_codes])"
+          >
+            全选当前套图
+          </el-button>
+        </div>
+
+        <div v-if="activeProductDrawerGroup.product_codes.length" class="product-grid">
+          <div
+            v-for="code in activeProductDrawerGroup.product_codes"
+            :key="code"
+            class="product-card"
+            :class="{
+              'is-checked': isProductChecked(activeProductDrawerGroup, code),
+              'is-listed': isProductListed(activeProductDrawerGroup, code),
+            }"
+            @click="toggleProductChecked(activeProductDrawerGroup, code, !isProductChecked(activeProductDrawerGroup, code))"
+          >
+            <div class="product-card-head">
+              <el-checkbox
+                :model-value="isProductChecked(activeProductDrawerGroup, code)"
+                @update:model-value="(val) => toggleProductChecked(activeProductDrawerGroup!, code, Boolean(val))"
+                @click.stop
+              />
+              <el-tag
+                :type="productStatusType(activeProductDrawerGroup, code) as any"
+                size="small"
+                effect="light"
+              >
+                {{ productStatusText(activeProductDrawerGroup, code) }}
+              </el-tag>
+            </div>
+            <div class="product-card-code">{{ code }}</div>
+            <div class="product-card-foot">
+              <span>点击卡片可快速切换勾选</span>
+            </div>
+          </div>
+        </div>
+
+        <div v-else class="empty-set-tip">
+          套图目录已存在，但暂无可用商品（需在套图下放入带 1.jpg/1.png 等编号主图的商品文件夹）
+        </div>
+      </div>
+    </el-drawer>
   </div>
 </template>
 
@@ -880,20 +1091,96 @@ onMounted(async () => {
 
 .product-pick-panel {
   width: 100%;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 12px;
+}
+
+.selection-overview-card {
+  width: 100%;
+  border: 1px solid var(--border-color);
+  border-radius: 12px;
+  background: linear-gradient(180deg, #fbfdff 0%, #f8fbff 100%);
+  padding: 14px 16px;
   display: flex;
   flex-direction: column;
   gap: 12px;
 }
 
+.selection-overview-metrics {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 18px;
+}
+
+.selection-metric {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 88px;
+}
+
+.selection-metric-value {
+  font-size: 20px;
+  line-height: 1.1;
+  font-weight: 700;
+  color: #0f172a;
+}
+
+.selection-metric-label {
+  font-size: 12px;
+  color: #64748b;
+}
+
+.selection-overview-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.selection-overview-preview {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.selection-overview-more {
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
 .product-pick-group {
-  padding: 12px 14px;
+  padding: 14px 16px;
   border: 1px solid var(--border-color);
-  border-radius: 8px;
+  border-radius: 12px;
   background: #fafbfd;
+  min-height: 136px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.product-pick-group-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.product-pick-group-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.group-toggle-tag {
+  cursor: pointer;
+  user-select: none;
 }
 
 .product-pick-group-title {
-  margin-bottom: 8px;
   font-size: 13px;
   font-weight: 600;
   color: #334155;
@@ -901,6 +1188,25 @@ onMounted(async () => {
   align-items: center;
   flex-wrap: wrap;
   gap: 8px;
+}
+
+.product-pick-group-summary {
+  font-size: 13px;
+  color: #475569;
+  line-height: 1.5;
+}
+
+.product-pick-preview {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  min-height: 32px;
+}
+
+.product-pick-more {
+  font-size: 12px;
+  color: var(--text-muted);
 }
 
 .material-option {
@@ -965,8 +1271,93 @@ onMounted(async () => {
   padding: 4px 0;
 }
 
-.product-pick-group :deep(.el-checkbox) {
-  margin-right: 18px;
+.product-drawer-header {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.product-drawer-title-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.product-drawer-meta {
+  font-size: 13px;
+  color: #64748b;
+}
+
+.product-drawer-body {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.product-drawer-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.product-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(190px, 1fr));
+  gap: 12px;
+}
+
+.product-card {
+  border: 1px solid #dbe4f0;
+  border-radius: 12px;
+  background: #fff;
+  padding: 12px;
+  min-height: 116px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  cursor: pointer;
+  transition:
+    border-color 0.2s ease,
+    box-shadow 0.2s ease,
+    transform 0.2s ease;
+}
+
+.product-card:hover {
+  border-color: #93c5fd;
+  box-shadow: 0 8px 24px rgba(37, 99, 235, 0.08);
+  transform: translateY(-1px);
+}
+
+.product-card.is-checked {
+  border-color: #60a5fa;
+  background: #f8fbff;
+}
+
+.product-card.is-listed {
+  background: #f0fdf4;
+  border-color: #86efac;
+}
+
+.product-card-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.product-card-code {
+  font-size: 15px;
+  line-height: 1.4;
+  font-weight: 700;
+  color: #0f172a;
+  word-break: break-all;
+}
+
+.product-card-foot {
+  margin-top: auto;
+  font-size: 12px;
+  color: #94a3b8;
 }
 
 .listed-tag {

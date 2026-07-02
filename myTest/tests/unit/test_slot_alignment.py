@@ -139,6 +139,99 @@ def test_validate_slot_structure_hints_preview_vs_sku(tmp_path, monkeypatch):
     assert "应为5个" in errors[0]
 
 
+def test_validate_slot_structure_hints_misnamed_preview_prefix(tmp_path):
+    """规格图未以文件夹商品编码开头时，报命名错误而非「多款多 N 个」。"""
+    from pdd_agent.skills.listing.slot_alignment import validate_slot_structure
+    from pdd_agent.domain.models import ListingUnit, SkuCombo
+
+    set_dir = tmp_path / "BD046" / "第一套图"
+    dirs = {
+        "BD046A": [
+            "BD046A.png",
+            "BD046A+YKL001AC.png",
+            "BD046A+YKL008A.png",
+            "BD046A+YKL020A.png",
+            "BD046B+YKL031D.png",
+        ],
+        "BD046B": [
+            "BD046B.png",
+            "BD046B+YKL001AC.png",
+            "BD046B+YKL008A.png",
+            "BD046B+YKL020A.png",
+            "BD046B+YKL031D.png",
+        ],
+        "BD046C": [
+            "BD046C.png",
+            "BD046C+YKL001AC.png",
+            "BD046C+YKL008A.png",
+            "BD046C+YKL020A.png",
+            "YKL046C+YKL031D.png",
+        ],
+    }
+    for code, names in dirs.items():
+        style_dir = set_dir / code
+        style_dir.mkdir(parents=True)
+        for name in names:
+            (style_dir / name).write_bytes(b"x")
+
+    def _build_skus(style_code: str, style_dir: Path, combo_names: list[str]) -> list[SkuCombo]:
+        skus: list[SkuCombo] = []
+        for combo in combo_names:
+            model = combo.split("+", 1)[1] if "+" in combo else style_code
+            skus.append(
+                SkuCombo(
+                    style_code=style_code,
+                    style_name=style_code,
+                    model_code=model,
+                    model_name=model,
+                    combo_folder=combo,
+                    preview_image=style_dir / f"{combo}.png",
+                    inventory="1",
+                    group_price="1",
+                    single_price="1",
+                )
+            )
+        return skus
+
+    dir_a = set_dir / "BD046A"
+    dir_b = set_dir / "BD046B"
+    dir_c = set_dir / "BD046C"
+    unit = ListingUnit(product_code="BD046A", image_set="第一套图", root=dir_a)
+    unit.skus = _build_skus(
+        "BD046A",
+        dir_a,
+        ["BD046A", "BD046A+YKL001AC", "BD046A+YKL008A", "BD046A+YKL020A"],
+    )
+    unit.skus.extend(
+        _build_skus(
+            "BD046B",
+            dir_b,
+            [
+                "BD046B",
+                "BD046B+YKL001AC",
+                "BD046B+YKL008A",
+                "BD046B+YKL020A",
+                "BD046B+YKL031D",
+            ],
+        )
+    )
+    unit.skus.extend(
+        _build_skus(
+            "BD046C",
+            dir_c,
+            ["BD046C", "BD046C+YKL001AC", "BD046C+YKL008A", "BD046C+YKL020A"],
+        )
+    )
+
+    errors = validate_slot_structure(unit)
+    assert len(errors) == 1
+    assert errors[0].startswith("兄弟款规格图命名错误：")
+    assert "BD046A有规格图未以BD046A开头（BD046B+YKL031D）" in errors[0]
+    assert "BD046C有规格图未以BD046C开头（YKL046C+YKL031D）" in errors[0]
+    assert "应为5个" in errors[0]
+    assert "BD046B多1个" not in errors[0]
+
+
 def test_slot_alignment_matches_signature_not_alphabetical_index(tmp_path):
     """中文主商品 + 短编码文件名：按 combo 签名对齐，避免套餐/挂件槽位对调。"""
     from pdd_agent.domain.models import ListingUnit, SkuCombo

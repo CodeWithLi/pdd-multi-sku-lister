@@ -43,6 +43,8 @@ import type {
   DailyCycleRelistSummaryResponse,
   DailyListingRecordListResponse,
   DailyListingSummaryResponse,
+  DailyPipelineListingSkipRecordListResponse,
+  DailyPipelineListingSkipSummaryResponse,
   PddFailureCycleRelistTriggerResult,
   PddFailureCycleRelistTriggerPayload,
   PddFailureCycleRelistClaimResult,
@@ -1042,6 +1044,23 @@ export const api = {
   }) =>
     http
       .get<DailyListingRecordListResponse>('/daily-listings', { params })
+      .then((r) => r.data),
+
+  dailyPipelineListingSkipSummary: (params?: { skip_date?: string; account_id?: string }) =>
+    http
+      .get<DailyPipelineListingSkipSummaryResponse>('/daily-pipeline-listing-skips/summary', {
+        params,
+      })
+      .then((r) => r.data),
+
+  dailyPipelineListingSkipRecords: (params?: {
+    skip_date?: string
+    account_id?: string
+    skip_kind?: string
+    limit?: number
+  }) =>
+    http
+      .get<DailyPipelineListingSkipRecordListResponse>('/daily-pipeline-listing-skips', { params })
       .then((r) => r.data),
 
   wecomHealth: () => http.get<WecomHealth>('/wecom/health').then((r) => r.data),
