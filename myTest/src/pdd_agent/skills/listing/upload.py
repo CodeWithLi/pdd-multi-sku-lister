@@ -40,6 +40,9 @@ from pdd_agent.skills.listing.category_page_flow import (
     prepare_category_before_next,
 )
 from pdd_agent.skills.listing.listing_publish_settings import apply_listing_publish_settings
+from pdd_agent.skills.listing.listing_detail_carousel_guard import (
+    ensure_detail_page_carousel_before_title,
+)
 from pdd_agent.skills.listing.listing_spec_pipeline import apply_unit_listing_specs
 from pdd_agent.skills.listing.pdd_page_image_errors import (
     BranchCCoverImageRejected,
@@ -3990,6 +3993,24 @@ def upload_one_listing(
         page.wait.load_start()
         if _dismiss_address_required_page(page, account_id, label):
             time.sleep(2)
+        try:
+            ensure_detail_page_carousel_before_title(
+                page,
+                covers,
+                account_id=account_id,
+                label=label,
+            )
+        except BranchCCoverImageRejected as exc:
+            _clear_beforeunload(page)
+            return _image_upload_rejection_finish(
+                run_id,
+                account_id,
+                unit,
+                exc,
+                image_kind="carousel",
+                phase="upload",
+                step="detail_page_carousel_recovery",
+            )
         listing_info["title"] = apply_title_after_branch_c_category_advance(
             page,
             account_id,
@@ -4077,16 +4098,25 @@ def upload_one_listing(
         if _dismiss_address_required_page(page, account_id, label):
             time.sleep(2)
 
-        section_ele = page.ele("css:.uploadImgEnter.uploadImgEnterNew")
-        if section_ele:
-            page.run_js('arguments[0].style.display = "flex";', section_ele)
-        time.sleep(1)
-        cover_input = page.ele(
-            'css:input[type="file"]:not([data-tracking-click-viewid="detail_img_localfile_upload"])'
-        )
-        if cover_input:
-            cover_input.input(covers)
-        time.sleep(random.uniform(1.5, 2.5))
+        try:
+            ensure_detail_page_carousel_before_title(
+                page,
+                covers,
+                account_id=account_id,
+                label=label,
+            )
+        except BranchCCoverImageRejected as exc:
+            _clear_beforeunload(page)
+            return _image_upload_rejection_finish(
+                run_id,
+                account_id,
+                unit,
+                exc,
+                image_kind="carousel",
+                phase="upload",
+                step="detail_page_carousel_recovery",
+            )
+        time.sleep(random.uniform(0.5, 1.0))
         listing_info["title"] = apply_title_after_cover_upload(
             page, account_id, product_info, listing_info.get("title", "")
         )
