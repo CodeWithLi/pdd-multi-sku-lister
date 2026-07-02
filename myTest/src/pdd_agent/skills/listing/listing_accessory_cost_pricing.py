@@ -5,8 +5,8 @@
 子商品：组合里的配件码，或套装文件名 + 段中除首段外的所有段（来自飞书「聚水潭ERP商品列表」成本）。
 
 浮动规则（listing_accessory_cost_float_registry）：
-- 同一主商品组内继承同一浮动（单款先随机 0~5，组合/套装沿用）；
-- 同套图跨主商品时，单配件组合若子商品编码相同则拼单价对齐，反推该主商品组浮动。
+- 同一主商品族（去末位变体字母，如 BD046A/B046B→BD046）内继承同一浮动；
+- 同套图跨主商品时，若组合族相同（如 BD046|YKL001+YKL008，颜色变体 N/P/A/B 忽略）则拼单价对齐。
 """
 
 from __future__ import annotations
@@ -17,7 +17,7 @@ from typing import Any
 
 from pdd_agent.integrations.feishu.config import FeishuConfig, accessory_cost_pricing_enabled, load_feishu_config
 from pdd_agent.skills.listing.listing_accessory_cost_float_registry import (
-    accessory_align_key,
+    combo_align_key,
     apply_reconciled_prices_to_unit,
     main_group_key,
     reconcile_accessory_cost_floats,
@@ -166,7 +166,7 @@ def _resolve_float_delta(
     scope = str(listing_scope or "").strip() or "__default__"
     main_key = main_group_key(catalog, main_code)
     main_sk = (scope, main_key)
-    align_key = accessory_align_key(accessory_codes)
+    align_key = combo_align_key(main_code, accessory_codes, catalog)
     align_sk = (scope, align_key) if align_key else None
 
     main_floats = dict(_main_float_ctx.get())
@@ -257,7 +257,7 @@ def resolve_accessory_cost_pricing(
         accessory_cost_sum=accessory_cost_sum,
     )
     group_price = round(main_price + accessory_cost_sum + float_delta, 2)
-    align_key = accessory_align_key(accessory_codes)
+    align_key = combo_align_key(main_code, accessory_codes, catalog)
     if align_key:
         scope = str(listing_scope or "").strip() or "__default__"
         anchor = _combo_anchor_ctx.get().get((scope, align_key))

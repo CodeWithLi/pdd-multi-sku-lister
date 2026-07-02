@@ -10,6 +10,7 @@ from pdd_agent.skills.listing.pdd_product_catalog import (
     PddProductEntry,
     _norm_code,
     find_catalog_entry,
+    product_code_family_key,
 )
 
 if TYPE_CHECKING:
@@ -26,19 +27,50 @@ class _SkuPricingRow:
     has_accessories: bool
 
 
-def accessory_align_key(accessory_codes: list[str]) -> str:
-    """跨主商品对齐键：仅单配件组合（如 YKL001A）共享拼单价。"""
-    norms = [_norm_code(code) for code in accessory_codes if _norm_code(code)]
-    if len(norms) == 1:
-        return norms[0]
+def combo_align_key(
+    main_code: str,
+    accessory_codes: list[str],
+    catalog: dict[str, PddProductEntry],
+) -> str:
+    """跨主商品对齐键：主商品族 + 配件族序列（去末位变体字母），如 BD046|YKL001+YKL008。"""
+    if not accessory_codes:
+        return ""
+    main_family = main_group_key(catalog, main_code)
+    acc_families = sorted(
+        dict.fromkeys(
+            product_code_family_key(code)
+            for code in accessory_codes
+            if product_code_family_key(code)
+        )
+    )
+    if not acc_families:
+        return ""
+    return f"{main_family}|{'+'.join(acc_families)}"
+
+
+def accessory_align_key(
+    accessory_codes: list[str],
+    *,
+    main_code: str = "",
+    catalog: dict[str, PddProductEntry] | None = None,
+) -> str:
+    """兼容旧调用；请优先使用 combo_align_key(main_code, accessory_codes, catalog)。"""
+    if main_code and catalog is not None:
+        return combo_align_key(main_code, accessory_codes, catalog)
+    families = [
+        product_code_family_key(code)
+        for code in accessory_codes
+        if product_code_family_key(code)
+    ]
+    if len(families) == 1:
+        return families[0]
     return ""
 
 
 def main_group_key(catalog: dict[str, PddProductEntry], main_code: str) -> str:
     entry = find_catalog_entry(catalog, main_code)
-    if entry:
-        return _norm_code(entry.code)
-    return _norm_code(main_code)
+    canonical = entry.code if entry else main_code
+    return product_code_family_key(canonical)
 
 
 def reconcile_accessory_cost_floats(
@@ -132,7 +164,7 @@ def apply_reconciled_prices_to_unit(
                 main_key=main_group_key(catalog, main_code),
                 main_price=round(float(entry.price or 0.0), 2),
                 accessory_cost_sum=round(accessory_cost_sum, 2),
-                align_key=accessory_align_key(accessory_codes),
+                align_key=combo_align_key(main_code, accessory_codes, catalog),
                 has_accessories=bool(accessory_codes),
             )
         )

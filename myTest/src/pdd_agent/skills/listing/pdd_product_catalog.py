@@ -58,6 +58,23 @@ def _norm_code(value: str) -> str:
     return str(value or "").strip().upper()
 
 
+_ALPHANUM_PREFIX = re.compile(r"^([A-Z0-9]+)")
+
+
+def product_code_alphanumeric_prefix(code: str) -> str:
+    """商品编码 leading 段（不含中文后缀），如 BD037A奶油泡芙笔袋 → BD037A。"""
+    match = _ALPHANUM_PREFIX.match(_norm_code(code))
+    return match.group(1) if match else _norm_code(code)
+
+
+def product_code_family_key(code: str) -> str:
+    """去掉末位变体字母后的商品族键：BD037A→BD037，YKL001N→YKL001。"""
+    prefix = product_code_alphanumeric_prefix(code)
+    if len(prefix) >= 2 and prefix[-1].isalpha():
+        return prefix[:-1]
+    return prefix
+
+
 def find_catalog_entry(
     catalog: dict[str, PddProductEntry],
     code: str,
