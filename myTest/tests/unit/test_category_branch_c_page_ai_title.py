@@ -114,18 +114,15 @@ def test_simplified_ai_title_page_skips_category_selection():
     page = MagicMock()
     listing_info = {"title_mode": "page_ai"}
     with patch(
-        "pdd_agent.skills.listing.category_branch_c_page_ai_title.branch_c_is_simplified_ai_title_publish_page",
-        return_value=True,
-    ):
-        with patch(
-            "pdd_agent.skills.listing.category_branch_c_recent.ensure_branch_c_category_selected",
-        ) as legacy:
-            ok = ensure_branch_c_category_ready_for_ai_title_flow(
-                page, "store", "label", listing_info, "笔袋"
-            )
+        "pdd_agent.skills.listing.category_branch_c_orchestrator.ensure_branch_c_category_selection",
+        return_value=(True, "simplified_auto"),
+    ) as orch:
+        ok = ensure_branch_c_category_ready_for_ai_title_flow(
+            page, "store", "label", listing_info, "笔袋"
+        )
     assert ok is True
-    assert listing_info[META_KEY_CATEGORY_AI_APPLIED] is True
-    legacy.assert_not_called()
+    assert listing_info.get(META_KEY_CATEGORY_AI_APPLIED) is None
+    orch.assert_called_once()
 
 
 def test_simplified_detection_false_on_traditional_category_page():

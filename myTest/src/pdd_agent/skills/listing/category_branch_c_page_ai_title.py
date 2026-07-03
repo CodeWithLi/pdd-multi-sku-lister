@@ -219,23 +219,20 @@ def ensure_branch_c_category_ready_for_ai_title_flow(
     category_keyword: str,
 ) -> bool:
     """
-    分支 C 选类门禁：简化 AI 标题页跳过选类；传统选类页走 ensure_branch_c_category_selected。
+    分支 C 选类门禁（兼容入口）：委托编排层按页面形态调度 strategy。
     """
-    from pdd_agent.skills.listing.category_branch_c_recent import (
-        ensure_branch_c_category_selected,
+    from pdd_agent.skills.listing.category_branch_c_orchestrator import (
+        ensure_branch_c_category_selection,
     )
 
-    if branch_c_is_simplified_ai_title_publish_page(page, listing_info):
-        listing_info[META_KEY_CATEGORY_AI_APPLIED] = True
-        _log(
-            account_id,
-            label,
-            "分支 C 简化页（AI 标题）：无传统选类区，跳过选类直接点「下一步」",
-        )
-        return True
-    return ensure_branch_c_category_selected(
-        page, account_id, label, category_keyword, listing_info
+    ok, _variant = ensure_branch_c_category_selection(
+        page,
+        account_id,
+        label,
+        listing_info,
+        category_keyword,
     )
+    return ok
 
 
 def click_branch_c_category_next_with_ai_burst(

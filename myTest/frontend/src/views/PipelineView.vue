@@ -121,6 +121,9 @@ const platformSkipDedupeEnabled = ref(false)
 const platformSkipDedupeSaving = ref(false)
 const platformSkipDedupeCodeCount = ref(0)
 const platformSkipDedupeUpdatedAt = ref('')
+const failureLogEnabled = ref(true)
+const failureLogSaving = ref(false)
+const failureLogTableName = ref('')
 const accessoryCostPricingEnabled = ref(false)
 const accessoryCostPricingSaving = ref(false)
 const accessoryCostPricingFloatMin = ref(0)
@@ -1088,6 +1091,31 @@ async function onLogSpecSkuRowsChange(enabled: boolean) {
   }
 }
 
+async function loadFailureLogSetting() {
+  const data = await api.feishuFailureLogSettings()
+  failureLogEnabled.value = !!data.failure_log_enabled
+  failureLogTableName.value = String(data.failure_table_name || '')
+}
+
+async function onFailureLogChange(enabled: boolean) {
+  failureLogSaving.value = true
+  try {
+    const data = await api.updateFeishuFailureLogSettings({ failure_log_enabled: enabled })
+    failureLogEnabled.value = !!data.failure_log_enabled
+    failureLogTableName.value = String(data.failure_table_name || '')
+    ElMessage.success(
+      enabled
+        ? '已开启：上架失败/跳过会写入飞书失败表'
+        : '已关闭：本次及后续发布不再写入飞书失败表（本地任务记录仍保留）',
+    )
+  } catch (e) {
+    failureLogEnabled.value = !enabled
+    ElMessage.error(e instanceof Error ? e.message : String(e))
+  } finally {
+    failureLogSaving.value = false
+  }
+}
+
 async function refreshCommerceOverview() {
   commerceLoading.value = true
   try {
@@ -1511,6 +1539,7 @@ onMounted(async () => {
     await loadAccessoryCostPricingSetting()
     await loadLogSpecSkuRowsSetting()
     await loadPlatformSkipDedupeSetting()
+    await loadFailureLogSetting()
     await loadAutoUploadConfig()
     await refreshPipelines()
     if (materialSource.value === 'minio') {
@@ -2172,6 +2201,14 @@ onUnmounted(() => {
                     />
                   </div>
                   <div class="switch-row">
+                    <span class="switch-label">写入飞书失败日志</span>
+                    <el-switch
+                      v-model="failureLogEnabled"
+                      :loading="failureLogSaving"
+                      @change="onFailureLogChange"
+                    />
+                  </div>
+                  <div class="switch-row">
                     <span class="switch-label">配件成本定价</span>
                     <el-switch
                       v-model="accessoryCostPricingEnabled"
@@ -2222,6 +2259,13 @@ onUnmounted(() => {
                 </div>
                 <div v-else class="form-tip">
                   默认关闭：每次上架仍会走笔袋视图校验，不适用商品会写入失败日志表。
+                </div>
+                <div v-if="failureLogEnabled" class="form-tip">
+                  已开启：上架失败、跳过、校验不通过等会写入飞书
+                  「{{ failureLogTableName || '全平台发布日志表（失败）' }}」；仅影响该表，成功日志与活动日志不受影响。
+                </div>
+                <div v-else class="form-tip">
+                  已关闭：发布过程中<strong>不会</strong>往飞书失败表写任何记录；本地任务记录与报错详情仍保留。发布前关掉、跑完再开即可。
                 </div>
                 <div v-if="accessoryCostPricingEnabled" class="form-tip">
                   已开启：拼单价 = 主商品拼多多定价 + 所有子商品聚水潭成本 + {{ accessoryCostPricingFloatMin }}~{{ accessoryCostPricingFloatMax }} 元浮动（仅浮动一次）。主商品仍读「拼多多比价定价」，子商品读「聚水潭ERP商品列表」成本。
