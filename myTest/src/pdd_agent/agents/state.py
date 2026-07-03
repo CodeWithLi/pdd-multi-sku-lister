@@ -32,6 +32,7 @@ class ListingState(TypedDict, total=False):
     retry_item: dict[str, Any]
     run_id: str
     slot_alignment_test: bool  # 试验：主款槽位对齐，默认应由 API 传 False
+    spec_fill_verify_test: bool  # 试验：槽位对齐+逐格填写+校验后再传预览图
     category_next_burst_demo: bool  # 分类页下一步随机连点 workaround
     material_source: str
     assets_root: str

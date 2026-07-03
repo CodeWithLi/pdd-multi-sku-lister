@@ -104,7 +104,15 @@ const promoteAfterLimitedTimeFailure = ref(false)
 const demoMode = ref(false)
 const activityDelayHours = ref(24)
 const slotAlignmentTest = ref(true)
+const specFillVerifyTest = ref(false)
 const categoryNextBurstDemo = ref(true)
+
+watch(specFillVerifyTest, (enabled) => {
+  if (enabled) slotAlignmentTest.value = false
+})
+watch(slotAlignmentTest, (enabled) => {
+  if (enabled) specFillVerifyTest.value = false
+})
 const relistStrategy = ref<RelistStrategy>(loadPipelineRelistStrategy())
 const listingThrottleEnabled = ref(loadListingThrottleEnabled())
 const listingBatchSetCount = ref(loadListingBatchSetCount())
@@ -1356,6 +1364,7 @@ async function startPipeline() {
         activity_delay_hours: demoMode.value ? 0 : activityDelayHours.value,
         demo_mode: demoMode.value,
         slot_alignment_test: slotAlignmentTest.value,
+        spec_fill_verify_test: specFillVerifyTest.value,
         category_next_burst_demo: categoryNextBurstDemo.value,
         store_start_delay_min_seconds: startDelayMin.value,
         store_start_delay_max_seconds: startDelayMax.value,
@@ -1402,6 +1411,7 @@ async function startPipeline() {
         activity_delay_hours: demoMode.value ? 0 : activityDelayHours.value,
         demo_mode: demoMode.value,
         slot_alignment_test: slotAlignmentTest.value,
+        spec_fill_verify_test: specFillVerifyTest.value,
         category_next_burst_demo: categoryNextBurstDemo.value,
         skip_listing: skipListing,
         listing_skip_selectors: listingSkipSelectors,
@@ -2135,8 +2145,11 @@ onUnmounted(() => {
 
               <el-form-item label="高级选项">
                 <div class="option-row">
-                  <el-checkbox v-model="slotAlignmentTest" class="slot-align-test">
+                  <el-checkbox v-model="slotAlignmentTest" class="slot-align-test" :disabled="specFillVerifyTest">
                     槽位对齐（试验）
+                  </el-checkbox>
+                  <el-checkbox v-model="specFillVerifyTest" class="spec-fill-verify-test" :disabled="slotAlignmentTest">
+                    规格校验填表（试验）
                   </el-checkbox>
                   <el-checkbox v-model="categoryNextBurstDemo" class="category-burst-demo">
                     分类页下一步连点（演示）
@@ -2234,6 +2247,9 @@ onUnmounted(() => {
                 </div>
                 <div v-if="slotAlignmentTest" class="form-tip">
                   开启后：主款预览图顺序定尺寸名，兄弟款跟槽位不走尺寸并集。
+                </div>
+                <div v-if="specFillVerifyTest" class="form-tip">
+                  开启后：槽位对齐 + 按「款式/尺寸」逐格填写 → 回读校验编码与价格 → 全部通过后再传预览图。与「槽位对齐」互斥；槽位名与商品表不一致（如挂件进套尺槽）将判失败并跳过预览图。
                 </div>
                 <div v-if="demoMode" class="form-tip">
                   演示模式：限时限量购上架后立即执行，活动约 2 分钟后执行，便于测试整条链路。

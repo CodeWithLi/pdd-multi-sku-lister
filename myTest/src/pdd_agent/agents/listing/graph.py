@@ -55,7 +55,8 @@ async def preflight_node(state: ListingState) -> dict:
     report = run_preflight(
         codes,
         settings,
-        slot_alignment_test=bool(state.get("slot_alignment_test")),
+        slot_alignment_test=bool(state.get("slot_alignment_test"))
+        or bool(state.get("spec_fill_verify_test")),
         assets_root=assets_root,
     )
     try:
@@ -209,6 +210,7 @@ async def browser_listing_node(state: ListingState) -> dict:
     defaults = settings.multi_spec.defaults
     run_id = str(state.get("run_id") or "")
     slot_alignment_test = bool(state.get("slot_alignment_test"))
+    spec_fill_verify_test = bool(state.get("spec_fill_verify_test"))
     category_next_burst_demo = bool(state.get("category_next_burst_demo", True))
 
     def _job(dp):
@@ -222,6 +224,7 @@ async def browser_listing_node(state: ListingState) -> dict:
             defaults=defaults,
             run_id=run_id,
             slot_alignment_test=slot_alignment_test,
+            spec_fill_verify_test=spec_fill_verify_test,
             category_next_burst_demo=category_next_burst_demo,
         )
 

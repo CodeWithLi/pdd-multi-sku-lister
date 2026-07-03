@@ -100,6 +100,7 @@ export const failureReasonLabel: Record<string, string> = {
   skipped_already_listed: '商品已上架，已跳过',
   listing_failed: '上架失败',
   slot_alignment_failed: '兄弟款规格数量不一致',
+  spec_fill_verify_failed: '规格校验填表未通过',
 }
 
 export const listingUnitStatusType: Record<string, string> = {

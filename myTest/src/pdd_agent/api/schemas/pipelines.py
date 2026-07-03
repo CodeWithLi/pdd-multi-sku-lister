@@ -15,6 +15,15 @@ def _normalize_activity_ids(activity_id: str = "", activity_ids: list[str] | Non
     return [legacy] if legacy else []
 
 
+def _reject_exclusive_spec_modes(
+    *,
+    slot_alignment_test: bool,
+    spec_fill_verify_test: bool,
+) -> None:
+    if slot_alignment_test and spec_fill_verify_test:
+        raise ValueError("spec_fill_verify_test 与 slot_alignment_test 不能同时开启")
+
+
 class IntegratedPipelineStartRequest(BaseModel):
     account_id: str
     product_codes: list[str] = Field(min_length=1)
@@ -31,6 +40,7 @@ class IntegratedPipelineStartRequest(BaseModel):
     demo_mode: bool = False
     platform_listing_code: str = ""
     slot_alignment_test: bool = True
+    spec_fill_verify_test: bool = False
     category_next_burst_demo: bool = True
     skip_listing: bool = False
     listing_skip_selectors: list[str] = Field(default_factory=list)
@@ -50,6 +60,10 @@ class IntegratedPipelineStartRequest(BaseModel):
             raise ValueError("activity_ids is required")
         self.activity_ids = normalized
         self.activity_id = normalized[0]
+        _reject_exclusive_spec_modes(
+            slot_alignment_test=bool(self.slot_alignment_test),
+            spec_fill_verify_test=bool(self.spec_fill_verify_test),
+        )
         return self
 
 
@@ -72,6 +86,7 @@ class IntegratedPipelineBatchStartRequest(BaseModel):
     demo_mode: bool = False
     platform_listing_code: str = ""
     slot_alignment_test: bool = True
+    spec_fill_verify_test: bool = False
     category_next_burst_demo: bool = True
     skip_listing: bool = False
     listing_skip_selectors: list[str] = Field(default_factory=list)
@@ -106,6 +121,10 @@ class IntegratedPipelineBatchStartRequest(BaseModel):
             raise ValueError("account_ids or items is required")
         if not product_codes:
             raise ValueError("product_codes is required when using account_ids")
+        _reject_exclusive_spec_modes(
+            slot_alignment_test=bool(self.slot_alignment_test),
+            spec_fill_verify_test=bool(self.spec_fill_verify_test),
+        )
         return self
 
 
@@ -154,6 +173,7 @@ class IntegratedPipelineResponse(BaseModel):
     activity_delay_hours: float = 24.0
     demo_mode: bool = False
     slot_alignment_test: bool = False
+    spec_fill_verify_test: bool = False
     category_next_burst_demo: bool = True
     batch_id: str = ""
     activity_jitter_seconds: int = 0

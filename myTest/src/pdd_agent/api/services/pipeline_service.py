@@ -1126,6 +1126,7 @@ def pipeline_to_dict(row) -> dict[str, Any]:
         "activity_delay_hours": float(row.activity_delay_hours or 24.0),
         "demo_mode": bool(row.demo_mode),
         "slot_alignment_test": bool((row.meta or {}).get("slot_alignment_test")),
+        "spec_fill_verify_test": bool((row.meta or {}).get("spec_fill_verify_test")),
         "category_next_burst_demo": bool((row.meta or {}).get("category_next_burst_demo", True)),
         "batch_id": str((row.meta or {}).get("batch_id") or ""),
         "activity_jitter_seconds": int((row.meta or {}).get("activity_jitter_seconds") or 0),
@@ -1193,6 +1194,7 @@ def start_integrated_pipeline(
     demo_mode: bool = False,
     platform_listing_code: str = "",
     slot_alignment_test: bool = False,
+    spec_fill_verify_test: bool = False,
     category_next_burst_demo: bool = True,
     listing_scheduled_at: datetime | None = None,
     batch_id: str = "",
@@ -1220,6 +1222,8 @@ def start_integrated_pipeline(
         raise ValueError("account_id is required")
     if not normalized_activity_ids:
         raise ValueError("activity_ids is required")
+    if slot_alignment_test and spec_fill_verify_test:
+        raise ValueError("spec_fill_verify_test 与 slot_alignment_test 不能同时开启")
 
     from pdd_agent.api.services.pipeline_listing_throttle import (
         apply_throttle_to_listing_codes,
@@ -1270,6 +1274,7 @@ def start_integrated_pipeline(
                 "demo_mode": demo_mode,
                 "platform_listing_code": platform_listing_code,
                 "slot_alignment_test": slot_alignment_test,
+                "spec_fill_verify_test": spec_fill_verify_test,
                 "category_next_burst_demo": category_next_burst_demo,
                 "listing_scheduled_at": listing_scheduled_at,
                 "batch_id": batch_id,
@@ -1304,6 +1309,7 @@ def start_integrated_pipeline(
         "category_keyword": category_keyword,
         "platform_listing_code": platform_listing_code,
         "slot_alignment_test": bool(slot_alignment_test),
+        "spec_fill_verify_test": bool(spec_fill_verify_test),
         "category_next_burst_demo": bool(category_next_burst_demo),
         "material_source": str(material_source or ""),
         "auto_limited_time_setup": bool(normalized_activity_ids),
@@ -1445,6 +1451,7 @@ def start_integrated_pipeline(
             "category_keyword": category_keyword,
             "platform_listing_code": platform_listing_code,
             "slot_alignment_test": bool(slot_alignment_test),
+            "spec_fill_verify_test": bool(spec_fill_verify_test),
             "category_next_burst_demo": bool(category_next_burst_demo),
             "material_source": str(material_source or ""),
         },
@@ -1455,6 +1462,7 @@ def start_integrated_pipeline(
         "category_keyword": category_keyword,
         "platform_listing_code": platform_listing_code,
         "slot_alignment_test": bool(slot_alignment_test),
+        "spec_fill_verify_test": bool(spec_fill_verify_test),
         "category_next_burst_demo": bool(category_next_burst_demo),
         "material_source": str(material_source or ""),
     }
@@ -1515,6 +1523,7 @@ def start_integrated_pipeline(
                 "platform_listing_code": platform_listing_code,
                 "pipeline_id": pipeline_id,
                 "slot_alignment_test": bool(slot_alignment_test),
+                "spec_fill_verify_test": bool(spec_fill_verify_test),
                 "category_next_burst_demo": bool(category_next_burst_demo),
                 "material_source": str(material_source or ""),
             },
@@ -1608,6 +1617,7 @@ def start_integrated_pipeline_batch(
     demo_mode: bool = False,
     platform_listing_code: str = "",
     slot_alignment_test: bool = False,
+    spec_fill_verify_test: bool = False,
     category_next_burst_demo: bool = True,
     store_start_delay_min_seconds: int | None = None,
     store_start_delay_max_seconds: int | None = None,
@@ -1658,6 +1668,7 @@ def start_integrated_pipeline_batch(
         demo_mode=demo_mode,
         platform_listing_code=platform_listing_code,
         slot_alignment_test=slot_alignment_test,
+        spec_fill_verify_test=spec_fill_verify_test,
         category_next_burst_demo=category_next_burst_demo,
         skip_listing=skip_listing,
         listing_skip_selectors=listing_skip_selectors,
@@ -1748,6 +1759,7 @@ def start_integrated_pipeline_batch(
             demo_mode=demo_mode,
             platform_listing_code=platform_listing_code,
             slot_alignment_test=slot_alignment_test,
+            spec_fill_verify_test=spec_fill_verify_test,
             category_next_burst_demo=category_next_burst_demo,
             listing_scheduled_at=scheduled_at,
             batch_id=batch_id,

@@ -3878,28 +3878,45 @@ def upload_one_listing(
     platform_listing_code: str = "",
     run_id: str = "",
     slot_alignment_test: bool = False,
+    spec_fill_verify_test: bool = False,
     category_next_burst_demo: bool = True,
 ) -> dict[str, Any]:
     """对单个上架单元执行完整发布流程。"""
     label = unit.listing_label
-    spec_errors = apply_unit_listing_specs(
-        unit,
-        account_id=account_id,
-        allow_ai=True,
-        slot_alignment_test=slot_alignment_test,
-    )
+    catalog_by_combo: dict[str, str] = {}
+    if spec_fill_verify_test:
+        from pdd_agent.skills.listing.listing_spec_fill_verified import (
+            apply_unit_specs_for_verified_fill,
+        )
+
+        spec_errors, catalog_by_combo = apply_unit_specs_for_verified_fill(
+            unit,
+            account_id=account_id,
+            allow_ai=True,
+        )
+        preflight_step = "spec_fill_verify_preflight"
+        preflight_reason = "spec_fill_verify_failed"
+    else:
+        spec_errors = apply_unit_listing_specs(
+            unit,
+            account_id=account_id,
+            allow_ai=True,
+            slot_alignment_test=slot_alignment_test,
+        )
+        preflight_step = "slot_alignment"
+        preflight_reason = "slot_alignment_failed"
     if spec_errors:
         return _finish_listing(
             run_id,
             account_id,
             unit,
             status="retryable",
-            reason="slot_alignment_failed",
+            reason=preflight_reason,
             error=spec_errors[0],
             retryable=True,
             legacy_status="skipped",
             phase="preflight",
-            step="slot_alignment",
+            step=preflight_step,
         )
     if run_id:
         from pdd_agent.api.services.listing_failure_log import (
@@ -4179,15 +4196,32 @@ def upload_one_listing(
 
     print(f"[{account_id}] [{label}] 开始填写价格表...")
     try:
-        fill_stats = fill_multi_spec_rows(
-            page,
-            account_id,
-            unit.skus,
-            defaults,
-            rows=sku_rows,
-            style_names=style_names,
-            size_names=size_names,
-        )
+        if spec_fill_verify_test:
+            from pdd_agent.skills.listing.listing_spec_fill_verified import (
+                fill_multi_spec_rows_verified,
+            )
+
+            fill_stats = fill_multi_spec_rows_verified(
+                page,
+                account_id,
+                unit.skus,
+                defaults,
+                rows=sku_rows,
+                style_names=style_names,
+                size_names=size_names,
+                catalog_by_combo=catalog_by_combo,
+                unit=unit,
+            )
+        else:
+            fill_stats = fill_multi_spec_rows(
+                page,
+                account_id,
+                unit.skus,
+                defaults,
+                rows=sku_rows,
+                style_names=style_names,
+                size_names=size_names,
+            )
     except PddImageUploadRejected as exc:
         _clear_beforeunload(page)
         return _image_upload_rejection_finish(
@@ -4203,6 +4237,53 @@ def upload_one_listing(
     previews_ok = bool(fill_stats.get("previews_ok"))
     price_filled = int(fill_stats.get("price_filled") or 0)
     price_total = int(fill_stats.get("price_total") or len(unit.skus))
+    if spec_fill_verify_test and fill_stats.get("spec_fill_verify_mode"):
+        if not fill_stats.get("verify_passed"):
+            validation_error = (
+                f"规格校验填表未通过：填写 {price_filled}/{price_total}，"
+                f"校验问题 {len(fill_stats.get('verify_issues') or [])}，"
+                f"槽位/商品表不一致 {len(fill_stats.get('slot_catalog_mismatches') or [])}"
+            )
+            print(
+                f"[{account_id}] [{label}] {validation_error}，跳过提交",
+                flush=True,
+            )
+            if run_id:
+                from pdd_agent.api.services.listing_failure_log import (
+                    record_listing_failure_detail,
+                )
+
+                record_listing_failure_detail(
+                    source_run_id=run_id,
+                    account_id=account_id,
+                    listing_label=unit.listing_label,
+                    product_code=unit.product_code,
+                    image_set=unit.image_set,
+                    family_code=unit.family_code,
+                    merchant_code=unit.merchant_code,
+                    phase="upload",
+                    step="spec_fill_verify",
+                    severity="error",
+                    reason_code="spec_fill_verify_failed",
+                    message=validation_error,
+                    detail=dict(fill_stats),
+                )
+            _clear_beforeunload(page)
+            return _finish_listing(
+                run_id,
+                account_id,
+                unit,
+                status="retryable",
+                reason="spec_fill_verify_failed",
+                error=validation_error,
+                title=listing_info.get("title", ""),
+                retryable=True,
+                legacy_status="skipped",
+                extra=dict(fill_stats),
+                phase="upload",
+                step="spec_fill_verify",
+                page_url=str(page.url or ""),
+            )
     if price_filled < price_total:
         price_gaps = collect_price_table_field_gaps(page, style_names, size_names)
         validation_error = scan_listing_validation_issues(
@@ -4642,6 +4723,7 @@ def run_listing_uploads(
     defaults: dict[str, str] | None = None,
     run_id: str = "",
     slot_alignment_test: bool = False,
+    spec_fill_verify_test: bool = False,
     category_next_burst_demo: bool = True,
 ) -> list[dict[str, Any]]:
     """顺序上架多个单元；单套失败记日志并继续，手动取消时停止。"""
@@ -4672,6 +4754,7 @@ def run_listing_uploads(
                 platform_listing_code=platform_listing_code,
                 run_id=run_id,
                 slot_alignment_test=slot_alignment_test,
+                spec_fill_verify_test=spec_fill_verify_test,
                 category_next_burst_demo=category_next_burst_demo,
             )
             results.append(item_result)
