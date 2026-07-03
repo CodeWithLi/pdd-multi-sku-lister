@@ -59,6 +59,15 @@ class ListingErrorCode:
     REJECTED_AFTER_PUBLISH = "rejected_after_publish"
     PUBLISHED_BUT_NOT_FOUND = "published_but_not_found_in_on_sale_or_rejected"
 
+    # 分类页 / 选类
+    CATEGORY_NEXT_STEP_NO_ADVANCE = "category_next_step_no_advance"
+    CATEGORY_NEXT_STEP_NOT_FOUND = "category_next_step_not_found"
+    CATEGORY_RECOMMENDATION_MODAL_BLOCKING = "category_recommendation_modal_blocking"
+    CATEGORY_SEARCH_FAILED = "category_search_failed"
+
+    # 提交前设置（满件折扣 / 运费模板）
+    PUBLISH_SETTINGS_INCOMPLETE = "publish_settings_incomplete"
+
     # 价格表
     PRICE_FILL_PARTIAL = "price_fill_partial"
     PRICE_FILL_ROW_NOT_FOUND = "price_fill_row_not_found"
@@ -97,6 +106,11 @@ class ListingErrors:
         ListingErrorCode.LISTED: "已提交但后续抓取商品 ID 失败",
         ListingErrorCode.REJECTED_AFTER_PUBLISH: "提交后被平台驳回",
         ListingErrorCode.PUBLISHED_BUT_NOT_FOUND: "提交后未在售列表/驳回列表中找到商品",
+        ListingErrorCode.CATEGORY_NEXT_STEP_NO_ADVANCE: "分类页点下一步后未进入商品详情",
+        ListingErrorCode.CATEGORY_NEXT_STEP_NOT_FOUND: "分类页未找到「下一步」按钮",
+        ListingErrorCode.CATEGORY_RECOMMENDATION_MODAL_BLOCKING: "推荐分类弹窗未确认，无法点下一步",
+        ListingErrorCode.CATEGORY_SEARCH_FAILED: "分类搜索失败，未选到类目",
+        ListingErrorCode.PUBLISH_SETTINGS_INCOMPLETE: "提交前满件折扣或运费模板未设置成功",
         ListingErrorCode.NEEDS_MANUAL_LOGIN_OR_CAPTCHA: "需要人工登录或处理验证码/滑块",
         ListingErrorCode.PAGE_OR_MATERIAL_CHANGED: "页面结构或素材异常（分类/规格/上传相关）",
         ListingErrorCode.BROWSER_TRANSIENT_ERROR: "浏览器超时或连接断开",
@@ -196,6 +210,11 @@ class ListingErrors:
         ListingErrorCode.LISTED: "已提交但未抓到商品 ID",
         ListingErrorCode.REJECTED_AFTER_PUBLISH: "提交后在「已驳回」找到商品，平台已驳回",
         ListingErrorCode.PUBLISHED_BUT_NOT_FOUND: "提交后在在售/驳回列表没找到刚上的商品，请人工核对",
+        ListingErrorCode.CATEGORY_NEXT_STEP_NO_ADVANCE: "分类页点下一步后未进入商品详情",
+        ListingErrorCode.CATEGORY_NEXT_STEP_NOT_FOUND: "分类页未找到「下一步」按钮",
+        ListingErrorCode.CATEGORY_RECOMMENDATION_MODAL_BLOCKING: "推荐分类弹窗未确认，无法点下一步",
+        ListingErrorCode.CATEGORY_SEARCH_FAILED: "分类搜索失败，未选到类目",
+        ListingErrorCode.PUBLISH_SETTINGS_INCOMPLETE: "提交前满件折扣或运费模板未设置成功",
         ListingErrorCode.NEEDS_MANUAL_LOGIN_OR_CAPTCHA: "需要人工处理验证码或重新登录",
         ListingErrorCode.PAGE_OR_MATERIAL_CHANGED: "页面或素材异常（分类/规格/上传相关）",
         ListingErrorCode.BROWSER_TRANSIENT_ERROR: "浏览器超时或断连，可重试",
@@ -307,6 +326,11 @@ class ListingErrors:
             ListingErrorCode.PREVIEW_NOT_READY,
             ListingErrorCode.PREVIEW_MISSING,
             ListingErrorCode.PRICE_FILL_PARTIAL,
+            ListingErrorCode.CATEGORY_NEXT_STEP_NO_ADVANCE,
+            ListingErrorCode.CATEGORY_NEXT_STEP_NOT_FOUND,
+            ListingErrorCode.CATEGORY_RECOMMENDATION_MODAL_BLOCKING,
+            ListingErrorCode.CATEGORY_SEARCH_FAILED,
+            ListingErrorCode.PUBLISH_SETTINGS_INCOMPLETE,
         }
     )
 

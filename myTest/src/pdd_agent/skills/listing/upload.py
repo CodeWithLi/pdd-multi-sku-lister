@@ -32,6 +32,10 @@ from pdd_agent.skills.listing.multi_spec_page import (
     wait_multi_sku_rows,
 )
 from pdd_agent.skills.listing.category_branch_c_flow import run_branch_c_category_after_covers
+from pdd_agent.skills.listing.category_next_step_failure_detail import (
+    build_category_next_step_failure_detail,
+    build_category_next_step_not_found_detail,
+)
 from pdd_agent.skills.listing.category_branch_title import (
     apply_title_after_branch_c_category_advance,
 )
@@ -42,10 +46,12 @@ from pdd_agent.skills.listing.category_page_flow import (
 )
 from pdd_agent.skills.listing.listing_bulk_discount_guard import ensure_bulk_discount_before_submit
 from pdd_agent.skills.listing.listing_page_validation_scan import (
-    build_validation_incomplete_detail,
     scan_listing_validation_issues,
 )
 from pdd_agent.skills.listing.listing_publish_settings import apply_listing_publish_settings
+from pdd_agent.skills.listing.publish_settings_failure_detail import (
+    build_publish_settings_failure_detail,
+)
 from pdd_agent.skills.listing.listing_detail_carousel_guard import (
     ensure_detail_page_carousel_before_title,
 )
@@ -3971,25 +3977,38 @@ def upload_one_listing(
                     step="category_recommendation_modal",
                 )
             if next_err == "not_found":
+                category_error = build_category_next_step_not_found_detail(
+                    page,
+                    merchant_code=pcode,
+                    ui_type=ui_type,
+                    listing_info=listing_info,
+                ) or "未找到「下一步，完善商品信息」按钮"
                 return _finish_listing(
                     run_id,
                     account_id,
                     unit,
                     status="retryable",
                     reason="category_next_step_not_found",
-                    error="未找到「下一步，完善商品信息」按钮",
+                    error=category_error,
                     retryable=True,
                     legacy_status="skipped",
                     phase="upload",
                     step="category_next_step",
                 )
+            category_error = build_category_next_step_failure_detail(
+                page,
+                merchant_code=pcode,
+                ui_type=ui_type,
+                listing_info=listing_info,
+                category_mode=_category_mode,
+            ) or "点击「下一步，完善商品信息」后页面未跳转到商品详情页"
             return _finish_listing(
                 run_id,
                 account_id,
                 unit,
                 status="retryable",
                 reason="category_next_step_no_advance",
-                error="点击「下一步，完善商品信息」后页面未跳转",
+                error=category_error,
                 retryable=True,
                 legacy_status="skipped",
                 phase="upload",
@@ -4075,25 +4094,38 @@ def upload_one_listing(
         if not next_ok:
             _clear_beforeunload(page)
             if next_err == "not_found":
+                category_error = build_category_next_step_not_found_detail(
+                    page,
+                    merchant_code=pcode,
+                    ui_type=ui_type,
+                    listing_info=listing_info,
+                ) or "未找到分类确认/下一步按钮"
                 return _finish_listing(
                     run_id,
                     account_id,
                     unit,
                     status="retryable",
                     reason="category_next_step_not_found",
-                    error="未找到分类确认/下一步按钮",
+                    error=category_error,
                     retryable=True,
                     legacy_status="skipped",
                     phase="upload",
                     step="category_next_step",
                 )
+            category_error = build_category_next_step_failure_detail(
+                page,
+                merchant_code=pcode,
+                ui_type=ui_type,
+                listing_info=listing_info,
+                category_mode=category_mode,
+            ) or "点击下一步后页面未跳转到商品详情页"
             return _finish_listing(
                 run_id,
                 account_id,
                 unit,
                 status="retryable",
                 reason="category_next_step_no_advance",
-                error="点击下一步后页面未跳转",
+                error=category_error,
                 retryable=True,
                 legacy_status="skipped",
                 phase="upload",
@@ -4173,20 +4205,14 @@ def upload_one_listing(
     price_total = int(fill_stats.get("price_total") or len(unit.skus))
     if price_filled < price_total:
         price_gaps = collect_price_table_field_gaps(page, style_names, size_names)
-        validation_detail = build_validation_incomplete_detail(
-            merchant_code=pcode,
+        validation_error = scan_listing_validation_issues(
+            page,
             style_names=style_names,
             size_names=size_names,
-            price_gaps=price_gaps or list(fill_stats.get("price_failed") or []),
-            price_failed=list(fill_stats.get("price_failed") or []),
-            preview_verified=int(fill_stats.get("preview_verified") or 0),
-            preview_need=int(fill_stats.get("preview_need") or 0),
-            preview_uploaded=int(fill_stats.get("preview_uploaded") or 0),
-        )
-        validation_error = (
-            validation_detail
-            or f"价格表填写 {price_filled}/{price_total} 行未完整"
-        )
+            merchant_code=pcode,
+            fill_stats=fill_stats,
+            blocked_reason=ListingErrorCode.VALIDATION_INCOMPLETE,
+        ) or f"价格表填写 {price_filled}/{price_total} 行未完整"
         print(
             f"[{account_id}] [{label}] 价格表未填完整（{price_filled}/{price_total}），跳过提交：{validation_error}",
             flush=True,
@@ -4311,7 +4337,18 @@ def upload_one_listing(
         )
 
     if not previews_ok:
-        print(f"[{account_id}] [{label}] 预览图未全部就绪，跳过提交", flush=True)
+        preview_error = scan_listing_validation_issues(
+            page,
+            style_names=style_names,
+            size_names=size_names,
+            merchant_code=pcode,
+            fill_stats=fill_stats,
+            blocked_reason=ListingErrorCode.PREVIEW_NOT_READY,
+        ) or (
+            f"预览图页面校验 {fill_stats.get('preview_verified')}/{fill_stats.get('preview_need')}，"
+            f"上传成功 {fill_stats.get('preview_uploaded')}/{fill_stats.get('preview_need')}"
+        )
+        print(f"[{account_id}] [{label}] 预览图未全部就绪，跳过提交：{preview_error}", flush=True)
         _clear_beforeunload(page)
         return _finish_listing(
             run_id,
@@ -4319,6 +4356,7 @@ def upload_one_listing(
             unit,
             status="retryable",
             reason="preview_not_ready",
+            error=preview_error,
             retryable=True,
             legacy_status="skipped",
             extra=dict(fill_stats),
@@ -4330,18 +4368,12 @@ def upload_one_listing(
     publish_settings = apply_listing_publish_settings(page, account_id, label)
     publish_settings = ensure_bulk_discount_before_submit(page, account_id, label, publish_settings)
     if not publish_settings.get("ok"):
-        shipping = publish_settings.get("shipping_template") or {}
-        bulk = publish_settings.get("bulk_discount") or {}
-        detail_parts = []
-        if not bulk.get("ok"):
-            detail_parts.append(f"满件折扣={bulk.get('reason') or bulk.get('after') or 'failed'}")
-        if not shipping.get("ok"):
-            detail_parts.append(
-                f"运费模板={shipping.get('reason') or shipping.get('step') or 'failed'}"
-            )
-        detail = "；".join(detail_parts) or str(publish_settings)
+        settings_error = build_publish_settings_failure_detail(
+            publish_settings,
+            merchant_code=pcode,
+        ) or "提交前满件折扣或运费模板未设置成功"
         print(
-            f"[{account_id}] [{label}] 提交前设置未完成，跳过提交：{detail}",
+            f"[{account_id}] [{label}] 提交前设置未完成，跳过提交：{settings_error}",
             flush=True,
         )
         _clear_beforeunload(page)
@@ -4351,7 +4383,7 @@ def upload_one_listing(
             unit,
             status="retryable",
             reason="publish_settings_incomplete",
-            error=f"提交前设置未完成：{detail}",
+            error=settings_error,
             title=listing_info.get("title", ""),
             retryable=True,
             legacy_status="skipped",
@@ -4370,6 +4402,7 @@ def upload_one_listing(
             size_names=size_names,
             merchant_code=pcode,
             fill_stats=fill_stats,
+            blocked_reason=blocked_reason,
         )
         validation_error = validation_detail or ListingErrors.feishu_label(blocked_reason)
         print(

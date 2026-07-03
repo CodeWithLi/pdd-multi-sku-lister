@@ -1490,6 +1490,59 @@ function collectPriceTableFieldGaps(styleNamesJson, sizeNamesJson) {
     }
     return gaps;
 }
+
+function getPreviewCell(tr) {
+    return tr?.querySelector('.sku-preview-cell, td[class*="sku-preview"]') || null;
+}
+
+function previewCellNeedsUpload(cell) {
+    if (!cell) return true;
+    const text = (cell.innerText || cell.textContent || '').replace(/\\s+/g, '');
+    return text.includes('请上传预览图') || text.includes('上传预览图');
+}
+
+function isPreviewCellUploaded(cell) {
+    if (!cell || previewCellNeedsUpload(cell)) return false;
+    if (cell.querySelector('[class*="delete"], [class*="close"], [class*="remove"], [class*="del"]'))
+        return true;
+    for (const img of cell.querySelectorAll('img')) {
+        const r = img.getBoundingClientRect();
+        if (r.width >= 20 && r.height >= 20) return true;
+    }
+    return false;
+}
+
+function collectPreviewTableGaps(styleNamesJson, sizeNamesJson) {
+    const ctx = parseSpecLists(styleNamesJson, sizeNamesJson);
+    const gaps = [];
+    for (const style of ctx.styleNames) {
+        for (const size of ctx.sizeNames) {
+            scrollFindStyleSizeRow(style, size, styleNamesJson, sizeNamesJson);
+            const tr = getRowBySpec(style, size, styleNamesJson, sizeNamesJson);
+            if (!tr) {
+                gaps.push({
+                    style: style,
+                    size: size,
+                    spec_code: '',
+                    reason: 'row_not_found',
+                });
+                continue;
+            }
+            const cell = getPreviewCell(tr);
+            if (!isPreviewCellUploaded(cell)) {
+                const inputs = rowInputs(tr);
+                const specCode = inputs.length >= 4 ? normFieldText(inputs[3].value) : '';
+                gaps.push({
+                    style: style,
+                    size: size,
+                    spec_code: specCode,
+                    reason: 'preview_missing',
+                });
+            }
+        }
+    }
+    return gaps;
+}
 """
 
 _FILL_ROWS_JS = (
@@ -2915,6 +2968,47 @@ def collect_price_table_field_gaps(
                     "size": size,
                     "missing": missing,
                     "reason": str(row.get("reason") or "").strip(),
+                }
+            )
+        return gaps
+    except Exception:
+        return []
+
+
+_COLLECT_PREVIEW_TABLE_GAPS_JS = (
+    _SKU_TABLE_SCROLL_JS
+    + """
+return collectPreviewTableGaps(arguments[0] || '[]', arguments[1] || '[]');
+"""
+)
+
+
+def collect_preview_table_field_gaps(
+    page,
+    style_names: list[str],
+    size_names: list[str],
+) -> list[dict]:
+    """扫描规格表，返回缺预览图的规格行。"""
+    styles_json, sizes_json = _spec_lists_json(style_names, size_names)
+    try:
+        raw = page.run_js(_COLLECT_PREVIEW_TABLE_GAPS_JS, styles_json, sizes_json) or "[]"
+        rows = json.loads(raw) if isinstance(raw, str) else raw
+        if not isinstance(rows, list):
+            return []
+        gaps: list[dict] = []
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            style = str(row.get("style") or "").strip()
+            size = str(row.get("size") or "").strip()
+            if not style and not size:
+                continue
+            gaps.append(
+                {
+                    "style": style,
+                    "size": size,
+                    "spec_code": str(row.get("spec_code") or "").strip(),
+                    "reason": str(row.get("reason") or "preview_missing").strip(),
                 }
             )
         return gaps
