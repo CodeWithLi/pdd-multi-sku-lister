@@ -12,6 +12,8 @@ from pdd_agent.browser.dp_compat_sync import DpPage
 from pdd_agent.skills.delist.time_utils import extract_created_at_from_text, format_datetime
 
 _LIST_STATUS_CANDIDATES = (
+    "编辑已驳回",
+    "发布已驳回",
     "销售中",
     "已驳回",
     "已下架",
@@ -92,6 +94,24 @@ def is_plain_goods_template_link(link: str, product_id: str) -> bool:
 
 def _normalize_goods_link(link: str) -> str:
     return str(link or "").strip().rstrip(".,;)")
+
+
+def is_rejected_list_status(status: str) -> bool:
+    """判断商品列表行状态是否属于驳回类（含编辑已驳回/发布已驳回）。"""
+    return "驳回" in str(status or "").strip()
+
+
+def extract_rejection_reason_from_text(text: str) -> str:
+    """从商品列表行文本提取「驳回原因」正文。"""
+    if not text:
+        return ""
+    match = re.search(r"驳回原因[：:\s]*(.+)", text, flags=re.DOTALL)
+    if not match:
+        return ""
+    reason = str(match.group(1) or "").strip()
+    # 行文本常把下一列（如操作按钮）拼在同一格，截断到首行即可。
+    reason = reason.split("\n", 1)[0].strip()
+    return reason
 
 
 def extract_list_status_from_text(text: str) -> str:
@@ -238,11 +258,14 @@ def extract_total_inventory_from_row_text(text: str) -> int | None:
 def parse_goods_list_row_meta(row_text: str) -> dict[str, str]:
     created_dt = extract_created_at_from_text(row_text)
     inventory = extract_total_inventory_from_row_text(row_text)
+    list_status = extract_list_status_from_text(row_text)
+    rejection_reason = extract_rejection_reason_from_text(row_text)
     return {
         "matched_created_at": format_datetime(created_dt) if created_dt else "",
-        "list_status": extract_list_status_from_text(row_text),
+        "list_status": list_status,
         "merchant_code": extract_merchant_code_from_row_text(row_text),
         "total_inventory": str(inventory) if inventory is not None else "",
+        "rejection_reason": rejection_reason,
     }
 
 
@@ -546,6 +569,8 @@ def enrich_capture_from_goods_list(
         capture["matched_created_at"] = meta["matched_created_at"]
     if meta.get("list_status"):
         capture["list_status"] = meta["list_status"]
+    if meta.get("rejection_reason"):
+        capture["rejection_reason"] = meta["rejection_reason"]
 
     product_id = str(capture.get("pdd_product_id") or "")
     link_result = copy_mobile_product_link(page, product_id, fallback=fallback_link)

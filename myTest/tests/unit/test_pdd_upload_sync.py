@@ -31,8 +31,10 @@ from pdd_agent.integrations.feishu.pdd_upload_sync import (
 from pdd_agent.skills.listing.goods_list_capture import (
     extract_list_status_from_text,
     extract_merchant_code_from_row_text,
+    extract_rejection_reason_from_text,
     extract_total_inventory_from_row_text,
     is_plain_goods_template_link,
+    is_rejected_list_status,
     parse_goods_list_row_meta,
 )
 
@@ -79,6 +81,26 @@ def test_extract_merchant_code_and_inventory_from_row_text():
 def test_extract_list_status_from_text():
     assert extract_list_status_from_text("2026-06-16 13:21\n销售中") == "销售中"
     assert extract_list_status_from_text("已驳回") == "已驳回"
+    assert extract_list_status_from_text("编辑已驳回") == "编辑已驳回"
+    assert extract_list_status_from_text("发布已驳回") == "发布已驳回"
+
+
+def test_extract_rejection_reason_from_row_text():
+    row_text = """
+    清新少女系文具
+    ID: 916918437299
+    商品编码: BD675
+    2026-07-03 10:00
+    编辑已驳回
+    驳回原因：您发布商品的分类与商品信息不匹配，请核实您的商品信息并选择正确分类。勿再次尝试此类违规行为以免受到店铺限制。
+    """
+    reason = extract_rejection_reason_from_text(row_text)
+    assert "分类与商品信息不匹配" in reason
+    meta = parse_goods_list_row_meta(row_text)
+    assert meta["merchant_code"] == "BD675"
+    assert meta["list_status"] == "编辑已驳回"
+    assert meta["rejection_reason"] == reason
+    assert is_rejected_list_status(meta["list_status"]) is True
 
 
 def test_is_plain_goods_template_link():
@@ -821,11 +843,12 @@ def test_schedule_feishu_listing_result_log_records_post_submit_failures(monkeyp
 
 
 def test_humanize_post_submit_failure_messages():
+    platform_reason = "您发布商品的分类与商品信息不匹配，请核实您的商品信息并选择正确分类。"
     rejected = _humanize_listing_failure_message(
         reason_code="rejected_after_publish",
-        error="提交后在「已驳回」找到商品，平台已驳回",
+        error=platform_reason,
     )
-    assert "已驳回" in rejected
+    assert "分类与商品信息不匹配" in rejected
 
     not_found = _format_brief_listing_failure_reason(
         listing_label="BD722D/第一套图",

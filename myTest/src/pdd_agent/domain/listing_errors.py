@@ -331,6 +331,7 @@ class ListingErrors:
             ListingErrorCode.CATEGORY_RECOMMENDATION_MODAL_BLOCKING,
             ListingErrorCode.CATEGORY_SEARCH_FAILED,
             ListingErrorCode.PUBLISH_SETTINGS_INCOMPLETE,
+            ListingErrorCode.REJECTED_AFTER_PUBLISH,
         }
     )
 

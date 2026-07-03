@@ -19,7 +19,9 @@ from pdd_agent.skills.delist.time_utils import (
 from pdd_agent.skills.listing.goods_list_capture import (
     enrich_capture_from_goods_list,
     extract_merchant_code_from_row_text,
+    extract_rejection_reason_from_text,
     extract_total_inventory_from_row_text,
+    is_rejected_list_status,
     merchant_code_matches_query,
     parse_goods_list_row_meta,
     resolve_row_merchant_code,
@@ -1294,6 +1296,7 @@ def _parse_goods_list_matches_by_merchant_code(
                 "merchant_code": row_code,
                 "matched_created_at": row_meta.get("matched_created_at") or "",
                 "list_status": row_meta.get("list_status") or "",
+                "rejection_reason": row_meta.get("rejection_reason") or "",
                 "total_inventory": inventory,
             }
         )
@@ -1304,6 +1307,8 @@ def _parse_goods_list_matches(
     page: DpPage,
     merchant_code: str,
     title: str,
+    *,
+    require_title_match: bool = True,
 ) -> list[dict[str, Any]]:
     try:
         rows = page.eles("css:tbody tr", timeout=3)
@@ -1314,7 +1319,7 @@ def _parse_goods_list_matches(
         text = row.text or ""
         if not merchant_code_matches_query(row, text, merchant_code):
             continue
-        if not _row_matches_title(text, title):
+        if require_title_match and not _row_matches_title(text, title):
             continue
         product_id = extract_product_id_from_text(text)
         if not product_id:
@@ -1327,6 +1332,7 @@ def _parse_goods_list_matches(
                 "title_matched": True,
                 "matched_created_at": row_meta.get("matched_created_at") or "",
                 "list_status": row_meta.get("list_status") or "",
+                "rejection_reason": row_meta.get("rejection_reason") or "",
             }
         )
     return matches
@@ -1340,6 +1346,7 @@ def _capture_result(
     matched_created_at: str = "",
     matched_row_text: str = "",
     list_status: str = "",
+    rejection_reason: str = "",
     message: str = "",
 ) -> dict[str, Any]:
     return {
@@ -1349,6 +1356,7 @@ def _capture_result(
         "matched_created_at": matched_created_at,
         "matched_row_text": matched_row_text,
         "list_status": list_status,
+        "rejection_reason": rejection_reason,
         "message": message,
     }
 
@@ -1410,6 +1418,20 @@ def _evaluate_all_tab_row(
         )
 
     list_status = str(selected.get("list_status") or "").strip()
+    rejection_reason = str(selected.get("rejection_reason") or "").strip()
+    if not rejection_reason:
+        rejection_reason = extract_rejection_reason_from_text(str(selected.get("row_text") or ""))
+    if is_rejected_list_status(list_status) or rejection_reason:
+        return _capture_result(
+            status="rejected",
+            tab="all",
+            pdd_product_id=str(selected.get("pdd_product_id") or ""),
+            matched_created_at=str(selected.get("matched_created_at") or ""),
+            matched_row_text=str(selected.get("row_text") or ""),
+            list_status=list_status,
+            rejection_reason=rejection_reason,
+        )
+
     if list_status == "销售中":
         return _capture_result(
             status="captured",
@@ -1478,6 +1500,8 @@ def _execute_goods_tab_query(
     page: DpPage,
     merchant_code: str,
     title: str,
+    *,
+    require_title_match: bool = True,
 ) -> list[dict[str, Any]]:
     """重置筛选、按商品编码查询并解析匹配行。"""
     _reset_goods_list_filters(page)
@@ -1488,7 +1512,12 @@ def _execute_goods_tab_query(
         filter_ok = True
     if filter_ok:
         _click_goods_search(page)
-    return _parse_goods_list_matches(page, merchant_code, title)
+    return _parse_goods_list_matches(
+        page,
+        merchant_code,
+        title,
+        require_title_match=require_title_match,
+    )
 
 
 def _refresh_goods_list_tab(page: DpPage, tab_text: str) -> None:
@@ -1524,8 +1553,14 @@ def _search_goods_tab(
 
     label = unit.listing_label
     attempts = max(1, int(max_attempts or 1))
+    require_title_match = tab_key != "rejected"
     for attempt in range(1, attempts + 1):
-        matches = _execute_goods_tab_query(page, merchant_code, title)
+        matches = _execute_goods_tab_query(
+            page,
+            merchant_code,
+            title,
+            require_title_match=require_title_match,
+        )
         if matches:
             selected = matches[0]
             if attempt > 1:
@@ -1540,6 +1575,7 @@ def _search_goods_tab(
                 matched_created_at=str(selected.get("matched_created_at") or ""),
                 matched_row_text=str(selected.get("row_text") or ""),
                 list_status=str(selected.get("list_status") or ""),
+                rejection_reason=str(selected.get("rejection_reason") or ""),
             )
 
         if attempt >= attempts or not refresh_on_not_found:
@@ -1591,8 +1627,10 @@ def _capture_publish_outcome(
         )
         if rejected["status"] == "captured":
             rejected["status"] = "rejected"
+            reason = str(rejected.get("rejection_reason") or "").strip()
             print(
-                f"[{account_id}] [{unit.listing_label}] 商品发布后进入已驳回，按失败处理",
+                f"[{account_id}] [{unit.listing_label}] 商品发布后进入已驳回，按失败处理"
+                + (f"：{reason[:80]}" if reason else ""),
                 flush=True,
             )
             return rejected
@@ -1624,6 +1662,7 @@ def _attach_capture_fields(result: dict[str, Any], capture: dict[str, Any]) -> d
     result["pdd_product_matched_created_at"] = capture.get("matched_created_at") or ""
     result["pdd_product_matched_row_text"] = capture.get("matched_row_text") or ""
     result["pdd_product_list_status"] = capture.get("list_status") or ""
+    result["pdd_product_rejection_reason"] = capture.get("rejection_reason") or ""
     result["pdd_product_link"] = capture.get("product_link") or ""
     if capture.get("message") and capture.get("status") != "captured":
         result["pdd_product_capture_message"] = capture["message"]
@@ -4601,7 +4640,9 @@ def upload_one_listing(
             )
             return result
         if capture["status"] == "rejected":
-            reject_error = "提交后在「已驳回」找到商品，平台已驳回"
+            reject_error = str(capture.get("rejection_reason") or "").strip()
+            if not reject_error:
+                reject_error = str(capture.get("list_status") or "").strip() or "平台已驳回"
             result = _finish_listing(
                 run_id,
                 account_id,
