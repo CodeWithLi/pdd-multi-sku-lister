@@ -49,6 +49,7 @@ class ListingFeishuSnapshot:
     queried_codes: set[str] = field(default_factory=set)
     _code_field: str = ""
     _pricing_field: str = ""
+    _listing_pricing_field: str = ""
     _control_field: str = ""
     _retail_cost_field: str = ""
     _color_spec_field: str = ""
@@ -86,7 +87,7 @@ class ListingFeishuSnapshot:
             "color_spec": self._color_spec_field or names.color_spec,
             "product_type": self._product_type_field or names.product_type,
             "available_inventory": self._inventory_field or names.available_inventory,
-            "pricing": self._pricing_field or names.pricing,
+            "pricing": self._listing_pricing_field or names.pricing,
         }
         catalog: dict[str, PddProductEntry] = {}
         for code, fields in self.records_by_code.items():
@@ -198,6 +199,9 @@ def warm_listing_feishu_snapshot(
     snapshot._code_field = code_field
     snapshot._pricing_field = resolve_table_field_name(
         api, app_token, table_id, compare_names.pdd_pricing
+    )
+    snapshot._listing_pricing_field = resolve_table_field_name(
+        api, app_token, table_id, names.pricing
     )
     snapshot._control_field = resolve_table_field_name(
         api, app_token, table_id, compare_names.pdd_control_price

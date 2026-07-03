@@ -190,7 +190,7 @@ pdd_product_catalog:
     color_spec: 颜色规格
     product_type: 商品类型
     available_inventory: 可用库存
-    pricing: 拼多多定价
+    pricing: 拼多多定价+5元
 
 # 上架库存：聚水潭 ERP 可用数（按商品编码匹配）
 jushuitan_erp_inventory:

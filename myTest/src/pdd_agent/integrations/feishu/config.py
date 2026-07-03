@@ -186,7 +186,7 @@ class PddProductCatalogFieldNames(BaseModel):
     color_spec: str = "颜色规格"
     product_type: str = "商品类型"
     available_inventory: str = "可用库存"
-    pricing: str = "拼多多定价"
+    pricing: str = "拼多多定价+5元"
 
 
 class PddProductCatalogConfig(BaseModel):
@@ -233,7 +233,7 @@ class PipelineIntegrationConfig(BaseModel):
     )
     accessory_cost_pricing_enabled: bool = Field(
         default=False,
-        description="开启后拼单价=主商品拼多多定价+子商品聚水潭成本+一次0~5元浮动",
+        description="开启后拼单价=主商品拼多多定价+5元+主浮动+配件成本+配件浮动",
     )
     accessory_cost_float_min: float = Field(default=0.0, ge=0, description="配件成本定价模式：拼单价总浮动下限（元）")
     accessory_cost_float_max: float = Field(default=5.0, ge=0, description="配件成本定价模式：拼单价总浮动上限（元）")

@@ -1,4 +1,4 @@
-"""配件成本定价 — 浮动继承与同配件同价（独立子模块）。"""
+"""配件成本定价 — 主商品与配件分别浮动（独立子模块）。"""
 
 from __future__ import annotations
 
@@ -18,53 +18,51 @@ if TYPE_CHECKING:
 
 
 @dataclass(frozen=True)
+class _AccessoryCostPart:
+    float_key: str
+    cost: float
+
+
+@dataclass(frozen=True)
 class _SkuPricingRow:
     sku_index: int
     main_key: str
     main_price: float
-    accessory_cost_sum: float
-    align_key: str
+    accessories: tuple[_AccessoryCostPart, ...]
     has_accessories: bool
 
-
-def combo_align_key(
-    main_code: str,
-    accessory_codes: list[str],
-    catalog: dict[str, PddProductEntry],
-) -> str:
-    """跨主商品对齐键：主商品族 + 配件族序列（去末位变体字母），如 BD046|YKL001+YKL008。"""
-    if not accessory_codes:
-        return ""
-    main_family = main_group_key(catalog, main_code)
-    acc_families = sorted(
-        dict.fromkeys(
-            product_code_family_key(code)
-            for code in accessory_codes
-            if product_code_family_key(code)
-        )
-    )
-    if not acc_families:
-        return ""
-    return f"{main_family}|{'+'.join(acc_families)}"
+    @property
+    def accessory_cost_sum(self) -> float:
+        return round(sum(part.cost for part in self.accessories), 2)
 
 
-def accessory_align_key(
-    accessory_codes: list[str],
+def _price_key(price: float) -> str:
+    return f"{round(float(price or 0), 2):.2f}"
+
+
+def accessory_cost_group_price_floor(
+    main_price: float,
+    accessory_cost_sum: float = 0.0,
+) -> float:
+    """配件成本模式拼单价硬下限：单款不低于主商品定价；组合不低于主定价+配件成本。"""
+    base = round(float(main_price or 0), 2)
+    if base <= 0:
+        return 0.0
+    acc = round(float(accessory_cost_sum or 0), 2)
+    if acc > 0:
+        return round(base + acc, 2)
+    return base
+
+
+def clamp_accessory_cost_group_price(
+    group_price: float,
     *,
-    main_code: str = "",
-    catalog: dict[str, PddProductEntry] | None = None,
-) -> str:
-    """兼容旧调用；请优先使用 combo_align_key(main_code, accessory_codes, catalog)。"""
-    if main_code and catalog is not None:
-        return combo_align_key(main_code, accessory_codes, catalog)
-    families = [
-        product_code_family_key(code)
-        for code in accessory_codes
-        if product_code_family_key(code)
-    ]
-    if len(families) == 1:
-        return families[0]
-    return ""
+    main_price: float,
+    accessory_cost_sum: float = 0.0,
+) -> float:
+    """将拼单价钳制到合法下限之上。"""
+    floor = accessory_cost_group_price_floor(main_price, accessory_cost_sum)
+    return max(round(float(group_price or 0), 2), floor)
 
 
 def main_group_key(catalog: dict[str, PddProductEntry], main_code: str) -> str:
@@ -73,53 +71,80 @@ def main_group_key(catalog: dict[str, PddProductEntry], main_code: str) -> str:
     return product_code_family_key(canonical)
 
 
+def main_float_key(catalog: dict[str, PddProductEntry], main_code: str, main_price: float) -> str:
+    """主商品浮动继承键：同族且上架定价相同才共享浮动。"""
+    return f"{main_group_key(catalog, main_code)}@{_price_key(main_price)}"
+
+
+def accessory_float_key(accessory_code: str, cost: float) -> str:
+    """配件浮动继承键：同配件族且聚水潭成本相同才共享浮动。"""
+    family = product_code_family_key(accessory_code)
+    return f"{family}@{_price_key(cost)}"
+
+
+def accessory_float_key_for_codes(
+    accessory_codes: list[str],
+    *,
+    costs: list[float],
+) -> list[_AccessoryCostPart]:
+    parts: list[_AccessoryCostPart] = []
+    for code, cost in zip(accessory_codes, costs):
+        rounded = round(float(cost or 0), 2)
+        parts.append(
+            _AccessoryCostPart(
+                float_key=accessory_float_key(code, rounded),
+                cost=rounded,
+            )
+        )
+    return parts
+
+
+def _draw_float(float_min: float, float_max: float) -> float:
+    fmin = max(0.0, float(float_min))
+    fmax = max(fmin, float(float_max))
+    return round(random.uniform(fmin, fmax), 2)
+
+
 def reconcile_accessory_cost_floats(
     rows: list[_SkuPricingRow],
     *,
     listing_scope: str,
     float_min: float,
     float_max: float,
-) -> dict[int, tuple[float, float]]:
-    """按 SKU 顺序确定浮动并返回 sku_index -> (float_delta, group_price)。"""
+) -> dict[int, tuple[float, float, float]]:
+    """返回 sku_index -> (main_float, accessory_float_sum, group_price)。"""
     scope = str(listing_scope or "").strip() or "__default__"
-    fmin = max(0.0, float(float_min))
-    fmax = max(fmin, float(float_max))
 
     main_floats: dict[tuple[str, str], float] = {}
-    combo_anchors: dict[tuple[str, str], float] = {}
+    accessory_floats: dict[tuple[str, str], float] = {}
 
     for row in rows:
         main_sk = (scope, row.main_key)
-        align_sk = (scope, row.align_key) if row.align_key else None
-
-        if align_sk and align_sk in combo_anchors:
-            anchor = combo_anchors[align_sk]
-            float_delta = round(anchor - row.main_price - row.accessory_cost_sum, 2)
-            main_floats[main_sk] = float_delta
-            continue
-
         if main_sk not in main_floats:
-            main_floats[main_sk] = round(random.uniform(fmin, fmax), 2)
+            main_floats[main_sk] = _draw_float(float_min, float_max)
+        for part in row.accessories:
+            acc_sk = (scope, part.float_key)
+            if acc_sk not in accessory_floats:
+                accessory_floats[acc_sk] = _draw_float(float_min, float_max)
 
-        if align_sk and align_sk not in combo_anchors:
-            float_delta = main_floats[main_sk]
-            combo_anchors[align_sk] = round(
-                row.main_price + row.accessory_cost_sum + float_delta,
-                2,
-            )
-
-    out: dict[int, tuple[float, float]] = {}
+    out: dict[int, tuple[float, float, float]] = {}
     for row in rows:
         main_sk = (scope, row.main_key)
-        align_sk = (scope, row.align_key) if row.align_key else None
-        float_delta = main_floats.get(main_sk, 0.0)
-
-        if align_sk and align_sk in combo_anchors:
-            group_price = combo_anchors[align_sk]
-        else:
-            group_price = round(row.main_price + row.accessory_cost_sum + float_delta, 2)
-
-        out[row.sku_index] = (float_delta, group_price)
+        main_float = main_floats.get(main_sk, 0.0)
+        accessory_float_sum = round(
+            sum(accessory_floats.get((scope, part.float_key), 0.0) for part in row.accessories),
+            2,
+        )
+        group_price = round(
+            row.main_price + main_float + row.accessory_cost_sum + accessory_float_sum,
+            2,
+        )
+        group_price = clamp_accessory_cost_group_price(
+            group_price,
+            main_price=row.main_price,
+            accessory_cost_sum=row.accessory_cost_sum,
+        )
+        out[row.sku_index] = (main_float, accessory_float_sum, group_price)
     return out
 
 
@@ -139,7 +164,7 @@ def apply_reconciled_prices_to_unit(
     format_price,
     effective_single_price,
 ) -> None:
-    """上架单元内所有 SKU 按浮动继承规则重算拼单价。"""
+    """上架单元内所有 SKU 按主/配件分别浮动重算拼单价。"""
     rows: list[_SkuPricingRow] = []
     for index, sku in enumerate(unit.skus):
         bundle_components = None
@@ -155,16 +180,20 @@ def apply_reconciled_prices_to_unit(
         entry = find_catalog_entry(catalog, main_code)
         if not entry or float(entry.price or 0.0) <= 0:
             continue
-        accessory_cost_sum = 0.0
+        accessory_costs: list[float] = []
         for code in accessory_codes:
-            accessory_cost_sum += lookup_accessory_cost(code, cost_map=cost_map, catalog=catalog)
+            accessory_costs.append(
+                lookup_accessory_cost(code, cost_map=cost_map, catalog=catalog)
+            )
+        main_price = round(float(entry.price or 0.0), 2)
         rows.append(
             _SkuPricingRow(
                 sku_index=index,
-                main_key=main_group_key(catalog, main_code),
-                main_price=round(float(entry.price or 0.0), 2),
-                accessory_cost_sum=round(accessory_cost_sum, 2),
-                align_key=combo_align_key(main_code, accessory_codes, catalog),
+                main_key=main_float_key(catalog, main_code, main_price),
+                main_price=main_price,
+                accessories=tuple(
+                    accessory_float_key_for_codes(accessory_codes, costs=accessory_costs)
+                ),
                 has_accessories=bool(accessory_codes),
             )
         )
@@ -181,7 +210,7 @@ def apply_reconciled_prices_to_unit(
 
     for row in rows:
         sku = unit.skus[row.sku_index]
-        _, group_price = reconciled[row.sku_index]
+        _, _, group_price = reconciled[row.sku_index]
         bundle_components = None
         if _norm_code(sku.model_code) == bundle_model_code:
             bundle_components = parse_combo_component_codes(sku.combo_folder, sku.style_code)

@@ -1,4 +1,4 @@
-"""配件成本定价 — 浮动继承与同配件同价。"""
+"""配件成本定价 — 主/配件分别浮动。"""
 
 from __future__ import annotations
 
@@ -6,8 +6,10 @@ import pytest
 
 from pdd_agent.domain.models import ListingUnit, SkuCombo
 from pdd_agent.skills.listing.listing_accessory_cost_float_registry import (
+    _AccessoryCostPart,
     _SkuPricingRow,
-    combo_align_key,
+    accessory_cost_group_price_floor,
+    accessory_float_key,
     reconcile_accessory_cost_floats,
 )
 from pdd_agent.skills.listing.listing_accessory_cost_pricing import (
@@ -50,65 +52,87 @@ def test_split_main_and_accessory_codes():
 
 def test_product_code_family_key_strips_trailing_variant_letter():
     assert product_code_family_key("BD037A") == "BD037"
-    assert product_code_family_key("BD037B") == "BD037"
-    assert product_code_family_key("BD037A奶油泡芙笔袋") == "BD037"
     assert product_code_family_key("YKL001N") == "YKL001"
     assert product_code_family_key("YKL001P") == "YKL001"
-    assert product_code_family_key("YKL123A") == "YKL123"
-    assert product_code_family_key("YKL989A") == "YKL989"
 
 
-def test_combo_align_key_matches_variant_colors():
-    catalog = {
-        "BD046A": PddProductEntry("BD046A", "A", "笔袋", 100, 18.0),
-        "BD046B": PddProductEntry("BD046B", "B", "笔袋", 100, 16.0),
-    }
-    assert combo_align_key("BD046A", ["YKL001A"], catalog) == "BD046|YKL001"
-    assert combo_align_key("BD046B", ["YKL001P"], catalog) == "BD046|YKL001"
-    assert combo_align_key("BD046A", ["YKL001N", "YKL008A"], catalog) == "BD046|YKL001+YKL008"
-    assert combo_align_key("BD046B", ["YKL001P", "YKL008B"], catalog) == "BD046|YKL001+YKL008"
-    assert combo_align_key("BD046A", ["YKL123A", "YKL008A"], catalog) == "BD046|YKL008+YKL123"
-    assert combo_align_key("BD046B", ["YKL989A", "YKL008A"], catalog) == "BD046|YKL008+YKL989"
-    assert combo_align_key("BD046A", ["YKL123A", "YKL008A"], catalog) != combo_align_key(
-        "BD046B", ["YKL989A", "YKL008A"], catalog
-    )
+def test_accessory_float_key_shares_only_when_cost_matches():
+    assert accessory_float_key("YKL001A", 1.5) == accessory_float_key("YKL001B", 1.5) == "YKL001@1.50"
+    assert accessory_float_key("YKL001A", 1.2) != accessory_float_key("YKL001B", 1.8)
 
 
-def test_main_group_inherits_float_across_solo_combo_bundle():
+def test_main_and_accessory_floats_are_independent():
     rows = [
-        _SkuPricingRow(0, "BD037", 10.0, 0.0, "", False),
-        _SkuPricingRow(1, "BD037", 10.0, 2.0, "BD037|YKL001", True),
-        _SkuPricingRow(2, "BD037", 10.0, 7.0, "", True),
+        _SkuPricingRow(0, "BD037@10.00", 10.0, (), False),
+        _SkuPricingRow(
+            1,
+            "BD037@10.00",
+            10.0,
+            (_AccessoryCostPart(accessory_float_key("YKL001N", 2.0), 2.0),),
+            True,
+        ),
     ]
-    result = reconcile_accessory_cost_floats(rows, listing_scope="BD037/第一套图", float_min=3.0, float_max=3.0)
-    assert result[0][0] == 3.0
-    assert result[0][1] == 13.0
-    assert result[1][1] == 15.0
-    assert result[2][0] == 3.0
-    assert result[2][1] == 20.0
+    result = reconcile_accessory_cost_floats(rows, listing_scope="BD037/套1", float_min=3.0, float_max=3.0)
+    assert result[0][2] == 13.0
+    assert result[1][2] == 18.0
 
 
-def test_shared_accessory_combo_price_across_mains():
+def test_accessory_float_inherited_for_same_family_and_cost():
     rows = [
-        _SkuPricingRow(0, "BD037", 10.0, 0.0, "", False),
-        _SkuPricingRow(1, "BD037", 10.0, 2.0, "BD037|YKL001", True),
-        _SkuPricingRow(2, "BD037", 8.0, 0.0, "", False),
-        _SkuPricingRow(3, "BD037", 8.0, 2.0, "BD037|YKL001", True),
-        _SkuPricingRow(4, "BD037", 9.0, 0.0, "", False),
-        _SkuPricingRow(5, "BD037", 9.0, 1.5, "BD037|YKL001", True),
+        _SkuPricingRow(
+            0,
+            "BD014@10.00",
+            10.0,
+            (_AccessoryCostPart(accessory_float_key("YKL001A", 1.5), 1.5),),
+            True,
+        ),
+        _SkuPricingRow(
+            1,
+            "BD014@10.00",
+            10.0,
+            (_AccessoryCostPart(accessory_float_key("YKL001B", 1.5), 1.5),),
+            True,
+        ),
+        _SkuPricingRow(
+            2,
+            "BD014@10.00",
+            10.0,
+            (_AccessoryCostPart(accessory_float_key("YKL001C", 2.0), 2.0),),
+            True,
+        ),
     ]
-    result = reconcile_accessory_cost_floats(rows, listing_scope="BD037/第一套图", float_min=3.0, float_max=3.0)
-    assert result[1][1] == 15.0
-    assert result[3][1] == 15.0
-    assert result[5][1] == 15.0
-    assert result[3][0] == 4.5
-    assert result[2][1] == 12.5
-    assert result[0][1] == 14.5
+    result = reconcile_accessory_cost_floats(rows, listing_scope="BD014/套1", float_min=2.0, float_max=2.0)
+    assert result[0][1] == result[1][1] == 2.0
+    assert result[0][2] == result[1][2] == 15.5
+    assert result[2][2] == 16.0
 
 
-def test_resolve_accessory_cost_pricing_combo_uses_main_price_and_accessory_cost():
+def test_accessory_float_differs_when_cost_differs_even_if_same_family():
+    rows = [
+        _SkuPricingRow(
+            0,
+            "BD014@10.00",
+            10.0,
+            (_AccessoryCostPart(accessory_float_key("YKL001A", 1.2), 1.2),),
+            True,
+        ),
+        _SkuPricingRow(
+            1,
+            "BD014@10.00",
+            10.0,
+            (_AccessoryCostPart(accessory_float_key("YKL001B", 1.8), 1.8),),
+            True,
+        ),
+    ]
+    result = reconcile_accessory_cost_floats(rows, listing_scope="BD014/套1", float_min=0.2, float_max=0.2)
+    assert result[0][2] == 11.6
+    assert result[1][2] == 12.2
+    assert result[0][2] != result[1][2]
+
+
+def test_resolve_accessory_cost_pricing_uses_separate_main_and_accessory_floats():
     catalog = {
-        "BD716A": PddProductEntry("BD716A", "灰色笔袋", "笔袋", 100, 20.0),
+        "BD716A": PddProductEntry("BD716A", "灰色笔袋", "笔袋", 100, 13.6),
         "YKL001N": PddProductEntry("YKL001N", "挂架", "亚克力", 50, 5.0),
     }
     activate_accessory_cost_pricing(
@@ -124,8 +148,8 @@ def test_resolve_accessory_cost_pricing_combo_uses_main_price_and_accessory_cost
         listing_scope="BD716/第一套图",
     )
     assert inv == "50"
-    assert gp == "23.2"
-    assert sp == "23.2"
+    assert gp == "18.8"
+    assert sp == "18.8"
 
 
 def test_reconcile_accessory_cost_prices_for_unit_updates_skus():
@@ -184,10 +208,10 @@ def test_reconcile_accessory_cost_prices_for_unit_updates_skus():
         ],
     )
     reconcile_accessory_cost_prices_for_unit(unit, catalog, {})
-    assert unit.skus[0].group_price == "15"
-    assert unit.skus[1].group_price == "15"
-    assert unit.skus[2].group_price == "13"
-    assert unit.skus[3].group_price == "15"
+    assert unit.skus[0].group_price == "13"
+    assert unit.skus[1].group_price == "18"
+    assert unit.skus[2].group_price == "11"
+    assert unit.skus[3].group_price == "16"
 
 
 def test_resolve_accessory_cost_pricing_missing_cost_raises():
@@ -219,106 +243,139 @@ def test_resolve_sku_pricing_with_accessory_cost_if_enabled_returns_none_when_in
     )
 
 
-def test_bd046_ab_family_shares_float_and_ykl001_aligns():
-    """BD046A/B 主商品族共享浮动；YKL001N/P 单配件对齐；YKL123/YKL989 套餐不对齐。"""
+def test_solo_sku_not_below_main_price():
+    main = 8.6
+    rows = [
+        _SkuPricingRow(0, "BD113@8.60", main, (), False),
+        _SkuPricingRow(
+            1,
+            "BD113@8.60",
+            main,
+            (_AccessoryCostPart(accessory_float_key("ACC", 1.0), 1.0),),
+            True,
+        ),
+    ]
+    result = reconcile_accessory_cost_floats(rows, listing_scope="BD113/套1", float_min=1.04, float_max=1.04)
+    assert result[0][2] >= main
+    assert result[0][2] == round(main + 1.04, 2)
+
+
+def test_group_price_floor_never_below_main_catalog_price():
+    import random
+
+    main = 8.6
+    base_rows = [
+        _SkuPricingRow(0, "BD113@8.60", main, (), False),
+        _SkuPricingRow(
+            1,
+            "BD113@8.60",
+            main,
+            (_AccessoryCostPart(accessory_float_key("ACC", 1.0), 1.0),),
+            True,
+        ),
+        _SkuPricingRow(
+            2,
+            "BD113@8.60",
+            main,
+            (_AccessoryCostPart(accessory_float_key("ACC2", 6.3), 6.3),),
+            True,
+        ),
+    ]
+    for seed in range(50):
+        random.seed(seed)
+        order = list(base_rows)
+        random.shuffle(order)
+        result = reconcile_accessory_cost_floats(order, listing_scope="BD113/套1", float_min=0.0, float_max=5.0)
+        for row in order:
+            price = result[row.sku_index][2]
+            floor = accessory_cost_group_price_floor(row.main_price, row.accessory_cost_sum)
+            assert price >= floor >= row.main_price
+
+
+def test_bd014_same_main_price_shares_main_float_not_forced_combo_align():
     catalog = {
-        "BD046A": PddProductEntry("BD046A", "A款", "笔袋", 100, 18.0),
-        "BD046B": PddProductEntry("BD046B", "B款", "笔袋", 100, 16.0),
-        "YKL001N": PddProductEntry("YKL001N", "挂架N", "亚克力", 50, 5.0),
-        "YKL001P": PddProductEntry("YKL001P", "挂架P", "亚克力", 50, 5.0),
-        "YKL008A": PddProductEntry("YKL008A", "配件8A", "亚克力", 50, 5.0),
-        "YKL008B": PddProductEntry("YKL008B", "配件8B", "亚克力", 50, 5.0),
-        "YKL123A": PddProductEntry("YKL123A", "配件123", "亚克力", 50, 5.0),
-        "YKL989A": PddProductEntry("YKL989A", "配件989", "亚克力", 50, 5.0),
+        "BD014A": PddProductEntry("BD014A", "A款", "笔袋", 100, 10.0),
+        "BD014B": PddProductEntry("BD014B", "B款", "笔袋", 100, 8.0),
+        "BD014C": PddProductEntry("BD014C", "C款", "笔袋", 100, 10.0),
+        "YKL001AC": PddProductEntry("YKL001AC", "配件", "亚克力", 50, 5.0),
     }
-    cost_map = {
-        "YKL001N": 1.5,
-        "YKL001P": 1.5,
-        "YKL008A": 2.0,
-        "YKL008B": 2.0,
-        "YKL123A": 3.0,
-        "YKL989A": 4.0,
-    }
-    activate_accessory_cost_pricing(cost_map=cost_map, float_min=3.0, float_max=3.0)
+    activate_accessory_cost_pricing(cost_map={"YKL001AC": 2.0}, float_min=3.0, float_max=3.0)
     unit = ListingUnit(
-        product_code="BD046A",
-        family_code="BD046",
+        product_code="BD014A",
+        family_code="BD014",
         image_set="第一套",
         root=__import__("pathlib").Path("."),
         skus=[
             SkuCombo(
-                style_code="BD046A",
+                style_code="BD014A",
                 style_name="",
-                model_code="BD046A",
+                model_code="YKL001AC",
                 model_name="",
-                combo_folder="BD046A",
+                combo_folder="BD014A+YKL001AC",
                 preview_image=__import__("pathlib").Path("a.png"),
             ),
             SkuCombo(
-                style_code="BD046A",
+                style_code="BD014B",
                 style_name="",
-                model_code="YKL001N",
+                model_code="YKL001AC",
                 model_name="",
-                combo_folder="BD046A+YKL001N",
+                combo_folder="BD014B+YKL001AC",
                 preview_image=__import__("pathlib").Path("b.png"),
             ),
             SkuCombo(
-                style_code="BD046A",
+                style_code="BD014C",
                 style_name="",
-                model_code=BUNDLE_MODEL_CODE,
+                model_code="YKL001AC",
                 model_name="",
-                combo_folder="BD046A+YKL001N+YKL008A",
+                combo_folder="BD014C+YKL001AC",
                 preview_image=__import__("pathlib").Path("c.png"),
-            ),
-            SkuCombo(
-                style_code="BD046A",
-                style_name="",
-                model_code=BUNDLE_MODEL_CODE,
-                model_name="",
-                combo_folder="BD046A+YKL123A+YKL008A",
-                preview_image=__import__("pathlib").Path("d.png"),
-            ),
-            SkuCombo(
-                style_code="BD046B",
-                style_name="",
-                model_code="BD046B",
-                model_name="",
-                combo_folder="BD046B",
-                preview_image=__import__("pathlib").Path("e.png"),
-            ),
-            SkuCombo(
-                style_code="BD046B",
-                style_name="",
-                model_code="YKL001P",
-                model_name="",
-                combo_folder="BD046B+YKL001P",
-                preview_image=__import__("pathlib").Path("f.png"),
-            ),
-            SkuCombo(
-                style_code="BD046B",
-                style_name="",
-                model_code=BUNDLE_MODEL_CODE,
-                model_name="",
-                combo_folder="BD046B+YKL001P+YKL008B",
-                preview_image=__import__("pathlib").Path("g.png"),
-            ),
-            SkuCombo(
-                style_code="BD046B",
-                style_name="",
-                model_code=BUNDLE_MODEL_CODE,
-                model_name="",
-                combo_folder="BD046B+YKL989A+YKL008A",
-                preview_image=__import__("pathlib").Path("h.png"),
             ),
         ],
     )
     reconcile_accessory_cost_prices_for_unit(unit, catalog, {})
-
     by_folder = {sku.combo_folder: sku.group_price for sku in unit.skus}
-    assert by_folder["BD046A+YKL001N"] == by_folder["BD046B+YKL001P"] == "22.5"
-    assert by_folder["BD046A+YKL001N+YKL008A"] == by_folder["BD046B+YKL001P+YKL008B"]
-    assert by_folder["BD046A"] == "23"
-    assert by_folder["BD046B"] == "21"
-    assert float(by_folder["BD046A+YKL123A+YKL008A"]) != float(
-        by_folder["BD046B+YKL989A+YKL008A"]
+    assert by_folder["BD014A+YKL001AC"] == by_folder["BD014C+YKL001AC"] == "18"
+    assert by_folder["BD014B+YKL001AC"] == "16"
+
+
+def test_bd014_ab_combo_not_forced_same_when_accessory_cost_differs():
+    catalog = {
+        "BD014A": PddProductEntry("BD014A", "A款", "笔袋", 100, 10.0),
+        "BD014B": PddProductEntry("BD014B", "B款", "笔袋", 100, 10.0),
+        "YKL001A": PddProductEntry("YKL001A", "配件A", "亚克力", 50, 5.0),
+        "YKL001B": PddProductEntry("YKL001B", "配件B", "亚克力", 50, 5.0),
+    }
+    activate_accessory_cost_pricing(
+        cost_map={"YKL001A": 1.2, "YKL001B": 1.8},
+        float_min=0.2,
+        float_max=0.2,
     )
+    unit = ListingUnit(
+        product_code="BD014A",
+        family_code="BD014",
+        image_set="第一套",
+        root=__import__("pathlib").Path("."),
+        skus=[
+            SkuCombo(
+                style_code="BD014A",
+                style_name="",
+                model_code="YKL001A",
+                model_name="",
+                combo_folder="BD014A+YKL001A",
+                preview_image=__import__("pathlib").Path("a.png"),
+            ),
+            SkuCombo(
+                style_code="BD014B",
+                style_name="",
+                model_code="YKL001B",
+                model_name="",
+                combo_folder="BD014B+YKL001B",
+                preview_image=__import__("pathlib").Path("b.png"),
+            ),
+        ],
+    )
+    reconcile_accessory_cost_prices_for_unit(unit, catalog, {})
+    by_folder = {sku.combo_folder: sku.group_price for sku in unit.skus}
+    assert by_folder["BD014A+YKL001A"] == "11.6"
+    assert by_folder["BD014B+YKL001B"] == "12.2"
+    assert by_folder["BD014A+YKL001A"] != by_folder["BD014B+YKL001B"]

@@ -180,7 +180,11 @@ def load_pdd_product_catalog(path: Path | None = None) -> dict[str, PddProductEn
     color_col = headers.index("颜色规格") if "颜色规格" in headers else 1
     type_col = headers.index("商品类型") if "商品类型" in headers else 2
     inv_col = headers.index("库存") if "库存" in headers else None
-    price_col = headers.index("价格") if "价格" in headers else None
+    price_col = None
+    for col_name in ("拼多多定价+5元", "拼多多定价", "价格"):
+        if col_name in headers:
+            price_col = headers.index(col_name)
+            break
 
     catalog: dict[str, PddProductEntry] = {}
     for row in rows:

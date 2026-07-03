@@ -40,7 +40,7 @@ def test_collect_feishu_catalog_codes_includes_family_without_assets(tmp_path: P
     assert "BD029B" in codes
 
 
-def test_product_catalog_reads_resolved_pricing_field():
+def test_product_catalog_reads_resolved_listing_pricing_field():
     cfg = FeishuConfig(
         app_id="x",
         app_secret="y",
@@ -52,7 +52,8 @@ def test_product_catalog_reads_resolved_pricing_field():
     )
     snapshot = ListingFeishuSnapshot()
     snapshot._code_field = "商品编码"
-    snapshot._pricing_field = "定价列"
+    snapshot._pricing_field = "拼多多定价"
+    snapshot._listing_pricing_field = "拼多多定价+5元"
     snapshot._color_spec_field = "颜色规格"
     snapshot._product_type_field = "商品类型"
     snapshot._inventory_field = "可用库存"
@@ -61,7 +62,8 @@ def test_product_catalog_reads_resolved_pricing_field():
         "颜色规格": "笔袋",
         "商品类型": "笔袋",
         "可用库存": 10,
-        "定价列": 7.97,
+        "拼多多定价": 2.97,
+        "拼多多定价+5元": 7.97,
     }
     catalog = snapshot.product_catalog(cfg)
     assert catalog["BD029B"].price == 7.97
@@ -75,12 +77,12 @@ def test_entry_from_feishu_fields_falls_back_color_spec():
     entry = _entry_from_feishu_fields(
         {
             "商品编码": "BD029B",
-            "拼多多定价": 7.97,
+            "拼多多定价+5元": 7.97,
         },
         names,
         resolved_fields={
             "product_code": "商品编码",
-            "pricing": "拼多多定价",
+            "pricing": "拼多多定价+5元",
             "color_spec": "颜色规格",
         },
     )
@@ -90,7 +92,8 @@ def test_entry_from_feishu_fields_falls_back_color_spec():
     assert entry.price == 7.97
 
 
-def test_diagnose_skips_pricing_missing_when_pricing_catalog_has_price(monkeypatch):
+def test_diagnose_reports_pricing_missing_when_only_raw_pdd_pricing_present(monkeypatch):
+    """上架主价读「拼多多定价+5元」；仅有「拼多多定价」时仍应报定价缺失。"""
     from pdd_agent.integrations.feishu import pdd_product_catalog_sync
     from pdd_agent.integrations.feishu.listing_feishu_snapshot import (
         ListingFeishuSnapshot,
@@ -122,6 +125,7 @@ def test_diagnose_skips_pricing_missing_when_pricing_catalog_has_price(monkeypat
     snapshot = ListingFeishuSnapshot(source="feishu")
     snapshot._code_field = "商品编码"
     snapshot._pricing_field = "拼多多定价"
+    snapshot._listing_pricing_field = "拼多多定价+5元"
     snapshot._color_spec_field = "颜色规格"
     snapshot.records_by_code["BD029B"] = {
         "商品编码": "BD029B",
@@ -167,7 +171,8 @@ def test_diagnose_skips_pricing_missing_when_pricing_catalog_has_price(monkeypat
     )
 
     issues = pdd_product_catalog_sync.diagnose_feishu_listing_catalog_issues(units=[unit], config=cfg)
-    assert issues == []
+    assert len(issues) == 1
+    assert issues[0].details[0].aspect == "pricing_missing"
 
 
 def test_diagnose_fallback_uses_merchant_code_from_selector(monkeypatch):

@@ -222,7 +222,9 @@ def _resolved_catalog_fields_from_snapshot(snapshot: Any | None, names) -> dict[
         "available_inventory": str(
             getattr(snapshot, "_inventory_field", "") or names.available_inventory or ""
         ).strip(),
-        "pricing": str(getattr(snapshot, "_pricing_field", "") or names.pricing or "").strip(),
+        "pricing": str(
+            getattr(snapshot, "_listing_pricing_field", "") or names.pricing or ""
+        ).strip(),
     }
 
 
@@ -406,10 +408,6 @@ def _collect_product_catalog_issue_details(
         return aspects
 
     if float(entry.price or 0.0) <= 0:
-        if pricing_catalog and getattr(pricing_catalog, "source", "") == "feishu":
-            _price, reason = resolve_code_price_from_catalog(pricing_catalog, code)
-            if not reason:
-                return aspects
         aspect = "pricing_missing"
         aspects.append(_aspect_label(aspect))
         _append_catalog_detail(

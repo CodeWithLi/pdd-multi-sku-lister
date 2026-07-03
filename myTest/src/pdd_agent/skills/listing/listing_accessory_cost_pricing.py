@@ -1,12 +1,13 @@
 """配件成本定价模式（整合链路可选）。
 
-开启后拼单价 = 主商品拼多多定价 + Σ(子商品聚水潭成本) + 一次浮动。
-主商品：规格图文件名首段 / 单款时的款式码（来自飞书「拼多多比价定价」）。
+开启后拼单价 = 主商品「拼多多定价+5元」 + 主商品浮动(0~5) + Σ(配件聚水潭成本 + 配件浮动(0~5))。
+主商品：规格图文件名首段 / 单款时的款式码（来自飞书「拼多多定价+5元」列）。
 子商品：组合里的配件码，或套装文件名 + 段中除首段外的所有段（来自飞书「聚水潭ERP商品列表」成本）。
 
 浮动规则（listing_accessory_cost_float_registry）：
-- 同一主商品族（去末位变体字母，如 BD046A/B046B→BD046）内继承同一浮动；
-- 同套图跨主商品时，若组合族相同（如 BD046|YKL001+YKL008，颜色变体 N/P/A/B 忽略）则拼单价对齐。
+- 主商品：同族且上架定价相同 → 共享主浮动（如 BD014A/C 同价）；
+- 配件：同配件族且聚水潭成本相同 → 共享配件浮动（如 YKL001A/B 成本都是 1.5）；
+- 成本或定价不同 → 各自独立随机浮动；不再强制跨款式组合同价。
 """
 
 from __future__ import annotations
@@ -17,9 +18,11 @@ from typing import Any
 
 from pdd_agent.integrations.feishu.config import FeishuConfig, accessory_cost_pricing_enabled, load_feishu_config
 from pdd_agent.skills.listing.listing_accessory_cost_float_registry import (
-    combo_align_key,
+    accessory_float_key,
+    accessory_float_key_for_codes,
     apply_reconciled_prices_to_unit,
-    main_group_key,
+    clamp_accessory_cost_group_price,
+    main_float_key,
     reconcile_accessory_cost_floats,
 )
 from pdd_agent.skills.listing.pdd_product_catalog import (
@@ -44,8 +47,8 @@ _main_float_ctx: ContextVar[dict[tuple[str, str], float]] = ContextVar(
     "accessory_cost_pricing_main_float",
     default={},
 )
-_combo_anchor_ctx: ContextVar[dict[tuple[str, str], float]] = ContextVar(
-    "accessory_cost_pricing_combo_anchor",
+_accessory_float_ctx: ContextVar[dict[tuple[str, str], float]] = ContextVar(
+    "accessory_cost_pricing_accessory_float",
     default={},
 )
 
@@ -84,14 +87,14 @@ def activate_accessory_cost_pricing(
     _float_min_ctx.set(max(0.0, float(float_min)))
     _float_max_ctx.set(max(_float_min_ctx.get(), float(float_max)))
     _main_float_ctx.set({})
-    _combo_anchor_ctx.set({})
+    _accessory_float_ctx.set({})
 
 
 def deactivate_accessory_cost_pricing() -> None:
     _active_ctx.set(False)
     _cost_map_ctx.set({})
     _main_float_ctx.set({})
-    _combo_anchor_ctx.set({})
+    _accessory_float_ctx.set({})
 
 
 def accessory_cost_pricing_config(cfg: FeishuConfig | None = None) -> dict[str, Any]:
@@ -153,6 +156,41 @@ def _require_main_entry(code: str, catalog: dict[str, PddProductEntry]) -> PddPr
     return entry
 
 
+def _resolve_main_float(*, listing_scope: str, main_key: str) -> float:
+    scope = str(listing_scope or "").strip() or "__default__"
+    main_sk = (scope, main_key)
+    main_floats = dict(_main_float_ctx.get())
+    if main_sk not in main_floats:
+        main_floats[main_sk] = round(
+            random.uniform(_float_min_ctx.get(), _float_max_ctx.get()),
+            2,
+        )
+        _main_float_ctx.set(main_floats)
+    return main_floats[main_sk]
+
+
+def _resolve_accessory_floats(
+    *,
+    listing_scope: str,
+    accessory_codes: list[str],
+    accessory_costs: list[float],
+) -> float:
+    scope = str(listing_scope or "").strip() or "__default__"
+    accessory_floats = dict(_accessory_float_ctx.get())
+    total = 0.0
+    for code, cost in zip(accessory_codes, accessory_costs):
+        key = accessory_float_key(code, cost)
+        acc_sk = (scope, key)
+        if acc_sk not in accessory_floats:
+            accessory_floats[acc_sk] = round(
+                random.uniform(_float_min_ctx.get(), _float_max_ctx.get()),
+                2,
+            )
+        total += accessory_floats[acc_sk]
+    _accessory_float_ctx.set(accessory_floats)
+    return round(total, 2)
+
+
 def _resolve_float_delta(
     *,
     listing_scope: str,
@@ -162,34 +200,21 @@ def _resolve_float_delta(
     accessory_codes: list[str],
     accessory_cost_sum: float,
 ) -> float:
-    """增量定价时按继承规则取浮动（单元 reconcile 后会再次统一校正）。"""
-    scope = str(listing_scope or "").strip() or "__default__"
-    main_key = main_group_key(catalog, main_code)
-    main_sk = (scope, main_key)
-    align_key = combo_align_key(main_code, accessory_codes, catalog)
-    align_sk = (scope, align_key) if align_key else None
-
-    main_floats = dict(_main_float_ctx.get())
-    combo_anchors = dict(_combo_anchor_ctx.get())
-
-    if align_sk and align_sk in combo_anchors:
-        float_delta = round(combo_anchors[align_sk] - main_price - accessory_cost_sum, 2)
-        main_floats[main_sk] = float_delta
-        _main_float_ctx.set(main_floats)
-        return float_delta
-
-    if main_sk in main_floats:
-        float_delta = main_floats[main_sk]
-    else:
-        float_delta = round(random.uniform(_float_min_ctx.get(), _float_max_ctx.get()), 2)
-        main_floats[main_sk] = float_delta
-        _main_float_ctx.set(main_floats)
-
-    if align_sk and align_sk not in combo_anchors:
-        combo_anchors[align_sk] = round(main_price + accessory_cost_sum + float_delta, 2)
-        _combo_anchor_ctx.set(combo_anchors)
-
-    return float_delta
+    """增量定价：主浮动 + 配件浮动之和（单元 reconcile 后会再次统一校正）。"""
+    _ = accessory_cost_sum
+    main_key = main_float_key(catalog, main_code, main_price)
+    main_float = _resolve_main_float(listing_scope=listing_scope, main_key=main_key)
+    cost_map = _cost_map_ctx.get()
+    accessory_costs = [
+        _lookup_accessory_cost(code, cost_map=cost_map, catalog=catalog)
+        for code in accessory_codes
+    ]
+    accessory_float_sum = _resolve_accessory_floats(
+        listing_scope=listing_scope,
+        accessory_codes=accessory_codes,
+        accessory_costs=accessory_costs,
+    )
+    return round(main_float + accessory_float_sum, 2)
 
 
 def _resolve_inventory(
@@ -257,12 +282,12 @@ def resolve_accessory_cost_pricing(
         accessory_cost_sum=accessory_cost_sum,
     )
     group_price = round(main_price + accessory_cost_sum + float_delta, 2)
-    align_key = combo_align_key(main_code, accessory_codes, catalog)
-    if align_key:
-        scope = str(listing_scope or "").strip() or "__default__"
-        anchor = _combo_anchor_ctx.get().get((scope, align_key))
-        if anchor is not None:
-            group_price = round(float(anchor), 2)
+
+    group_price = clamp_accessory_cost_group_price(
+        group_price,
+        main_price=main_price,
+        accessory_cost_sum=accessory_cost_sum,
+    )
 
     if group_price <= 0:
         raise ComboPricingError(invalid_codes=[main_entry.code], reason="pricing_invalid")
@@ -285,7 +310,7 @@ def reconcile_accessory_cost_prices_for_unit(
     catalog: dict[str, PddProductEntry],
     defaults: dict[str, str],
 ) -> None:
-    """上架单元解析完成后，按浮动继承与同配件同价规则重算全部 SKU 拼单价。"""
+    """上架单元解析完成后，按主/配件分别浮动重算全部 SKU 拼单价。"""
     _ = defaults
     if not ensure_accessory_cost_pricing_active() or not unit.skus:
         return

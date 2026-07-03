@@ -245,6 +245,7 @@ def test_warm_snapshot_prefers_priced_duplicate_row_for_same_code(monkeypatch):
                     "商品编码": "BD083A",
                     "颜色规格": "绿色罗宾笔袋",
                     "拼多多定价": 8.40,
+                    "拼多多定价+5元": 13.40,
                     "PDD控价": 7.91,
                 }
             },
@@ -277,7 +278,7 @@ def test_warm_snapshot_prefers_priced_duplicate_row_for_same_code(monkeypatch):
     assert snapshot is not None
     row = snapshot.records_by_code["BD083A"]
     assert row["拼多多定价"] == 8.40
-    assert snapshot.product_catalog(cfg)["BD083A"].price == 8.40
+    assert snapshot.product_catalog(cfg)["BD083A"].price == 13.40
     assert snapshot.pricing_catalog(cfg).prices["BD083A"] == 8.40
 
     clear_listing_feishu_snapshot()
