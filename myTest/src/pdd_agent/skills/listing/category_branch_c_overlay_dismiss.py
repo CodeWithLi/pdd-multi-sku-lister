@@ -72,6 +72,13 @@ def ensure_branch_c_blocking_overlays_cleared(
     from pdd_agent.skills.listing.listing_pdd_overlay_dismiss import (
         ensure_image_space_modal_cleared,
     )
+    from pdd_agent.skills.pdd_blocking_overlay_guard import (
+        ensure_pdd_blocking_overlays_cleared,
+    )
+
+    ensure_pdd_blocking_overlays_cleared(
+        page, account_id, label, max_attempts=2, include_image_space=False
+    )
 
     if dismiss_branch_c_image_space_hint_tooltip(page):
         _log(account_id, label, "分支 C：已关闭「仅展示可用图片」引导")

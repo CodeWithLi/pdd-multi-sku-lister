@@ -308,6 +308,28 @@ def _classify_exception(exc: Exception) -> tuple[str, bool]:
     return "unexpected_error", False
 
 
+def _guard_pdd_overlays(
+    page: DpPage,
+    account_id: str = "",
+    label: str = "",
+    *,
+    max_attempts: int = 3,
+    include_image_space: bool = False,
+) -> None:
+    """统一遮罩守卫（额外清场，不替代各步骤内已有 dismiss）。"""
+    from pdd_agent.skills.pdd_blocking_overlay_guard import (
+        ensure_pdd_blocking_overlays_cleared,
+    )
+
+    ensure_pdd_blocking_overlays_cleared(
+        page,
+        account_id,
+        label,
+        max_attempts=max_attempts,
+        include_image_space=include_image_space,
+    )
+
+
 def _dismiss_address_required_page(page: DpPage, account_id: str, label: str) -> bool:
     """
     拼多多偶尔会在发布页弹出「请尽快填写真实有效联系/经营地址」遮罩。
@@ -504,6 +526,7 @@ def _detect_submit_success(page: DpPage, *, max_wait: float = 18.0) -> bool:
 def _click_submit(page: DpPage, account_id: str, label: str) -> tuple[bool, datetime | None, str]:
     """点击提交；返回 (成功标志是否出现, 点击时间, 拦截原因)。"""
     print(f"[{account_id}] [{label}] 点击提交并上架...", flush=True)
+    _guard_pdd_overlays(page, account_id, label, max_attempts=2)
     try:
         submit_btn = page.ele("text:提交并上架", timeout=3)
         if not submit_btn:
@@ -552,6 +575,7 @@ def _open_goods_list(page: DpPage, account_id: str, tab_text: str = "在售中")
         except Exception:
             continue
 
+    _guard_pdd_overlays(page, account_id, "", max_attempts=3)
     ensure_post_publish_modals_cleared(page, account_id, "", max_attempts=3)
 
     try:
@@ -2531,7 +2555,8 @@ def _select_category_by_keyword_search(
     return False
 
 
-def _human_click_element(page: DpPage, el: Any) -> bool:
+def _human_click_element(page: DpPage, el: Any, *, account_id: str = "", label: str = "") -> bool:
+    _guard_pdd_overlays(page, account_id, label, max_attempts=2)
     if _playwright_mouse_click_element(page, el):
         return True
     try:
@@ -3950,6 +3975,7 @@ def upload_one_listing(
     print(f"[{account_id}] [{label}] 正在跳转商品分类界面...")
     page.get("https://mms.pinduoduo.com/goods/category")
     time.sleep(5)
+    _guard_pdd_overlays(page, account_id, label, max_attempts=3)
     if _dismiss_address_required_page(page, account_id, label):
         time.sleep(2)
     from pdd_agent.skills.listing.listing_pdd_overlay_dismiss import (

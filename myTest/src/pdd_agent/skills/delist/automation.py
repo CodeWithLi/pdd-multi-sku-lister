@@ -78,13 +78,12 @@ def resolve_target_accounts(config: dict, settings: DelistSettings) -> list[dict
 
 
 def _dismiss_pdd_blocking_modals(page, account_id: str, label: str = "商品列表") -> None:
-    """关闭拼多多后台常见遮罩（如经营地址补充弹窗），避免挡住后续点击。"""
-    from pdd_agent.skills.listing.upload import _dismiss_address_required_page
+    """关闭拼多多后台常见遮罩（如经营地址、待处理），避免挡住后续点击。"""
+    from pdd_agent.skills.pdd_blocking_overlay_guard import (
+        ensure_pdd_blocking_overlays_cleared,
+    )
 
-    for _ in range(3):
-        if not _dismiss_address_required_page(page, account_id, label):
-            break
-        time.sleep(0.6)
+    ensure_pdd_blocking_overlays_cleared(page, account_id, label, max_attempts=4)
 
 
 def open_goods_list_on_sale(page, account_id: str) -> bool:
