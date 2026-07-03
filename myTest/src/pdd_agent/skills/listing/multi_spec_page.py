@@ -1448,6 +1448,48 @@ function readRowFieldValues(tr) {
     }
     return out;
 }
+
+const PRICE_FIELD_LABELS = ['库存', '拼团价', '单买价', '规格编码'];
+
+function inspectRowMissingFieldLabels(tr) {
+    const inputs = rowInputs(tr);
+    const missing = [];
+    for (let i = 0; i < 4; i++) {
+        const val = inputs[i] ? normFieldText(inputs[i].value) : '';
+        if (!val) missing.push(PRICE_FIELD_LABELS[i]);
+    }
+    return missing;
+}
+
+function collectPriceTableFieldGaps(styleNamesJson, sizeNamesJson) {
+    const ctx = parseSpecLists(styleNamesJson, sizeNamesJson);
+    const gaps = [];
+    for (const style of ctx.styleNames) {
+        for (const size of ctx.sizeNames) {
+            scrollFindStyleSizeRow(style, size, styleNamesJson, sizeNamesJson);
+            const tr = getRowBySpec(style, size, styleNamesJson, sizeNamesJson);
+            if (!tr) {
+                gaps.push({
+                    style: style,
+                    size: size,
+                    missing: ['整行未找到'],
+                    reason: 'row_not_found',
+                });
+                continue;
+            }
+            const missing = inspectRowMissingFieldLabels(tr);
+            if (missing.length) {
+                gaps.push({
+                    style: style,
+                    size: size,
+                    missing: missing,
+                    reason: missing.length === 4 ? 'matrix_cell_empty' : 'partial_empty',
+                });
+            }
+        }
+    }
+    return gaps;
+}
 """
 
 _FILL_ROWS_JS = (
@@ -2836,6 +2878,48 @@ def _audit_sku_spec_coverage(
                     flush=True,
                 )
     return issues
+
+
+_COLLECT_PRICE_TABLE_FIELD_GAPS_JS = (
+    _SKU_TABLE_SCROLL_JS
+    + """
+return collectPriceTableFieldGaps(arguments[0] || '[]', arguments[1] || '[]');
+"""
+)
+
+
+def collect_price_table_field_gaps(
+    page,
+    style_names: list[str],
+    size_names: list[str],
+) -> list[dict]:
+    """扫描价格表，返回每格缺失字段（库存/拼团价/单买价/规格编码）。"""
+    styles_json, sizes_json = _spec_lists_json(style_names, size_names)
+    try:
+        raw = page.run_js(_COLLECT_PRICE_TABLE_FIELD_GAPS_JS, styles_json, sizes_json) or "[]"
+        rows = json.loads(raw) if isinstance(raw, str) else raw
+        if not isinstance(rows, list):
+            return []
+        gaps: list[dict] = []
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            style = str(row.get("style") or "").strip()
+            size = str(row.get("size") or "").strip()
+            missing = [str(x).strip() for x in (row.get("missing") or []) if str(x).strip()]
+            if not style and not size and not missing:
+                continue
+            gaps.append(
+                {
+                    "style": style,
+                    "size": size,
+                    "missing": missing,
+                    "reason": str(row.get("reason") or "").strip(),
+                }
+            )
+        return gaps
+    except Exception:
+        return []
 
 
 def _count_filled_matrix_cells(

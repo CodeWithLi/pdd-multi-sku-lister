@@ -298,6 +298,18 @@ class ListingErrors:
         ListingErrorCode.VALIDATION_REQUIRED: "提交被拦截：页面仍有必填项未填写",
     }
 
+    VALIDATION_DETAIL_REASON_CODES: frozenset[str] = frozenset(
+        {
+            ListingErrorCode.VALIDATION_ERRORS,
+            ListingErrorCode.VALIDATION_INCOMPLETE,
+            ListingErrorCode.VALIDATION_REQUIRED,
+            ListingErrorCode.SUBMIT_BLOCKED,
+            ListingErrorCode.PREVIEW_NOT_READY,
+            ListingErrorCode.PREVIEW_MISSING,
+            ListingErrorCode.PRICE_FILL_PARTIAL,
+        }
+    )
+
     SKIP_REASON_CODES: frozenset[str] = frozenset(
         {
             ListingErrorCode.SLOT_ALIGNMENT_FAILED,
@@ -444,6 +456,33 @@ class ListingErrors:
         # 飞书 humanize 补充
         NUMBERED_IMAGES_SUFFIX = "缺少按数字命名的图片 ({detail})"
         PREVIEW_IMAGE_SUFFIX = "缺少规格预览图（{detail}）"
+
+    @classmethod
+    def format_validation_detail_brief(
+        cls,
+        issues: list[str],
+        *,
+        merchant_code: str = "",
+        max_items: int = 4,
+    ) -> str:
+        """把缺项列表压成飞书一行说明；无具体项时返回空串。"""
+        cleaned: list[str] = []
+        seen: set[str] = set()
+        for item in issues:
+            text = str(item or "").strip()
+            if not text or text in seen:
+                continue
+            seen.add(text)
+            cleaned.append(text)
+        if not cleaned:
+            return ""
+        code = str(merchant_code or "").strip().upper()
+        body = cls.format_numbered(cleaned[: max(1, int(max_items))])
+        if len(cleaned) > max_items:
+            body = f"{body}等{len(cleaned)}项"
+        if code and not body.startswith(code):
+            return cls.sanitize_feishu_failure_reason(f"{code}{body}")[:500]
+        return cls.sanitize_feishu_failure_reason(body)[:500]
 
     @classmethod
     def label(cls, reason_code: str, *, fallback: str = "") -> str:
@@ -939,6 +978,11 @@ class ListingErrors:
             return "缺预览图"
 
         rc = str(reason_code or "").strip()
+        if rc in cls.VALIDATION_DETAIL_REASON_CODES and text:
+            detail = cls.sanitize_feishu_failure_reason(text[:500])
+            if detail and detail not in cls.FEISHU_LABELS.values():
+                return detail
+
         if rc:
             brief = cls.compact_feishu_line("", reason_code=rc, merchant_code=merchant_code)
             if brief:

@@ -27,6 +27,7 @@ from pdd_agent.skills.listing.goods_list_capture import (
 from pdd_agent.skills.listing.multi_spec_page import (
     _safe_exc,
     add_style_and_model_specs,
+    collect_price_table_field_gaps,
     fill_multi_spec_rows,
     wait_multi_sku_rows,
 )
@@ -40,6 +41,10 @@ from pdd_agent.skills.listing.category_page_flow import (
     prepare_category_before_next,
 )
 from pdd_agent.skills.listing.listing_bulk_discount_guard import ensure_bulk_discount_before_submit
+from pdd_agent.skills.listing.listing_page_validation_scan import (
+    build_validation_incomplete_detail,
+    scan_listing_validation_issues,
+)
 from pdd_agent.skills.listing.listing_publish_settings import apply_listing_publish_settings
 from pdd_agent.skills.listing.listing_detail_carousel_guard import (
     ensure_detail_page_carousel_before_title,
@@ -4167,8 +4172,23 @@ def upload_one_listing(
     price_filled = int(fill_stats.get("price_filled") or 0)
     price_total = int(fill_stats.get("price_total") or len(unit.skus))
     if price_filled < price_total:
+        price_gaps = collect_price_table_field_gaps(page, style_names, size_names)
+        validation_detail = build_validation_incomplete_detail(
+            merchant_code=pcode,
+            style_names=style_names,
+            size_names=size_names,
+            price_gaps=price_gaps or list(fill_stats.get("price_failed") or []),
+            price_failed=list(fill_stats.get("price_failed") or []),
+            preview_verified=int(fill_stats.get("preview_verified") or 0),
+            preview_need=int(fill_stats.get("preview_need") or 0),
+            preview_uploaded=int(fill_stats.get("preview_uploaded") or 0),
+        )
+        validation_error = (
+            validation_detail
+            or f"价格表填写 {price_filled}/{price_total} 行未完整"
+        )
         print(
-            f"[{account_id}] [{label}] 价格表未填完整（{price_filled}/{price_total}），跳过提交",
+            f"[{account_id}] [{label}] 价格表未填完整（{price_filled}/{price_total}），跳过提交：{validation_error}",
             flush=True,
         )
         if run_id:
@@ -4186,8 +4206,8 @@ def upload_one_listing(
                 step="verify_price_table",
                 severity="error",
                 reason_code="validation_incomplete",
-                message=f"价格表填写 {price_filled}/{price_total} 行未完整",
-                detail=dict(fill_stats),
+                message=validation_error,
+                detail={**dict(fill_stats), "price_gaps": price_gaps},
             )
         _clear_beforeunload(page)
         return _finish_listing(
@@ -4196,10 +4216,11 @@ def upload_one_listing(
             unit,
             status="retryable",
             reason="validation_incomplete",
+            error=validation_error,
             title=listing_info.get("title", ""),
             retryable=True,
             legacy_status="skipped",
-            extra=dict(fill_stats),
+            extra={**dict(fill_stats), "price_gaps": price_gaps},
             phase="upload",
             step="verify_price_table",
             page_url=str(page.url or ""),
@@ -4343,12 +4364,25 @@ def upload_one_listing(
     ok, submitted_at, blocked_reason = _click_submit(page, account_id, label)
     _clear_beforeunload(page)
     if blocked_reason in {"preview_missing", "validation_errors", "validation_incomplete", "validation_required"}:
+        validation_detail = scan_listing_validation_issues(
+            page,
+            style_names=style_names,
+            size_names=size_names,
+            merchant_code=pcode,
+            fill_stats=fill_stats,
+        )
+        validation_error = validation_detail or ListingErrors.feishu_label(blocked_reason)
+        print(
+            f"[{account_id}] [{label}] 提交被页面拦截（{blocked_reason}）：{validation_error}",
+            flush=True,
+        )
         return _finish_listing(
             run_id,
             account_id,
             unit,
             status="retryable",
             reason=blocked_reason,
+            error=validation_error,
             title=listing_info.get("title", ""),
             retryable=True,
             legacy_status="skipped",
