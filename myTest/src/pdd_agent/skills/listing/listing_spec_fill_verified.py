@@ -104,7 +104,7 @@ def apply_unit_specs_for_verified_fill(
     allow_ai: bool = True,
 ) -> tuple[list[str], dict[str, str]]:
     """
-    enrich → 记录商品表尺寸名 → 槽位对齐 → 刷新 model_codes。
+    enrich → 记录商品表尺寸名 → 语义槽位对齐 → 刷新 model_codes。
     返回 (error_messages, combo_folder → 槽位对齐前的 catalog 尺寸名)。
     """
     from pdd_agent.skills.listing.platform_skip_siblings import (
@@ -122,9 +122,11 @@ def apply_unit_specs_for_verified_fill(
         if combo:
             catalog_by_combo[combo] = str(getattr(sku, "model_name", "") or "").strip()
 
-    from pdd_agent.skills.listing.slot_alignment import apply_slot_alignment
+    from pdd_agent.skills.listing.listing_semantic_slot_alignment import (
+        apply_semantic_slot_alignment,
+    )
 
-    result = apply_slot_alignment(unit, account_id=account_id)
+    result = apply_semantic_slot_alignment(unit, account_id=account_id)
     if not result.ok:
         return list(result.errors), catalog_by_combo
 
@@ -146,6 +148,10 @@ def find_slot_catalog_mismatches(
     catalog_by_combo: dict[str, str],
 ) -> list[dict[str, str]]:
     """组合款：槽位对齐后的尺寸名与商品表推断不一致时记录（如挂件被塞进套尺槽）。"""
+    from pdd_agent.skills.listing.listing_semantic_slot_alignment import (
+        normalize_semantic_size_label,
+    )
+
     mismatches: list[dict[str, str]] = []
     for sku in unit.skus or []:
         combo = str(getattr(sku, "combo_folder", "") or "").strip()
@@ -158,7 +164,13 @@ def find_slot_catalog_mismatches(
             continue
         catalog_size = str(catalog_by_combo.get(combo) or "").strip()
         slot_size = str(getattr(sku, "model_name", "") or "").strip()
-        if catalog_size and slot_size and catalog_size != slot_size:
+        if not catalog_size or not slot_size:
+            continue
+        if normalize_semantic_size_label(catalog_size) == normalize_semantic_size_label(
+            slot_size
+        ):
+            continue
+        if catalog_size != slot_size:
             mismatches.append(
                 {
                     "combo_folder": combo,

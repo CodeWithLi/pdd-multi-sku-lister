@@ -7,6 +7,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -234,11 +235,22 @@ def validate_slot_structure(unit: ListingUnit) -> list[str]:
     return [msg] if msg else []
 
 
-def apply_slot_alignment(unit: ListingUnit, *, account_id: str = "") -> SlotAlignmentResult:
+def apply_slot_alignment(
+    unit: ListingUnit,
+    *,
+    account_id: str = "",
+    signature_for_sku: Callable[[SkuCombo, str], str] | None = None,
+    log_tag: str = "槽位对齐",
+) -> SlotAlignmentResult:
     """
     主款槽位名覆盖兄弟款同索引 SKU 的 model_name，并重写 unit.model_codes。
     调用前应先完成常规 enrich_listing_unit_specs。
+
+    signature_for_sku: 默认按 YKL 子编码签名；语义模式见 listing_semantic_slot_alignment。
     """
+    if signature_for_sku is None:
+        signature_for_sku = lambda sku, code: combo_slot_signature(sku.combo_folder, code)
+
     prefix = f"[{account_id}] " if account_id else ""
     errors = validate_slot_structure(unit)
     if errors:
@@ -257,7 +269,7 @@ def apply_slot_alignment(unit: ListingUnit, *, account_id: str = "") -> SlotAlig
             errors=[ListingErrors.Msg.SLOT_REF_NO_SKU.format(label=unit.listing_label, reference=reference)],
         )
 
-    ref_signatures = [combo_slot_signature(sku.combo_folder, reference) for sku in ref_skus]
+    ref_signatures = [signature_for_sku(sku, reference) for sku in ref_skus]
     slot_labels = [sku.model_name for sku in ref_skus]
     sig_to_label = dict(zip(ref_signatures, slot_labels))
     slot_count = len(slot_labels)
@@ -282,7 +294,7 @@ def apply_slot_alignment(unit: ListingUnit, *, account_id: str = "") -> SlotAlig
         used_labels: set[str] = set()
         unmatched: list[SkuCombo] = []
         for sku in skus:
-            sig = combo_slot_signature(sku.combo_folder, code)
+            sig = signature_for_sku(sku, code)
             target_label = sig_to_label.get(sig)
             if target_label and target_label not in used_labels:
                 old = sku.model_name
@@ -290,7 +302,7 @@ def apply_slot_alignment(unit: ListingUnit, *, account_id: str = "") -> SlotAlig
                 used_labels.add(target_label)
                 if prefix and old != sku.model_name:
                     print(
-                        f"{prefix}[{unit.listing_label}] 槽位对齐 {code} [{sig}]："
+                        f"{prefix}[{unit.listing_label}] {log_tag} {code} [{sig}]："
                         f"{sku.combo_folder} {old} → {sku.model_name}",
                         flush=True,
                     )
@@ -301,7 +313,7 @@ def apply_slot_alignment(unit: ListingUnit, *, account_id: str = "") -> SlotAlig
         unmatched_sorted = _sort_skus_by_slot(unmatched, code)
         if len(unmatched_sorted) > len(remaining_labels):
             first = unmatched_sorted[0]
-            sig = combo_slot_signature(first.combo_folder, code)
+            sig = signature_for_sku(first, code)
             return SlotAlignmentResult(
                 ok=False,
                 errors=[
@@ -318,9 +330,9 @@ def apply_slot_alignment(unit: ListingUnit, *, account_id: str = "") -> SlotAlig
             sku.model_name = target_label
             used_labels.add(target_label)
             if prefix and old != sku.model_name:
-                sig = combo_slot_signature(sku.combo_folder, code)
+                sig = signature_for_sku(sku, code)
                 print(
-                    f"{prefix}[{unit.listing_label}] 槽位对齐 {code} [{sig}]："
+                    f"{prefix}[{unit.listing_label}] {log_tag} {code} [{sig}]："
                     f"{sku.combo_folder} {old} → {sku.model_name}",
                     flush=True,
                 )
@@ -359,7 +371,7 @@ def apply_slot_alignment(unit: ListingUnit, *, account_id: str = "") -> SlotAlig
         )
 
     print(
-        f"{prefix}[{unit.listing_label}] 槽位对齐完成：主款={reference}，"
+        f"{prefix}[{unit.listing_label}] {log_tag}完成：主款={reference}，"
         f"{slot_count} 槽 × {len(style_codes)} 款 = {expected_skus} SKU",
         flush=True,
     )

@@ -3960,7 +3960,7 @@ def upload_one_listing(
             allow_ai=True,
         )
         preflight_step = "spec_fill_verify_preflight"
-        preflight_reason = "spec_fill_verify_failed"
+        preflight_reason = ListingErrorCode.SPEC_FILL_VERIFY_FAILED
     else:
         spec_errors = apply_unit_listing_specs(
             unit,
@@ -4315,11 +4315,11 @@ def upload_one_listing(
     price_total = int(fill_stats.get("price_total") or len(unit.skus))
     if spec_fill_verify_test and fill_stats.get("spec_fill_verify_mode"):
         if not fill_stats.get("verify_passed"):
-            validation_error = (
-                f"规格校验填表未通过：填写 {price_filled}/{price_total}，"
-                f"校验问题 {len(fill_stats.get('verify_issues') or [])}，"
-                f"槽位/商品表不一致 {len(fill_stats.get('slot_catalog_mismatches') or [])}"
+            from pdd_agent.skills.listing.listing_spec_fill_failure_detail import (
+                format_spec_fill_verify_feishu_reason,
             )
+
+            validation_error = format_spec_fill_verify_feishu_reason(fill_stats)
             print(
                 f"[{account_id}] [{label}] {validation_error}，跳过提交",
                 flush=True,
@@ -4340,7 +4340,7 @@ def upload_one_listing(
                     phase="upload",
                     step="spec_fill_verify",
                     severity="error",
-                    reason_code="spec_fill_verify_failed",
+                    reason_code=ListingErrorCode.SPEC_FILL_VERIFY_FAILED,
                     message=validation_error,
                     detail=dict(fill_stats),
                 )
@@ -4350,7 +4350,7 @@ def upload_one_listing(
                 account_id,
                 unit,
                 status="retryable",
-                reason="spec_fill_verify_failed",
+                reason=ListingErrorCode.SPEC_FILL_VERIFY_FAILED,
                 error=validation_error,
                 title=listing_info.get("title", ""),
                 retryable=True,

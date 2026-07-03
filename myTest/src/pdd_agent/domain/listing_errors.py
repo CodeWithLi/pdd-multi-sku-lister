@@ -28,6 +28,7 @@ class ListingErrorCode:
     CATALOG_PARSE_WARNING = "catalog_parse_warning"
     NO_VALID_UNITS = "no_valid_units"
     SLOT_ALIGNMENT_FAILED = "slot_alignment_failed"
+    SPEC_FILL_VERIFY_FAILED = "spec_fill_verify_failed"
 
     # 飞书商品表
     FEISHU_PRODUCT_CATALOG_MISSING = "feishu_product_catalog_missing"
@@ -132,6 +133,7 @@ class ListingErrors:
         ListingErrorCode.CATALOG_PARSE_WARNING: "素材目录解析警告",
         ListingErrorCode.NO_VALID_UNITS: "无有效上架单元",
         ListingErrorCode.SLOT_ALIGNMENT_FAILED: "兄弟款规格数量不一致",
+        ListingErrorCode.SPEC_FILL_VERIFY_FAILED: "规格校验填表未通过",
         ListingErrorCode.FEISHU_PRODUCT_CATALOG_MISSING: "飞书商品/定价数据缺失",
         ListingErrorCode.FEISHU_PRICING_MISSING: "定价数据缺失",
         ListingErrorCode.FEISHU_CONTROL_MISSING: "控价数据缺失",
@@ -237,6 +239,7 @@ class ListingErrors:
         ListingErrorCode.CATALOG_PARSE_WARNING: "素材目录解析有问题",
         ListingErrorCode.NO_VALID_UNITS: "没有可上架的套图（素材或校验未通过）",
         ListingErrorCode.SLOT_ALIGNMENT_FAILED: "兄弟款规格数量不一致",
+        ListingErrorCode.SPEC_FILL_VERIFY_FAILED: "规格校验填表未通过（款式/尺寸/编码或预览图校验失败）",
         ListingErrorCode.TASK_CANCELLED: "任务已被用户停止",
         ListingErrorCode.USER_CANCELLED: "任务已被用户停止",
         ListingErrorCode.FEISHU_PRODUCT_CATALOG_MISSING: "飞书商品/定价数据缺失",
@@ -332,12 +335,14 @@ class ListingErrors:
             ListingErrorCode.CATEGORY_SEARCH_FAILED,
             ListingErrorCode.PUBLISH_SETTINGS_INCOMPLETE,
             ListingErrorCode.REJECTED_AFTER_PUBLISH,
+            ListingErrorCode.SPEC_FILL_VERIFY_FAILED,
         }
     )
 
     SKIP_REASON_CODES: frozenset[str] = frozenset(
         {
             ListingErrorCode.SLOT_ALIGNMENT_FAILED,
+            ListingErrorCode.SPEC_FILL_VERIFY_FAILED,
             ListingErrorCode.PREFLIGHT_NO_SKUS,
             ListingErrorCode.PREFLIGHT_NO_CAROUSEL,
             ListingErrorCode.PREFLIGHT_NO_DETAIL,
@@ -413,6 +418,7 @@ class ListingErrors:
             ListingErrorCode.CATALOG_PARSE_WARNING,
             ListingErrorCode.NO_VALID_UNITS,
             ListingErrorCode.SLOT_ALIGNMENT_FAILED,
+            ListingErrorCode.SPEC_FILL_VERIFY_FAILED,
         }
     )
 
@@ -1003,6 +1009,11 @@ class ListingErrors:
             return "缺预览图"
 
         rc = str(reason_code or "").strip()
+        if rc == ListingErrorCode.SPEC_FILL_VERIFY_FAILED and text:
+            detail = cls.sanitize_feishu_failure_reason(text[:500])
+            if detail and not re.fullmatch(r"[a-z0-9_]+", detail, flags=re.I):
+                return detail
+
         if rc in cls.VALIDATION_DETAIL_REASON_CODES and text:
             detail = cls.sanitize_feishu_failure_reason(text[:500])
             if detail and detail not in cls.FEISHU_LABELS.values():
