@@ -3879,6 +3879,7 @@ def upload_one_listing(
     run_id: str = "",
     slot_alignment_test: bool = False,
     spec_fill_verify_test: bool = False,
+    primary_style_first_test: bool = False,
     category_next_burst_demo: bool = True,
 ) -> dict[str, Any]:
     """对单个上架单元执行完整发布流程。"""
@@ -3925,6 +3926,16 @@ def upload_one_listing(
         )
 
         validate_unit_image_files(unit, source_run_id=run_id, account_id=account_id)
+    if primary_style_first_test:
+        from pdd_agent.skills.listing.listing_primary_style_first import (
+            apply_primary_style_first_to_unit,
+        )
+
+        apply_primary_style_first_to_unit(
+            unit,
+            account_id=account_id,
+            enabled=True,
+        )
     _log_unit_spec_snapshot(account_id, unit)
     covers = [str(p.resolve()) for p in unit.carousel_images]
     details = [str(p.resolve()) for p in unit.detail_images]
@@ -4724,6 +4735,7 @@ def run_listing_uploads(
     run_id: str = "",
     slot_alignment_test: bool = False,
     spec_fill_verify_test: bool = False,
+    primary_style_first_test: bool = False,
     category_next_burst_demo: bool = True,
 ) -> list[dict[str, Any]]:
     """顺序上架多个单元；单套失败记日志并继续，手动取消时停止。"""
@@ -4755,6 +4767,7 @@ def run_listing_uploads(
                 run_id=run_id,
                 slot_alignment_test=slot_alignment_test,
                 spec_fill_verify_test=spec_fill_verify_test,
+                primary_style_first_test=primary_style_first_test,
                 category_next_burst_demo=category_next_burst_demo,
             )
             results.append(item_result)

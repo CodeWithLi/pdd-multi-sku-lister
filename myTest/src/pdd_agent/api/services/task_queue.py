@@ -193,6 +193,7 @@ class TaskQueueWorker:
                     retry_item=dict(payload.get("retry_item") or {}),
                     slot_alignment_test=bool(payload.get("slot_alignment_test")),
                     spec_fill_verify_test=bool(payload.get("spec_fill_verify_test")),
+                    primary_style_first_test=bool(payload.get("primary_style_first_test")),
                     category_next_burst_demo=bool(payload.get("category_next_burst_demo", True)),
                     material_source=str(payload.get("material_source") or ""),
                     pipeline_id=str(payload.get("pipeline_id") or ""),
@@ -344,6 +345,7 @@ def enqueue_listing_task(
     retry_item: dict | None = None,
     slot_alignment_test: bool = False,
     spec_fill_verify_test: bool = False,
+    primary_style_first_test: bool = False,
     pipeline_id: str = "",
     material_source: str = "",
 ):
@@ -355,6 +357,7 @@ def enqueue_listing_task(
         "retry_item": dict(retry_item or {}),
         "slot_alignment_test": bool(slot_alignment_test),
         "spec_fill_verify_test": bool(spec_fill_verify_test),
+        "primary_style_first_test": bool(primary_style_first_test),
         "material_source": str(material_source or ""),
     }
     if pipeline_id:

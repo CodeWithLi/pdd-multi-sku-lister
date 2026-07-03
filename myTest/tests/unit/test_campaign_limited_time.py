@@ -7,6 +7,7 @@ from pdd_agent.skills.campaign.limited_time import (
     _click_product_modal_header_select_all,
     _ensure_page_binding,
     _is_sync_marketing_checkbox_label,
+    _merge_price_filter_passes,
     _price_filter_failure_message,
     _scroll_product_modal_row_into_view,
 )
@@ -168,6 +169,33 @@ def test_price_filter_failure_message_when_mapping_missing():
     message = _price_filter_failure_message({"status": "skipped", "reason": "no_published_mapping_ids"})
     assert "控价区间" in message
     assert "映射" in message
+
+
+def test_merge_price_filter_passes_combines_decisions_and_deleted_ids():
+    earlier = {
+        "kept_product_ids": ["111", "222"],
+        "deleted_product_ids": ["333"],
+        "decisions": [
+            {"product_id": "111", "keep": True},
+            {"product_id": "333", "keep": False, "reason": "price_below_retail_cost"},
+        ],
+    }
+    later = {
+        "status": "success",
+        "kept_product_ids": ["111"],
+        "deleted_product_ids": ["222"],
+        "decisions": [
+            {"product_id": "111", "keep": True},
+            {"product_id": "222", "keep": False, "reason": "price_below_retail_cost"},
+        ],
+        "phase": "pre_submit",
+    }
+    merged = _merge_price_filter_passes(earlier, later)
+
+    assert merged["kept_product_ids"] == ["111"]
+    assert merged["deleted_product_ids"] == ["333", "222"]
+    assert {item["product_id"] for item in merged["decisions"]} == {"111", "222", "333"}
+    assert merged["pre_submit"] == later
 
 
 def test_product_modal_select_all_helpers_are_importable():

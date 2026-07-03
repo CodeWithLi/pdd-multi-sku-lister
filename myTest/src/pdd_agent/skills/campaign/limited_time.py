@@ -3789,13 +3789,55 @@ def _delete_activity_product_by_id(page: DpPage, product_id: str) -> dict[str, A
     return result
 
 
+def _merge_price_filter_passes(
+    earlier: dict[str, Any],
+    later: dict[str, Any],
+) -> dict[str, Any]:
+    """合并立减后筛选与创建前复核，decisions 同商品 ID 以后者为准。"""
+    merged = dict(later)
+    later_ids = {
+        str(item.get("product_id") or "").strip()
+        for item in (later.get("decisions") or [])
+        if str(item.get("product_id") or "").strip()
+    }
+    combined_decisions = list(later.get("decisions") or [])
+    for item in earlier.get("decisions") or []:
+        product_id = str(item.get("product_id") or "").strip()
+        if product_id and product_id not in later_ids:
+            combined_decisions.append(item)
+    merged["decisions"] = combined_decisions
+    merged["deleted_product_ids"] = list(
+        dict.fromkeys(
+            list(earlier.get("deleted_product_ids") or [])
+            + list(later.get("deleted_product_ids") or [])
+        )
+    )
+    merged["pre_submit"] = later
+    return merged
+
+
 def _filter_activity_products_by_price(
     page: DpPage,
     account_id: str,
     mapping_ids: list[str],
     *,
     pdd_product_ids: list[str] | None = None,
+    phase: str = "",
 ) -> dict[str, Any]:
+    from pdd_agent.api.services.pipeline_limited_time_first_spec_price_policy import (
+        try_pipeline_first_spec_price_filter,
+    )
+
+    delegated = try_pipeline_first_spec_price_filter(
+        page,
+        account_id,
+        mapping_ids,
+        pdd_product_ids=pdd_product_ids,
+        phase=phase,
+    )
+    if delegated is not None:
+        return delegated
+
     target_state = _load_campaign_price_targets(
         mapping_ids,
         account_id=account_id,
@@ -3870,8 +3912,10 @@ def _filter_activity_products_by_price(
                 deleted.append(product_id)
         decisions.append(decision)
 
+    phase_label = str(phase or "").strip()
+    filter_label = "创建前活动价格复核" if phase_label == "pre_submit" else "活动价格筛选"
     print(
-        f"[{account_id}] 活动价格筛选：保留 {len(kept)} 个，删除 {len(deleted)} 个",
+        f"[{account_id}] {filter_label}：保留 {len(kept)} 个，删除 {len(deleted)} 个",
         flush=True,
     )
     all_feishu_missing = bool(decisions) and all(
@@ -3883,7 +3927,8 @@ def _filter_activity_products_by_price(
     return {
         "status": status,
         "reason": "feishu_data_missing" if all_feishu_missing else "",
-        "step": "campaign_price_filter",
+        "step": "campaign_price_filter_pre_submit" if phase_label == "pre_submit" else "campaign_price_filter",
+        "phase": phase_label or "after_reduction",
         "kept_product_ids": kept,
         "deleted_product_ids": deleted,
         "decisions": decisions,
@@ -4339,6 +4384,46 @@ def setup_limited_time_campaign(
                 "step": "uncheck_surprise_discount",
                 "error": "同步营销优惠复选框仍处于勾选状态",
                 "checkbox": checkbox,
+                "price_filter": price_filter,
+                "batch_reduction": batch_reduction,
+                "promotion_dimension": promotion_dimension,
+                "product_selection": product_selection,
+                "current_url": page.url,
+                "selected_pdd_product_ids": selected_pdd_product_ids,
+                "published_mapping_ids": selected_mapping_ids,
+            }
+
+        kept_ids = [
+            str(pid).strip()
+            for pid in (price_filter.get("kept_product_ids") or [])
+            if str(pid).strip()
+        ]
+        pre_submit_filter = _filter_activity_products_by_price(
+            page,
+            account_id,
+            selected_mapping_ids,
+            pdd_product_ids=kept_ids or selected_pdd_product_ids,
+            phase="pre_submit",
+        )
+        price_filter = _merge_price_filter_passes(price_filter, pre_submit_filter)
+        if pre_submit_filter.get("status") == "skipped":
+            return {
+                "status": "failed",
+                "step": "campaign_price_filter_pre_submit",
+                "error": _price_filter_failure_message(pre_submit_filter),
+                "price_filter": price_filter,
+                "batch_reduction": batch_reduction,
+                "promotion_dimension": promotion_dimension,
+                "product_selection": product_selection,
+                "current_url": page.url,
+                "selected_pdd_product_ids": selected_pdd_product_ids,
+                "published_mapping_ids": selected_mapping_ids,
+            }
+        if pre_submit_filter.get("status") in {"no_eligible_products", "feishu_data_missing"}:
+            return {
+                "status": "failed",
+                "step": "campaign_price_filter_pre_submit",
+                "error": _price_filter_failure_message(pre_submit_filter),
                 "price_filter": price_filter,
                 "batch_reduction": batch_reduction,
                 "promotion_dimension": promotion_dimension,

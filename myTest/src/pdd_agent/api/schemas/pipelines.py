@@ -41,6 +41,7 @@ class IntegratedPipelineStartRequest(BaseModel):
     platform_listing_code: str = ""
     slot_alignment_test: bool = True
     spec_fill_verify_test: bool = False
+    primary_style_first_test: bool = False
     category_next_burst_demo: bool = True
     skip_listing: bool = False
     listing_skip_selectors: list[str] = Field(default_factory=list)
@@ -87,6 +88,7 @@ class IntegratedPipelineBatchStartRequest(BaseModel):
     platform_listing_code: str = ""
     slot_alignment_test: bool = True
     spec_fill_verify_test: bool = False
+    primary_style_first_test: bool = False
     category_next_burst_demo: bool = True
     skip_listing: bool = False
     listing_skip_selectors: list[str] = Field(default_factory=list)
@@ -174,6 +176,7 @@ class IntegratedPipelineResponse(BaseModel):
     demo_mode: bool = False
     slot_alignment_test: bool = False
     spec_fill_verify_test: bool = False
+    primary_style_first_test: bool = False
     category_next_burst_demo: bool = True
     batch_id: str = ""
     activity_jitter_seconds: int = 0

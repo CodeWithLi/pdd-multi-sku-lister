@@ -237,6 +237,10 @@ class PipelineIntegrationConfig(BaseModel):
     )
     accessory_cost_float_min: float = Field(default=0.0, ge=0, description="配件成本定价模式：拼单价总浮动下限（元）")
     accessory_cost_float_max: float = Field(default=5.0, ge=0, description="配件成本定价模式：拼单价总浮动上限（元）")
+    limited_time_first_spec_price_enabled: bool = Field(
+        default=True,
+        description="限时限量购：仅第一个规格立减后价对比商品编码零售综合成本（整合链路策略）",
+    )
 
 
 class PddActivityLogConfig(BaseModel):

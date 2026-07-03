@@ -227,6 +227,7 @@ def enqueue_listing_batch_for_pipeline(
             "pipeline_id": pipeline_id,
             "slot_alignment_test": bool(payload_base.get("slot_alignment_test")),
             "spec_fill_verify_test": bool(payload_base.get("spec_fill_verify_test")),
+            "primary_style_first_test": bool(payload_base.get("primary_style_first_test")),
             "category_next_burst_demo": bool(payload_base.get("category_next_burst_demo", True)),
             "material_source": str(payload_base.get("material_source") or ""),
         },

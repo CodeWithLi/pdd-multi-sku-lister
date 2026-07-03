@@ -275,6 +275,7 @@ async def tasks_listing(body: ListingTaskRequest):
             category_keyword=body.category_keyword,
             platform_listing_code=body.platform_listing_code,
             slot_alignment_test=body.slot_alignment_test,
+            primary_style_first_test=body.primary_style_first_test,
             material_source=body.material_source,
         )
         record = TaskRunStore().load(run_id)
@@ -292,6 +293,7 @@ async def tasks_listing(body: ListingTaskRequest):
         platform_listing_code=body.platform_listing_code,
         scheduled_at=datetime.now(),
         slot_alignment_test=body.slot_alignment_test,
+        primary_style_first_test=body.primary_style_first_test,
         material_source=body.material_source,
     )
     return ListingTaskResponse(
@@ -381,6 +383,7 @@ async def tasks_listing_batch(body: ListingBatchTaskRequest):
             platform_listing_code=body.platform_listing_code,
             scheduled_at=scheduled_at,
             slot_alignment_test=body.slot_alignment_test,
+            primary_style_first_test=body.primary_style_first_test,
             material_source=body.material_source,
         )
         runs.append(BatchRunItem(account_id=account_id, run_id=run_id, status=RunStatus.PENDING))
