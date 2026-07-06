@@ -80,6 +80,7 @@ def _apply_listing_product_attributes_after_title(
     account_id: str,
     label: str,
 ) -> None:
+    time.sleep(2.5)
     try:
         result = fill_listing_product_attributes(
             page,
@@ -87,9 +88,13 @@ def _apply_listing_product_attributes_after_title(
             listing_label=label,
         )
         if not result.get("ok"):
+            _log_json_summary = {
+                "filled": result.get("filled_count", 0),
+                "failed": result.get("failed_count", 0),
+                "codes": [f.get("code") for f in result.get("failed") or []],
+            }
             print(
-                f"[{account_id}] [{label}] 商品属性未全部填写成功："
-                f"成功 {result.get('filled_count', 0)}，失败 {result.get('failed_count', 0)}",
+                f"[{account_id}] [{label}] 商品属性未全部填写成功：{_log_json_summary}",
                 flush=True,
             )
     except Exception as exc:
