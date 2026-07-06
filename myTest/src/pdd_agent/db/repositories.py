@@ -31,6 +31,7 @@ from pdd_agent.db.models import (
     FailureCycleRelistPollLogORM,
     ListedAssetFolderORM,
     TaskQueueORM,
+    WecomDailyContentORM,
 )
 from pdd_agent.db.session import is_database_available, session_scope
 
@@ -2776,3 +2777,57 @@ def latest_failure_cycle_relist_actions_by_record_ids(
                 session.expunge(row)
                 latest[rid] = row
         return latest
+
+
+def get_wecom_daily_content_row(content_date: date) -> WecomDailyContentORM | None:
+    """读取指定日期的日报手动内容；无记录返回 None。"""
+    if not is_database_available():
+        return None
+    with session_scope() as session:
+        row = (
+            session.query(WecomDailyContentORM)
+            .filter(WecomDailyContentORM.content_date == content_date)
+            .first()
+        )
+        if row:
+            session.expunge(row)
+        return row
+
+
+def upsert_wecom_daily_content_row(
+    *,
+    content_date: date,
+    pdd_in_progress: str = "",
+    taobao_netdisk_materials: str = "",
+    taobao_in_progress: str = "",
+) -> WecomDailyContentORM | None:
+    """按自然日写入日报手动内容；同一天重复保存则覆盖。"""
+    if not is_database_available():
+        return None
+    now = datetime.now()
+    with session_scope() as session:
+        row = (
+            session.query(WecomDailyContentORM)
+            .filter(WecomDailyContentORM.content_date == content_date)
+            .first()
+        )
+        if row:
+            row.pdd_in_progress = str(pdd_in_progress or "")
+            row.taobao_netdisk_materials = str(taobao_netdisk_materials or "")
+            row.taobao_in_progress = str(taobao_in_progress or "")
+            row.updated_at = now
+        else:
+            row = WecomDailyContentORM(
+                record_id=uuid.uuid4().hex,
+                content_date=content_date,
+                pdd_in_progress=str(pdd_in_progress or ""),
+                taobao_netdisk_materials=str(taobao_netdisk_materials or ""),
+                taobao_in_progress=str(taobao_in_progress or ""),
+                created_at=now,
+                updated_at=now,
+            )
+            session.add(row)
+        session.flush()
+        session.refresh(row)
+        session.expunge(row)
+        return row

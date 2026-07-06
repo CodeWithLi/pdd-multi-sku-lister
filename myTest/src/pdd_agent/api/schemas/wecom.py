@@ -7,6 +7,7 @@ from typing import Any, Literal
 from pydantic import BaseModel, Field
 
 WecomMsgType = Literal["text", "markdown", "markdown_v2", "raw"]
+WecomDailyReportPlatform = Literal["pdd", "taobao"]
 
 
 class WecomConfigOut(BaseModel):
@@ -55,9 +56,29 @@ class WecomTestSendOut(BaseModel):
     response: dict[str, Any] = Field(default_factory=dict)
 
 
+class WecomDailyReportTriggerIn(BaseModel):
+    platform: WecomDailyReportPlatform = "pdd"
+
+
 class WecomDailyReportTriggerOut(BaseModel):
     ok: bool
+    platform: WecomDailyReportPlatform = "pdd"
     message: str = ""
+
+
+class WecomDailyContentOut(BaseModel):
+    content_date: str = ""
+    pdd_in_progress: str = ""
+    taobao_netdisk_materials: str = ""
+    taobao_in_progress: str = ""
+    updated_at: str = ""
+    database_available: bool = False
+
+
+class WecomDailyContentUpdateIn(BaseModel):
+    pdd_in_progress: str = ""
+    taobao_netdisk_materials: str = ""
+    taobao_in_progress: str = ""
 
 
 class WecomHealthOut(BaseModel):
@@ -83,11 +104,14 @@ class WecomDailyReportStoreOut(BaseModel):
 
 
 class WecomDailyReportPreviewOut(BaseModel):
+    platform: WecomDailyReportPlatform = "pdd"
     report_date: str
-    repo_path: str
-    commit_count: int
-    progress_summary: str
+    repo_path: str = ""
+    commit_count: int = 0
+    progress_summary: str = ""
     store_progress: str = ""
+    netdisk_materials: str = ""
+    in_progress: str = ""
     listing_window_start: str = ""
     listing_window_end: str = ""
     store_summaries: list[WecomDailyReportStoreOut] = Field(default_factory=list)

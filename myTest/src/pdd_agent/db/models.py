@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import date, datetime
 
-from sqlalchemy import Boolean, DateTime, Float, Index, Integer, String, Text, func
+from sqlalchemy import Boolean, Date, DateTime, Float, Index, Integer, String, Text, func
 from sqlalchemy.dialects.mysql import JSON as MySQLJSON
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -589,6 +589,25 @@ class ProductStyleColorORM(Base):
     source: Mapped[str] = mapped_column(String(16), default="ai", nullable=False)
     image_path: Mapped[str] = mapped_column(String(512), default="", nullable=False)
     image_mtime: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, server_default=func.now(), nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, server_default=func.now(), onupdate=func.now(), nullable=False
+    )
+
+
+class WecomDailyContentORM(Base):
+    """企业微信日报每日手动填写内容（按自然日一条，当天覆盖）。"""
+
+    __tablename__ = "wecom_daily_contents"
+    __table_args__ = (Index("ux_wecom_daily_contents_content_date", "content_date", unique=True),)
+
+    record_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    content_date: Mapped[date] = mapped_column(Date, nullable=False)
+    pdd_in_progress: Mapped[str] = mapped_column(Text, default="", nullable=False)
+    taobao_netdisk_materials: Mapped[str] = mapped_column(Text, default="", nullable=False)
+    taobao_in_progress: Mapped[str] = mapped_column(Text, default="", nullable=False)
     created_at: Mapped[datetime] = mapped_column(
         DateTime, server_default=func.now(), nullable=False
     )

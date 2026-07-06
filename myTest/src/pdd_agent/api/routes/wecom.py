@@ -10,7 +10,11 @@ from fastapi import APIRouter, HTTPException
 from pdd_agent.api.schemas.wecom import (
     WecomConfigOut,
     WecomConfigUpdateIn,
+    WecomDailyContentOut,
+    WecomDailyContentUpdateIn,
+    WecomDailyReportPlatform,
     WecomDailyReportPreviewOut,
+    WecomDailyReportTriggerIn,
     WecomDailyReportTriggerOut,
     WecomHealthOut,
     WecomTestSendIn,
@@ -32,7 +36,15 @@ from pdd_agent.integrations.wecom.config import (
     wecom_configured,
 )
 from pdd_agent.integrations.git.digest import GitDigestError
+from pdd_agent.integrations.wecom.daily_content import (
+    PddDailyContent,
+    TaobaoDailyContent,
+    WecomDailyContent,
+    load_wecom_daily_content,
+    save_wecom_daily_content,
+)
 from pdd_agent.integrations.wecom.daily_report import generate_daily_report_draft
+from pdd_agent.db.session import is_database_available
 
 router = APIRouter(prefix="/wecom", tags=["wecom"])
 
@@ -166,24 +178,27 @@ def test_wecom_send(body: WecomTestSendIn):
     )
 
 
-@router.get("/daily-report/preview", response_model=WecomDailyReportPreviewOut)
-def preview_daily_report():
-    """采集今日 Git 提交，经 LLM 摘要后返回日报草稿（不发送企业微信）。"""
-    try:
-        draft = generate_daily_report_draft()
-    except GitDigestError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-    except RuntimeError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-    except Exception as exc:
-        raise HTTPException(status_code=500, detail=f"生成日报失败: {exc}") from exc
+def _daily_content_out(content: WecomDailyContent) -> WecomDailyContentOut:
+    return WecomDailyContentOut(
+        content_date=str(content.content_date or ""),
+        pdd_in_progress=str(content.pdd.in_progress or ""),
+        taobao_netdisk_materials=str(content.taobao.netdisk_materials or ""),
+        taobao_in_progress=str(content.taobao.in_progress or ""),
+        updated_at=str(content.updated_at or ""),
+        database_available=is_database_available(),
+    )
 
+
+def _preview_out(draft) -> WecomDailyReportPreviewOut:
     return WecomDailyReportPreviewOut(
+        platform=draft.platform,
         report_date=draft.report_date,
         repo_path=draft.repo_path,
         commit_count=draft.commit_count,
         progress_summary=draft.progress_summary,
         store_progress=draft.store_progress,
+        netdisk_materials=draft.netdisk_materials,
+        in_progress=draft.in_progress,
         listing_window_start=draft.listing_window_start,
         listing_window_end=draft.listing_window_end,
         store_summaries=[
@@ -209,18 +224,66 @@ def preview_daily_report():
     )
 
 
+@router.get("/daily-content", response_model=WecomDailyContentOut)
+def get_wecom_daily_content():
+    return _daily_content_out(load_wecom_daily_content())
+
+
+@router.put("/daily-content", response_model=WecomDailyContentOut)
+def update_wecom_daily_content(body: WecomDailyContentUpdateIn):
+    if not is_database_available():
+        raise HTTPException(status_code=503, detail="数据库不可用，无法保存日报手动内容")
+    try:
+        saved = save_wecom_daily_content(
+            WecomDailyContent(
+                pdd=PddDailyContent(in_progress=str(body.pdd_in_progress or "")),
+                taobao=TaobaoDailyContent(
+                    netdisk_materials=str(body.taobao_netdisk_materials or ""),
+                    in_progress=str(body.taobao_in_progress or ""),
+                ),
+            )
+        )
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    return _daily_content_out(saved)
+
+
+@router.get("/daily-report/preview", response_model=WecomDailyReportPreviewOut)
+def preview_daily_report(platform: WecomDailyReportPlatform = "pdd"):
+    """预览指定平台日报草稿（不发送企业微信）。"""
+    try:
+        draft = generate_daily_report_draft(platform=platform)
+    except GitDigestError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"生成日报失败: {exc}") from exc
+    return _preview_out(draft)
+
+
 @router.post("/daily-report/trigger", response_model=WecomDailyReportTriggerOut)
-def trigger_daily_report():
-    """手动触发：立即生成并发送企业微信日报。"""
+def trigger_daily_report(body: WecomDailyReportTriggerIn | None = None):
+    """手动触发：立即生成并发送指定平台日报。"""
+    platform = (body.platform if body else "pdd")
     cfg = load_wecom_config()
     if not wecom_configured(cfg):
         raise HTTPException(status_code=400, detail="请先启用企业微信并配置 Webhook")
+    label = "PDD" if platform == "pdd" else "淘宝"
     try:
-        ok = get_wecom_daily_report_scheduler().trigger_now()
+        ok = get_wecom_daily_report_scheduler().trigger_now(platform)
     except RuntimeError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"发送日报失败: {exc}") from exc
     if not ok:
-        return WecomDailyReportTriggerOut(ok=False, message="日报发送失败，请查看后台日志")
-    return WecomDailyReportTriggerOut(ok=True, message="企业微信日报已发送")
+        return WecomDailyReportTriggerOut(
+            ok=False,
+            platform=platform,
+            message=f"{label}日报发送失败，请查看后台日志",
+        )
+    return WecomDailyReportTriggerOut(
+        ok=True,
+        platform=platform,
+        message=f"{label}日报已发送",
+    )

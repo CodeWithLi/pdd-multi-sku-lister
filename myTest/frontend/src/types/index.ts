@@ -1403,6 +1403,60 @@ export interface WecomTestSendResult {
   response: Record<string, unknown>
 }
 
+export interface WecomDailyContent {
+  content_date: string
+  pdd_in_progress: string
+  taobao_netdisk_materials: string
+  taobao_in_progress: string
+  updated_at: string
+  database_available: boolean
+}
+
+export interface WecomDailyContentUpdatePayload {
+  pdd_in_progress: string
+  taobao_netdisk_materials: string
+  taobao_in_progress: string
+}
+
+export type WecomDailyReportPlatform = 'pdd' | 'taobao'
+
+export interface WecomDailyReportPreview {
+  platform: WecomDailyReportPlatform
+  report_date: string
+  repo_path: string
+  commit_count: number
+  progress_summary: string
+  store_progress: string
+  netdisk_materials: string
+  in_progress: string
+  listing_window_start: string
+  listing_window_end: string
+  store_summaries: Array<{
+    account_id: string
+    shop_display_name: string
+    count: number
+  }>
+  message: string
+  commits: Array<{
+    short_hash: string
+    author: string
+    committed_at: string
+    subject: string
+    body: string
+    file_count: number
+  }>
+}
+
+export interface WecomDailyReportTriggerPayload {
+  platform: WecomDailyReportPlatform
+}
+
+export interface WecomDailyReportTriggerResult {
+  ok: boolean
+  platform: WecomDailyReportPlatform
+  message: string
+}
+
 export interface WecomHealth {
   configured: boolean
   enabled: boolean

@@ -65,4 +65,5 @@ async def test_scheduler_sends_after_target_time(monkeypatch):
 
     await scheduler._maybe_send_daily_report()
     send_mock.assert_called_once()
+    assert send_mock.call_args[0][0] == "pdd"
     assert scheduler.last_run_date == date(2026, 7, 6)

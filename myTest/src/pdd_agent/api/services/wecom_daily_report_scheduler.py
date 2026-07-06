@@ -1,4 +1,4 @@
-"""企业微信日报定时发送调度。"""
+"""企业微信日报定时发送调度（仅 PDD）。"""
 
 from __future__ import annotations
 
@@ -8,7 +8,7 @@ from datetime import date, datetime, timedelta, timezone
 from pdd_agent.core.logging import get_logger
 from pdd_agent.integrations.wecom.client import WecomAPIError, send_text
 from pdd_agent.integrations.wecom.config import load_wecom_config, wecom_configured
-from pdd_agent.integrations.wecom.daily_report import generate_daily_report_draft
+from pdd_agent.integrations.wecom.daily_report import DailyReportPlatform, generate_daily_report_draft
 
 logger = get_logger(__name__)
 
@@ -122,37 +122,38 @@ class WecomDailyReportScheduler:
             self._last_run_date = now.date()
             return
 
-        ok = await asyncio.to_thread(self._send_daily_report, cfg)
+        ok = await asyncio.to_thread(self._send_daily_report, "pdd", cfg)
         if ok:
             self._last_run_date = now.date()
             print(
-                f"[scheduler] 企业微信日报已发送，触发时间={now.strftime('%Y-%m-%d %H:%M:%S')}",
+                f"[scheduler] 企业微信 PDD 日报已发送，触发时间={now.strftime('%Y-%m-%d %H:%M:%S')}",
                 flush=True,
             )
 
-    def _send_daily_report(self, cfg) -> bool:
+    def _send_daily_report(self, platform: DailyReportPlatform, cfg) -> bool:
         try:
-            draft = generate_daily_report_draft()
+            draft = generate_daily_report_draft(platform=platform)
             send_text(draft.message, cfg=cfg)
             logger.info(
-                "wecom daily report sent commits=%s stores=%s",
+                "wecom daily report sent platform=%s commits=%s stores=%s",
+                platform,
                 draft.commit_count,
                 len(draft.store_summaries),
             )
             return True
         except WecomAPIError:
-            logger.exception("wecom daily report send failed")
+            logger.exception("wecom daily report send failed platform=%s", platform)
             return False
         except Exception:
-            logger.exception("wecom daily report generate/send failed")
+            logger.exception("wecom daily report generate/send failed platform=%s", platform)
             return False
 
-    def trigger_now(self) -> bool:
-        """手动触发：立即生成并发送日报。"""
+    def trigger_now(self, platform: DailyReportPlatform = "pdd") -> bool:
+        """手动触发：立即生成并发送指定平台日报。"""
         cfg = load_wecom_config()
         if not wecom_configured(cfg):
             raise RuntimeError("企业微信未配置或未启用")
-        ok = self._send_daily_report(cfg)
-        if ok:
+        ok = self._send_daily_report(platform, cfg)
+        if ok and platform == "pdd":
             self._last_run_date = datetime.now(TZ).date()
         return ok

@@ -14,7 +14,10 @@ from pdd_agent.integrations.git.digest import (
     commits_to_context,
     resolve_git_repo_path,
 )
-from pdd_agent.integrations.wecom.daily_report import build_daily_report_message
+from pdd_agent.integrations.wecom.daily_report import (
+    build_pdd_daily_report_message,
+    build_taobao_daily_report_message,
+)
 
 
 SAMPLE_LOG = """===COMMIT===
@@ -44,18 +47,29 @@ def test_commits_to_context_empty():
     assert "无 Git 提交" in commits_to_context([])
 
 
-def test_build_daily_report_message_template():
-    message = build_daily_report_message(
+def test_build_pdd_daily_report_message_template():
+    message = build_pdd_daily_report_message(
         progress_summary="商品属性自动填写功能\n商品属性管理功能",
         store_progress="兔兔潮玩屋：已发布16个",
+        in_progress="修复上架超时问题",
     )
     assert message.startswith("当日已完成交付技术项目进展:")
     assert "商品属性自动填写功能" in message
     assert "兔兔潮玩屋：已发布16个" in message
-    assert "-------" in message
-    assert "店铺今日发布商品进度：" in message
-    assert "----------" in message
-    assert message.endswith("正在解决/优化中：")
+    assert "网盘素材" not in message
+    assert "正在解决/优化中：" in message
+    assert "修复上架超时问题" in message
+
+
+def test_build_taobao_daily_report_message_template():
+    message = build_taobao_daily_report_message(
+        netdisk_materials="今日上传素材 120 个",
+        in_progress="优化标题生成",
+    )
+    assert "网盘素材和上架累计数据" in message
+    assert "今日上传素材 120 个" in message
+    assert "正在解决/优化中：" in message
+    assert "优化标题生成" in message
 
 
 def test_resolve_git_repo_path_finds_workspace_root():

@@ -3,16 +3,31 @@ import { computed, onMounted, reactive, ref } from 'vue'
 import { ElMessage } from 'element-plus'
 import { api } from '@/api/client'
 import PageHeader from '@/components/PageHeader.vue'
-import type { WecomConfig, WecomHealth, WecomMsgType, WecomTestSendResult } from '@/types'
+import type {
+  WecomConfig,
+  WecomDailyReportPlatform,
+  WecomDailyReportPreview,
+  WecomHealth,
+  WecomMsgType,
+  WecomTestSendResult,
+} from '@/types'
 
 const loading = ref(false)
 const saving = ref(false)
+const savingDailyContent = ref(false)
 const sending = ref(false)
-const triggeringReport = ref(false)
+const triggeringPddReport = ref(false)
+const triggeringTaobaoReport = ref(false)
+const previewing = ref(false)
 const health = ref<WecomHealth | null>(null)
 const lastResult = ref<WecomTestSendResult | null>(null)
 const scheduleLastRunDate = ref('')
 const scheduleRunning = ref(false)
+const dailyContentDate = ref('')
+const dailyContentUpdatedAt = ref('')
+const dailyContentDbAvailable = ref(false)
+const previewPlatform = ref<WecomDailyReportPlatform>('pdd')
+const reportPreview = ref<WecomDailyReportPreview | null>(null)
 
 const webhookMasked = ref('')
 const webhookConfigured = ref(false)
@@ -34,6 +49,12 @@ const scheduleTimeDisplay = computed(() => {
   const h = String(configForm.daily_report_schedule_hour).padStart(2, '0')
   const m = String(configForm.daily_report_schedule_minute).padStart(2, '0')
   return `${h}:${m}`
+})
+
+const dailyContentForm = reactive({
+  pdd_in_progress: '',
+  taobao_netdisk_materials: '',
+  taobao_in_progress: '',
 })
 
 const testForm = reactive({
@@ -84,12 +105,33 @@ function cancelWebhookEdit() {
   webhookDraft.value = ''
 }
 
+function applyDailyContent(data: {
+  content_date: string
+  pdd_in_progress: string
+  taobao_netdisk_materials: string
+  taobao_in_progress: string
+  updated_at?: string
+  database_available?: boolean
+}) {
+  dailyContentForm.pdd_in_progress = data.pdd_in_progress || ''
+  dailyContentForm.taobao_netdisk_materials = data.taobao_netdisk_materials || ''
+  dailyContentForm.taobao_in_progress = data.taobao_in_progress || ''
+  dailyContentDate.value = data.content_date || ''
+  dailyContentUpdatedAt.value = data.updated_at || ''
+  dailyContentDbAvailable.value = Boolean(data.database_available)
+}
+
 async function load() {
   loading.value = true
   try {
-    const [cfg, h] = await Promise.all([api.wecomConfig(), api.wecomHealth()])
+    const [cfg, h, dailyContent] = await Promise.all([
+      api.wecomConfig(),
+      api.wecomHealth(),
+      api.wecomDailyContent(),
+    ])
     health.value = h
     applyConfig(cfg)
+    applyDailyContent(dailyContent)
   } catch (e) {
     ElMessage.error(e instanceof Error ? e.message : '加载配置失败')
   } finally {
@@ -122,21 +164,60 @@ async function save() {
   }
 }
 
-async function triggerDailyReport() {
-  triggeringReport.value = true
+async function saveDailyContent(silent = false) {
+  savingDailyContent.value = true
   try {
-    const result = await api.wecomDailyReportTrigger()
+    const data = await api.updateWecomDailyContent({
+      pdd_in_progress: dailyContentForm.pdd_in_progress,
+      taobao_netdisk_materials: dailyContentForm.taobao_netdisk_materials,
+      taobao_in_progress: dailyContentForm.taobao_in_progress,
+    })
+    applyDailyContent(data)
+    if (!silent) {
+      ElMessage.success('日报手动内容已保存')
+    }
+  } catch (e) {
+    ElMessage.error(e instanceof Error ? e.message : '保存失败')
+    throw e
+  } finally {
+    savingDailyContent.value = false
+  }
+}
+
+async function previewDailyReport(platform: WecomDailyReportPlatform) {
+  previewing.value = true
+  previewPlatform.value = platform
+  try {
+    await saveDailyContent(true)
+    reportPreview.value = await api.wecomDailyReportPreview(platform)
+  } catch (e) {
+    if (!(e instanceof Error)) {
+      ElMessage.error('预览失败')
+    }
+  } finally {
+    previewing.value = false
+  }
+}
+
+async function triggerDailyReport(platform: WecomDailyReportPlatform) {
+  const loadingRef = platform === 'pdd' ? triggeringPddReport : triggeringTaobaoReport
+  loadingRef.value = true
+  try {
+    await saveDailyContent(true)
+    const result = await api.wecomDailyReportTrigger({ platform })
     if (result.ok) {
-      ElMessage.success(result.message || '企业微信日报已发送')
-      const cfg = await api.wecomConfig()
-      applyConfig(cfg)
+      ElMessage.success(result.message || '日报已发送')
+      if (platform === 'pdd') {
+        const cfg = await api.wecomConfig()
+        applyConfig(cfg)
+      }
     } else {
       ElMessage.error(result.message || '发送失败')
     }
   } catch (e) {
     ElMessage.error(e instanceof Error ? e.message : '发送失败')
   } finally {
-    triggeringReport.value = false
+    loadingRef.value = false
   }
 }
 
@@ -287,10 +368,10 @@ onMounted(() => {
 
             <el-divider content-position="left">定时任务</el-divider>
 
-            <el-form-item label="启用日报定时发送">
+            <el-form-item label="启用 PDD 日报定时发送">
               <el-switch v-model="configForm.daily_report_schedule_enabled" />
               <div class="hint">
-                需同时启用企业微信通知并配置 Webhook。到达设定时间后自动生成并推送日报。
+                仅自动发送 PDD 日报。淘宝日报请手动发送。
               </div>
             </el-form-item>
 
@@ -323,24 +404,110 @@ onMounted(() => {
                   {{ scheduleRunning ? '调度器运行中' : '调度器未启动' }}
                 </el-tag>
                 <span v-if="scheduleLastRunDate" class="schedule-meta">
-                  上次自动发送：{{ scheduleLastRunDate }}
+                  上次 PDD 自动发送：{{ scheduleLastRunDate }}
                 </span>
-                <span v-else class="schedule-meta">今天尚未自动发送</span>
+                <span v-else class="schedule-meta">今天尚未自动发送 PDD 日报</span>
               </div>
-              <el-button
-                type="warning"
-                plain
-                :loading="triggeringReport"
-                style="margin-top: 8px"
-                @click="triggerDailyReport"
-              >
-                立即发送日报
-              </el-button>
+              <div class="report-actions">
+                <el-button
+                  type="warning"
+                  plain
+                  :loading="triggeringPddReport"
+                  @click="triggerDailyReport('pdd')"
+                >
+                  立即发送 PDD 日报
+                </el-button>
+                <el-button
+                  type="primary"
+                  plain
+                  :loading="triggeringTaobaoReport"
+                  @click="triggerDailyReport('taobao')"
+                >
+                  立即发送淘宝日报
+                </el-button>
+              </div>
             </el-form-item>
           </el-form>
         </el-card>
       </el-col>
 
+      <el-col :xs="24" :lg="12">
+        <el-card shadow="never" class="card">
+          <template #header>
+            <div class="card-head">
+              <span>日报内容（每日填写）</span>
+              <el-button type="primary" :loading="savingDailyContent" @click="saveDailyContent()">
+                保存日报内容
+              </el-button>
+            </div>
+          </template>
+
+          <el-form label-position="top">
+            <el-alert
+              :type="dailyContentDbAvailable ? 'info' : 'warning'"
+              :closable="false"
+              show-icon
+              class="content-tip"
+            >
+              <template v-if="dailyContentDbAvailable">
+                按自然日存 MySQL：今天填写会覆盖今天记录；今天未保存则发送时对应区块为空（不会沿用昨天）。
+                <span v-if="dailyContentDate">当前日期：{{ dailyContentDate }}</span>
+                <span v-if="dailyContentUpdatedAt"> · 最近保存：{{ dailyContentUpdatedAt }}</span>
+              </template>
+              <template v-else>
+                数据库不可用，无法保存日报手动内容。
+              </template>
+            </el-alert>
+
+            <el-divider content-position="left">PDD</el-divider>
+
+            <el-form-item label="正在解决/优化中">
+              <el-input
+                v-model="dailyContentForm.pdd_in_progress"
+                type="textarea"
+                :rows="4"
+                placeholder="例如：修复上架超时问题"
+              />
+            </el-form-item>
+
+            <el-divider content-position="left">淘宝</el-divider>
+
+            <el-form-item label="网盘素材和上架累计数据">
+              <el-input
+                v-model="dailyContentForm.taobao_netdisk_materials"
+                type="textarea"
+                :rows="5"
+                placeholder="填写今日网盘素材和上架累计数据"
+              />
+            </el-form-item>
+
+            <el-form-item label="正在解决/优化中">
+              <el-input
+                v-model="dailyContentForm.taobao_in_progress"
+                type="textarea"
+                :rows="4"
+                placeholder="填写淘宝侧正在处理的事项"
+              />
+            </el-form-item>
+
+            <div v-if="dailyContentDate" class="hint">
+              保存目标日期：{{ dailyContentDate }}（Asia/Shanghai 今天）
+            </div>
+
+            <div class="report-actions">
+              <el-button :loading="previewing && previewPlatform === 'pdd'" @click="previewDailyReport('pdd')">
+                预览 PDD 日报
+              </el-button>
+              <el-button :loading="previewing && previewPlatform === 'taobao'" @click="previewDailyReport('taobao')">
+                预览淘宝日报
+              </el-button>
+            </div>
+          </el-form>
+        </el-card>
+      </el-col>
+    </el-row>
+
+    <el-row :gutter="16">
       <el-col :xs="24" :lg="12">
         <el-card shadow="never" class="card">
           <template #header>
@@ -390,6 +557,16 @@ onMounted(() => {
         </el-card>
       </el-col>
     </el-row>
+
+    <el-card v-if="reportPreview" shadow="never" class="card result-card" v-loading="previewing">
+      <template #header>
+        <div class="card-head">
+          <span>日报预览（{{ reportPreview.platform === 'pdd' ? 'PDD' : '淘宝' }}）</span>
+          <el-tag type="info">{{ reportPreview.report_date }}</el-tag>
+        </div>
+      </template>
+      <pre class="report-preview">{{ reportPreview.message }}</pre>
+    </el-card>
 
     <el-card v-if="lastResult" shadow="never" class="card result-card">
       <template #header>最近一次发送结果</template>
@@ -485,6 +662,29 @@ onMounted(() => {
 .schedule-meta {
   font-size: 13px;
   color: var(--el-text-color-secondary);
+}
+
+.content-tip {
+  margin-bottom: 12px;
+}
+
+.report-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-top: 8px;
+}
+
+.report-preview {
+  margin: 0;
+  padding: 12px;
+  background: var(--el-fill-color-light);
+  border-radius: 8px;
+  overflow: auto;
+  font-size: 13px;
+  line-height: 1.6;
+  white-space: pre-wrap;
+  word-break: break-word;
 }
 
 .sample-actions {

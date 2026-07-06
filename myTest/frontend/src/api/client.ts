@@ -95,6 +95,12 @@ import type {
   TrafficReportScheduleTriggerResult,
   WecomConfig,
   WecomConfigUpdatePayload,
+  WecomDailyContent,
+  WecomDailyContentUpdatePayload,
+  WecomDailyReportPlatform,
+  WecomDailyReportPreview,
+  WecomDailyReportTriggerPayload,
+  WecomDailyReportTriggerResult,
   WecomHealth,
   WecomTestSendPayload,
   WecomTestSendResult,
@@ -1086,8 +1092,18 @@ export const api = {
   wecomTestSend: (body: WecomTestSendPayload) =>
     http.post<WecomTestSendResult>('/wecom/test', body).then((r) => r.data),
 
-  wecomDailyReportTrigger: () =>
-    http.post<{ ok: boolean; message: string }>('/wecom/daily-report/trigger').then((r) => r.data),
+  wecomDailyContent: () => http.get<WecomDailyContent>('/wecom/daily-content').then((r) => r.data),
+
+  updateWecomDailyContent: (body: WecomDailyContentUpdatePayload) =>
+    http.put<WecomDailyContent>('/wecom/daily-content', body).then((r) => r.data),
+
+  wecomDailyReportPreview: (platform: WecomDailyReportPlatform) =>
+    http
+      .get<WecomDailyReportPreview>('/wecom/daily-report/preview', { params: { platform } })
+      .then((r) => r.data),
+
+  wecomDailyReportTrigger: (body: WecomDailyReportTriggerPayload) =>
+    http.post<WecomDailyReportTriggerResult>('/wecom/daily-report/trigger', body).then((r) => r.data),
 }
 
 export default http
