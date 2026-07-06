@@ -25,6 +25,7 @@ from pdd_agent.api.routes.pdd_failure_log import router as pdd_failure_log_route
 from pdd_agent.api.routes.published_products import router as published_products_router
 from pdd_agent.api.routes.style_colors import router as style_colors_router
 from pdd_agent.api.routes.listed_folders import router as listed_folders_router
+from pdd_agent.api.routes.listing_product_attributes import router as listing_product_attributes_router
 from pdd_agent.api.routes.pipelines import router as pipelines_router
 from pdd_agent.api.routes.pipeline_issues import router as pipeline_issues_router
 from pdd_agent.api.routes.queue import router as queue_router
@@ -279,6 +280,7 @@ def create_app() -> FastAPI:
     app.include_router(commerce_router, prefix="/api")
     app.include_router(pipeline_issues_router, prefix="/api")
     app.include_router(listed_folders_router, prefix="/api")
+    app.include_router(listing_product_attributes_router, prefix="/api")
     app.include_router(queue_router, prefix="/api")
     app.include_router(failures_router, prefix="/api")
     app.include_router(pdd_failure_log_router, prefix="/api")

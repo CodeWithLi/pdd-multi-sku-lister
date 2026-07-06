@@ -233,6 +233,23 @@ def _ensure_integrated_pipelines_created_at_index(engine: Engine) -> None:
         return
 
 
+def _ensure_listing_product_attributes_seed(engine: Engine) -> None:
+    try:
+        inspector = inspect(engine)
+        if "listing_product_attributes" not in inspector.get_table_names():
+            return
+        from pdd_agent.db.repositories import seed_listing_product_attributes
+
+        created = seed_listing_product_attributes()
+        if created:
+            from pdd_agent.core.logging import get_logger
+
+            logger = get_logger(__name__)
+            logger.info("seeded %s listing product attribute fields", created)
+    except Exception:
+        return
+
+
 def _ensure_listed_folders_backfill(engine: Engine) -> None:
     try:
         inspector = inspect(engine)
@@ -296,6 +313,7 @@ def init_database() -> bool:
         _ensure_failure_sequential_batch_columns(engine)
         _ensure_daily_listing_records_columns(engine)
         _ensure_integrated_pipelines_created_at_index(engine)
+        _ensure_listing_product_attributes_seed(engine)
         _engine = engine
         _sessionmaker = sessionmaker(bind=engine, expire_on_commit=False, future=True)
         _available = True

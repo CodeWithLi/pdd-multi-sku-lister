@@ -18,6 +18,7 @@ import {
   Warning,
   CircleClose,
   Brush,
+  List,
   Grid,
   Timer,
   Tickets,
@@ -71,6 +72,7 @@ const navGroups: NavGroup[] = [
     label: '商品数据',
     items: [
       { path: '/published-products', label: '已发布商品', icon: DocumentCopy },
+      { path: '/listing-product-attributes', label: '商品属性', icon: List },
       { path: '/style-colors', label: '款式颜色', icon: Brush },
       { path: '/feishu-bitable', label: '飞书多维表格', icon: Grid },
     ],

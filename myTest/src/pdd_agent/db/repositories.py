@@ -20,6 +20,7 @@ from pdd_agent.db.models import (
     IntegratedPipelineIssueReportORM,
     IntegratedPipelineORM,
     ListingFailureDetailORM,
+    ListingProductAttributeORM,
     LoginStatusORM,
     ProductStyleColorORM,
     PublishedProductORM,
@@ -1764,6 +1765,117 @@ def delete_style_color(product_code: str) -> bool:
             return False
         session.delete(row)
         return True
+
+
+def seed_listing_product_attributes() -> int:
+    """初始化上架商品属性表；表为空时写入默认字段。"""
+    if not is_database_available():
+        return 0
+    from pdd_agent.domain.listing_product_attributes import DEFAULT_LISTING_PRODUCT_ATTRIBUTES
+
+    created = 0
+    with session_scope() as session:
+        existing = session.scalar(select(func.count()).select_from(ListingProductAttributeORM)) or 0
+        if existing:
+            return 0
+        for item in DEFAULT_LISTING_PRODUCT_ATTRIBUTES:
+            session.add(
+                ListingProductAttributeORM(
+                    field_key=item.field_key,
+                    label=item.label,
+                    selected_value=item.selected_value,
+                    options=list(item.options),
+                    enabled=item.enabled,
+                    sort_order=item.sort_order,
+                )
+            )
+            created += 1
+    return created
+
+
+def list_listing_product_attributes(*, enabled_only: bool = False) -> list[ListingProductAttributeORM]:
+    if not is_database_available():
+        return []
+    with session_scope() as session:
+        stmt = select(ListingProductAttributeORM).order_by(
+            ListingProductAttributeORM.sort_order.asc(),
+            ListingProductAttributeORM.field_key.asc(),
+        )
+        if enabled_only:
+            stmt = stmt.where(ListingProductAttributeORM.enabled.is_(True))
+        rows = list(session.scalars(stmt))
+        for row in rows:
+            session.expunge(row)
+        return rows
+
+
+def get_listing_product_attribute(field_key: str) -> ListingProductAttributeORM | None:
+    if not is_database_available():
+        return None
+    key = str(field_key or "").strip()
+    if not key:
+        return None
+    with session_scope() as session:
+        row = session.get(ListingProductAttributeORM, key)
+        if row:
+            session.expunge(row)
+        return row
+
+
+def update_listing_product_attribute(
+    field_key: str,
+    *,
+    selected_value: str | None = None,
+    options: list[str] | None = None,
+) -> ListingProductAttributeORM | None:
+    if not is_database_available():
+        return None
+    key = str(field_key or "").strip()
+    if not key:
+        return None
+    with session_scope() as session:
+        row = session.get(ListingProductAttributeORM, key)
+        if not row:
+            return None
+        if not row.enabled:
+            return None
+        if selected_value is not None:
+            row.selected_value = str(selected_value).strip()
+        if options is not None:
+            cleaned = [str(v).strip() for v in options if str(v).strip()]
+            if row.selected_value and row.selected_value not in cleaned:
+                cleaned.insert(0, row.selected_value)
+            row.options = cleaned
+        session.flush()
+        session.refresh(row)
+        session.expunge(row)
+        return row
+
+
+def batch_update_listing_product_attributes(
+    updates: dict[str, str],
+) -> list[ListingProductAttributeORM]:
+    if not is_database_available():
+        return []
+    if not updates:
+        return list_listing_product_attributes(enabled_only=True)
+    updated: list[ListingProductAttributeORM] = []
+    with session_scope() as session:
+        for field_key, value in updates.items():
+            key = str(field_key or "").strip()
+            if not key:
+                continue
+            row = session.get(ListingProductAttributeORM, key)
+            if not row or not row.enabled:
+                continue
+            row.selected_value = str(value or "").strip()
+            if row.selected_value and row.selected_value not in (row.options or []):
+                row.options = [row.selected_value, *(row.options or [])]
+            session.flush()
+            session.refresh(row)
+            session.expunge(row)
+            updated.append(row)
+    return updated
 
 
 def create_integrated_pipeline(

@@ -99,13 +99,13 @@ const activityIds = ref<string[]>(['20981', '21365'])
 const categoryKeyword = ref('笔袋')
 const autoPromotion = ref(true)
 const continueAfterLimitedTimeFailure = ref(false)
-const continueAfterActivityFailure = ref(false)
-const promoteAfterLimitedTimeFailure = ref(false)
+const continueAfterActivityFailure = ref(true)
+const promoteAfterLimitedTimeFailure = ref(true)
 const demoMode = ref(false)
 const activityDelayHours = ref(24)
-const slotAlignmentTest = ref(true)
-const specFillVerifyTest = ref(false)
-const primaryStyleFirstTest = ref(false)
+const slotAlignmentTest = ref(false)
+const specFillVerifyTest = ref(true)
+const primaryStyleFirstTest = ref(true)
 const categoryNextBurstDemo = ref(true)
 
 watch(specFillVerifyTest, (enabled) => {
@@ -124,16 +124,16 @@ const delistSpecCodeSearchEnabled = ref(loadDelistSpecCodeSearchEnabled())
 const activityLimitedTimeSuccessOnly = ref(loadActivityLimitedTimeSuccessOnly())
 const excelFallbackEnabled = ref(false)
 const excelFallbackSaving = ref(false)
-const logSpecSkuRowsEnabled = ref(false)
+const logSpecSkuRowsEnabled = ref(true)
 const logSpecSkuRowsSaving = ref(false)
-const platformSkipDedupeEnabled = ref(false)
+const platformSkipDedupeEnabled = ref(true)
 const platformSkipDedupeSaving = ref(false)
 const platformSkipDedupeCodeCount = ref(0)
 const platformSkipDedupeUpdatedAt = ref('')
 const failureLogEnabled = ref(true)
 const failureLogSaving = ref(false)
 const failureLogTableName = ref('')
-const accessoryCostPricingEnabled = ref(false)
+const accessoryCostPricingEnabled = ref(true)
 const accessoryCostPricingSaving = ref(false)
 const accessoryCostPricingFloatMin = ref(0)
 const accessoryCostPricingFloatMax = ref(5)
@@ -159,10 +159,10 @@ const autoUploadConfig = ref<AutoUploadConfig>({
   auto_promotion: true,
   auto_limited_time_setup: true,
   continue_after_limited_time_failure: false,
-  continue_after_activity_failure: false,
-  demo_mode: true,
+  continue_after_activity_failure: true,
+  demo_mode: false,
   activity_delay_hours: 24,
-  slot_alignment_test: true,
+  slot_alignment_test: false,
   material_source: 'minio',
   auto_sync_minio: true,
 })

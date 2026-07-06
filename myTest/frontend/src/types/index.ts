@@ -894,6 +894,25 @@ export interface StyleColorUpdatePayload {
   image_path?: string | null
 }
 
+export interface ListingProductAttribute {
+  field_key: string
+  label: string
+  selected_value: string
+  options: string[]
+  enabled: boolean
+  sort_order: number
+  created_at: string | null
+  updated_at: string | null
+}
+
+export interface ListingProductAttributeListResponse {
+  items: ListingProductAttribute[]
+}
+
+export interface ListingProductAttributeBatchUpdatePayload {
+  attributes: Record<string, string>
+}
+
 export interface ProductDetail {
   product_code: string
   image_sets: string[]

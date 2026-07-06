@@ -15,6 +15,7 @@ const router = createRouter({
     { path: '/login-health', name: 'login-health', component: () => import('@/views/LoginHealthView.vue'), meta: { title: '登录体检' } },
     { path: '/published-products', name: 'published-products', component: () => import('@/views/PublishedProductsView.vue'), meta: { title: '已发布商品' } },
     { path: '/style-colors', name: 'style-colors', component: () => import('@/views/StyleColorsView.vue'), meta: { title: '款式颜色' } },
+    { path: '/listing-product-attributes', name: 'listing-product-attributes', component: () => import('@/views/ListingProductAttributesView.vue'), meta: { title: '商品属性' } },
     { path: '/feishu/oauth/callback', name: 'feishu-oauth-callback', component: () => import('@/views/FeishuOAuthCallbackView.vue'), meta: { title: '飞书授权' } },
     { path: '/feishu-bitable', name: 'feishu-bitable', component: () => import('@/views/FeishuBitableView.vue'), meta: { title: '飞书多维表格' } },
     { path: '/failures', name: 'failures', component: () => import('@/views/FailuresView.vue'), meta: { title: '失败项工作台' } },

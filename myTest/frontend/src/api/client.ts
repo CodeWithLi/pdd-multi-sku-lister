@@ -70,6 +70,9 @@ import type {
   StyleColorCreatePayload,
   StyleColorListResponse,
   StyleColorUpdatePayload,
+  ListingProductAttribute,
+  ListingProductAttributeBatchUpdatePayload,
+  ListingProductAttributeListResponse,
   ProductDetail,
   ProductSummary,
   QueueCancelResponse,
@@ -623,6 +626,16 @@ export const api = {
 
   deleteStyleColor: (productCode: string) =>
     http.delete(`/style-colors/${encodeURIComponent(productCode)}`).then(() => undefined),
+
+  listingProductAttributes: (params: { enabled_only?: boolean } = {}) =>
+    http
+      .get<ListingProductAttributeListResponse>('/listing-product-attributes', { params })
+      .then((r) => r.data),
+
+  updateListingProductAttributes: (body: ListingProductAttributeBatchUpdatePayload) =>
+    http
+      .put<ListingProductAttributeListResponse>('/listing-product-attributes/batch', body)
+      .then((r) => r.data),
 
   loginStatuses: () =>
     http.get<LoginStatus[]>('/login/statuses').then((r) => r.data),

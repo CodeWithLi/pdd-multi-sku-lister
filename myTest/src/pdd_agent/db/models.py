@@ -560,6 +560,25 @@ class ProductClaimORM(Base):
     claimed_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
 
 
+class ListingProductAttributeORM(Base):
+    """上架商品属性：拼多多发布页「商品属性」下拉选项与当前选中值。"""
+
+    __tablename__ = "listing_product_attributes"
+
+    field_key: Mapped[str] = mapped_column(String(64), primary_key=True)
+    label: Mapped[str] = mapped_column(String(64), nullable=False)
+    selected_value: Mapped[str] = mapped_column(String(255), default="", nullable=False)
+    options: Mapped[list[str]] = mapped_column(MySQLJSON, default=list, nullable=False)
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    sort_order: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, server_default=func.now(), nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, server_default=func.now(), onupdate=func.now(), nullable=False
+    )
+
+
 class ProductStyleColorORM(Base):
     """商品编码 → AI/人工识别的款式颜色（缓存，省 token）。"""
 

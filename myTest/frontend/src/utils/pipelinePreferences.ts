@@ -141,10 +141,13 @@ export function saveDelistSpecCodeSearchEnabled(enabled: boolean): void {
 
 export function loadActivityLimitedTimeSuccessOnly(): boolean {
   try {
-    return localStorage.getItem(ACTIVITY_LIMITED_TIME_SUCCESS_ONLY_KEY) === '1'
+    const raw = localStorage.getItem(ACTIVITY_LIMITED_TIME_SUCCESS_ONLY_KEY)
+    if (raw === '0') return false
+    if (raw === '1') return true
   } catch {
-    return false
+    // ignore quota / private mode
   }
+  return true
 }
 
 export function saveActivityLimitedTimeSuccessOnly(enabled: boolean): void {
