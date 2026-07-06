@@ -69,9 +69,31 @@ from pdd_agent.skills.listing.pdd_page_image_errors import (
     read_pdd_image_file_size_error,
 )
 from pdd_agent.skills.listing.page_ai_title import apply_title_after_cover_upload
+from pdd_agent.skills.listing.listing_product_attributes_fill import fill_listing_product_attributes
 from pdd_agent.skills.listing.spec_labels import is_forbidden_spec_code_label, ordered_style_names
 from pdd_agent.skills.listing.title import resolve_listing_title
 from pdd_agent.skills.published.pdd_spec_format import listing_unit_sku_metadata
+
+
+def _apply_listing_product_attributes_after_title(
+    page: DpPage,
+    account_id: str,
+    label: str,
+) -> None:
+    try:
+        result = fill_listing_product_attributes(
+            page,
+            account_id,
+            listing_label=label,
+        )
+        if not result.get("ok"):
+            print(
+                f"[{account_id}] [{label}] 商品属性未全部填写成功："
+                f"成功 {result.get('filled_count', 0)}，失败 {result.get('failed_count', 0)}",
+                flush=True,
+            )
+    except Exception as exc:
+        print(f"[{account_id}] [{label}] 商品属性填写异常：{exc}", flush=True)
 
 
 def _unit_spec_metadata(unit: ListingUnit) -> dict[str, Any]:
@@ -4137,6 +4159,7 @@ def upload_one_listing(
             label=label,
         )
         time.sleep(1)
+        _apply_listing_product_attributes_after_title(page, account_id, label)
     else:
         if ui_type == "B":
             tab = page.ele('css:[data-tracking-click-viewid="cate_tree_tab"]')
@@ -4252,6 +4275,7 @@ def upload_one_listing(
             page, account_id, product_info, listing_info.get("title", "")
         )
         time.sleep(1)
+        _apply_listing_product_attributes_after_title(page, account_id, label)
 
     print(f"[{account_id}] [{label}] 正在上传详情图...")
     detail_input = page.ele('css:input[data-tracking-click-viewid="detail_img_localfile_upload"]')
