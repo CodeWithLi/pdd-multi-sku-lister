@@ -15,6 +15,7 @@ import { formatAutoPipelineFeedback } from '@/utils/autoPipeline'
 import {
   loadListingBatchIntervalMinutes,
   loadListingBatchSetCount,
+  loadRandomSelectCount,
   loadListingThrottleEnabled,
   loadListingPerBatchLimitedTimeEnabled,
   loadListingPerBatchCampaignEnabled,
@@ -23,6 +24,7 @@ import {
   loadPipelineRelistStrategy,
   saveListingBatchIntervalMinutes,
   saveListingBatchSetCount,
+  saveRandomSelectCount,
   saveListingThrottleEnabled,
   saveListingPerBatchLimitedTimeEnabled,
   saveListingPerBatchCampaignEnabled,
@@ -117,6 +119,7 @@ watch(slotAlignmentTest, (enabled) => {
 const relistStrategy = ref<RelistStrategy>(loadPipelineRelistStrategy())
 const listingThrottleEnabled = ref(loadListingThrottleEnabled())
 const listingBatchSetCount = ref(loadListingBatchSetCount())
+const randomSelectCount = ref(loadRandomSelectCount())
 const listingBatchIntervalMinutes = ref(loadListingBatchIntervalMinutes())
 const listingPerBatchLimitedTimeEnabled = ref(loadListingPerBatchLimitedTimeEnabled())
 const listingPerBatchCampaignEnabled = ref(loadListingPerBatchCampaignEnabled())
@@ -585,6 +588,33 @@ function closeSelectedSetDrawer() {
 function selectAllMaterialGroups() {
   productCodes.value = visibleProductOptions.value.map((item) => item.selector)
   syncCheckedProductsForSets(productCodes.value)
+}
+
+function shuffleArray<T>(items: T[]): T[] {
+  const arr = [...items]
+  for (let i = arr.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1))
+    ;[arr[i], arr[j]] = [arr[j], arr[i]]
+  }
+  return arr
+}
+
+function randomSelectMaterialGroups() {
+  const candidates = visibleProductOptions.value
+  if (!candidates.length) {
+    ElMessage.warning(showOnlyUnlistedGroups.value ? '当前没有待上架套图' : '暂无可选套图')
+    return
+  }
+  const requested = Math.max(1, Math.floor(Number(randomSelectCount.value) || 1))
+  const n = Math.min(requested, candidates.length)
+  const picked = shuffleArray(candidates).slice(0, n)
+  productCodes.value = picked.map((item) => item.selector)
+  syncCheckedProductsForSets(productCodes.value)
+  if (requested > candidates.length) {
+    ElMessage.success(`可选 ${candidates.length} 套，已全部随机选中`)
+  } else {
+    ElMessage.success(`已随机选中 ${picked.length} 套图`)
+  }
 }
 
 function clearAllMaterialGroups() {
@@ -1514,6 +1544,10 @@ watch(listingBatchSetCount, (value) => {
   saveListingBatchSetCount(Number(value) || 5)
 })
 
+watch(randomSelectCount, (value) => {
+  saveRandomSelectCount(Number(value) || 3)
+})
+
 watch(listingBatchIntervalMinutes, (value) => {
   saveListingBatchIntervalMinutes(Number(value) || 30)
 })
@@ -1742,6 +1776,21 @@ onUnmounted(() => {
                       </el-radio-button>
                       <el-radio-button :label="false">全部套图</el-radio-button>
                     </el-radio-group>
+                    <div class="random-select-actions">
+                      <span class="random-select-label">随机</span>
+                      <el-input-number
+                        v-model="randomSelectCount"
+                        size="small"
+                        :min="1"
+                        :max="100"
+                        controls-position="right"
+                        class="random-select-input"
+                      />
+                      <span class="random-select-label">套</span>
+                      <el-button size="small" type="warning" plain @click="randomSelectMaterialGroups">
+                        随机选
+                      </el-button>
+                    </div>
                     <div class="toolbar-actions">
                       <el-button size="small" type="primary" plain @click="selectAllMaterialGroups">全选</el-button>
                       <el-button size="small" @click="clearAllMaterialGroups">清空</el-button>
@@ -3208,6 +3257,22 @@ onUnmounted(() => {
 .filter-segment :deep(.el-radio-button__inner) {
   padding: 7px 14px;
   font-size: 13px;
+}
+
+.random-select-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.random-select-label {
+  font-size: 13px;
+  color: var(--el-text-color-secondary);
+  white-space: nowrap;
+}
+
+.random-select-input {
+  width: 88px;
 }
 
 .toolbar-actions {

@@ -3,6 +3,7 @@ import type { RelistStrategy } from '@/types'
 const RELIST_STRATEGY_KEY = 'pdd_agent.pipeline.relist_strategy'
 const LISTING_THROTTLE_ENABLED_KEY = 'pdd_agent.pipeline.listing_throttle_enabled'
 const LISTING_BATCH_SET_COUNT_KEY = 'pdd_agent.pipeline.listing_batch_set_count'
+const RANDOM_SELECT_COUNT_KEY = 'pdd_agent.pipeline.random_select_count'
 const LISTING_BATCH_INTERVAL_KEY = 'pdd_agent.pipeline.listing_batch_interval_minutes'
 const LISTING_PER_BATCH_LIMITED_TIME_KEY = 'pdd_agent.pipeline.listing_per_batch_limited_time_enabled'
 const LISTING_PER_BATCH_CAMPAIGN_KEY = 'pdd_agent.pipeline.listing_per_batch_campaign_enabled'
@@ -65,6 +66,24 @@ export function loadListingBatchSetCount(): number {
 export function saveListingBatchSetCount(count: number): void {
   try {
     localStorage.setItem(LISTING_BATCH_SET_COUNT_KEY, String(Math.max(1, Math.min(100, count))))
+  } catch {
+    // ignore
+  }
+}
+
+export function loadRandomSelectCount(): number {
+  try {
+    const raw = Number(localStorage.getItem(RANDOM_SELECT_COUNT_KEY))
+    if (Number.isFinite(raw) && raw >= 1) return Math.min(100, Math.floor(raw))
+  } catch {
+    // ignore
+  }
+  return 3
+}
+
+export function saveRandomSelectCount(count: number): void {
+  try {
+    localStorage.setItem(RANDOM_SELECT_COUNT_KEY, String(Math.max(1, Math.min(100, count))))
   } catch {
     // ignore
   }
