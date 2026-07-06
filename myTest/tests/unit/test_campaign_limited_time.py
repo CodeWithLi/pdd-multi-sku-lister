@@ -10,6 +10,8 @@ from pdd_agent.skills.campaign.limited_time import (
     _merge_price_filter_passes,
     _price_filter_failure_message,
     _scroll_product_modal_row_into_view,
+    _summarize_checkbox_result,
+    _summarize_modal_row_details,
 )
 from pdd_agent.skills.campaign.price_rules import (
     evaluate_campaign_activity_price,
@@ -201,3 +203,39 @@ def test_merge_price_filter_passes_combines_decisions_and_deleted_ids():
 def test_product_modal_select_all_helpers_are_importable():
     assert callable(_click_product_modal_header_select_all)
     assert callable(_scroll_product_modal_row_into_view)
+
+
+def test_summarize_modal_row_details_includes_row_states():
+    summary = _summarize_modal_row_details(
+        {
+            "row_count": 2,
+            "selected_counter_text": "已选商品(1/40)",
+            "selected_ids": ["111"],
+            "missing_ids": ["222"],
+            "row_details": [
+                {"id": "111", "found": True, "selected": True},
+                {"id": "222", "found": True, "selected": False},
+            ],
+        }
+    )
+    assert "111:found=True,selected=True" in summary
+    assert "222:found=True,selected=False" in summary
+    assert "counter='已选商品(1/40)'" in summary
+
+
+def test_summarize_checkbox_result_includes_toggle_state():
+    summary = _summarize_checkbox_result(
+        {
+            "found": True,
+            "method": "footer_sync_checkbox",
+            "before": True,
+            "after": False,
+            "unchecked": True,
+            "text": "同步设置惊喜优惠",
+        }
+    )
+    assert "found=True" in summary
+    assert "method=footer_sync_checkbox" in summary
+    assert "before=True" in summary
+    assert "after=False" in summary
+    assert "unchecked=True" in summary

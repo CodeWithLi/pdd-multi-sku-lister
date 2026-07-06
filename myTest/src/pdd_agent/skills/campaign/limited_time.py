@@ -10,6 +10,7 @@ from typing import Any
 from pdd_agent.browser.dp_compat_sync import DpPage
 from pdd_agent.browser.sync_login import ensure_session_sync, is_login_url
 from pdd_agent.core.config import AccountConfig
+from pdd_agent.core.logging import get_logger
 from pdd_agent.db.repositories import (
     get_published_products_by_mapping_ids,
     get_published_products_by_pdd_product_ids,
@@ -54,6 +55,63 @@ _DIRECT_SYNC_CHECKBOX_SELECTORS = (
     '[id*="surpriseCoupon"]',
     '[id*="fullSiteMarketing"]',
 )
+
+logger = get_logger(__name__)
+
+
+def _lt_log(account_id: str, step: str, message: str, **extra: Any) -> None:
+    """限时限量购步骤日志：同时写 logger 与 stdout，便于对照控制台与日志文件。"""
+    prefix = f"[{account_id}] [限时限量购][{step}]"
+    parts = [f"{key}={value}" for key, value in extra.items() if value is not None and value != ""]
+    line = f"{prefix} {message}"
+    if parts:
+        line = f"{line} | {' '.join(parts)}"
+    logger.info(line)
+    print(line, flush=True)
+
+
+def _summarize_modal_row_details(state: dict[str, Any] | None, *, limit: int = 15) -> str:
+    if not isinstance(state, dict):
+        return str(state)
+    details = [item for item in (state.get("row_details") or []) if isinstance(item, dict)]
+    chunks: list[str] = []
+    for item in details[:limit]:
+        pid = str(item.get("id") or "?")
+        chunks.append(f"{pid}:found={item.get('found')},selected={item.get('selected')}")
+    suffix = " ..." if len(details) > limit else ""
+    counter = state.get("selected_counter_text") or state.get("selected_counter") or ""
+    return (
+        f"row_count={state.get('row_count')} "
+        f"counter={counter!r} "
+        f"selected={state.get('selected_ids') or []} "
+        f"missing={state.get('missing_ids') or []} "
+        f"rows=[{'; '.join(chunks)}{suffix}]"
+    )
+
+
+def _summarize_checkbox_result(result: dict[str, Any] | None) -> str:
+    if not isinstance(result, dict):
+        return str(result)
+
+    def _pick_bool(*keys: str) -> Any:
+        for key in keys:
+            if key in result:
+                return result.get(key)
+        return None
+
+    text = str(result.get("text") or "").replace("\n", " ").strip()
+    if len(text) > 100:
+        text = text[:100] + "..."
+    after = _pick_bool("after", "select_all_after")
+    before = _pick_bool("before", "select_all_before")
+    return (
+        f"found={result.get('found')} "
+        f"method={result.get('method') or result.get('selection_method') or '-'} "
+        f"before={before} "
+        f"after={after} "
+        f"unchecked={result.get('unchecked')} "
+        f"text={text!r}"
+    )
 
 
 def _safe_exc(exc: BaseException, limit: int = 300) -> str:
@@ -1334,7 +1392,7 @@ def _click_product_modal_header_select_all(page: DpPage, account_id: str) -> dic
         result = {"clicked": False, "reason": _safe_exc(exc)}
 
     if isinstance(result, dict):
-        print(f"[{account_id}] 商品弹窗表头全选：{result}", flush=True)
+        _lt_log(account_id, "商品弹窗表头全选", _summarize_checkbox_result(result), raw=result)
         return result
     return {"clicked": False, "reason": str(result)}
 
@@ -1600,9 +1658,25 @@ def _select_product_rows_in_modal(page: DpPage, account_id: str, product_ids: li
         raw_page = getattr(page, "_page")
         initial = inspect_state()
         if not isinstance(initial, dict):
+            _lt_log(account_id, "商品弹窗勾选", "初始状态读取失败", reason=str(initial), target_ids=product_ids)
             return {"selected_ids": [], "missing_ids": product_ids, "reason": str(initial), "row_count": 0}
         if initial.get("reason"):
+            _lt_log(
+                account_id,
+                "商品弹窗勾选",
+                "初始状态异常",
+                reason=initial.get("reason"),
+                target_ids=product_ids,
+            )
             return initial
+
+        _lt_log(
+            account_id,
+            "商品弹窗勾选",
+            "初始状态",
+            target_ids=product_ids,
+            summary=_summarize_modal_row_details(initial),
+        )
 
         initial_count = counter_value(initial)
         pending = [
@@ -1614,12 +1688,26 @@ def _select_product_rows_in_modal(page: DpPage, account_id: str, product_ids: li
         click_results: list[dict[str, Any]] = []
 
         if pending and found_ids:
+            _lt_log(
+                account_id,
+                "商品弹窗勾选",
+                "尝试表头全选",
+                pending=len(pending),
+                found_ids=found_ids,
+            )
             select_all_result = _click_product_modal_header_select_all(page, account_id)
             time.sleep(0.6)
             after_select_all = inspect_state()
             if isinstance(after_select_all, dict):
                 after_select_all = infer_from_counter(after_select_all, initial_count, found_ids)
                 after_select_all["select_all"] = select_all_result
+                _lt_log(
+                    account_id,
+                    "商品弹窗勾选",
+                    "表头全选后状态",
+                    select_all=_summarize_checkbox_result(select_all_result),
+                    summary=_summarize_modal_row_details(after_select_all),
+                )
                 final_count = counter_value(after_select_all)
                 base_count = initial_count if initial_count is not None else 0
                 expected_selected = base_count + len(found_ids)
@@ -1661,7 +1749,24 @@ def _select_product_rows_in_modal(page: DpPage, account_id: str, product_ids: li
                     time.sleep(0.15)
                 points = detail.get("click_points") or []
                 if not points:
+                    _lt_log(
+                        account_id,
+                        "商品弹窗勾选",
+                        "行无点击坐标，跳过",
+                        product_id=product_id,
+                        selected=detail.get("selected"),
+                    )
                     continue
+                _lt_log(
+                    account_id,
+                    "商品弹窗勾选",
+                    "点击行复选框",
+                    product_id=product_id,
+                    before_selected=detail.get("selected"),
+                    point_label=points[0].get("label"),
+                    x=points[0].get("x"),
+                    y=points[0].get("y"),
+                )
                 click_results.append(click_point(raw_page, points[0], str(detail.get("id")), "primary"))
                 time.sleep(0.35)
 
@@ -1679,6 +1784,15 @@ def _select_product_rows_in_modal(page: DpPage, account_id: str, product_ids: li
                 time.sleep(0.15)
                 for point in (detail.get("click_points") or [])[1:]:
                     before_count = counter_value(result)
+                    _lt_log(
+                        account_id,
+                        "商品弹窗勾选",
+                        "重试点击行复选框",
+                        product_id=product_id,
+                        point_label=point.get("label"),
+                        x=point.get("x"),
+                        y=point.get("y"),
+                    )
                     click_results.append(click_point(raw_page, point, product_id, "retry"))
                     time.sleep(0.3)
                     next_state = inspect_state()
@@ -1700,7 +1814,15 @@ def _select_product_rows_in_modal(page: DpPage, account_id: str, product_ids: li
         return {"selected_ids": [], "missing_ids": product_ids, "reason": _safe_exc(exc), "row_count": 0}
 
     if isinstance(result, dict):
-        print(f"[{account_id}] 商品弹窗勾选：{result}", flush=True)
+        _lt_log(
+            account_id,
+            "商品弹窗勾选",
+            "完成",
+            method=result.get("selection_method"),
+            selected_ids=result.get("selected_ids"),
+            missing_ids=result.get("missing_ids"),
+            summary=_summarize_modal_row_details(result),
+        )
         return result
     return {"selected_ids": [], "missing_ids": product_ids, "reason": str(result), "row_count": 0}
 
@@ -2144,6 +2266,7 @@ def _select_campaign_products(
 ) -> dict[str, Any]:
     """在活动设置页选择商品弹窗中按拼多多商品 ID 搜索、勾选并确认。"""
     target_ids = list(dict.fromkeys(str(value).strip() for value in product_ids if str(value).strip()))
+    _lt_log(account_id, "选品", "开始", target_ids=target_ids, count=len(target_ids))
     if not target_ids:
         return {"status": "skipped", "selected_ids": [], "missing_ids": [], "reason": "no_product_ids"}
     if len(target_ids) > MAX_CAMPAIGN_PRODUCTS:
@@ -2161,6 +2284,13 @@ def _select_campaign_products(
             for row in existing_rows.get("rows") or []
             for item in row.get("ids", [])
         ]
+        _lt_log(
+            account_id,
+            "选品",
+            "活动页已有商品行，跳过弹窗选品",
+            existing_ids=existing_ids,
+            target_ids=target_ids,
+        )
         return {
             "status": "success",
             "step": "product_already_selected_on_page",
@@ -2177,6 +2307,7 @@ def _select_campaign_products(
 
     existing_selection = _read_selected_products_on_activity_page(page)
     if _activity_has_selected_products(existing_selection, target_ids):
+        _lt_log(account_id, "选品", "活动页已选商品满足目标，跳过弹窗", target_ids=target_ids)
         return {
             "status": "success",
             "step": "product_already_selected",
@@ -2192,6 +2323,13 @@ def _select_campaign_products(
 
     open_result = _open_product_modal(page, account_id)
     if not open_result.get("clicked") or not _wait_product_modal(page, timeout=10):
+        _lt_log(
+            account_id,
+            "选品",
+            "打开商品弹窗失败",
+            clicked=open_result.get("clicked"),
+            reason=open_result.get("reason"),
+        )
         return {
             "status": "failed",
             "step": "open_product_modal",
@@ -2204,12 +2342,23 @@ def _select_campaign_products(
     missing_ids: list[str] = []
     batches: list[dict[str, Any]] = []
     for batch in _chunked(target_ids, PRODUCT_SEARCH_BATCH_SIZE):
+        _lt_log(account_id, "选品", "处理批次", batch=batch)
         search_result = _search_product_ids_in_modal(page, account_id, batch)
         if not search_result.get("searched"):
+            _lt_log(account_id, "选品", "批次查询失败", batch=batch, search_result=search_result)
             missing_ids.extend(batch)
             batches.append({"batch": batch, "search": search_result})
             continue
         ready = _wait_modal_table_after_search(page, batch, timeout=12)
+        _lt_log(
+            account_id,
+            "选品",
+            "批次查询完成",
+            batch=batch,
+            ready=ready.get("ready"),
+            found_ids=ready.get("found_ids"),
+            row_count=ready.get("row_count"),
+        )
         if ready.get("query_not_applied"):
             fallback_search = _fallback_search_product_ids_in_modal(page, account_id, batch)
             fallback_ready = _wait_modal_table_after_search(page, batch, timeout=12)
@@ -2228,9 +2377,19 @@ def _select_campaign_products(
         if not ready.get("ready"):
             missing_ids.extend(batch)
             reason = "query_not_applied" if ready.get("query_not_applied") else "search_result_timeout"
+            _lt_log(account_id, "选品", "批次表格未就绪", batch=batch, reason=reason, ready=ready)
             batches.append({"batch": batch, "search": search_result, "ready": ready, "reason": reason})
             continue
         select_result = _select_product_rows_in_modal(page, account_id, batch)
+        _lt_log(
+            account_id,
+            "选品",
+            "批次勾选完成",
+            batch=batch,
+            selected_ids=select_result.get("selected_ids"),
+            missing_ids=select_result.get("missing_ids"),
+            method=select_result.get("selection_method"),
+        )
         selected_ids.extend(str(item) for item in select_result.get("selected_ids") or [])
         missing_ids.extend(str(item) for item in select_result.get("missing_ids") or [])
         batches.append(
@@ -2245,6 +2404,13 @@ def _select_campaign_products(
     selected_ids = list(dict.fromkeys(selected_ids))
     missing_ids = [item for item in list(dict.fromkeys(missing_ids)) if item not in selected_ids]
     if missing_ids:
+        _lt_log(
+            account_id,
+            "选品",
+            "勾选失败",
+            missing_ids=missing_ids,
+            selected_ids=selected_ids,
+        )
         return {
             "status": "failed",
             "step": "select_product_rows",
@@ -2256,6 +2422,7 @@ def _select_campaign_products(
         }
 
     confirm = _confirm_product_selection(page, account_id)
+    _lt_log(account_id, "选品", "点击确认选择", confirm=confirm)
     if not confirm.get("clicked"):
         return {
             "status": "failed",
@@ -2298,6 +2465,16 @@ def _select_campaign_products(
         error = "确认选择后未在活动页看到已选商品"
     else:
         error = ""
+    _lt_log(
+        account_id,
+        "选品",
+        "完成" if product_selection_done else "失败",
+        status="success" if product_selection_done else "failed",
+        selected_ids=selected_ids,
+        visible_on_page=selected_visible_on_page,
+        modal_closed=closed,
+        error=error,
+    )
     return {
         "status": "success" if product_selection_done else "failed",
         "step": "product_selected" if product_selection_done else "wait_product_modal_closed",
@@ -2848,7 +3025,13 @@ def _confirm_all_specs_in_modal(page: DpPage, account_id: str) -> dict[str, Any]
         return {"handled": False, "modal_found": True, "reason": _safe_exc(exc)}
 
     if isinstance(result, dict):
-        print(f"[{account_id}] 选择规格弹窗：{result}", flush=True)
+        _lt_log(
+            account_id,
+            "规格弹窗勾选",
+            _summarize_checkbox_result(result),
+            row_click_count=result.get("row_click_count"),
+            selected_text=result.get("selected_text"),
+        )
         return result
     return {"handled": False, "modal_found": True, "reason": str(result)}
 
@@ -3944,6 +4127,7 @@ def _uncheck_surprise_discount(page: DpPage, account_id: str) -> dict[str, Any]:
     PDD 新版文案为「不改变到手价，创建并更新全站营销…」，旧版为「同步设置惊喜优惠」。
     返回 checked=false 才算成功；没有找到该控件按失败处理，避免误以为完成。
     """
+    _lt_log(account_id, "同步营销复选框", "开始取消勾选")
     sync_keywords = json.dumps(list(_SYNC_MARKETING_CHECKBOX_LABEL_KEYWORDS), ensure_ascii=False)
     exclude_keywords = json.dumps(list(_EXCLUDE_CHECKBOX_LABEL_KEYWORDS), ensure_ascii=False)
     direct_selectors = json.dumps(list(_DIRECT_SYNC_CHECKBOX_SELECTORS), ensure_ascii=False)
@@ -4228,11 +4412,12 @@ def _uncheck_surprise_discount(page: DpPage, account_id: str) -> dict[str, Any]:
                             result["text"] = verify.get("text")
             except Exception as exc:
                 result["trusted_click_error"] = _safe_exc(exc)
-        print(
-            f"[{account_id}] 同步营销优惠复选框：found={result.get('found')} "
-            f"method={result.get('method')} before={result.get('before')} after={result.get('after')} "
-            f"text={(result.get('text') or '')[:80]}",
-            flush=True,
+        _lt_log(
+            account_id,
+            "同步营销复选框",
+            "取消勾选结果",
+            summary=_summarize_checkbox_result(result),
+            trusted_click=result.get("trusted_click"),
         )
         return result
     return {"found": False, "unchecked": False, "raw": result}
@@ -4249,8 +4434,16 @@ def setup_limited_time_campaign(
     """进入限时限量购创建页，完成设置并点击底部「创建」提交活动。"""
     selected_pdd_product_ids = list(dict.fromkeys(pdd_product_ids or []))
     selected_mapping_ids = list(dict.fromkeys(published_mapping_ids or []))
+    _lt_log(
+        account_id,
+        "流程",
+        "开始",
+        pdd_product_ids=selected_pdd_product_ids,
+        mapping_ids=selected_mapping_ids,
+    )
     try:
         if not _open_marketing_tools(page, account_id, account=account):
+            _lt_log(account_id, "流程", "失败", flow_step="open_marketing_tools")
             return {
                 "status": "failed",
                 "step": "open_marketing_tools",
@@ -4260,6 +4453,7 @@ def setup_limited_time_campaign(
                 "published_mapping_ids": selected_mapping_ids,
             }
         if not _open_limited_time_tool(page, account_id, account=account):
+            _lt_log(account_id, "流程", "失败", flow_step="open_limited_time_tool")
             return {
                 "status": "failed",
                 "step": "open_limited_time_tool",
@@ -4269,6 +4463,7 @@ def setup_limited_time_campaign(
                 "published_mapping_ids": selected_mapping_ids,
             }
         if not _click_create(page, account_id):
+            _lt_log(account_id, "流程", "失败", flow_step="click_create")
             return {
                 "status": "failed",
                 "step": "click_create",
@@ -4278,6 +4473,7 @@ def setup_limited_time_campaign(
                 "published_mapping_ids": selected_mapping_ids,
             }
         if not _wait_activity_settings(page, account_id):
+            _lt_log(account_id, "流程", "失败", flow_step="wait_activity_settings", url=page.url)
             return {
                 "status": "failed",
                 "step": "wait_activity_settings",
@@ -4287,8 +4483,24 @@ def setup_limited_time_campaign(
                 "published_mapping_ids": selected_mapping_ids,
             }
 
-        product_selection = _select_campaign_products(page, account_id, selected_pdd_product_ids)
+        from pdd_agent.skills.campaign.limited_time_setup_partial import run_product_selection_for_setup
+
+        product_selection, selected_pdd_product_ids, selected_mapping_ids, partial_scope = (
+            run_product_selection_for_setup(
+                page,
+                account_id,
+                selected_pdd_product_ids,
+                selected_mapping_ids,
+            )
+        )
         if product_selection.get("status") != "success":
+            _lt_log(
+                account_id,
+                "流程",
+                "失败",
+                flow_step=product_selection.get("step") or "select_campaign_products",
+                error=product_selection.get("error"),
+            )
             return {
                 "status": "failed",
                 "step": product_selection.get("step") or "select_campaign_products",
@@ -4304,6 +4516,13 @@ def setup_limited_time_campaign(
             account_id,
             selected_pdd_product_ids,
         )
+        _lt_log(
+            account_id,
+            "流程",
+            "促销维度",
+            status=promotion_dimension.get("status"),
+            flow_step=promotion_dimension.get("step"),
+        )
         if promotion_dimension.get("status") != "success":
             return {
                 "status": "failed",
@@ -4317,6 +4536,7 @@ def setup_limited_time_campaign(
             }
 
         batch_reduction = _set_batch_reduction_discount(page, account_id, value="5")
+        _lt_log(account_id, "流程", "批量立减", status=batch_reduction.get("status"))
         if batch_reduction.get("status") != "success":
             return {
                 "status": "failed",
@@ -4335,6 +4555,14 @@ def setup_limited_time_campaign(
             account_id,
             selected_mapping_ids,
             pdd_product_ids=selected_pdd_product_ids,
+        )
+        _lt_log(
+            account_id,
+            "流程",
+            "价格筛选",
+            status=price_filter.get("status"),
+            kept=price_filter.get("kept_product_ids"),
+            removed=price_filter.get("removed_product_ids"),
         )
         if price_filter.get("status") == "skipped":
             return {
@@ -4365,6 +4593,7 @@ def setup_limited_time_campaign(
 
         checkbox = _uncheck_surprise_discount(page, account_id)
         if not checkbox.get("found"):
+            _lt_log(account_id, "流程", "失败", flow_step="uncheck_surprise_discount", reason="not_found")
             return {
                 "status": "failed",
                 "step": "uncheck_surprise_discount",
@@ -4379,6 +4608,14 @@ def setup_limited_time_campaign(
                 "published_mapping_ids": selected_mapping_ids,
             }
         if not checkbox.get("unchecked"):
+            _lt_log(
+                account_id,
+                "流程",
+                "失败",
+                flow_step="uncheck_surprise_discount",
+                reason="still_checked",
+                checkbox=_summarize_checkbox_result(checkbox),
+            )
             return {
                 "status": "failed",
                 "step": "uncheck_surprise_discount",
@@ -4434,6 +4671,7 @@ def setup_limited_time_campaign(
             }
 
         submit_create = _submit_activity_settings_create(page, account_id)
+        _lt_log(account_id, "流程", "提交创建", status=submit_create.get("status"))
         if submit_create.get("status") != "success":
             return {
                 "status": "failed",
@@ -4450,6 +4688,13 @@ def setup_limited_time_campaign(
                 "published_mapping_ids": selected_mapping_ids,
             }
 
+        _lt_log(
+            account_id,
+            "流程",
+            "完成",
+            kept_ids=kept_ids or selected_pdd_product_ids,
+            flow_step="activity_created",
+        )
         return {
             "status": "success",
             "step": "activity_created",
@@ -4460,11 +4705,13 @@ def setup_limited_time_campaign(
             "batch_reduction": batch_reduction,
             "promotion_dimension": promotion_dimension,
             "product_selection": product_selection,
+            "partial_scope": partial_scope,
             "current_url": page.url,
             "selected_pdd_product_ids": selected_pdd_product_ids,
             "published_mapping_ids": selected_mapping_ids,
         }
     except Exception as exc:
+        _lt_log(account_id, "流程", "异常", error=_safe_exc(exc))
         return {
             "status": "failed",
             "step": "unexpected",
