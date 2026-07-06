@@ -153,6 +153,9 @@ pdd_activity_log:
     marketing_activity_discount: 营销活动ID~
     activity_discount_status: 七折状态
     activity_discount_failure_reason: 7折失败原因
+    marketing_tool_published_at: 营销工具发布时间
+    activity_618_published_at: 618活动发布时间
+    activity_discount_published_at: 七折活动发布时间
 
 # 推广创建步骤：成功/失败写入同一张飞书表
 pdd_promotion_log:

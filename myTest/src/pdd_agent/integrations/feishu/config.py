@@ -119,6 +119,9 @@ class PddActivityLogFieldNames(BaseModel):
     marketing_activity_discount: str = "营销活动ID~"
     activity_discount_status: str = "七折状态"
     activity_discount_failure_reason: str = "7折失败原因"
+    marketing_tool_published_at: str = "营销工具发布时间"
+    activity_618_published_at: str = "618活动发布时间"
+    activity_discount_published_at: str = "七折活动发布时间"
 
 
 class PddPriceCompareFieldNames(BaseModel):

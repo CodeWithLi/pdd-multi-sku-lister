@@ -51,9 +51,9 @@ def test_build_pdd_daily_report_markdown():
         progress_summary="商品属性自动填写功能\n商品属性管理功能",
         store_progress="兔兔潮玩屋：已发布16个",
         in_progress="修复上架超时问题",
-        listing_window="07-05 18:01 ~ 07-06 17:00",
+        listing_window="07-05 18:01 ~ 07-06 18:00",
     )
-    assert "## 运营日报 · PDD" in message
+    assert "## 日报 · PDD" in message
     assert "### 当日已完成交付技术项目进展" in message
     assert "- 商品属性自动填写功能" in message
     assert "### 店铺今日发布商品进度" in message
@@ -70,7 +70,7 @@ def test_build_taobao_daily_report_markdown():
         netdisk_materials="今日上传素材 120 个",
         in_progress="优化标题生成",
     )
-    assert "## 运营日报 · 淘宝" in message
+    assert "## 日报 · 淘宝" in message
     assert "### 网盘素材和上架累计数据" in message
     assert "今日上传素材 120 个" in message
     assert "### 正在解决 / 优化中" in message

@@ -41,7 +41,7 @@ export interface DailyReportMarkdownInput {
 export function buildDailyReportMarkdown(input: DailyReportMarkdownInput): string {
   const label = platformTitle(input.platform)
   const parts = [
-    `## 运营日报 · ${label}`,
+    `## 日报 · ${label}`,
     `> 日期：<font color="info">${input.reportDate}</font>`,
     '',
   ]

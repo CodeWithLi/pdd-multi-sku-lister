@@ -35,7 +35,7 @@ def build_daily_report_markdown(
     """组装企业微信群机器人 Markdown 日报。"""
     label = _platform_title(platform)
     parts = [
-        f"## 运营日报 · {label}",
+        f"## 日报 · {label}",
         f"> 日期：<font color=\"info\">{report_date}</font>",
         "",
     ]

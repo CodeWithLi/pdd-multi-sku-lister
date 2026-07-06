@@ -19,10 +19,10 @@ try:
 except Exception:
     TZ = timezone(timedelta(hours=8))
 
-# 日报 18:00 发送，统计窗口为昨天 18:01 ~ 今天 17:00
+# 日报 18:00 发送，统计窗口为昨天 18:01 ~ 今天 18:00
 WINDOW_START_HOUR = 18
 WINDOW_START_MINUTE = 1
-WINDOW_END_HOUR = 17
+WINDOW_END_HOUR = 18
 WINDOW_END_MINUTE = 0
 
 
@@ -50,7 +50,7 @@ def report_listing_window(
     reference_day: date | None = None,
     now: datetime | None = None,
 ) -> tuple[datetime, datetime]:
-    """计算日报使用的上架统计窗口（昨天 18:01 ~ 今天 17:00，含边界）。"""
+    """计算日报使用的上架统计窗口（昨天 18:01 ~ 今天 18:00，含边界）。"""
     ref = now or datetime.now(TZ)
     today = reference_day or ref.date()
     yesterday = today - timedelta(days=1)

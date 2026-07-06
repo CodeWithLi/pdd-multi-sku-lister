@@ -9,10 +9,13 @@ import { summarizeRunError, extractActivitySpecLookupMeta, extractActivitySpecLo
 import type {
   Account,
   CampaignTaskResponse,
+  IntegratedPipeline,
   MarketingActivityOption,
   PublishedProduct,
   RunRecord,
 } from '@/types'
+
+const CAMPAIGN_CHAIN_ACTIVITY_IDS = ['20981', '21365'] as const
 
 type ProductTableRef = {
   clearSelection: () => void
@@ -22,6 +25,7 @@ const router = useRouter()
 
 const taskLoading = ref(false)
 const marketingTaskLoading = ref(false)
+const chainTaskLoading = ref(false)
 const productLoading = ref(false)
 const error = ref('')
 const taskError = ref('')
@@ -57,6 +61,24 @@ const selectedMappingIds = computed(() => {
   return Array.from(new Set(ids))
 })
 const canStart = computed(() => Boolean(accountId.value) && selectedPddProductIds.value.length > 0)
+
+function pipelineSelectorFromProduct(item: PublishedProduct): string {
+  const label = String(item.listing_label || '').trim()
+  if (label) return label
+  const code = String(item.product_code || '').trim()
+  const imageSet = String(item.image_set || '').trim()
+  if (code && imageSet) return `${code}/${imageSet}`
+  return code
+}
+
+const selectedPipelineSelectors = computed(() => {
+  const selectors = selectedProducts.value.map(pipelineSelectorFromProduct).filter(Boolean)
+  return Array.from(new Set(selectors))
+})
+
+const canStartCampaignChain = computed(
+  () => Boolean(accountId.value) && selectedPipelineSelectors.value.length > 0,
+)
 const isCampaignRunning = computed(() => {
   const status = activeCampaignRun.value?.status || result.value?.status
   return status === 'pending' || status === 'running'
@@ -446,6 +468,57 @@ function startCampaignPolling(runId: string) {
   }, 2000)
 }
 
+async function startCampaignChain() {
+  if (isCampaignRunning.value || isMarketingRunning.value || chainTaskLoading.value) {
+    showFormError('当前已有活动任务正在执行，请等待完成后再启动')
+    return
+  }
+  if (!accountId.value) {
+    showFormError('请选择店铺')
+    return
+  }
+  if (!selectedPipelineSelectors.value.length) {
+    showFormError('请先选择要处理的已发布商品')
+    return
+  }
+
+  chainTaskLoading.value = true
+  taskError.value = ''
+  taskSuccess.value = ''
+  try {
+    const result: IntegratedPipeline = await api.startIntegratedPipeline({
+      account_id: accountId.value,
+      product_codes: selectedPipelineSelectors.value,
+      activity_ids: [...CAMPAIGN_CHAIN_ACTIVITY_IDS],
+      activity_id: CAMPAIGN_CHAIN_ACTIVITY_IDS[0],
+      category_keyword: '笔袋',
+      skip_listing: true,
+      auto_promotion: false,
+      auto_limited_time_setup: true,
+      activity_limited_time_success_only: true,
+      continue_after_limited_time_failure: false,
+      continue_after_activity_failure: false,
+      demo_mode: true,
+      activity_delay_hours: 0,
+    })
+    if (result.commerce_queued) {
+      showTaskSuccess(
+        result.block_reason_label ||
+          `任务已排队（${result.intent_id || '—'}），当前店铺有进行中的运营周期`,
+      )
+    } else {
+      showTaskSuccess(
+        `已启动：限时限量购 → ${CAMPAIGN_CHAIN_ACTIVITY_IDS.join('、')} 活动报名（仅限时成功商品）`,
+      )
+    }
+    router.push({ path: '/pipeline' })
+  } catch (e) {
+    showTaskError(e instanceof Error ? e.message : '启动活动链路失败')
+  } finally {
+    chainTaskLoading.value = false
+  }
+}
+
 async function startLimitedTimeSetup() {
   if (isCampaignRunning.value || isMarketingRunning.value) {
     showFormError('当前已有活动任务正在执行，请等待完成后再启动')
@@ -522,7 +595,7 @@ onBeforeUnmount(() => {
   <div
     class="campaign-page"
     :class="{ 'campaign-page--expanded': leftPanelExpanded }"
-    v-loading="taskLoading || marketingTaskLoading"
+    v-loading="taskLoading || marketingTaskLoading || chainTaskLoading"
   >
     <PageHeader title="活动" desc="营销活动报名 + 限时限量购设置，左侧配置、右侧选品。" />
 
@@ -670,11 +743,35 @@ onBeforeUnmount(() => {
                 type="warning"
                 plain
                 class="action-btn"
-                :disabled="!canStart || isCampaignRunning || isMarketingRunning"
+                :disabled="!canStart || isCampaignRunning || isMarketingRunning || chainTaskLoading"
                 :loading="isCampaignRunning"
                 @click="startLimitedTimeSetup"
               >
                 取消惊喜优惠设置
+              </el-button>
+            </div>
+
+            <el-divider />
+
+            <div class="action-group chain-action-group">
+              <div class="action-group-label">整合链路（仅活动）</div>
+              <p class="chain-tip muted">
+                与整合链路一致：先跑限时限量购，再依次报名活动
+                {{ CAMPAIGN_CHAIN_ACTIVITY_IDS.join('、') }}；仅限时限量购成功的商品参与活动报名（演示模式约 2 分钟后报活动）。
+              </p>
+              <el-button
+                type="primary"
+                class="action-btn"
+                :disabled="
+                  !canStartCampaignChain ||
+                  isCampaignRunning ||
+                  isMarketingRunning ||
+                  chainTaskLoading
+                "
+                :loading="chainTaskLoading"
+                @click="startCampaignChain"
+              >
+                限时限量购 → 双活动报名
               </el-button>
             </div>
           </el-card>
@@ -1195,6 +1292,11 @@ onBeforeUnmount(() => {
   margin-top: 2px;
   font-size: 12px;
   color: var(--text-secondary);
+}
+
+.chain-tip {
+  margin: 0 0 10px;
+  line-height: 1.5;
 }
 
 .pager {

@@ -37,6 +37,10 @@ from pdd_agent.integrations.feishu.pdd_upload_sync import (
     _resolve_or_create_pdd_table_id,
     lookup_pdd_upload_log_identity_fields,
 )
+from pdd_agent.integrations.feishu.pdd_activity_log_execution_time import (
+    field_defs_for_activity_execution_times,
+    merge_activity_execution_time_patch,
+)
 
 logger = get_logger(__name__)
 
@@ -246,6 +250,7 @@ def _field_defs_for_pdd_activity_log(config: FeishuConfig) -> list[dict[str, Any
                 "options": [{"name": x} for x in activity_cfg.activity_register_failure_reason_options],
             },
         },
+        *field_defs_for_activity_execution_times(config),
     ]
 
 
@@ -718,6 +723,7 @@ def push_pdd_activity_log_limited_time(
     account_name: str = "",
     product_contexts: dict[str, dict[str, str]] | None = None,
     product_errors: dict[str, str] | None = None,
+    executed_at: datetime | None = None,
     config: FeishuConfig | None = None,
     client: FeishuClient | None = None,
     **_ignored: Any,
@@ -747,6 +753,12 @@ def push_pdd_activity_log_limited_time(
             names.limited_time_status: status_value,
             names.limited_time_failure_reason: row_reason,
         }
+        patch = merge_activity_execution_time_patch(
+            patch,
+            "limited_time",
+            executed_at=executed_at,
+            config=cfg,
+        )
         row_store = str((product_contexts or {}).get(pid, {}).get("account_name") or store_name).strip()
         row = upsert_pdd_activity_log_fields(
             product_id=pid,
@@ -781,6 +793,7 @@ def push_pdd_activity_log_activity_register(
     account_name: str = "",
     product_contexts: dict[str, dict[str, str]] | None = None,
     product_errors: dict[str, str] | None = None,
+    executed_at: datetime | None = None,
     config: FeishuConfig | None = None,
     client: FeishuClient | None = None,
     **_ignored: Any,
@@ -826,6 +839,13 @@ def push_pdd_activity_log_activity_register(
             status_field: status_value,
             reason_field: row_reason,
         }
+        execution_phase = "activity_618" if phase == "activity_618" else "activity_discount"
+        patch = merge_activity_execution_time_patch(
+            patch,
+            execution_phase,
+            executed_at=executed_at,
+            config=cfg,
+        )
         row_store = str((product_contexts or {}).get(pid, {}).get("account_name") or store_name).strip()
         row = upsert_pdd_activity_log_fields(
             product_id=pid,

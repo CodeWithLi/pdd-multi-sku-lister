@@ -613,7 +613,7 @@ onMounted(() => {
               <span>分</span>
             </div>
             <div class="time-badge">{{ scheduleTimeDisplay }} · Asia/Shanghai</div>
-            <p class="field-hint">店铺统计窗口：昨天 18:01 ~ 今天 17:00</p>
+            <p class="field-hint">店铺统计窗口：昨天 18:01 ~ 今天 18:00</p>
           </div>
 
           <div class="schedule-meta-box">
@@ -769,7 +769,7 @@ onMounted(() => {
           <div class="preview-shell preview-shell-inline">
             <div class="wechat-frame">
               <div class="wechat-topbar">
-                <span class="wechat-topbar-title">运营日报群</span>
+                <span class="wechat-topbar-title">日报群</span>
                 <span class="wechat-topbar-sub">企业微信 · 机器人</span>
               </div>
               <div class="chat-bubble">
@@ -779,7 +779,7 @@ onMounted(() => {
                     <span class="chat-app">拼多多上架助手</span>
                     <span class="chat-time">{{ editableReport.report_date }}</span>
                   </div>
-                  <div class="chat-title">运营日报 · {{ editableReport.platform === 'pdd' ? 'PDD' : '淘宝' }}</div>
+                  <div class="chat-title">日报 · {{ editableReport.platform === 'pdd' ? 'PDD' : '淘宝' }}</div>
 
                   <template v-if="editableReport.platform === 'pdd'">
                     <div class="chat-section">

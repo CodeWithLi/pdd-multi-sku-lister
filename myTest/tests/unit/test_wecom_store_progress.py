@@ -16,7 +16,7 @@ from pdd_agent.integrations.wecom.store_progress import (
 def test_report_listing_window():
     start, end = report_listing_window(reference_day=date(2026, 7, 6))
     assert start == datetime(2026, 7, 5, 18, 1, 0)
-    assert end == datetime(2026, 7, 6, 17, 0, 0)
+    assert end == datetime(2026, 7, 6, 18, 0, 0)
 
 
 def test_format_store_progress_lines():
@@ -66,4 +66,4 @@ def test_collect_pdd_store_progress(monkeypatch):
     assert snapshot.text == "兔兔潮玩屋：已发布5个"
     assert len(snapshot.shops) == 1
     assert snapshot.window_start.hour == 18
-    assert snapshot.window_end.hour == 17
+    assert snapshot.window_end.hour == 18

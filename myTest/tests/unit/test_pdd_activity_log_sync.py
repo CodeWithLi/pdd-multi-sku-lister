@@ -276,6 +276,7 @@ def test_push_pdd_activity_log_limited_time_creates_row(monkeypatch, activity_cf
     assert captured[0]["identity_mode"] == "immediate"
     assert captured[0]["patch_fields"][names.limited_time_status] == "成功"
     assert captured[0]["patch_fields"][names.limited_time_failure_reason] == ""
+    assert names.marketing_tool_published_at in captured[0]["patch_fields"]
 
 
 def test_push_pdd_activity_log_limited_time_partial_success_marks_failures(monkeypatch, activity_cfg):
@@ -412,6 +413,7 @@ def test_push_pdd_activity_log_activity_register_618_and_discount(monkeypatch, a
     )
     assert captured[-1]["identity_mode"] == "delayed"
     assert captured[-1]["patch_fields"][names.activity_618_status] == "报名成功"
+    assert names.activity_618_published_at in captured[-1]["patch_fields"]
 
     push_pdd_activity_log_activity_register(
         account_id="store_A",
@@ -423,6 +425,7 @@ def test_push_pdd_activity_log_activity_register_618_and_discount(monkeypatch, a
         config=activity_cfg,
     )
     assert captured[-1]["patch_fields"][names.activity_discount_status] == "失败"
+    assert names.activity_discount_published_at in captured[-1]["patch_fields"]
 
 
 def test_upsert_pdd_activity_log_fields_skips_unchanged(monkeypatch, activity_cfg):
