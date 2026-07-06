@@ -10,9 +10,9 @@ from pdd_agent.core.config import load_yaml_settings
 from pdd_agent.core.logging import get_logger
 from pdd_agent.db.repositories import get_account_config
 from pdd_agent.skills.campaign.limited_time import setup_limited_time_campaign
-from pdd_agent.skills.campaign.marketing_activities import (
-    register_marketing_activity,
-    search_marketing_activity,
+from pdd_agent.skills.campaign.marketing_activity_register_bridge import (
+    register_marketing_activity_guarded,
+    search_marketing_activity_guarded,
 )
 
 logger = get_logger(__name__)
@@ -69,7 +69,7 @@ async def marketing_activity_search_node(state: CampaignState) -> dict:
         return {"errors": ["marketing_activity_id is required"], "finished": True}
 
     def _job(dp):
-        return search_marketing_activity(dp, account_id, activity_id, account=account)
+        return search_marketing_activity_guarded(dp, account_id, activity_id, account=account)
 
     try:
         result = await run_browser_job_async(settings, account, _job)
@@ -106,7 +106,7 @@ async def marketing_activity_register_node(state: CampaignState) -> dict:
         return {"errors": ["pdd_product_ids is required"], "finished": True}
 
     def _job(dp):
-        return register_marketing_activity(
+        return register_marketing_activity_guarded(
             dp,
             account_id,
             activity_id,
