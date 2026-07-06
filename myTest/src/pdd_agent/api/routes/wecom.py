@@ -10,6 +10,7 @@ from fastapi import APIRouter, HTTPException
 from pdd_agent.api.schemas.wecom import (
     WecomConfigOut,
     WecomConfigUpdateIn,
+    WecomDailyReportPreviewOut,
     WecomHealthOut,
     WecomTestSendIn,
     WecomTestSendOut,
@@ -28,6 +29,8 @@ from pdd_agent.integrations.wecom.config import (
     save_wecom_config,
     wecom_configured,
 )
+from pdd_agent.integrations.git.digest import GitDigestError
+from pdd_agent.integrations.wecom.daily_report import generate_daily_report_draft
 
 router = APIRouter(prefix="/wecom", tags=["wecom"])
 
@@ -143,4 +146,36 @@ def test_wecom_send(body: WecomTestSendIn):
         errmsg="ok",
         payload_sent=payload,
         response=data,
+    )
+
+
+@router.get("/daily-report/preview", response_model=WecomDailyReportPreviewOut)
+def preview_daily_report():
+    """采集今日 Git 提交，经 LLM 摘要后返回日报草稿（不发送企业微信）。"""
+    try:
+        draft = generate_daily_report_draft()
+    except GitDigestError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"生成日报失败: {exc}") from exc
+
+    return WecomDailyReportPreviewOut(
+        report_date=draft.report_date,
+        repo_path=draft.repo_path,
+        commit_count=draft.commit_count,
+        progress_summary=draft.progress_summary,
+        message=draft.message,
+        commits=[
+            {
+                "short_hash": c.short_hash,
+                "author": c.author,
+                "committed_at": c.committed_at,
+                "subject": c.subject,
+                "body": c.body,
+                "file_count": len(c.files),
+            }
+            for c in draft.commits
+        ],
     )

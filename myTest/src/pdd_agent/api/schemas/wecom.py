@@ -51,3 +51,21 @@ class WecomHealthOut(BaseModel):
     enabled: bool
     webhook_configured: bool
     config_path: str = ""
+
+
+class WecomDailyReportCommitOut(BaseModel):
+    short_hash: str
+    author: str
+    committed_at: str
+    subject: str
+    body: str = ""
+    file_count: int = 0
+
+
+class WecomDailyReportPreviewOut(BaseModel):
+    report_date: str
+    repo_path: str
+    commit_count: int
+    progress_summary: str
+    message: str
+    commits: list[WecomDailyReportCommitOut] = Field(default_factory=list)
