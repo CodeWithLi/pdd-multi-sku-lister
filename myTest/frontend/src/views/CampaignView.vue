@@ -63,12 +63,17 @@ const selectedMappingIds = computed(() => {
 const canStart = computed(() => Boolean(accountId.value) && selectedPddProductIds.value.length > 0)
 
 function pipelineSelectorFromProduct(item: PublishedProduct): string {
-  const label = String(item.listing_label || '').trim()
-  if (label) return label
-  const code = String(item.product_code || '').trim()
+  const productCode = String(item.product_code || '').trim()
   const imageSet = String(item.image_set || '').trim()
-  if (code && imageSet) return `${code}/${imageSet}`
-  return code
+  const familyCode = String(item.family_code || '').trim()
+  // 整合链路 selector 须为「母款/套图/商品编码」三段式；listing_label 两段式会被误解析
+  if (familyCode && imageSet && productCode) {
+    return `${familyCode}/${imageSet}/${productCode}`
+  }
+  if (productCode && imageSet) {
+    return `${productCode}/${imageSet}`
+  }
+  return productCode
 }
 
 const selectedPipelineSelectors = computed(() => {

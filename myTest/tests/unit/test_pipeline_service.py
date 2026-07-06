@@ -223,6 +223,31 @@ def test_resolve_published_products_for_pipeline():
     assert missing == []
 
 
+def test_resolve_published_products_for_pipeline_listing_label_two_part():
+    row = SimpleNamespace(
+        pdd_product_id="966914511095",
+        mapping_id="map_2",
+        status="on_sale",
+    )
+
+    def fake_get_published_product(*, account_id, product_code, image_set=""):
+        if product_code == "BD029A卡皮巴拉笔袋" and image_set == "第一套图":
+            return row
+        return None
+
+    with patch(
+        "pdd_agent.api.services.pipeline_service.get_published_product",
+        side_effect=fake_get_published_product,
+    ):
+        pdd_ids, mapping_ids, missing = resolve_published_products_for_pipeline(
+            "store_A",
+            ["BD029A卡皮巴拉笔袋/第一套图"],
+        )
+    assert pdd_ids == ["966914511095"]
+    assert mapping_ids == ["map_2"]
+    assert missing == []
+
+
 def test_start_integrated_pipeline_skip_listing_schedules_activity():
     row = SimpleNamespace(
         pipeline_id="pipe_skip",

@@ -782,6 +782,43 @@ def _parse_pipeline_product_selector(selector: str) -> tuple[str, str, str]:
     return "", "", ""
 
 
+def _selector_parts(selector: str) -> list[str]:
+    return [part.strip() for part in str(selector or "").split("/") if part.strip()]
+
+
+def _looks_like_image_set_segment(text: str) -> bool:
+    segment = str(text or "").strip()
+    return bool(segment) and segment.endswith("套图")
+
+
+def _lookup_published_row_for_pipeline_selector(account_id: str, selector: str):
+    """按 selector 查在售 published_products；兼容 listing_label 的 product_code/套图 两段式。"""
+    parts = _selector_parts(selector)
+    if not parts:
+        return None
+
+    _family, image_set, product_code = _parse_pipeline_product_selector(selector)
+    if product_code:
+        row = get_published_product(
+            account_id=account_id,
+            product_code=product_code,
+            image_set=image_set,
+        )
+        if row and str(row.status or "") == "on_sale":
+            return row
+
+    if len(parts) == 2 and _looks_like_image_set_segment(parts[1]):
+        row = get_published_product(
+            account_id=account_id,
+            product_code=parts[0],
+            image_set=parts[1],
+        )
+        if row and str(row.status or "") == "on_sale":
+            return row
+
+    return None
+
+
 def resolve_published_products_for_pipeline(
     account_id: str,
     selectors: list[str],
@@ -795,16 +832,8 @@ def resolve_published_products_for_pipeline(
         selector = str(selector or "").strip()
         if not selector:
             continue
-        _family, image_set, product_code = _parse_pipeline_product_selector(selector)
-        if not product_code:
-            missing.append(selector)
-            continue
-        row = get_published_product(
-            account_id=account_id,
-            product_code=product_code,
-            image_set=image_set,
-        )
-        if not row or str(row.status or "") != "on_sale":
+        row = _lookup_published_row_for_pipeline_selector(account_id, selector)
+        if not row:
             missing.append(selector)
             continue
         pdd_product_id = str(row.pdd_product_id or "").strip()
