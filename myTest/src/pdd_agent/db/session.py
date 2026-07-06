@@ -18,6 +18,8 @@ import pdd_agent.db.models  # noqa: F401
 _engine: Engine | None = None
 _sessionmaker: sessionmaker[Session] | None = None
 _available: bool | None = None
+_initializing: bool = False
+_listed_folders_backfill_done: bool = False
 _last_error: str = ""
 
 
@@ -250,20 +252,43 @@ def _ensure_listing_product_attributes_seed(engine: Engine) -> None:
         return
 
 
+def _startup_catalog_set_index() -> tuple[dict[str, frozenset[str]], bool]:
+    """启动时对齐素材目录：MinIO 已配置时用 MinIO 索引并按商品编码匹配。"""
+    from pdd_agent.core.config import load_yaml_settings
+    from pdd_agent.integrations.minio.config import minio_configured
+
+    if minio_configured():
+        from pdd_agent.integrations.minio.catalog import build_minio_catalog_set_index
+
+        return build_minio_catalog_set_index(), True
+
+    from pdd_agent.db.repositories import build_catalog_set_index
+
+    return build_catalog_set_index(load_yaml_settings()), False
+
+
 def _ensure_listed_folders_backfill(engine: Engine) -> None:
+    global _listed_folders_backfill_done
+
+    if _listed_folders_backfill_done:
+        return
     try:
         inspector = inspect(engine)
         if "listed_asset_folders" not in inspector.get_table_names():
+            _listed_folders_backfill_done = True
             return
         from pdd_agent.api.services.listed_folder_service import ensure_listed_folder_backfill
-        from pdd_agent.core.config import load_yaml_settings
-        from pdd_agent.db.repositories import build_catalog_set_index, prune_listed_folders_against_catalog
+        from pdd_agent.db.repositories import prune_listed_folders_against_catalog
         from pdd_agent.db.repositories import prune_stale_listed_asset_folders
 
         created = ensure_listed_folder_backfill()
         pruned_published = prune_stale_listed_asset_folders()
-        catalog_index = build_catalog_set_index(load_yaml_settings())
-        pruned_catalog = prune_listed_folders_against_catalog(catalog_index=catalog_index)
+        catalog_index, match_by_product_code = _startup_catalog_set_index()
+        pruned_catalog = prune_listed_folders_against_catalog(
+            catalog_index=catalog_index,
+            match_by_product_code=match_by_product_code,
+        )
+        _listed_folders_backfill_done = True
         if created or pruned_published or pruned_catalog:
             from pdd_agent.core.logging import get_logger
 
@@ -280,10 +305,12 @@ def _ensure_listed_folders_backfill(engine: Engine) -> None:
 
 def init_database() -> bool:
     """初始化数据库连接与表结构；未配置 DATABASE_URL 时返回 False。"""
-    global _engine, _sessionmaker, _available, _last_error
+    global _engine, _sessionmaker, _available, _initializing, _last_error
 
     if _available is not None:
         return _available
+    if _initializing:
+        return _sessionmaker is not None
 
     env = get_env_settings()
     database_url = (env.database_url or "").strip()
@@ -292,6 +319,7 @@ def init_database() -> bool:
         _last_error = "DATABASE_URL 未配置"
         return False
 
+    _initializing = True
     try:
         _create_mysql_database_if_missing(database_url)
         engine = create_engine(
@@ -313,12 +341,12 @@ def init_database() -> bool:
         _ensure_failure_sequential_batch_columns(engine)
         _ensure_daily_listing_records_columns(engine)
         _ensure_integrated_pipelines_created_at_index(engine)
-        _ensure_listing_product_attributes_seed(engine)
+        # seed / backfill 会调用 is_database_available()，须先发布 session，避免 init 递归
         _engine = engine
         _sessionmaker = sessionmaker(bind=engine, expire_on_commit=False, future=True)
         _available = True
         _last_error = ""
-        # backfill 会调用 is_database_available()，须在 _available=True 之后执行，避免 init 重入
+        _ensure_listing_product_attributes_seed(engine)
         _ensure_listed_folders_backfill(engine)
         return True
     except Exception as exc:
@@ -327,6 +355,8 @@ def init_database() -> bool:
         _available = False
         _last_error = str(exc)
         return False
+    finally:
+        _initializing = False
 
 
 def is_database_available() -> bool:
