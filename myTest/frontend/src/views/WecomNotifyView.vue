@@ -8,8 +8,11 @@ import type { WecomConfig, WecomHealth, WecomMsgType, WecomTestSendResult } from
 const loading = ref(false)
 const saving = ref(false)
 const sending = ref(false)
+const triggeringReport = ref(false)
 const health = ref<WecomHealth | null>(null)
 const lastResult = ref<WecomTestSendResult | null>(null)
+const scheduleLastRunDate = ref('')
+const scheduleRunning = ref(false)
 
 const webhookMasked = ref('')
 const webhookConfigured = ref(false)
@@ -22,6 +25,15 @@ const configForm = reactive({
   notify_on_pipeline_failed: false,
   notify_on_commerce_queued: false,
   notify_on_commerce_dispatched: false,
+  daily_report_schedule_enabled: false,
+  daily_report_schedule_hour: 18,
+  daily_report_schedule_minute: 0,
+})
+
+const scheduleTimeDisplay = computed(() => {
+  const h = String(configForm.daily_report_schedule_hour).padStart(2, '0')
+  const m = String(configForm.daily_report_schedule_minute).padStart(2, '0')
+  return `${h}:${m}`
 })
 
 const testForm = reactive({
@@ -53,6 +65,11 @@ function applyConfig(cfg: WecomConfig) {
   configForm.notify_on_pipeline_failed = cfg.notify_on_pipeline_failed
   configForm.notify_on_commerce_queued = cfg.notify_on_commerce_queued
   configForm.notify_on_commerce_dispatched = cfg.notify_on_commerce_dispatched
+  configForm.daily_report_schedule_enabled = cfg.daily_report_schedule_enabled
+  configForm.daily_report_schedule_hour = cfg.daily_report_schedule_hour
+  configForm.daily_report_schedule_minute = cfg.daily_report_schedule_minute
+  scheduleLastRunDate.value = cfg.daily_report_last_run_date || ''
+  scheduleRunning.value = Boolean(cfg.daily_report_scheduler_running)
   webhookEditing.value = false
   webhookDraft.value = ''
 }
@@ -91,6 +108,9 @@ async function save() {
       notify_on_pipeline_failed: configForm.notify_on_pipeline_failed,
       notify_on_commerce_queued: configForm.notify_on_commerce_queued,
       notify_on_commerce_dispatched: configForm.notify_on_commerce_dispatched,
+      daily_report_schedule_enabled: configForm.daily_report_schedule_enabled,
+      daily_report_schedule_hour: configForm.daily_report_schedule_hour,
+      daily_report_schedule_minute: configForm.daily_report_schedule_minute,
     })
     applyConfig(cfg)
     health.value = await api.wecomHealth()
@@ -99,6 +119,24 @@ async function save() {
     ElMessage.error(e instanceof Error ? e.message : '保存失败')
   } finally {
     saving.value = false
+  }
+}
+
+async function triggerDailyReport() {
+  triggeringReport.value = true
+  try {
+    const result = await api.wecomDailyReportTrigger()
+    if (result.ok) {
+      ElMessage.success(result.message || '企业微信日报已发送')
+      const cfg = await api.wecomConfig()
+      applyConfig(cfg)
+    } else {
+      ElMessage.error(result.message || '发送失败')
+    }
+  } catch (e) {
+    ElMessage.error(e instanceof Error ? e.message : '发送失败')
+  } finally {
+    triggeringReport.value = false
   }
 }
 
@@ -246,6 +284,59 @@ onMounted(() => {
             <el-form-item label="排队任务派发时推送">
               <el-switch v-model="configForm.notify_on_commerce_dispatched" />
             </el-form-item>
+
+            <el-divider content-position="left">定时任务</el-divider>
+
+            <el-form-item label="启用日报定时发送">
+              <el-switch v-model="configForm.daily_report_schedule_enabled" />
+              <div class="hint">
+                需同时启用企业微信通知并配置 Webhook。到达设定时间后自动生成并推送日报。
+              </div>
+            </el-form-item>
+
+            <el-form-item label="每天发送时间">
+              <div class="time-row">
+                <el-input-number
+                  v-model="configForm.daily_report_schedule_hour"
+                  :min="0"
+                  :max="23"
+                  controls-position="right"
+                />
+                <span class="time-sep">时</span>
+                <el-input-number
+                  v-model="configForm.daily_report_schedule_minute"
+                  :min="0"
+                  :max="59"
+                  controls-position="right"
+                />
+                <span class="time-sep">分</span>
+                <el-tag type="info">{{ scheduleTimeDisplay }}（Asia/Shanghai）</el-tag>
+              </div>
+              <div class="hint">
+                默认 18:00。店铺发布进度统计窗口为昨天 18:01 ~ 今天 17:00。
+              </div>
+            </el-form-item>
+
+            <el-form-item label="调度状态">
+              <div class="schedule-status">
+                <el-tag :type="scheduleRunning ? 'success' : 'info'">
+                  {{ scheduleRunning ? '调度器运行中' : '调度器未启动' }}
+                </el-tag>
+                <span v-if="scheduleLastRunDate" class="schedule-meta">
+                  上次自动发送：{{ scheduleLastRunDate }}
+                </span>
+                <span v-else class="schedule-meta">今天尚未自动发送</span>
+              </div>
+              <el-button
+                type="warning"
+                plain
+                :loading="triggeringReport"
+                style="margin-top: 8px"
+                @click="triggerDailyReport"
+              >
+                立即发送日报
+              </el-button>
+            </el-form-item>
           </el-form>
         </el-card>
       </el-col>
@@ -370,6 +461,30 @@ onMounted(() => {
 
 .webhook-edit-actions {
   margin-top: 4px;
+}
+
+.time-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.time-sep {
+  color: var(--el-text-color-secondary);
+  font-size: 13px;
+}
+
+.schedule-status {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.schedule-meta {
+  font-size: 13px;
+  color: var(--el-text-color-secondary);
 }
 
 .sample-actions {

@@ -1085,6 +1085,9 @@ export const api = {
 
   wecomTestSend: (body: WecomTestSendPayload) =>
     http.post<WecomTestSendResult>('/wecom/test', body).then((r) => r.data),
+
+  wecomDailyReportTrigger: () =>
+    http.post<{ ok: boolean; message: string }>('/wecom/daily-report/trigger').then((r) => r.data),
 }
 
 export default http

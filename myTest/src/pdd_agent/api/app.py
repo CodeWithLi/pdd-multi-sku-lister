@@ -44,11 +44,13 @@ from pdd_agent.api.services.commerce_dispatch_scheduler import get_commerce_disp
 from pdd_agent.api.services.mq_auto_phase2_scheduler import get_mq_auto_phase2_scheduler
 from pdd_agent.api.services.platform_skip_dedupe_scheduler import get_platform_skip_dedupe_scheduler
 from pdd_agent.api.services.traffic_report_scheduler import get_traffic_report_scheduler
+from pdd_agent.api.services.wecom_daily_report_scheduler import get_wecom_daily_report_scheduler
 from pdd_agent.api.services.task_queue import TaskQueueWorker
 
 logger = get_logger(__name__)
 worker = TaskQueueWorker()
 traffic_report_scheduler = get_traffic_report_scheduler()
+wecom_daily_report_scheduler = get_wecom_daily_report_scheduler()
 failure_cycle_relist_watch_scheduler = get_failure_cycle_relist_watch_scheduler()
 failure_sequential_scheduler = get_failure_sequential_scheduler()
 platform_skip_dedupe_scheduler = get_platform_skip_dedupe_scheduler()
@@ -74,6 +76,7 @@ async def lifespan(app: FastAPI):
     except Exception:
         logger.exception("commerce overview sync on startup failed")
     traffic_report_scheduler.start()
+    wecom_daily_report_scheduler.start()
     failure_cycle_relist_watch_scheduler.start()
     failure_sequential_scheduler.start()
     platform_skip_dedupe_scheduler.start()
@@ -238,6 +241,7 @@ async def lifespan(app: FastAPI):
     await commerce_dispatch_scheduler.stop()
     await mq_auto_phase2_scheduler.stop()
     await traffic_report_scheduler.stop()
+    await wecom_daily_report_scheduler.stop()
     await worker.stop()
     logger.info("PDD Agent API stopped")
 

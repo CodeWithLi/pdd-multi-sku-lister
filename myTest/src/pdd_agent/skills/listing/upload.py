@@ -4036,6 +4036,7 @@ def upload_one_listing(
 
     listing_info = dict(product_info)
     listing_info["title"] = resolve_listing_title(product_info, account_id)
+    pcode = (platform_listing_code or "").strip() or unit.merchant_code
     time.sleep(random.uniform(1.0, 2.0))
 
     print(f"[{account_id}] [{label}] 正在跳转商品分类界面...")
@@ -4478,7 +4479,6 @@ def upload_one_listing(
     except Exception:
         page_url = ""
 
-    pcode = (platform_listing_code or "").strip() or unit.merchant_code
     if not _fill_global_product_code(page, account_id, label, pcode):
         _clear_beforeunload(page)
         return _finish_listing(

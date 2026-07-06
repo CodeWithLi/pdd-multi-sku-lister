@@ -22,10 +22,15 @@ class WecomConfig(BaseModel):
     notify_on_pipeline_failed: bool = False
     notify_on_commerce_queued: bool = False
     notify_on_commerce_dispatched: bool = False
+    daily_report_schedule_enabled: bool = False
+    daily_report_schedule_hour: int = 18
+    daily_report_schedule_minute: int = 0
 
     @model_validator(mode="after")
     def normalize(self) -> "WecomConfig":
         self.webhook_url = str(self.webhook_url or "").strip()
+        self.daily_report_schedule_hour = max(0, min(23, int(self.daily_report_schedule_hour)))
+        self.daily_report_schedule_minute = max(0, min(59, int(self.daily_report_schedule_minute)))
         return self
 
 

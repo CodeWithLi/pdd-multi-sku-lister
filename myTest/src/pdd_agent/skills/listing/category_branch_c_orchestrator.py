@@ -106,6 +106,14 @@ def _run_strategy_simplified_manual(
         burst_demo=False,
     )
     if not listing_upload._open_category_selector_panel(page):
+        from pdd_agent.skills.listing.category_branch_c_titled_recommendation_fallback import (
+            try_recover_branch_c_titled_category_after_render_nudge,
+        )
+
+        if try_recover_branch_c_titled_category_after_render_nudge(
+            page, account_id, label, listing_info
+        ):
+            return True
         _log(account_id, label, "分支 C 编排：未找到「选择分类」入口")
         return False
     if not listing_upload._select_category_by_keyword_search(

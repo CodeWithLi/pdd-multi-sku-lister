@@ -18,6 +18,12 @@ class WecomConfigOut(BaseModel):
     notify_on_pipeline_failed: bool = False
     notify_on_commerce_queued: bool = False
     notify_on_commerce_dispatched: bool = False
+    daily_report_schedule_enabled: bool = False
+    daily_report_schedule_hour: int = 18
+    daily_report_schedule_minute: int = 0
+    daily_report_schedule_time: str = "18:00"
+    daily_report_scheduler_running: bool = False
+    daily_report_last_run_date: str = ""
     config_path: str = ""
 
 
@@ -28,6 +34,9 @@ class WecomConfigUpdateIn(BaseModel):
     notify_on_pipeline_failed: bool = False
     notify_on_commerce_queued: bool = False
     notify_on_commerce_dispatched: bool = False
+    daily_report_schedule_enabled: bool = False
+    daily_report_schedule_hour: int = 18
+    daily_report_schedule_minute: int = 0
 
 
 class WecomTestSendIn(BaseModel):
@@ -44,6 +53,11 @@ class WecomTestSendOut(BaseModel):
     errmsg: str = ""
     payload_sent: dict[str, Any] = Field(default_factory=dict)
     response: dict[str, Any] = Field(default_factory=dict)
+
+
+class WecomDailyReportTriggerOut(BaseModel):
+    ok: bool
+    message: str = ""
 
 
 class WecomHealthOut(BaseModel):

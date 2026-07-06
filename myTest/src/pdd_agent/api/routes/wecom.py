@@ -11,10 +11,12 @@ from pdd_agent.api.schemas.wecom import (
     WecomConfigOut,
     WecomConfigUpdateIn,
     WecomDailyReportPreviewOut,
+    WecomDailyReportTriggerOut,
     WecomHealthOut,
     WecomTestSendIn,
     WecomTestSendOut,
 )
+from pdd_agent.api.services.wecom_daily_report_scheduler import get_wecom_daily_report_scheduler
 from pdd_agent.integrations.wecom.client import (
     WecomAPIError,
     build_markdown_payload,
@@ -41,6 +43,9 @@ def _config_path() -> str:
 
 def _config_out(cfg: WecomConfig, *, expose_webhook: bool = False) -> WecomConfigOut:
     url = str(cfg.webhook_url or "").strip()
+    scheduler = get_wecom_daily_report_scheduler()
+    hour = int(cfg.daily_report_schedule_hour)
+    minute = int(cfg.daily_report_schedule_minute)
     return WecomConfigOut(
         enabled=bool(cfg.enabled),
         webhook_url=url if expose_webhook else "",
@@ -50,6 +55,14 @@ def _config_out(cfg: WecomConfig, *, expose_webhook: bool = False) -> WecomConfi
         notify_on_pipeline_failed=bool(cfg.notify_on_pipeline_failed),
         notify_on_commerce_queued=bool(cfg.notify_on_commerce_queued),
         notify_on_commerce_dispatched=bool(cfg.notify_on_commerce_dispatched),
+        daily_report_schedule_enabled=bool(cfg.daily_report_schedule_enabled),
+        daily_report_schedule_hour=hour,
+        daily_report_schedule_minute=minute,
+        daily_report_schedule_time=f"{hour:02d}:{minute:02d}",
+        daily_report_scheduler_running=scheduler.is_running,
+        daily_report_last_run_date=(
+            scheduler.last_run_date.isoformat() if scheduler.last_run_date else ""
+        ),
         config_path=_config_path(),
     )
 
@@ -110,8 +123,12 @@ def update_wecom_config(body: WecomConfigUpdateIn):
             notify_on_pipeline_failed=bool(body.notify_on_pipeline_failed),
             notify_on_commerce_queued=bool(body.notify_on_commerce_queued),
             notify_on_commerce_dispatched=bool(body.notify_on_commerce_dispatched),
+            daily_report_schedule_enabled=bool(body.daily_report_schedule_enabled),
+            daily_report_schedule_hour=int(body.daily_report_schedule_hour),
+            daily_report_schedule_minute=int(body.daily_report_schedule_minute),
         )
     )
+    get_wecom_daily_report_scheduler().reset_last_run_date()
     return _config_out(saved)
 
 
@@ -190,3 +207,20 @@ def preview_daily_report():
             for c in draft.commits
         ],
     )
+
+
+@router.post("/daily-report/trigger", response_model=WecomDailyReportTriggerOut)
+def trigger_daily_report():
+    """手动触发：立即生成并发送企业微信日报。"""
+    cfg = load_wecom_config()
+    if not wecom_configured(cfg):
+        raise HTTPException(status_code=400, detail="请先启用企业微信并配置 Webhook")
+    try:
+        ok = get_wecom_daily_report_scheduler().trigger_now()
+    except RuntimeError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"发送日报失败: {exc}") from exc
+    if not ok:
+        return WecomDailyReportTriggerOut(ok=False, message="日报发送失败，请查看后台日志")
+    return WecomDailyReportTriggerOut(ok=True, message="企业微信日报已发送")

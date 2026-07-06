@@ -1366,6 +1366,12 @@ export interface WecomConfig {
   notify_on_pipeline_failed: boolean
   notify_on_commerce_queued: boolean
   notify_on_commerce_dispatched: boolean
+  daily_report_schedule_enabled: boolean
+  daily_report_schedule_hour: number
+  daily_report_schedule_minute: number
+  daily_report_schedule_time: string
+  daily_report_scheduler_running: boolean
+  daily_report_last_run_date: string
   config_path: string
 }
 
@@ -1376,6 +1382,9 @@ export interface WecomConfigUpdatePayload {
   notify_on_pipeline_failed: boolean
   notify_on_commerce_queued: boolean
   notify_on_commerce_dispatched: boolean
+  daily_report_schedule_enabled: boolean
+  daily_report_schedule_hour: number
+  daily_report_schedule_minute: number
 }
 
 export interface WecomTestSendPayload {

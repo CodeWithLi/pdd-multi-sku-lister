@@ -9,3 +9,8 @@ notify_on_listing_failed: false
 notify_on_pipeline_failed: false
 notify_on_commerce_queued: false
 notify_on_commerce_dispatched: false
+
+# 日报定时发送（需 enabled=true、webhook_url 已配置，且 daily_report_schedule_enabled=true）
+daily_report_schedule_enabled: false
+daily_report_schedule_hour: 18
+daily_report_schedule_minute: 0
