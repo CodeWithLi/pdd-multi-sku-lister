@@ -1,37 +1,39 @@
-# PDD Agent Platform 依赖
+# PDD Agent Platform dependencies
 # Python >= 3.11
 #
-# 安装方式：
+# Install:
 #   pip install -r requirements.txt
-#   pip install -e .                    # 以可编辑模式安装本项目
-#   python -m playwright install chromium   # 安装浏览器（需单独执行）
+#   pip install -e .                    # editable install
+#   python -m playwright install chromium   # install browser separately
 #
-# 国内 PyPI 镜像（可选）：
+# China PyPI mirror (optional):
 #   pip install -r requirements.txt -i https://pypi.tuna.tsinghua.edu.cn/simple
 
-# ── LangGraph / LangChain ──
+# LangGraph / LangChain
 langgraph>=0.2.0
 langchain-core>=0.3.0
 langchain-openai>=0.2.0
 
-# ── Playwright 浏览器自动化 ──
+# Playwright browser automation
 playwright>=1.49.0
 
-# ── 配置与数据模型 ──
+# Config and data models
 pydantic>=2.0
 pydantic-settings>=2.0
 pyyaml>=6.0
 SQLAlchemy>=2.0.0
 PyMySQL>=1.1.0
 
-# ── 多规格 Excel 解析 ──
+# Multi-SKU Excel parsing
 openpyxl>=3.1.0
 xlrd>=2.0.1
 
-# ── FastAPI（预留 Vue3 对接） ──
+# FastAPI (for Vue3 frontend)
 fastapi>=0.115.0
 uvicorn[standard]>=0.32.0
 httpx>=0.27.0
+python-multipart>=0.0.9
+tzdata>=2024.1; sys_platform == "win32"
 
 minio
 redis>=5.0.0

@@ -2408,6 +2408,42 @@ def summarize_daily_listing_records(
         ]
 
 
+def summarize_daily_listing_records_between(
+    *,
+    start: datetime,
+    end: datetime,
+) -> list[dict[str, str | int]]:
+    """按店铺汇总指定时间段内的上架数量（含边界）。"""
+    if not is_database_available():
+        return []
+    with session_scope() as session:
+        rows = (
+            session.query(
+                DailyListingRecordORM.account_id,
+                DailyListingRecordORM.shop_display_name,
+                func.count(DailyListingRecordORM.record_id),
+            )
+            .filter(
+                DailyListingRecordORM.listed_at >= start,
+                DailyListingRecordORM.listed_at <= end,
+            )
+            .group_by(
+                DailyListingRecordORM.account_id,
+                DailyListingRecordORM.shop_display_name,
+            )
+            .order_by(func.count(DailyListingRecordORM.record_id).desc())
+            .all()
+        )
+        return [
+            {
+                "account_id": str(account_id or ""),
+                "shop_display_name": str(shop_name or "").strip(),
+                "count": int(count or 0),
+            }
+            for account_id, shop_name, count in rows
+        ]
+
+
 def create_daily_cycle_relist_record(
     *,
     feishu_record_id: str,

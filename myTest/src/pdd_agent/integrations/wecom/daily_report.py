@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import date
 
 from pdd_agent.integrations.git.digest import (
@@ -12,6 +12,10 @@ from pdd_agent.integrations.git.digest import (
     today_in_tz,
 )
 from pdd_agent.integrations.git.summarize import summarize_commits_as_progress
+from pdd_agent.integrations.wecom.store_progress import (
+    StoreListingSummary,
+    collect_pdd_store_progress,
+)
 
 
 @dataclass
@@ -20,8 +24,12 @@ class DailyReportDraft:
     repo_path: str
     commit_count: int
     progress_summary: str
-    message: str
-    commits: list[GitCommitRecord]
+    store_progress: str
+    listing_window_start: str
+    listing_window_end: str
+    store_summaries: list[StoreListingSummary] = field(default_factory=list)
+    message: str = ""
+    commits: list[GitCommitRecord] = field(default_factory=list)
 
 
 def build_daily_report_message(
@@ -58,17 +66,17 @@ def generate_daily_report_draft(
     *,
     repo_path: str = "",
     day: date | None = None,
-    store_progress: str = "",
     in_progress: str = "",
 ) -> DailyReportDraft:
-    """采集今日 Git 提交并由 LLM 生成进展摘要，组装日报草稿。"""
+    """采集 Git 提交 + PDD 店铺发布进度，组装日报草稿。"""
     resolved = resolve_git_repo_path(repo_path)
     target_day = day or today_in_tz()
     commits = collect_commits_for_day(repo_path=resolved, day=target_day)
     progress_summary = summarize_commits_as_progress(commits)
+    store_snapshot = collect_pdd_store_progress(reference_day=target_day)
     message = build_daily_report_message(
         progress_summary=progress_summary,
-        store_progress=store_progress,
+        store_progress=store_snapshot.text,
         in_progress=in_progress,
     )
     return DailyReportDraft(
@@ -76,6 +84,10 @@ def generate_daily_report_draft(
         repo_path=str(resolved),
         commit_count=len(commits),
         progress_summary=progress_summary,
+        store_progress=store_snapshot.text,
+        listing_window_start=store_snapshot.window_start.strftime("%Y-%m-%d %H:%M"),
+        listing_window_end=store_snapshot.window_end.strftime("%Y-%m-%d %H:%M"),
+        store_summaries=store_snapshot.shops,
         message=message,
         commits=commits,
     )

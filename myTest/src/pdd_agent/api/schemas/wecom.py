@@ -62,10 +62,20 @@ class WecomDailyReportCommitOut(BaseModel):
     file_count: int = 0
 
 
+class WecomDailyReportStoreOut(BaseModel):
+    account_id: str
+    shop_display_name: str
+    count: int
+
+
 class WecomDailyReportPreviewOut(BaseModel):
     report_date: str
     repo_path: str
     commit_count: int
     progress_summary: str
+    store_progress: str = ""
+    listing_window_start: str = ""
+    listing_window_end: str = ""
+    store_summaries: list[WecomDailyReportStoreOut] = Field(default_factory=list)
     message: str
     commits: list[WecomDailyReportCommitOut] = Field(default_factory=list)

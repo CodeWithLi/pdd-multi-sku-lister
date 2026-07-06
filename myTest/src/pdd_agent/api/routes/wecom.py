@@ -166,6 +166,17 @@ def preview_daily_report():
         repo_path=draft.repo_path,
         commit_count=draft.commit_count,
         progress_summary=draft.progress_summary,
+        store_progress=draft.store_progress,
+        listing_window_start=draft.listing_window_start,
+        listing_window_end=draft.listing_window_end,
+        store_summaries=[
+            {
+                "account_id": s.account_id,
+                "shop_display_name": s.shop_display_name,
+                "count": s.count,
+            }
+            for s in draft.store_summaries
+        ],
         message=draft.message,
         commits=[
             {

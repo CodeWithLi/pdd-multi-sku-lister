@@ -46,10 +46,12 @@ def test_commits_to_context_empty():
 
 def test_build_daily_report_message_template():
     message = build_daily_report_message(
-        progress_summary="商品属性自动填写功能上线\n商品属性管理页面上线",
+        progress_summary="商品属性自动填写功能\n商品属性管理功能",
+        store_progress="兔兔潮玩屋：已发布16个",
     )
     assert message.startswith("当日已完成交付技术项目进展:")
-    assert "商品属性自动填写功能上线" in message
+    assert "商品属性自动填写功能" in message
+    assert "兔兔潮玩屋：已发布16个" in message
     assert "-------" in message
     assert "店铺今日发布商品进度：" in message
     assert "----------" in message
