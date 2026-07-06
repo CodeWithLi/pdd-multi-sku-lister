@@ -14,10 +14,7 @@ from pdd_agent.integrations.git.digest import (
     commits_to_context,
     resolve_git_repo_path,
 )
-from pdd_agent.integrations.wecom.daily_report import (
-    build_pdd_daily_report_message,
-    build_taobao_daily_report_message,
-)
+from pdd_agent.integrations.wecom.daily_report_format import build_daily_report_markdown
 
 
 SAMPLE_LOG = """===COMMIT===
@@ -47,29 +44,36 @@ def test_commits_to_context_empty():
     assert "无 Git 提交" in commits_to_context([])
 
 
-def test_build_pdd_daily_report_message_template():
-    message = build_pdd_daily_report_message(
+def test_build_pdd_daily_report_markdown():
+    message = build_daily_report_markdown(
+        platform="pdd",
+        report_date="2026-07-06",
         progress_summary="商品属性自动填写功能\n商品属性管理功能",
         store_progress="兔兔潮玩屋：已发布16个",
         in_progress="修复上架超时问题",
+        listing_window="07-05 18:01 ~ 07-06 17:00",
     )
-    assert message.startswith("当日已完成交付技术项目进展:")
-    assert "商品属性自动填写功能" in message
+    assert "## 运营日报 · PDD" in message
+    assert "### 当日已完成交付技术项目进展" in message
+    assert "- 商品属性自动填写功能" in message
+    assert "### 店铺今日发布商品进度" in message
     assert "兔兔潮玩屋：已发布16个" in message
-    assert "网盘素材" not in message
-    assert "正在解决/优化中：" in message
+    assert "### 正在解决 / 优化中" in message
     assert "修复上架超时问题" in message
+    assert "网盘素材" not in message
 
 
-def test_build_taobao_daily_report_message_template():
-    message = build_taobao_daily_report_message(
+def test_build_taobao_daily_report_markdown():
+    message = build_daily_report_markdown(
+        platform="taobao",
+        report_date="2026-07-06",
         netdisk_materials="今日上传素材 120 个",
         in_progress="优化标题生成",
     )
-    assert "网盘素材和上架累计数据" in message
+    assert "## 运营日报 · 淘宝" in message
+    assert "### 网盘素材和上架累计数据" in message
     assert "今日上传素材 120 个" in message
-    assert "正在解决/优化中：" in message
-    assert "优化标题生成" in message
+    assert "### 正在解决 / 优化中" in message
 
 
 def test_resolve_git_repo_path_finds_workspace_root():
@@ -87,6 +91,32 @@ def test_collect_commits_for_day_today(monkeypatch):
     commits = collect_commits_for_day(repo_path=repo, day=date(2026, 7, 6), include_file_stats=False)
     assert len(commits) == 1
     assert commits[0].author == "CodeWithLi"
+
+
+def test_clean_progress_lines_dedupes_and_caps():
+    from pdd_agent.integrations.git.summarize import _clean_progress_lines
+
+    text = "\n".join(
+        [
+            "企业微信日报功能",
+            "企业微信日报功能",
+            "- 商品属性功能",
+            "条目3",
+            "条目4",
+            "条目5",
+            "条目6",
+            "条目7",
+        ]
+    )
+    lines = _clean_progress_lines(text)
+    assert lines == [
+        "企业微信日报功能",
+        "商品属性功能",
+        "条目3",
+        "条目4",
+        "条目5",
+        "条目6",
+    ]
 
 
 def test_summarize_commits_as_progress(monkeypatch):

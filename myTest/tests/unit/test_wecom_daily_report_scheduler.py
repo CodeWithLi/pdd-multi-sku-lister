@@ -67,3 +67,25 @@ async def test_scheduler_sends_after_target_time(monkeypatch):
     send_mock.assert_called_once()
     assert send_mock.call_args[0][0] == "pdd"
     assert scheduler.last_run_date == date(2026, 7, 6)
+
+
+def test_trigger_now_sends_custom_message(monkeypatch):
+    scheduler = WecomDailyReportScheduler()
+    monkeypatch.setattr(
+        "pdd_agent.api.services.wecom_daily_report_scheduler.load_wecom_config",
+        lambda: _cfg(),
+    )
+    send_markdown = MagicMock()
+    monkeypatch.setattr(
+        "pdd_agent.api.services.wecom_daily_report_scheduler.send_markdown",
+        send_markdown,
+    )
+    send_report = MagicMock(return_value=True)
+    monkeypatch.setattr(scheduler, "_send_daily_report", send_report)
+
+    ok = scheduler.trigger_now("pdd", message="## 自定义日报")
+
+    assert ok is True
+    send_markdown.assert_called_once()
+    assert send_markdown.call_args[0][0] == "## 自定义日报"
+    send_report.assert_not_called()

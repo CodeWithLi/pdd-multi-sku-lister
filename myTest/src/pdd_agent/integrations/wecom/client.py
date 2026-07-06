@@ -67,6 +67,20 @@ def send_webhook_payload(
     return data
 
 
+def send_markdown(
+    content: str,
+    *,
+    webhook_url: str = "",
+    cfg: WecomConfig | None = None,
+    version: str = "markdown",
+) -> dict[str, Any]:
+    return send_webhook_payload(
+        build_markdown_payload(content, version=version),
+        webhook_url=webhook_url,
+        cfg=cfg,
+    )
+
+
 def send_text(
     content: str,
     *,

@@ -266,12 +266,16 @@ def preview_daily_report(platform: WecomDailyReportPlatform = "pdd"):
 def trigger_daily_report(body: WecomDailyReportTriggerIn | None = None):
     """手动触发：立即生成并发送指定平台日报。"""
     platform = (body.platform if body else "pdd")
+    custom_message = str(body.message or "").strip() if body else ""
     cfg = load_wecom_config()
     if not wecom_configured(cfg):
         raise HTTPException(status_code=400, detail="请先启用企业微信并配置 Webhook")
     label = "PDD" if platform == "pdd" else "淘宝"
     try:
-        ok = get_wecom_daily_report_scheduler().trigger_now(platform)
+        ok = get_wecom_daily_report_scheduler().trigger_now(
+            platform,
+            message=custom_message,
+        )
     except RuntimeError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except Exception as exc:

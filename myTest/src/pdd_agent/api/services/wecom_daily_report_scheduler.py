@@ -6,7 +6,7 @@ import asyncio
 from datetime import date, datetime, timedelta, timezone
 
 from pdd_agent.core.logging import get_logger
-from pdd_agent.integrations.wecom.client import WecomAPIError, send_text
+from pdd_agent.integrations.wecom.client import WecomAPIError, send_markdown
 from pdd_agent.integrations.wecom.config import load_wecom_config, wecom_configured
 from pdd_agent.integrations.wecom.daily_report import DailyReportPlatform, generate_daily_report_draft
 
@@ -133,7 +133,7 @@ class WecomDailyReportScheduler:
     def _send_daily_report(self, platform: DailyReportPlatform, cfg) -> bool:
         try:
             draft = generate_daily_report_draft(platform=platform)
-            send_text(draft.message, cfg=cfg)
+            send_markdown(draft.message, cfg=cfg)
             logger.info(
                 "wecom daily report sent platform=%s commits=%s stores=%s",
                 platform,
@@ -148,12 +148,33 @@ class WecomDailyReportScheduler:
             logger.exception("wecom daily report generate/send failed platform=%s", platform)
             return False
 
-    def trigger_now(self, platform: DailyReportPlatform = "pdd") -> bool:
-        """手动触发：立即生成并发送指定平台日报。"""
+    def trigger_now(
+        self,
+        platform: DailyReportPlatform = "pdd",
+        *,
+        message: str = "",
+    ) -> bool:
+        """手动触发：发送指定平台日报（可传入已编辑的 Markdown）。"""
         cfg = load_wecom_config()
         if not wecom_configured(cfg):
             raise RuntimeError("企业微信未配置或未启用")
-        ok = self._send_daily_report(platform, cfg)
+        custom = str(message or "").strip()
+        if custom:
+            ok = self._send_markdown(custom, platform, cfg)
+        else:
+            ok = self._send_daily_report(platform, cfg)
         if ok and platform == "pdd":
             self._last_run_date = datetime.now(TZ).date()
         return ok
+
+    def _send_markdown(self, message: str, platform: DailyReportPlatform, cfg) -> bool:
+        try:
+            send_markdown(message, cfg=cfg)
+            logger.info("wecom daily report sent platform=%s custom_message=true", platform)
+            return True
+        except WecomAPIError:
+            logger.exception("wecom daily report send failed platform=%s", platform)
+            return False
+        except Exception:
+            logger.exception("wecom daily report send failed platform=%s", platform)
+            return False

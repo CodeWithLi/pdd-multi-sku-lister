@@ -58,6 +58,10 @@ class WecomTestSendOut(BaseModel):
 
 class WecomDailyReportTriggerIn(BaseModel):
     platform: WecomDailyReportPlatform = "pdd"
+    message: str = Field(
+        default="",
+        description="非空时直接发送此 Markdown 正文，不再重新生成日报",
+    )
 
 
 class WecomDailyReportTriggerOut(BaseModel):

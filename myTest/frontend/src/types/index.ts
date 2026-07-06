@@ -1449,6 +1449,8 @@ export interface WecomDailyReportPreview {
 
 export interface WecomDailyReportTriggerPayload {
   platform: WecomDailyReportPlatform
+  /** 非空时直接发送此 Markdown，不再由后端重新生成 */
+  message?: string
 }
 
 export interface WecomDailyReportTriggerResult {

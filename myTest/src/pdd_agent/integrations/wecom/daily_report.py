@@ -14,6 +14,7 @@ from pdd_agent.integrations.git.digest import (
 )
 from pdd_agent.integrations.git.summarize import summarize_commits_as_progress
 from pdd_agent.integrations.wecom.daily_content import WecomDailyContent, load_wecom_daily_content
+from pdd_agent.integrations.wecom.daily_report_format import build_daily_report_markdown
 from pdd_agent.integrations.wecom.store_progress import (
     StoreListingSummary,
     collect_pdd_store_progress,
@@ -39,46 +40,6 @@ class DailyReportDraft:
     commits: list[GitCommitRecord] = field(default_factory=list)
 
 
-def _append_section(parts: list[str], title: str, body: str) -> None:
-    parts.append(title)
-    text = str(body or "").strip()
-    if text:
-        parts.append(text)
-
-
-def build_pdd_daily_report_message(
-    *,
-    progress_summary: str,
-    store_progress: str = "",
-    in_progress: str = "",
-) -> str:
-    """PDD 日报：Git 进展 + 店铺发布进度 + 正在解决/优化中（无网盘素材）。"""
-    parts: list[str] = []
-    _append_section(parts, "当日已完成交付技术项目进展:", progress_summary or "今日暂无代码提交")
-    parts.append("-------")
-    _append_section(parts, "店铺今日发布商品进度：", store_progress)
-    parts.append("----------")
-    _append_section(parts, "正在解决/优化中：", in_progress)
-    return "\n".join(parts)
-
-
-def build_taobao_daily_report_message(
-    *,
-    netdisk_materials: str = "",
-    in_progress: str = "",
-) -> str:
-    """淘宝日报：仅手动填写区块（网盘素材 + 正在解决/优化中）。"""
-    parts: list[str] = []
-    _append_section(parts, "当日已完成交付技术项目进展:", "")
-    parts.append("-------")
-    _append_section(parts, "店铺今日发布商品进度：", "")
-    parts.append("---------")
-    _append_section(parts, "网盘素材和上架累计数据", netdisk_materials)
-    parts.append("----------")
-    _append_section(parts, "正在解决/优化中：", in_progress)
-    return "\n".join(parts)
-
-
 def generate_pdd_daily_report_draft(
     *,
     repo_path: str = "",
@@ -93,10 +54,17 @@ def generate_pdd_daily_report_draft(
     progress_summary = summarize_commits_as_progress(commits)
     store_snapshot = collect_pdd_store_progress(reference_day=target_day)
     in_progress = str(content.pdd.in_progress or "").strip()
-    message = build_pdd_daily_report_message(
+    listing_window = (
+        f"{store_snapshot.window_start.strftime('%m-%d %H:%M')} ~ "
+        f"{store_snapshot.window_end.strftime('%m-%d %H:%M')}"
+    )
+    message = build_daily_report_markdown(
+        platform="pdd",
+        report_date=target_day.isoformat(),
         progress_summary=progress_summary,
         store_progress=store_snapshot.text,
         in_progress=in_progress,
+        listing_window=listing_window,
     )
     return DailyReportDraft(
         platform="pdd",
@@ -124,7 +92,9 @@ def generate_taobao_daily_report_draft(
     content = daily_content or load_wecom_daily_content(day=target_day)
     netdisk_materials = str(content.taobao.netdisk_materials or "").strip()
     in_progress = str(content.taobao.in_progress or "").strip()
-    message = build_taobao_daily_report_message(
+    message = build_daily_report_markdown(
+        platform="taobao",
+        report_date=target_day.isoformat(),
         netdisk_materials=netdisk_materials,
         in_progress=in_progress,
     )
