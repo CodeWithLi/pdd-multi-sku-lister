@@ -31,6 +31,10 @@ from pdd_agent.api.services.pipeline_service import (
 )
 from pdd_agent.core.config import load_yaml_settings
 from pdd_agent.db.session import is_database_available
+from pdd_agent.api.schemas.pipeline_late_retry import (
+    PipelineLateRetryStartRequest,
+    PipelineLateRetryStartResponse,
+)
 from pdd_agent.api.schemas.feishu_inspect import FeishuInspectListingPricesOut
 from pdd_agent.integrations.feishu.config import (
     accessory_cost_pricing_enabled,
@@ -369,6 +373,27 @@ def get_integrated(pipeline_id: str):
     if not data:
         raise HTTPException(status_code=404, detail="pipeline not found")
     return IntegratedPipelineResponse(**data)
+
+
+@router.post("/integrated/{pipeline_id}/late-retry-failed", response_model=PipelineLateRetryStartResponse)
+def late_retry_failed_integrated(pipeline_id: str, body: PipelineLateRetryStartRequest | None = None):
+    if not is_database_available():
+        raise HTTPException(status_code=503, detail="数据库不可用")
+    from pdd_agent.api.services.pipeline_late_retry_policy import start_late_retry_failed
+
+    body = body or PipelineLateRetryStartRequest()
+    try:
+        data = start_late_retry_failed(
+            pipeline_id,
+            selectors=list(body.selectors or []),
+            deadline_buffer_minutes=body.deadline_buffer_minutes,
+        )
+    except ValueError as exc:
+        detail = str(exc)
+        if detail == "pipeline_not_found":
+            raise HTTPException(status_code=404, detail=detail) from exc
+        raise HTTPException(status_code=400, detail=detail) from exc
+    return PipelineLateRetryStartResponse(**data)
 
 
 @router.post("/integrated/{pipeline_id}/cancel", response_model=IntegratedPipelineResponse)

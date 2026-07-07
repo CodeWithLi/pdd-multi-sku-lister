@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime
+from typing import Any
 
 from pydantic import BaseModel, Field, model_validator
 
@@ -205,6 +206,7 @@ class IntegratedPipelineResponse(BaseModel):
     block_reason: str = ""
     block_reason_label: str = ""
     wake_at: str = ""
+    late_retry: dict[str, Any] = Field(default_factory=dict)
 
 
 class IntegratedPipelineBatchRunItem(BaseModel):

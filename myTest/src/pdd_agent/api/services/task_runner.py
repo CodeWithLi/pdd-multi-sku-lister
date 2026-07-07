@@ -1802,7 +1802,11 @@ async def execute_campaign_marketing_activity_register(
                 "pdd_product_ids": selected_product_ids,
             }
         )
-        result = _json_safe(raw)
+        from pdd_agent.api.services.campaign_result_storage_sanitize import (
+            json_safe_campaign_result_for_storage,
+        )
+
+        result = json_safe_campaign_result_for_storage(raw)
         item_results = [r for r in result.get("results") or [] if isinstance(r, dict)]
         item_failed = any(str(r.get("status") or "") != "success" for r in item_results)
         status = RunStatus.SUCCESS if not result.get("errors") and not item_failed else RunStatus.FAILED

@@ -1130,6 +1130,11 @@ def _step_infos(row) -> list[dict[str, Any]]:
 def pipeline_to_dict(row) -> dict[str, Any]:
     if row is None:
         return {}
+    from pdd_agent.api.services.pipeline_late_retry_policy import (
+        build_late_retry_public_state,
+        merge_late_retry_listing_statuses,
+    )
+
     return {
         "pipeline_id": row.pipeline_id,
         "account_id": row.account_id,
@@ -1175,7 +1180,11 @@ def pipeline_to_dict(row) -> dict[str, Any]:
             (row.meta or {}).get("listing_limited_time_phase_completed")
         ),
         "store_sequential": dict((row.meta or {}).get("store_sequential") or {}),
-        "listing_unit_statuses": build_listing_unit_statuses(row),
+        "listing_unit_statuses": merge_late_retry_listing_statuses(
+            row,
+            build_listing_unit_statuses(row),
+        ),
+        "late_retry": build_late_retry_public_state(row),
         "campaign_results": _campaign_results(row),
         "steps": _step_infos(row),
         "feishu_inspect_at": str((row.meta or {}).get("feishu_price_inspect_at") or ""),
@@ -1875,26 +1884,37 @@ def on_queue_task_finished(
         return
 
     result = result if isinstance(result, dict) else {}
-    if agent == AgentKind.LISTING.value:
-        _on_listing_finished(row, run_id=run_id, success=success, result=result, error=error)
-    elif agent == AgentKind.CAMPAIGN.value:
-        if _pipeline_limited_time_run_id(row) == run_id:
-            _on_limited_time_finished(row, run_id=run_id, success=success, result=result, error=error)
-        else:
-            _on_campaign_finished(row, run_id=run_id, success=success, result=result, error=error)
-    elif agent == AgentKind.TRAFFIC.value:
-        _on_traffic_finished(row, run_id=run_id, success=success, error=error)
-    elif agent == AgentKind.DELIST.value:
-        from pdd_agent.api.services.pipeline_relist_strategy import handle_pipeline_delist_task_finished
+    from pdd_agent.api.services.pipeline_late_retry_policy import dispatch_late_retry_queue_task_finished
 
-        if handle_pipeline_delist_task_finished(
-            pipeline_id=pipeline_id,
-            run_id=run_id,
-            success=success,
-            result=result,
-            error=error,
-        ):
-            return
+    late_retry_handled = dispatch_late_retry_queue_task_finished(
+        row,
+        agent=agent,
+        run_id=run_id,
+        success=success,
+        result=result,
+        error=error,
+    )
+    if not late_retry_handled:
+        if agent == AgentKind.LISTING.value:
+            _on_listing_finished(row, run_id=run_id, success=success, result=result, error=error)
+        elif agent == AgentKind.CAMPAIGN.value:
+            if _pipeline_limited_time_run_id(row) == run_id:
+                _on_limited_time_finished(row, run_id=run_id, success=success, result=result, error=error)
+            else:
+                _on_campaign_finished(row, run_id=run_id, success=success, result=result, error=error)
+        elif agent == AgentKind.TRAFFIC.value:
+            _on_traffic_finished(row, run_id=run_id, success=success, error=error)
+        elif agent == AgentKind.DELIST.value:
+            from pdd_agent.api.services.pipeline_relist_strategy import handle_pipeline_delist_task_finished
+
+            if handle_pipeline_delist_task_finished(
+                pipeline_id=pipeline_id,
+                run_id=run_id,
+                success=success,
+                result=result,
+                error=error,
+            ):
+                return
 
     try:
         from pdd_agent.api.services.pipeline_issue_report_service import ingest_queue_task_outcome
@@ -1910,6 +1930,17 @@ def on_queue_task_finished(
         )
     except Exception:
         logger.warning("pipeline issue ingest failed pipeline_id=%s", pipeline_id, exc_info=True)
+
+    if late_retry_handled:
+        refreshed = get_integrated_pipeline(pipeline_id)
+        if refreshed and refreshed.status in TERMINAL_PIPELINE_STATUSES:
+            try:
+                from pdd_agent.api.services.pipeline_store_sequential import maybe_advance_sequential_store
+
+                maybe_advance_sequential_store(refreshed)
+            except Exception:
+                logger.exception("advance sequential store failed pipeline_id=%s", pipeline_id)
+        return
 
     _ensure_pipeline_failed_after_task(
         pipeline_id=pipeline_id,

@@ -1021,6 +1021,44 @@ export interface IntegratedPipeline {
   block_reason_label?: string
   wake_at?: string
   is_merged?: boolean
+  late_retry?: PipelineLateRetryState
+}
+
+export interface PipelineLateRetryEligibility {
+  eligible: boolean
+  reason?: string
+  failed_selectors?: string[]
+  failed_count?: number
+  minutes_remaining?: number | null
+  required_buffer_minutes?: number
+  activity_deadline_at?: string
+}
+
+export interface PipelineLateRetryState {
+  enabled?: boolean
+  phase?: string
+  outcome?: string
+  outcome_detail?: string
+  selectors?: string[]
+  succeeded_selectors?: string[]
+  failed_selectors?: string[]
+  expired_selectors?: string[]
+  listing_run_id?: string
+  limited_time_run_id?: string
+  activity_deadline_at?: string
+  minutes_remaining?: number | null
+  merged_pdd_count?: number
+  eligible?: boolean
+  eligibility?: PipelineLateRetryEligibility
+}
+
+export interface PipelineLateRetryStartResponse {
+  pipeline_id: string
+  listing_run_id: string
+  selector_count: number
+  selectors: string[]
+  activity_deadline_at: string
+  late_retry: PipelineLateRetryState
 }
 
 export interface AccountLifecycle {

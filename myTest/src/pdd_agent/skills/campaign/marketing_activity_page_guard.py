@@ -110,6 +110,8 @@ def ensure_marketing_activities_tab_focus(page: DpPage, account_id: str) -> dict
     blank_closed = _close_blank_tabs(page, account_id)
 
     candidates: list[dict[str, Any]] = []
+    best_meta: dict[str, Any] | None = None
+    best_page: Any = None
     for item in _live_context_pages(page):
         try:
             url = str(item.url or "")
@@ -124,15 +126,16 @@ def ensure_marketing_activities_tab_focus(page: DpPage, account_id: str) -> dict
         except Exception as exc:
             text = ""
             search_state = {"found": False, "reason": str(exc)}
-        candidates.append(
-            {
-                "page": item,
-                "url": url,
-                "text_sample": text[:120],
-                "search_found": bool(search_state.get("found")),
-                "score": _score_marketing_tab(url, text, bool(search_state.get("found"))),
-            }
-        )
+        meta = {
+            "url": url,
+            "text_sample": text[:120],
+            "search_found": bool(search_state.get("found")),
+            "score": _score_marketing_tab(url, text, bool(search_state.get("found"))),
+        }
+        candidates.append(meta)
+        if best_meta is None or meta["score"] > best_meta["score"]:
+            best_meta = meta
+            best_page = item
 
     if not candidates:
         return {
@@ -154,7 +157,16 @@ def ensure_marketing_activities_tab_focus(page: DpPage, account_id: str) -> dict
             "current_url": str(getattr(page, "url", "") or ""),
         }
 
-    target = best["page"]
+    target = best_page
+    if target is None:
+        return {
+            "focused": False,
+            "reason": "best_page_missing",
+            "candidates": candidates,
+            "multi_quick": multi_quick,
+            "blank_closed": blank_closed,
+            "current_url": str(getattr(page, "url", "") or ""),
+        }
     _bind_page(page, target)
     try:
         target.bring_to_front()

@@ -22,6 +22,7 @@ import type {
   IntegratedPipelineBatchStartPayload,
   IntegratedPipelineListResponse,
   IntegratedPipelineStartPayload,
+  PipelineLateRetryStartResponse,
   PipelineIssueListResponse,
   PipelineIssueReport,
   PipelineIssueSummaryResponse,
@@ -694,6 +695,14 @@ export const api = {
 
   cancelIntegratedPipeline: (pipelineId: string) =>
     http.post<IntegratedPipeline>(`/pipelines/integrated/${pipelineId}/cancel`).then((r) => r.data),
+
+  lateRetryFailedPipeline: (
+    pipelineId: string,
+    body: { selectors?: string[]; deadline_buffer_minutes?: number } = {},
+  ) =>
+    http
+      .post<PipelineLateRetryStartResponse>(`/pipelines/integrated/${pipelineId}/late-retry-failed`, body)
+      .then((r) => r.data),
 
   getPipelineExcelFallback: () =>
     http.get<{ enabled: boolean }>('/pipelines/integrated/excel-fallback').then((r) => r.data),

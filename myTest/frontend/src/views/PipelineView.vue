@@ -64,6 +64,7 @@ import {
 const router = useRouter()
 const loading = ref(false)
 const cancelingId = ref('')
+const lateRetryLoading = ref(false)
 const polling = ref(false)
 const error = ref('')
 const success = ref('')
@@ -442,6 +443,45 @@ const listingUnitStatusSummary = computed(() => {
   return counts
 })
 
+const lateRetryState = computed(() => activePipeline.value?.late_retry)
+const lateRetryFailedCount = computed(() => listingUnitStatusSummary.value?.failed || 0)
+const canLateRetryFailed = computed(() => {
+  const pipeline = activePipeline.value
+  if (!pipeline) return false
+  const lr = pipeline.late_retry
+  if (lr?.phase === 'listing' || lr?.phase === 'limited_time') return false
+  return Boolean(lr?.eligibility?.eligible ?? lr?.eligible)
+})
+
+function lateRetryEligibilityHint() {
+  const lr = lateRetryState.value
+  const reason = lr?.eligibility?.reason || ''
+  const map: Record<string, string> = {
+    pipeline_not_waiting_activity: '链路未处于等活动状态',
+    pipeline_not_in_waiting_activity_step: '当前步骤不允许补跑',
+    activity_not_scheduled: '活动尚未预约',
+    activity_deadline_passed: '活动预约时间已过',
+    late_retry_in_progress: '补跑进行中',
+    no_failed_selectors: '没有可补跑的失败套图',
+    insufficient_time_before_activity: `距活动不足 ${lr?.eligibility?.required_buffer_minutes ?? 30} 分钟缓冲`,
+  }
+  if (map[reason]) return map[reason]
+  if (lr?.outcome_detail) return lr.outcome_detail
+  return reason || ''
+}
+
+function lateRetryPhaseLabel(phase?: string) {
+  const map: Record<string, string> = {
+    idle: '未开始',
+    listing: '补跑上架中',
+    limited_time: '补跑限时购中',
+    done: '已并入活动池',
+    partial_done: '部分完成',
+    expired: '已超时未并入',
+  }
+  return map[String(phase || '')] || phase || ''
+}
+
 function listingUnitReasonText(reasonCode: string) {
   if (!reasonCode) return ''
   return failureReasonLabel[reasonCode] || reasonCode
@@ -727,6 +767,47 @@ async function cancelPipeline(pipeline: IntegratedPipeline) {
     ElMessage.error(msg)
   } finally {
     cancelingId.value = ''
+  }
+}
+
+async function startLateRetryFailed(pipeline: IntegratedPipeline) {
+  const failedCount = lateRetryFailedCount.value
+  if (!failedCount) {
+    ElMessage.warning('当前没有失败的套图可补跑')
+    return
+  }
+  const minutes = pipeline.late_retry?.eligibility?.minutes_remaining
+  const deadline = pipeline.scheduled_activity_at
+    ? formatTime(pipeline.scheduled_activity_at)
+    : pipeline.late_retry?.activity_deadline_at || ''
+  const timeHint =
+    minutes != null
+      ? `距活动约 ${Math.round(minutes)} 分钟（预约 ${deadline}）`
+      : deadline
+        ? `活动预约 ${deadline}`
+        : ''
+  try {
+    await ElMessageBox.confirm(
+      `将补跑 ${failedCount} 个失败套图：上架 → 限时限量购 → 并入本链路活动池，仍按原预约时间报活动。${timeHint ? `\n${timeHint}` : ''}\n若未在活动触发前完成限时购，将不会并入当次活动。`,
+      '补跑失败项',
+      { type: 'warning', confirmButtonText: '开始补跑', cancelButtonText: '取消' },
+    )
+  } catch {
+    return
+  }
+  lateRetryLoading.value = true
+  try {
+    const resp = await api.lateRetryFailedPipeline(pipeline.pipeline_id)
+    ElMessage.success(`已提交补跑 ${resp.selector_count} 个套图`)
+    if (activePipeline.value?.pipeline_id === pipeline.pipeline_id) {
+      activePipeline.value = await api.getIntegratedPipeline(pipeline.pipeline_id)
+    }
+    await refreshPipelines()
+  } catch (e: unknown) {
+    const err = e as { response?: { data?: { detail?: string } }; message?: string }
+    ElMessage.error(err?.response?.data?.detail || err?.message || '补跑提交失败')
+  } finally {
+    lateRetryLoading.value = false
   }
 }
 
@@ -2475,6 +2556,16 @@ onUnmounted(() => {
                   飞书定价数据
                 </el-button>
                 <el-button
+                  v-if="canLateRetryFailed && lateRetryFailedCount > 0"
+                  link
+                  type="warning"
+                  size="small"
+                  :loading="lateRetryLoading"
+                  @click="startLateRetryFailed(activePipeline)"
+                >
+                  补跑失败 ({{ lateRetryFailedCount }})
+                </el-button>
+                <el-button
                   v-if="canCancelPipeline(activePipeline)"
                   link
                   type="danger"
@@ -2495,6 +2586,16 @@ onUnmounted(() => {
           </p>
           <p v-if="activePipeline.scheduled_activity_at" class="meta">
             活动计划时间：{{ formatTime(activePipeline.scheduled_activity_at) }}
+          </p>
+          <p v-if="lateRetryState?.phase && lateRetryState.phase !== 'idle'" class="warn-text">
+            补跑：{{ lateRetryPhaseLabel(lateRetryState.phase) }}
+            <template v-if="lateRetryState.outcome_detail"> — {{ lateRetryState.outcome_detail }}</template>
+          </p>
+          <p v-else-if="lateRetryFailedCount > 0 && activePipeline.current_step === 'waiting_activity'" class="meta">
+            等活动期间可补跑失败套图（{{ lateRetryFailedCount }} 个）
+            <template v-if="!canLateRetryFailed && lateRetryEligibilityHint()">
+              · {{ lateRetryEligibilityHint() }}
+            </template>
           </p>
           <p v-if="activePipeline.pdd_product_ids.length" class="meta">
             拼多多商品：{{ activePipeline.pdd_product_ids.join(', ') }}

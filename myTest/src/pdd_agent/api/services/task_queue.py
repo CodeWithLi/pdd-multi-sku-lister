@@ -217,11 +217,18 @@ class TaskQueueWorker:
                         published_mapping_ids=list(payload.get("published_mapping_ids") or []),
                     )
                 else:
+                    from pdd_agent.api.services.pipeline_late_retry_policy import (
+                        resolve_campaign_pdd_ids_at_execution,
+                    )
+
                     result = await execute_campaign_marketing_activity_register(
                         run_id=row.run_id,
                         account_id=row.account_id,
                         activity_id=str(payload.get("activity_id") or ""),
-                        pdd_product_ids=list(payload.get("pdd_product_ids") or []),
+                        pdd_product_ids=resolve_campaign_pdd_ids_at_execution(
+                            pipeline_id=str(payload.get("pipeline_id") or ""),
+                            payload_pdd_ids=list(payload.get("pdd_product_ids") or []),
+                        ),
                     )
             elif row.agent == AgentKind.TRAFFIC.value:
                 traffic_type = str(payload.get("traffic_type") or "promotion_create")
