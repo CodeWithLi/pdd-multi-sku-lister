@@ -48,20 +48,32 @@ def test_evaluate_eligible_when_waiting_activity(mock_failed):
     out = evaluate_late_retry_eligibility(row)
     assert out["eligible"] is True
     assert out["failed_count"] == 1
-    mock_failed.assert_called_once()
 
 
 @patch("pdd_agent.api.services.pipeline_late_retry_policy.list_failed_selectors", return_value=["BD001/第一套图/A1"])
-def test_evaluate_reject_when_deadline_passed(mock_failed):
-    row = _waiting_pipeline(scheduled_activity_at=datetime.now() - timedelta(minutes=5))
+def test_evaluate_reject_when_deadline_passed_without_defer(mock_failed):
+    row = _waiting_pipeline(
+        scheduled_activity_at=datetime.now() - timedelta(minutes=5),
+        meta={"pipeline_late_retry_activity_defer_enabled": False},
+    )
     out = evaluate_late_retry_eligibility(row)
     assert out["eligible"] is False
     assert out["reason"] == "activity_deadline_passed"
 
 
 @patch("pdd_agent.api.services.pipeline_late_retry_policy.list_failed_selectors", return_value=["BD001/第一套图/A1"])
-def test_evaluate_reject_insufficient_buffer(mock_failed):
-    row = _waiting_pipeline(scheduled_activity_at=datetime.now() + timedelta(minutes=10))
+def test_evaluate_eligible_past_deadline_with_defer(mock_failed):
+    row = _waiting_pipeline(scheduled_activity_at=datetime.now() - timedelta(minutes=5))
+    out = evaluate_late_retry_eligibility(row)
+    assert out["eligible"] is True
+
+
+@patch("pdd_agent.api.services.pipeline_late_retry_policy.list_failed_selectors", return_value=["BD001/第一套图/A1"])
+def test_evaluate_reject_insufficient_buffer_without_defer(mock_failed):
+    row = _waiting_pipeline(
+        scheduled_activity_at=datetime.now() + timedelta(minutes=10),
+        meta={"pipeline_late_retry_activity_defer_enabled": False},
+    )
     out = evaluate_late_retry_eligibility(row)
     assert out["eligible"] is False
     assert out["reason"] == "insufficient_time_before_activity"

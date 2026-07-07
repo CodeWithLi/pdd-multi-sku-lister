@@ -217,6 +217,26 @@ class TaskQueueWorker:
                         published_mapping_ids=list(payload.get("published_mapping_ids") or []),
                     )
                 else:
+                    if pipeline_id:
+                        from pdd_agent.api.services.pipeline_late_retry_activity_defer_policy import (
+                            maybe_defer_activity_task_execution,
+                        )
+                        from pdd_agent.db.repositories import get_integrated_pipeline
+
+                        pipe_row = get_integrated_pipeline(pipeline_id)
+                        if pipe_row and maybe_defer_activity_task_execution(
+                            pipe_row,
+                            task_id=row.task_id,
+                            run_id=row.run_id,
+                        ):
+                            logger.info(
+                                "queue task deferred task_id=%s run_id=%s pipeline_id=%s",
+                                row.task_id,
+                                row.run_id,
+                                pipeline_id,
+                            )
+                            return
+
                     from pdd_agent.api.services.pipeline_late_retry_policy import (
                         resolve_campaign_pdd_ids_at_execution,
                     )

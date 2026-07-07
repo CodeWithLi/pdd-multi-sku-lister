@@ -1048,6 +1048,17 @@ export interface PipelineLateRetryEligibility {
   activity_deadline_at?: string
 }
 
+export interface PipelineLateRetryActivityDefer {
+  enabled?: boolean
+  rescheduled?: boolean
+  reschedule_reason?: string
+  original_activity_at?: string
+  listing_finished_at?: string
+  last_deferred_at?: string
+  defer_count?: number
+  scheduled_activity_at?: string
+}
+
 export interface PipelineLateRetryState {
   enabled?: boolean
   phase?: string
@@ -1064,6 +1075,7 @@ export interface PipelineLateRetryState {
   merged_pdd_count?: number
   eligible?: boolean
   eligibility?: PipelineLateRetryEligibility
+  activity_defer?: PipelineLateRetryActivityDefer
 }
 
 export interface PipelineLateRetryStartResponse {

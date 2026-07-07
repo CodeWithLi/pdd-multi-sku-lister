@@ -455,6 +455,13 @@ const canLateRetryFailed = computed(() => {
 
 function lateRetryEligibilityHint() {
   const lr = lateRetryState.value
+  const defer = lr?.activity_defer
+  if (defer?.rescheduled && defer.reschedule_reason) {
+    return defer.reschedule_reason
+  }
+  if (defer?.last_deferred_at && (lr?.phase === 'listing' || lr?.phase === 'limited_time')) {
+    return '补跑进行中，活动已自动推迟'
+  }
   const reason = lr?.eligibility?.reason || ''
   const map: Record<string, string> = {
     pipeline_not_waiting_activity: '链路未处于等活动状态',
@@ -776,19 +783,9 @@ async function startLateRetryFailed(pipeline: IntegratedPipeline) {
     ElMessage.warning('当前没有失败的套图可补跑')
     return
   }
-  const minutes = pipeline.late_retry?.eligibility?.minutes_remaining
-  const deadline = pipeline.scheduled_activity_at
-    ? formatTime(pipeline.scheduled_activity_at)
-    : pipeline.late_retry?.activity_deadline_at || ''
-  const timeHint =
-    minutes != null
-      ? `距活动约 ${Math.round(minutes)} 分钟（预约 ${deadline}）`
-      : deadline
-        ? `活动预约 ${deadline}`
-        : ''
   try {
     await ElMessageBox.confirm(
-      `将补跑 ${failedCount} 个失败套图：上架 → 限时限量购 → 并入本链路活动池，仍按原预约时间报活动。${timeHint ? `\n${timeHint}` : ''}\n若未在活动触发前完成限时购，将不会并入当次活动。`,
+      `将补跑 ${failedCount} 个失败套图：上架 → 限时限量购 → 并入活动池。\n若活动原定时间到了补跑还没跑完，会自动推迟；全部补跑结束后，将按最后一次补跑上架完成时间重新计 ${pipeline.activity_delay_hours || 24} 小时再报活动。`,
       '补跑失败项',
       { type: 'warning', confirmButtonText: '开始补跑', cancelButtonText: '取消' },
     )
@@ -2586,6 +2583,12 @@ onUnmounted(() => {
           </p>
           <p v-if="activePipeline.scheduled_activity_at" class="meta">
             活动计划时间：{{ formatTime(activePipeline.scheduled_activity_at) }}
+            <template v-if="lateRetryState?.activity_defer?.rescheduled">
+              （已因补跑延期）
+            </template>
+          </p>
+          <p v-if="lateRetryState?.activity_defer?.reschedule_reason" class="warn-text">
+            {{ lateRetryState.activity_defer.reschedule_reason }}
           </p>
           <p v-if="lateRetryState?.phase && lateRetryState.phase !== 'idle'" class="warn-text">
             补跑：{{ lateRetryPhaseLabel(lateRetryState.phase) }}

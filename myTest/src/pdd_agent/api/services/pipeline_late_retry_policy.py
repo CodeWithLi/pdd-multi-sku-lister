@@ -143,6 +143,36 @@ def evaluate_late_retry_eligibility(row) -> dict[str, Any]:
             "reason": "pipeline_not_in_waiting_activity_step",
             "current_step": step,
         }
+    if not deadline and not getattr(row, "campaign_run_id", None):
+        return {"eligible": False, "reason": "activity_not_scheduled"}
+
+    state = late_retry_state(row)
+    phase = str(state.get("phase") or PHASE_IDLE)
+    if phase in ACTIVE_PHASES:
+        base = {
+            "eligible": False,
+            "reason": "late_retry_in_progress",
+            "phase": phase,
+        }
+        return _augment_eligibility(row, base)
+
+    failed = list_failed_selectors(row)
+    if not failed:
+        return _augment_eligibility(row, {"eligible": False, "reason": "no_failed_selectors"})
+
+    from pdd_agent.api.services.pipeline_late_retry_activity_defer_policy import is_defer_policy_enabled
+
+    if is_defer_policy_enabled(row):
+        return _augment_eligibility(
+            row,
+            {
+                "eligible": True,
+                "failed_selectors": failed,
+                "failed_count": len(failed),
+                "activity_deadline_at": deadline.isoformat() if deadline else "",
+            },
+        )
+
     if not deadline:
         return {"eligible": False, "reason": "activity_not_scheduled"}
     if deadline <= now:
@@ -151,19 +181,6 @@ def evaluate_late_retry_eligibility(row) -> dict[str, Any]:
             "reason": "activity_deadline_passed",
             "activity_deadline_at": deadline.isoformat(),
         }
-
-    state = late_retry_state(row)
-    phase = str(state.get("phase") or PHASE_IDLE)
-    if phase in ACTIVE_PHASES:
-        return {
-            "eligible": False,
-            "reason": "late_retry_in_progress",
-            "phase": phase,
-        }
-
-    failed = list_failed_selectors(row)
-    if not failed:
-        return {"eligible": False, "reason": "no_failed_selectors"}
 
     remaining = (deadline - now).total_seconds() / 60.0
     buffer_min = _buffer_minutes(row)
@@ -186,8 +203,19 @@ def evaluate_late_retry_eligibility(row) -> dict[str, Any]:
     }
 
 
+def _augment_eligibility(row, eligibility: dict[str, Any]) -> dict[str, Any]:
+    from pdd_agent.api.services.pipeline_late_retry_activity_defer_policy import augment_late_retry_eligibility
+
+    return augment_late_retry_eligibility(row, eligibility)
+
+
 def build_late_retry_public_state(row) -> dict[str, Any]:
+    from pdd_agent.api.services.pipeline_late_retry_activity_defer_policy import (
+        build_activity_defer_public_state,
+    )
+
     state = late_retry_state(row)
+    activity_defer = build_activity_defer_public_state(row)
     if not state:
         eligibility = evaluate_late_retry_eligibility(row)
         return {
@@ -195,8 +223,11 @@ def build_late_retry_public_state(row) -> dict[str, Any]:
             "phase": PHASE_IDLE,
             "eligible": bool(eligibility.get("eligible")),
             "eligibility": eligibility,
+            "activity_defer": activity_defer,
         }
     deadline = _activity_deadline(row)
+    scheduled = getattr(row, "scheduled_activity_at", None)
+    display_deadline = scheduled if isinstance(scheduled, datetime) else deadline
     return {
         "enabled": is_late_retry_enabled(row),
         "phase": str(state.get("phase") or PHASE_IDLE),
@@ -208,13 +239,16 @@ def build_late_retry_public_state(row) -> dict[str, Any]:
         "expired_selectors": list(state.get("expired_selectors") or []),
         "listing_run_id": str(state.get("listing_run_id") or ""),
         "limited_time_run_id": str(state.get("limited_time_run_id") or ""),
-        "activity_deadline_at": deadline.isoformat() if deadline else "",
+        "activity_deadline_at": display_deadline.isoformat() if display_deadline else "",
         "minutes_remaining": (
-            round(_minutes_until_deadline(row), 1) if _minutes_until_deadline(row) is not None else None
+            round((display_deadline - datetime.now()).total_seconds() / 60.0, 1)
+            if isinstance(display_deadline, datetime)
+            else None
         ),
         "merged_pdd_count": int(state.get("merged_pdd_count") or 0),
         "eligible": evaluate_late_retry_eligibility(row).get("eligible"),
         "eligibility": evaluate_late_retry_eligibility(row),
+        "activity_defer": activity_defer,
     }
 
 
@@ -365,6 +399,22 @@ def start_late_retry_failed(
     }
     _save_late_retry_state(row, state_patch)
 
+    from pdd_agent.api.services.pipeline_late_retry_activity_defer_policy import (
+        is_defer_policy_enabled,
+    )
+
+    if is_defer_policy_enabled(row):
+        scheduled = getattr(row, "scheduled_activity_at", None)
+        update_integrated_pipeline(
+            pipeline_id,
+            meta_patch={
+                "pipeline_late_retry_activity_defer": {
+                    "original_activity_at": scheduled.isoformat() if isinstance(scheduled, datetime) else "",
+                    "awaiting_reschedule": False,
+                }
+            },
+        )
+
     enqueue_task(
         agent=AgentKind.LISTING.value,
         run_id=run_id,
@@ -455,14 +505,6 @@ def _mark_expired(row, *, detail: str, selectors: list[str] | None = None) -> No
 
 
 def _enqueue_late_retry_limited_time(row, *, pdd_ids: list[str], mapping_ids: list[str]) -> str:
-    if _is_past_deadline(row):
-        _mark_expired(
-            row,
-            detail="活动预约时间已到，未能启动补跑限时限量购",
-            selectors=list(late_retry_state(row).get("pending_selectors") or []),
-        )
-        return ""
-
     limited_time_run_id = create_campaign_run(str(row.account_id or ""))
     enqueue_task(
         agent=AgentKind.CAMPAIGN.value,
@@ -573,20 +615,11 @@ def maybe_handle_late_retry_listing_finished(
 
     succeeded, failed, pdd_ids, mapping_ids = _classify_listing_outcome(result, selectors)
 
-    if _is_past_deadline(row):
-        _mark_expired(
-            row,
-            detail="补跑上架完成时活动预约时间已过，未能并入活动池",
-            selectors=selectors,
-        )
-        _save_late_retry_state(
-            row,
-            {
-                "succeeded_selectors": succeeded,
-                "failed_selectors": failed,
-            },
-        )
-        return True
+    from pdd_agent.api.services.pipeline_late_retry_activity_defer_policy import (
+        record_late_retry_listing_finished_at,
+    )
+
+    record_late_retry_listing_finished_at(row)
 
     if not success and not pdd_ids:
         _save_late_retry_state(
@@ -600,6 +633,12 @@ def maybe_handle_late_retry_listing_finished(
                 "pending_selectors": [],
             },
         )
+        from pdd_agent.api.services.pipeline_late_retry_activity_defer_policy import (
+            maybe_reschedule_activity_after_late_retry_batch,
+        )
+
+        refreshed = get_integrated_pipeline(row.pipeline_id) or row
+        maybe_reschedule_activity_after_late_retry_batch(refreshed)
         return True
 
     if not pdd_ids:
@@ -614,6 +653,12 @@ def maybe_handle_late_retry_listing_finished(
                 "pending_selectors": [],
             },
         )
+        from pdd_agent.api.services.pipeline_late_retry_activity_defer_policy import (
+            maybe_reschedule_activity_after_late_retry_batch,
+        )
+
+        refreshed = get_integrated_pipeline(row.pipeline_id) or row
+        maybe_reschedule_activity_after_late_retry_batch(refreshed)
         return True
 
     _save_late_retry_state(
@@ -645,14 +690,6 @@ def maybe_handle_late_retry_limited_time_finished(
     result = result if isinstance(result, dict) else {}
     state = late_retry_state(row)
     selectors = list(state.get("selectors") or [])
-
-    if _is_past_deadline(row):
-        _mark_expired(
-            row,
-            detail="补跑限时限量购完成时活动预约时间已过；若活动尚未执行，成功项可能未并入当次活动",
-            selectors=selectors,
-        )
-        return True
 
     merged_pdd, merged_map = _merge_limited_time_success_into_activity_pool(
         row,
@@ -690,6 +727,12 @@ def maybe_handle_late_retry_limited_time_finished(
         success,
         len(merged_pdd),
     )
+    from pdd_agent.api.services.pipeline_late_retry_activity_defer_policy import (
+        maybe_reschedule_activity_after_late_retry_batch,
+    )
+
+    refreshed = get_integrated_pipeline(row.pipeline_id) or row
+    maybe_reschedule_activity_after_late_retry_batch(refreshed)
     return True
 
 
@@ -728,11 +771,16 @@ def dispatch_late_retry_queue_task_finished(
 
 
 def finalize_late_retry_before_activity_execution(pipeline_id: str) -> None:
-    """
-    活动任务执行前：将仍在进行中的补跑标为过期，避免阻塞；已合并 ID 保留在 activity 池。
-    """
+    """活动执行前：延期策略下不再将补跑标过期（由 defer 模块在活动到期时推迟）。"""
+    from pdd_agent.api.services.pipeline_late_retry_activity_defer_policy import (
+        is_defer_policy_enabled,
+    )
+
     row = get_integrated_pipeline(str(pipeline_id or "").strip())
     if not row:
+        return
+
+    if is_defer_policy_enabled(row):
         return
     state = late_retry_state(row)
     phase = str(state.get("phase") or PHASE_IDLE)

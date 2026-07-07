@@ -1167,6 +1167,53 @@ def get_queue_task_by_run_id(run_id: str) -> TaskQueueORM | None:
         return row
 
 
+def update_queued_task_schedule(
+    task_id: str,
+    *,
+    scheduled_at: datetime,
+    error: str = "",
+) -> bool:
+    """更新排队中任务的 scheduled_at（供补跑延期策略使用）。"""
+    if not is_database_available():
+        return False
+    task_id = str(task_id or "").strip()
+    if not task_id:
+        return False
+    with session_scope() as session:
+        row = session.get(TaskQueueORM, task_id)
+        if not row or str(row.status or "") != "queued":
+            return False
+        row.scheduled_at = scheduled_at
+        if error is not None:
+            row.error = str(error or "")
+        return True
+
+
+def requeue_running_task(
+    task_id: str,
+    *,
+    scheduled_at: datetime,
+    error: str = "",
+) -> bool:
+    """将 running 任务退回 queued 并改期（活动 defer 时使用）。"""
+    if not is_database_available():
+        return False
+    task_id = str(task_id or "").strip()
+    if not task_id:
+        return False
+    with session_scope() as session:
+        row = session.get(TaskQueueORM, task_id)
+        if not row or str(row.status or "") != "running":
+            return False
+        row.status = "queued"
+        row.started_at = None
+        row.scheduled_at = scheduled_at
+        row.error = str(error or "")
+        if row.attempts > 0:
+            row.attempts -= 1
+        return True
+
+
 def upsert_listed_asset_folder(
     *,
     account_id: str,
