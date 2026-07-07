@@ -100,3 +100,48 @@ def test_build_listing_unit_statuses_marks_preflight_and_success(monkeypatch):
     assert by_label["BD025A/第一套图"]["status"] == "success"
     assert by_label["BD030A/第一套图"]["status"] == "preflight_failed"
     assert by_label["BD030A/第一套图"]["reason_code"] == "feishu_product_catalog_missing"
+
+
+def test_build_listing_unit_statuses_marks_inventory_skip_reasons(monkeypatch):
+    row = SimpleNamespace(
+        product_codes=["BD070/第一套图/BD070A", "BD071/第一套图/BD071A"],
+        listing_run_id="run-inv",
+        meta={"listing_skip_selectors": []},
+    )
+    record = SimpleNamespace(
+        status=RunStatus.SUCCESS,
+        phase=MagicMock(value="report"),
+        result={
+            "preflight": {
+                "units": [
+                    {"product_code": "BD070A", "image_set": "第一套图"},
+                    {"product_code": "BD071A", "image_set": "第一套图"},
+                ],
+                "issues": [
+                    {
+                        "level": "error",
+                        "listing_label": "BD070A/第一套图",
+                        "reason_code": "negative_inventory_skip",
+                    },
+                    {
+                        "level": "error",
+                        "listing_label": "BD071A/第一套图",
+                        "reason_code": "zero_inventory_skip",
+                    },
+                ],
+            },
+            "results": [],
+        },
+    )
+    monkeypatch.setattr(
+        "pdd_agent.api.services.pipeline_service.TaskRunStore",
+        lambda: MagicMock(load=lambda _id: record),
+    )
+
+    statuses = build_listing_unit_statuses(row)
+    by_label = {item["listing_label"]: item for item in statuses}
+
+    assert by_label["BD070A/第一套图"]["status"] == "preflight_failed"
+    assert by_label["BD070A/第一套图"]["reason_code"] == "negative_inventory_skip"
+    assert by_label["BD071A/第一套图"]["status"] == "preflight_failed"
+    assert by_label["BD071A/第一套图"]["reason_code"] == "zero_inventory_skip"

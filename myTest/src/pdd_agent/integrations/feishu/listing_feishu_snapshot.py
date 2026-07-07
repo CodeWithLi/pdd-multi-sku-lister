@@ -226,6 +226,7 @@ def warm_listing_feishu_snapshot(
             values=to_fetch,
         )
     except Exception:
+        snapshot.source = "feishu_query_failed"
         logger.exception("search feishu price compare rows failed codes=%s", to_fetch)
         snapshot.mark_queried(to_fetch)
         return snapshot

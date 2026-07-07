@@ -30,6 +30,7 @@ class ListingErrorCode:
     SLOT_ALIGNMENT_FAILED = "slot_alignment_failed"
     SPEC_FILL_VERIFY_FAILED = "spec_fill_verify_failed"
     NEGATIVE_INVENTORY_SKIP = "negative_inventory_skip"
+    ZERO_INVENTORY_SKIP = "zero_inventory_skip"
 
     # 飞书商品表
     FEISHU_PRODUCT_CATALOG_MISSING = "feishu_product_catalog_missing"
@@ -136,6 +137,7 @@ class ListingErrors:
         ListingErrorCode.SLOT_ALIGNMENT_FAILED: "兄弟款规格数量不一致",
         ListingErrorCode.SPEC_FILL_VERIFY_FAILED: "规格校验填表未通过",
         ListingErrorCode.NEGATIVE_INVENTORY_SKIP: "聚水潭可用库存小于0，跳过上架",
+        ListingErrorCode.ZERO_INVENTORY_SKIP: "库存为0，跳过上架",
         ListingErrorCode.FEISHU_PRODUCT_CATALOG_MISSING: "飞书商品/定价数据缺失",
         ListingErrorCode.FEISHU_PRICING_MISSING: "定价数据缺失",
         ListingErrorCode.FEISHU_CONTROL_MISSING: "控价数据缺失",
@@ -243,6 +245,7 @@ class ListingErrors:
         ListingErrorCode.SLOT_ALIGNMENT_FAILED: "兄弟款规格数量不一致",
         ListingErrorCode.SPEC_FILL_VERIFY_FAILED: "规格校验填表未通过（款式/尺寸/编码或预览图校验失败）",
         ListingErrorCode.NEGATIVE_INVENTORY_SKIP: "可用库存小于0，跳过该商品上架",
+        ListingErrorCode.ZERO_INVENTORY_SKIP: "库存为0，跳过该商品上架",
         ListingErrorCode.TASK_CANCELLED: "任务已被用户停止",
         ListingErrorCode.USER_CANCELLED: "任务已被用户停止",
         ListingErrorCode.FEISHU_PRODUCT_CATALOG_MISSING: "飞书商品/定价数据缺失",
@@ -649,24 +652,16 @@ class ListingErrors:
         merchant_code: str = "",
         fallback_message: str = "",
     ) -> str:
-        """无有效 SKU 时生成飞书失败表一行说明（优先指向组合图/子编码）。"""
-        merchant = str(merchant_code or "").strip().upper()
-        if not merchant and listing_label:
-            merchant = str(listing_label.split("/")[0] or "").strip().upper()
+        from pdd_agent.api.services.listing_preflight_reason_detail import (
+            infer_preflight_no_sku_brief,
+        )
 
-        for warning in cls._unit_warnings_for_label(preflight, listing_label):
-            brief = cls._catalog_warning_to_brief(warning)
-            if brief:
-                return brief
-
-        for source in (fallback_message, listing_label):
-            brief = cls._catalog_warning_to_brief(str(source or ""))
-            if brief:
-                return brief
-
-        if merchant:
-            return cls.sanitize_feishu_failure_reason(f"{merchant}飞书无数据或名称未匹配")
-        return cls.sanitize_feishu_failure_reason("飞书无商品数据或名称未匹配")
+        return infer_preflight_no_sku_brief(
+            preflight=preflight,
+            listing_label=listing_label,
+            merchant_code=merchant_code,
+            fallback_message=fallback_message,
+        )
 
     @classmethod
     def build_preflight_no_skus_brief(
@@ -675,7 +670,11 @@ class ListingErrors:
         listing_label: str,
         merchant_code: str = "",
     ) -> str:
-        return cls.infer_no_sku_failure_brief(
+        from pdd_agent.api.services.listing_preflight_reason_detail import (
+            infer_preflight_no_sku_brief,
+        )
+
+        return infer_preflight_no_sku_brief(
             preflight=preflight,
             listing_label=listing_label,
             merchant_code=merchant_code,

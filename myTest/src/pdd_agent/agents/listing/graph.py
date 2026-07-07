@@ -137,8 +137,19 @@ async def preflight_node(state: ListingState) -> dict:
         append_negative_inventory_preflight_issues(report)
     except Exception:
         logger.exception("negative inventory guard failed during preflight")
+    try:
+        from pdd_agent.skills.listing.listing_zero_inventory_guard import (
+            append_zero_inventory_preflight_issues,
+        )
+
+        append_zero_inventory_preflight_issues(report)
+    except Exception:
+        logger.exception("zero inventory guard failed during preflight")
     if run_id:
         from pdd_agent.api.services.listing_failure_log import record_preflight_issue
+        from pdd_agent.api.services.listing_preflight_feishu_bridge import (
+            sync_preflight_failures_to_feishu,
+        )
 
         for issue in report.issues:
             if issue.level == "error":
@@ -147,6 +158,10 @@ async def preflight_node(state: ListingState) -> dict:
                     account_id=account_id,
                     issue=issue,
                 )
+        sync_preflight_failures_to_feishu(
+            account_id=account_id,
+            report=report,
+        )
         try:
             from pdd_agent.storage import TaskRunStore
 

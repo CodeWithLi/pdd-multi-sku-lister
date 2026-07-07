@@ -95,6 +95,11 @@ def _search_goods_all_tab(
     matches = upload._execute_goods_all_tab_query(page, merchant_code)
     if not matches:
         return _capture_result(status="not_found", tab="all")
+    if len(matches) > 1:
+        print(
+            f"[{account_id}] [{label}] 全部Tab按商品编码命中 {len(matches)} 条记录，按要求仅取第1条核验",
+            flush=True,
+        )
 
     selected = matches[0]
     result = upload._evaluate_all_tab_row(selected, merchant_code)

@@ -102,6 +102,7 @@ export const failureReasonLabel: Record<string, string> = {
   slot_alignment_failed: '兄弟款规格数量不一致',
   spec_fill_verify_failed: '规格校验填表未通过',
   negative_inventory_skip: '可用库存小于0，跳过上架',
+  zero_inventory_skip: '库存为0，跳过上架',
 }
 
 export const listingUnitStatusType: Record<string, string> = {

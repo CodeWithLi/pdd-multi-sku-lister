@@ -255,6 +255,41 @@ def extract_total_inventory_from_row_text(text: str) -> int | None:
     return None
 
 
+def extract_total_inventory_from_row(row: Any, row_text: str = "") -> int | None:
+    """优先从表格单元格解析总库存，失败再回退到整行文本。"""
+    text = str(row_text or "")
+    direct = extract_total_inventory_from_row_text(text)
+    if direct is not None:
+        return direct
+    if row is None:
+        return None
+    try:
+        cells = row.eles("css:td", timeout=1)
+    except Exception:
+        cells = []
+    numeric_values: list[int] = []
+    for cell in cells:
+        try:
+            cell_text = str(cell.text or "").strip()
+        except Exception:
+            continue
+        if not cell_text:
+            continue
+        compact = re.sub(r"\s+", "", cell_text)
+        match = re.fullmatch(r"[\d,]+", compact)
+        if not match:
+            continue
+        try:
+            value = int(compact.replace(",", ""))
+        except ValueError:
+            continue
+        numeric_values.append(value)
+    if numeric_values:
+        # 商品列表中总库存列通常是行内首个纯数字列；像截图场景会直接显示为 0。
+        return numeric_values[0]
+    return None
+
+
 def parse_goods_list_row_meta(row_text: str) -> dict[str, str]:
     created_dt = extract_created_at_from_text(row_text)
     inventory = extract_total_inventory_from_row_text(row_text)

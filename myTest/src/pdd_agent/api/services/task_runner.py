@@ -1271,8 +1271,29 @@ async def execute_listing(
 
     codes = product_codes or account.product_codes
     batch_resume_plan = None
+    late_retry_resume_plan = None
     pipeline_id = str(pipeline_id or "").strip()
-    # 补跑 listing 必须按提交的失败 selector 全量重试，不能走分批续跑（只看当前批）。
+    # 补跑 listing 恢复时，只重跑未成功的 selector；正常主链路不受影响。
+    if pipeline_id and pipeline_late_retry:
+        from pdd_agent.api.services.pipeline_late_retry_resume import (
+            finish_late_retry_if_already_complete,
+            prepare_late_retry_resume,
+        )
+
+        codes, late_retry_resume_plan = prepare_late_retry_resume(
+            pipeline_id=pipeline_id,
+            run_id=run_id,
+            product_codes=list(codes),
+        )
+        if late_retry_resume_plan is not None:
+            early = finish_late_retry_if_already_complete(
+                run_id=run_id,
+                account_id=account_id,
+                plan=late_retry_resume_plan,
+            )
+            if early is not None:
+                return early
+    # 正常主链路的分批续跑仍只用于主批次，不用于补跑。
     if pipeline_id and not pipeline_late_retry:
         from pdd_agent.api.services.pipeline_listing_batch_resume import (
             finish_listing_if_batch_already_complete,
@@ -1548,6 +1569,10 @@ async def execute_listing(
         result = _json_safe(raw)
         if batch_resume_plan is not None:
             result = merge_resumed_listing_graph_result(batch_resume_plan, result)
+        if late_retry_resume_plan is not None:
+            from pdd_agent.api.services.pipeline_late_retry_resume import merge_resumed_late_retry_result
+
+            result = merge_resumed_late_retry_result(late_retry_resume_plan, result)
         from pdd_agent.api.services.pipeline_listing_unit_results import merge_skip_results_into_listing_payload
 
         result = merge_skip_results_into_listing_payload(

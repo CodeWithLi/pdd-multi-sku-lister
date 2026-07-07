@@ -391,11 +391,6 @@ def _collect_product_catalog_issue_details(
 
     entry = catalog_entry(catalog, code)
     if not entry:
-        if raw_fields:
-            if pricing_catalog and getattr(pricing_catalog, "source", "") == "feishu":
-                _price, reason = resolve_code_price_from_catalog(pricing_catalog, code)
-                if not reason:
-                    return aspects
         aspect = _row_missing_aspect(code, merchant_code)
         aspects.append(_aspect_label(aspect))
         _append_catalog_detail(

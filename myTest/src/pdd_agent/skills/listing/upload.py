@@ -20,6 +20,7 @@ from pdd_agent.skills.listing.goods_list_capture import (
     enrich_capture_from_goods_list,
     extract_merchant_code_from_row_text,
     extract_rejection_reason_from_text,
+    extract_total_inventory_from_row,
     extract_total_inventory_from_row_text,
     is_rejected_list_status,
     merchant_code_matches_query,
@@ -1297,7 +1298,7 @@ def _parse_goods_list_matches_by_merchant_code(
         if not product_id:
             continue
         row_meta = parse_goods_list_row_meta(text)
-        inventory = extract_total_inventory_from_row_text(text)
+        inventory = extract_total_inventory_from_row(row, text)
         matches.append(
             {
                 "pdd_product_id": product_id or "",
@@ -4540,7 +4541,7 @@ def upload_one_listing(
                 unit,
                 status="failed",
                 reason="goods_list_zero_inventory",
-                error="当前库存为0",
+                error="该商品上架后库存为0",
                 title=listing_info.get("title", ""),
                 retryable=False,
                 legacy_status="failed",
