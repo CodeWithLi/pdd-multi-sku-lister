@@ -129,6 +129,14 @@ async def preflight_node(state: ListingState) -> dict:
                 )
         except Exception:
             logger.exception("check feishu product catalog missing failed")
+    try:
+        from pdd_agent.skills.listing.listing_negative_inventory_guard import (
+            append_negative_inventory_preflight_issues,
+        )
+
+        append_negative_inventory_preflight_issues(report)
+    except Exception:
+        logger.exception("negative inventory guard failed during preflight")
     if run_id:
         from pdd_agent.api.services.listing_failure_log import record_preflight_issue
 

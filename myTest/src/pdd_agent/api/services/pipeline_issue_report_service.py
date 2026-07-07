@@ -53,6 +53,7 @@ ISSUE_TITLE_MAP: dict[str, str] = {
     "preflight_no_detail": "详情图为空",
     "preflight_no_material": "商品素材图为空",
     "preflight_catalog": "商品表/素材目录问题",
+    "negative_inventory_skip": "聚水潭可用库存小于0",
     "image_file_missing": "图片文件缺失",
     "price_fill_partial": "价格表未填完整",
     "price_fill_row_not_found": "价格表找不到规格行",

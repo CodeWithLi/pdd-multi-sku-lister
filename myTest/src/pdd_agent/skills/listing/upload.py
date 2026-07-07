@@ -3834,6 +3834,23 @@ def upload_one_listing(
             phase="preflight",
             step=preflight_step,
         )
+    from pdd_agent.skills.listing.listing_negative_inventory_guard import (
+        build_listing_skip_result,
+        evaluate_negative_inventory_guard,
+    )
+
+    negative_inventory_guard = evaluate_negative_inventory_guard(unit)
+    if negative_inventory_guard.blocked:
+        print(
+            f"[{account_id}] [{label}] {negative_inventory_guard.failure_message}，跳过提交",
+            flush=True,
+        )
+        return build_listing_skip_result(
+            run_id,
+            account_id,
+            unit,
+            guard=negative_inventory_guard,
+        )
     if run_id:
         from pdd_agent.api.services.listing_failure_log import (
             record_price_fill_summary,
