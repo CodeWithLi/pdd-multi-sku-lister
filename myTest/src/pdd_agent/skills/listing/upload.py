@@ -589,32 +589,14 @@ def _click_submit(page: DpPage, account_id: str, label: str) -> tuple[bool, date
 
 
 def _open_goods_list(page: DpPage, account_id: str, tab_text: str = "在售中") -> bool:
-    from pdd_agent.skills.listing.listing_pdd_overlay_dismiss import (
-        ensure_post_publish_modals_cleared,
+    from pdd_agent.skills.listing.goods_list_tab_navigation import open_goods_list_with_tab
+
+    return open_goods_list_with_tab(
+        page,
+        account_id,
+        tab_text,
+        guard_overlays=_guard_pdd_overlays,
     )
-
-    for url in GOODS_LIST_URLS:
-        try:
-            page.get(url)
-            time.sleep(3)
-            if "login" in page.url:
-                return False
-            if page.ele("text:商品列表", timeout=2) or page.ele("text:商品ID", timeout=2):
-                break
-        except Exception:
-            continue
-
-    _guard_pdd_overlays(page, account_id, "", max_attempts=3)
-    ensure_post_publish_modals_cleared(page, account_id, "", max_attempts=3)
-
-    try:
-        tab = page.ele(f"text:{tab_text}", timeout=3)
-        if tab:
-            tab.click()
-            time.sleep(1.5)
-    except Exception:
-        pass
-    return True
 
 
 def _reset_goods_list_filters(page: DpPage) -> None:
@@ -1481,48 +1463,6 @@ def _evaluate_all_tab_row(
     )
 
 
-def _search_goods_all_tab(
-    page: DpPage,
-    account_id: str,
-    unit: ListingUnit,
-    merchant_code: str,
-) -> dict[str, Any]:
-    """在售中/已驳回均未命中时，改在「全部」Tab 按商品编码兜底核验。"""
-    label = unit.listing_label
-    if not _open_goods_list(page, account_id, "全部"):
-        return _capture_result(status="open_goods_list_failed", tab="all")
-
-    print(
-        f"[{account_id}] [{label}] 在售中/已驳回未匹配，改在全部Tab按商品编码核验",
-        flush=True,
-    )
-    matches = _execute_goods_all_tab_query(page, merchant_code)
-    if not matches:
-        return _capture_result(status="not_found", tab="all")
-
-    selected = matches[0]
-    result = _evaluate_all_tab_row(selected, merchant_code)
-    status = str(result.get("status") or "")
-    if status == "captured":
-        print(
-            f"[{account_id}] [{label}] 全部Tab核验通过："
-            f"product_id={result.get('pdd_product_id')} "
-            f"库存={selected.get('total_inventory')} 状态={result.get('list_status')}",
-            flush=True,
-        )
-    elif status == "zero_inventory":
-        print(
-            f"[{account_id}] [{label}] 全部Tab找到商品但总库存为0",
-            flush=True,
-        )
-    elif status == "invalid_list_status":
-        print(
-            f"[{account_id}] [{label}] 全部Tab找到商品但状态={result.get('list_status') or '未知'}",
-            flush=True,
-        )
-    return result
-
-
 def _execute_goods_tab_query(
     page: DpPage,
     merchant_code: str,
@@ -1549,72 +1489,9 @@ def _execute_goods_tab_query(
 
 def _refresh_goods_list_tab(page: DpPage, tab_text: str) -> None:
     """刷新当前商品列表页并切回指定 Tab。"""
-    try:
-        page._page.reload(wait_until="domcontentloaded")
-    except Exception:
-        return
-    time.sleep(2)
-    try:
-        tab = page.ele(f"text:{tab_text}", timeout=3)
-        if tab:
-            tab.click()
-            time.sleep(1.5)
-    except Exception:
-        pass
+    from pdd_agent.skills.listing.goods_list_tab_navigation import refresh_goods_list_with_tab
 
-
-def _search_goods_tab(
-    page: DpPage,
-    account_id: str,
-    unit: ListingUnit,
-    *,
-    tab_text: str,
-    tab_key: str,
-    merchant_code: str,
-    title: str,
-    max_attempts: int = 1,
-    refresh_on_not_found: bool = False,
-) -> dict[str, Any]:
-    if not _open_goods_list(page, account_id, tab_text):
-        return _capture_result(status="open_goods_list_failed", tab=tab_key)
-
-    label = unit.listing_label
-    attempts = max(1, int(max_attempts or 1))
-    require_title_match = tab_key != "rejected"
-    for attempt in range(1, attempts + 1):
-        matches = _execute_goods_tab_query(
-            page,
-            merchant_code,
-            title,
-            require_title_match=require_title_match,
-        )
-        if matches:
-            selected = matches[0]
-            if attempt > 1:
-                print(
-                    f"[{account_id}] [{label}] {tab_text} 第{attempt}次查询匹配成功",
-                    flush=True,
-                )
-            return _capture_result(
-                status="captured",
-                tab=tab_key,
-                pdd_product_id=str(selected.get("pdd_product_id") or ""),
-                matched_created_at=str(selected.get("matched_created_at") or ""),
-                matched_row_text=str(selected.get("row_text") or ""),
-                list_status=str(selected.get("list_status") or ""),
-                rejection_reason=str(selected.get("rejection_reason") or ""),
-            )
-
-        if attempt >= attempts or not refresh_on_not_found:
-            break
-
-        print(
-            f"[{account_id}] [{label}] {tab_text} 第{attempt}次未匹配到商品，刷新页面后重试",
-            flush=True,
-        )
-        _refresh_goods_list_tab(page, tab_text)
-
-    return _capture_result(status="not_found", tab=tab_key)
+    refresh_goods_list_with_tab(page, tab_text)
 
 
 def _capture_publish_outcome(
@@ -1624,62 +1501,9 @@ def _capture_publish_outcome(
     merchant_code: str,
     title: str,
 ) -> dict[str, Any]:
-    try:
-        on_sale = _search_goods_tab(
-            page,
-            account_id,
-            unit,
-            tab_text="在售中",
-            tab_key="on_sale",
-            merchant_code=merchant_code,
-            title=title,
-            max_attempts=2,
-            refresh_on_not_found=True,
-        )
-        if on_sale["status"] == "captured" and on_sale.get("pdd_product_id"):
-            print(
-                f"[{account_id}] [{unit.listing_label}] 已在在售中抓取商品ID={on_sale['pdd_product_id']}",
-                flush=True,
-            )
-            return on_sale
+    from pdd_agent.skills.listing.goods_list_publish_verify import capture_publish_outcome
 
-        rejected = _search_goods_tab(
-            page,
-            account_id,
-            unit,
-            tab_text="已驳回",
-            tab_key="rejected",
-            merchant_code=merchant_code,
-            title=title,
-        )
-        if rejected["status"] == "captured":
-            rejected["status"] = "rejected"
-            reason = str(rejected.get("rejection_reason") or "").strip()
-            print(
-                f"[{account_id}] [{unit.listing_label}] 商品发布后进入已驳回，按失败处理"
-                + (f"：{reason[:80]}" if reason else ""),
-                flush=True,
-            )
-            return rejected
-
-        status = "not_found"
-        if on_sale["status"] == "open_goods_list_failed" or rejected["status"] == "open_goods_list_failed":
-            status = "open_goods_list_failed"
-        print(
-            f"[{account_id}] [{unit.listing_label}] 提交后未在在售中/已驳回匹配到本次商品",
-            flush=True,
-        )
-        all_tab = _search_goods_all_tab(page, account_id, unit, merchant_code)
-        if all_tab.get("status") != "not_found":
-            return all_tab
-        return _capture_result(
-            status=status,
-            message="提交成功页已出现，但商品列表未匹配到本次发布记录",
-        )
-    except Exception as exc:
-        err = _safe_exc(exc)
-        print(f"[{account_id}] [{unit.listing_label}] 抓取商品ID异常：{err}", flush=True)
-        return _capture_result(status="capture_error", message=err)
+    return capture_publish_outcome(page, account_id, unit, merchant_code, title)
 
 
 def _attach_capture_fields(result: dict[str, Any], capture: dict[str, Any]) -> dict[str, Any]:
