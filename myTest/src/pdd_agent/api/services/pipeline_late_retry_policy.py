@@ -614,52 +614,37 @@ def maybe_handle_late_retry_listing_finished(
     selectors = list(state.get("selectors") or state.get("pending_selectors") or [])
 
     succeeded, failed, pdd_ids, mapping_ids = _classify_listing_outcome(result, selectors)
+    batch_resume = result.get("batch_resume") if isinstance(result.get("batch_resume"), dict) else {}
+    skipped_run = bool(batch_resume.get("skipped_run"))
+
+    if not pdd_ids:
+        if skipped_run:
+            detail = "补跑未实际上架（被分批续跑误判为已完成），请重新点击补跑"
+            outcome = "listing_skipped_batch_resume"
+        elif not success and not succeeded:
+            detail = error or "补跑上架失败"
+            outcome = "listing_failed"
+        else:
+            detail = "补跑上架无成功商品 ID"
+            outcome = "listing_no_pdd_ids"
+        _save_late_retry_state(
+            row,
+            {
+                "phase": PHASE_IDLE,
+                "outcome": outcome,
+                "outcome_detail": detail,
+                "succeeded_selectors": succeeded,
+                "failed_selectors": failed,
+                "pending_selectors": [],
+            },
+        )
+        return True
 
     from pdd_agent.api.services.pipeline_late_retry_activity_defer_policy import (
         record_late_retry_listing_finished_at,
     )
 
     record_late_retry_listing_finished_at(row)
-
-    if not success and not pdd_ids:
-        _save_late_retry_state(
-            row,
-            {
-                "phase": PHASE_PARTIAL if succeeded else PHASE_EXPIRED,
-                "outcome": "listing_failed" if not succeeded else "partial_listing",
-                "outcome_detail": error or "补跑上架失败",
-                "succeeded_selectors": succeeded,
-                "failed_selectors": failed,
-                "pending_selectors": [],
-            },
-        )
-        from pdd_agent.api.services.pipeline_late_retry_activity_defer_policy import (
-            maybe_reschedule_activity_after_late_retry_batch,
-        )
-
-        refreshed = get_integrated_pipeline(row.pipeline_id) or row
-        maybe_reschedule_activity_after_late_retry_batch(refreshed)
-        return True
-
-    if not pdd_ids:
-        _save_late_retry_state(
-            row,
-            {
-                "phase": PHASE_PARTIAL,
-                "outcome": "listing_no_pdd_ids",
-                "outcome_detail": "补跑上架无成功商品 ID",
-                "succeeded_selectors": succeeded,
-                "failed_selectors": failed,
-                "pending_selectors": [],
-            },
-        )
-        from pdd_agent.api.services.pipeline_late_retry_activity_defer_policy import (
-            maybe_reschedule_activity_after_late_retry_batch,
-        )
-
-        refreshed = get_integrated_pipeline(row.pipeline_id) or row
-        maybe_reschedule_activity_after_late_retry_batch(refreshed)
-        return True
 
     _save_late_retry_state(
         row,

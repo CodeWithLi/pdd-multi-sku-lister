@@ -197,6 +197,7 @@ class TaskQueueWorker:
                     category_next_burst_demo=bool(payload.get("category_next_burst_demo", True)),
                     material_source=str(payload.get("material_source") or ""),
                     pipeline_id=str(payload.get("pipeline_id") or ""),
+                    pipeline_late_retry=bool(payload.get("pipeline_late_retry")),
                 )
             elif row.agent == AgentKind.DELIST.value:
                 result = await execute_delist(

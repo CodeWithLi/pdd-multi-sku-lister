@@ -118,6 +118,40 @@ def test_listing_finished_enqueues_limited_time(mock_classify, mock_update, mock
     mock_enqueue_lt.assert_called_once_with(row, pdd_ids=["333"], mapping_ids=["m3"])
 
 
+@patch(
+    "pdd_agent.api.services.pipeline_late_retry_activity_defer_policy.maybe_reschedule_activity_after_late_retry_batch"
+)
+@patch("pdd_agent.api.services.pipeline_late_retry_activity_defer_policy.record_late_retry_listing_finished_at")
+@patch("pdd_agent.api.services.pipeline_late_retry_policy.update_integrated_pipeline")
+@patch("pdd_agent.api.services.pipeline_late_retry_policy._classify_listing_outcome")
+def test_listing_finished_no_pdd_ids_does_not_reschedule(
+    mock_classify,
+    mock_update,
+    mock_record_anchor,
+    mock_reschedule,
+):
+    row = _waiting_pipeline(
+        meta={
+            "pipeline_late_retry": {
+                "listing_run_id": "lr_1",
+                "selectors": ["BD001/第一套图/A1"],
+            }
+        }
+    )
+    mock_classify.return_value = ([], ["BD001/第一套图/A1"], [], [])
+
+    handled = maybe_handle_late_retry_listing_finished(
+        row,
+        run_id="lr_1",
+        success=True,
+        result={"results": []},
+        error="",
+    )
+    assert handled is True
+    mock_record_anchor.assert_not_called()
+    mock_reschedule.assert_not_called()
+
+
 @patch("pdd_agent.api.services.pipeline_late_retry_policy._merge_limited_time_success_into_activity_pool")
 @patch("pdd_agent.api.services.pipeline_late_retry_policy.update_integrated_pipeline")
 def test_limited_time_finished_merges_pool(mock_update, mock_merge):

@@ -1252,6 +1252,7 @@ async def execute_listing(
     category_next_burst_demo: bool = True,
     material_source: str | None = None,
     pipeline_id: str = "",
+    pipeline_late_retry: bool = False,
 ) -> dict[str, Any]:
     """执行 listing 子图，更新 RunRecord。"""
     from pdd_agent.integrations.minio.material import prepare_listing_assets
@@ -1271,7 +1272,8 @@ async def execute_listing(
     codes = product_codes or account.product_codes
     batch_resume_plan = None
     pipeline_id = str(pipeline_id or "").strip()
-    if pipeline_id:
+    # 补跑 listing 必须按提交的失败 selector 全量重试，不能走分批续跑（只看当前批）。
+    if pipeline_id and not pipeline_late_retry:
         from pdd_agent.api.services.pipeline_listing_batch_resume import (
             finish_listing_if_batch_already_complete,
             merge_resumed_listing_graph_result,
