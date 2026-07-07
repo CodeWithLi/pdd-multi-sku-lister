@@ -1033,6 +1033,34 @@ def patch_published_product_spec_metadata(
         return row
 
 
+def update_published_product_limited_time_status(
+    mapping_id: str,
+    *,
+    limited_time_status: str,
+    limited_time_error: str = "",
+    limited_time_run_id: str = "",
+    limited_time_completed_at: datetime | None = None,
+) -> PublishedProductORM | None:
+    if not is_database_available():
+        return None
+    mapping_id = str(mapping_id or "").strip()
+    if not mapping_id:
+        return None
+    with session_scope() as session:
+        row = session.get(PublishedProductORM, mapping_id)
+        if not row:
+            return None
+        row.limited_time_status = str(limited_time_status or "").strip()
+        row.limited_time_error = str(limited_time_error or "").strip()
+        row.limited_time_run_id = str(limited_time_run_id or "").strip()
+        row.limited_time_completed_at = limited_time_completed_at
+        row.updated_at = datetime.now()
+        session.flush()
+        session.refresh(row)
+        session.expunge(row)
+        return row
+
+
 def delete_published_product(mapping_id: str) -> bool:
     if not is_database_available():
         return False

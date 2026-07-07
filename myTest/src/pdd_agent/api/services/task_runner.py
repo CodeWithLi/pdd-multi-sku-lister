@@ -396,6 +396,17 @@ def _schedule_feishu_limited_time_status(
             product_contexts=product_contexts,
             product_errors=product_errors,
         )
+        from pdd_agent.api.services.published_limited_time_status_bridge import (
+            persist_published_limited_time_status_after_run,
+        )
+
+        persist_published_limited_time_status_after_run(
+            account_id=account_id,
+            selected_product_ids=selected_product_ids,
+            result=result,
+            status=status,
+            run_id=run_id,
+        )
     except Exception:
         if run_id:
             _release_feishu_terminal_log(run_id)

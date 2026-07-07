@@ -186,6 +186,10 @@ class PublishedProductORM(Base):
     pdd_product_id: Mapped[str] = mapped_column(String(64), index=True, nullable=False)
     spec_metadata: Mapped[dict | None] = mapped_column(MySQLJSON, nullable=True)
     status: Mapped[str] = mapped_column(String(32), default="on_sale", nullable=False)
+    limited_time_status: Mapped[str] = mapped_column(String(16), default="", nullable=False)
+    limited_time_error: Mapped[str] = mapped_column(Text, default="", nullable=False)
+    limited_time_run_id: Mapped[str] = mapped_column(String(64), default="", nullable=False)
+    limited_time_completed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     published_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime, server_default=func.now(), nullable=False

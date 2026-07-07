@@ -100,6 +100,21 @@ function priceSyncTagType(status: string): 'success' | 'warning' | 'info' | 'dan
   return 'info'
 }
 
+function limitedTimeLabel(status: string) {
+  const map: Record<string, string> = {
+    '': '未报名',
+    success: '报名成功',
+    failed: '报名失败',
+  }
+  return map[status] || status || '未报名'
+}
+
+function limitedTimeTagType(status: string): 'success' | 'warning' | 'info' | 'danger' {
+  if (status === 'success') return 'success'
+  if (status === 'failed') return 'danger'
+  return 'info'
+}
+
 function listPriceHint(row: PublishedProduct) {
   const lookup = row.spec_metadata?.pdd_goods_lookup as Record<string, unknown> | undefined
   const pddSkus = lookup?.pdd_skus
@@ -670,6 +685,19 @@ onMounted(async () => {
             </el-tag>
             <div v-if="listPriceHint(row)" class="muted">{{ listPriceHint(row) }}</div>
             <div v-else-if="row.price_sync_at" class="muted">{{ formatTime(row.price_sync_at) }}</div>
+          </template>
+        </el-table-column>
+        <el-table-column label="限时限量购" width="150">
+          <template #default="{ row }">
+            <el-tag size="small" :type="limitedTimeTagType(row.limited_time_status)" effect="plain">
+              {{ limitedTimeLabel(row.limited_time_status) }}
+            </el-tag>
+            <div v-if="row.limited_time_error" class="muted" :title="row.limited_time_error">
+              {{ row.limited_time_error }}
+            </div>
+            <div v-else-if="row.limited_time_completed_at" class="muted">
+              {{ formatTime(row.limited_time_completed_at) }}
+            </div>
           </template>
         </el-table-column>
         <el-table-column prop="status" label="状态" width="100" />

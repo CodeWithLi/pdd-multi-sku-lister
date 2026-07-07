@@ -55,6 +55,10 @@ def _row_out(row) -> PublishedProductOut:
         spec_metadata=row.spec_metadata or {},
         price_sync_status=price_sync_status,
         price_sync_at=price_sync_at,
+        limited_time_status=getattr(row, "limited_time_status", "") or "",
+        limited_time_error=getattr(row, "limited_time_error", "") or "",
+        limited_time_run_id=getattr(row, "limited_time_run_id", "") or "",
+        limited_time_completed_at=getattr(row, "limited_time_completed_at", None),
     )
 
 

@@ -813,6 +813,10 @@ export interface PublishedProduct {
   spec_metadata: Record<string, unknown>
   price_sync_status: 'none' | 'specs_synced' | 'local_skus' | 'list_price' | 'detail_opened' | 'edit_opened' | 'searched' | string
   price_sync_at: string | null
+  limited_time_status: '' | 'success' | 'failed' | string
+  limited_time_error: string
+  limited_time_run_id: string
+  limited_time_completed_at: string | null
 }
 
 export interface PublishedProductListResponse {

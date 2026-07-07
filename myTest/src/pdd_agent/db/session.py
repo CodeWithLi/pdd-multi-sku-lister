@@ -130,11 +130,39 @@ def _ensure_published_products_columns(engine: Engine) -> None:
                 statements.append("ALTER TABLE published_products ADD COLUMN spec_metadata JSON NULL")
             else:
                 statements.append("ALTER TABLE published_products ADD COLUMN spec_metadata JSON NULL")
+        if "limited_time_status" not in existing:
+            statements.append(
+                "ALTER TABLE published_products ADD COLUMN limited_time_status VARCHAR(16) NOT NULL DEFAULT ''"
+            )
+        if "limited_time_error" not in existing:
+            if dialect.startswith("mysql"):
+                # MySQL 不允许 TEXT/BLOB 列带 DEFAULT，用 NULL 列即可（应用层默认 ""）
+                statements.append(
+                    "ALTER TABLE published_products ADD COLUMN limited_time_error TEXT NULL"
+                )
+            else:
+                statements.append(
+                    "ALTER TABLE published_products ADD COLUMN limited_time_error TEXT NOT NULL DEFAULT ''"
+                )
+        if "limited_time_run_id" not in existing:
+            statements.append(
+                "ALTER TABLE published_products ADD COLUMN limited_time_run_id VARCHAR(64) NOT NULL DEFAULT ''"
+            )
+        if "limited_time_completed_at" not in existing:
+            statements.append(
+                "ALTER TABLE published_products ADD COLUMN limited_time_completed_at DATETIME NULL"
+            )
         if not statements:
             return
-        with engine.begin() as conn:
-            for stmt in statements:
-                conn.execute(text(stmt))
+        from pdd_agent.core.logging import get_logger
+
+        log = get_logger(__name__)
+        for stmt in statements:
+            try:
+                with engine.begin() as conn:
+                    conn.execute(text(stmt))
+            except Exception:
+                log.warning("published_products migration skipped: %s", stmt, exc_info=True)
     except Exception:
         return
 

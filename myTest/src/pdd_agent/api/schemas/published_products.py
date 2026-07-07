@@ -28,6 +28,13 @@ class PublishedProductOut(BaseModel):
         description="none=未反查, specs_synced=拼多多规格价, local_skus=本地规格价, list_price=列表价, detail_opened=已打开详情, searched=已搜索",
     )
     price_sync_at: datetime | None = None
+    limited_time_status: str = Field(
+        default="",
+        description="限时限量购报名状态：空=未报名, success=成功, failed=失败",
+    )
+    limited_time_error: str = Field(default="", description="限时限量购失败原因")
+    limited_time_run_id: str = Field(default="", description="最近一次限时限量购 run_id")
+    limited_time_completed_at: datetime | None = None
 
 
 class PublishedProductListResponse(BaseModel):
