@@ -1296,6 +1296,7 @@ async def execute_listing(
     store.update_phase(run_id, TaskPhase.PREFLIGHT)
 
     dedupe_skipped_results: list[dict[str, Any]] = []
+    bag_view_skipped_results: list[dict[str, Any]] = []
     try:
         from pdd_agent.integrations.feishu.listing_feishu_platform_guard import PLATFORM_SKIP_REASON
         from pdd_agent.integrations.feishu.platform_skip_dedupe_cache import (
@@ -1346,13 +1347,20 @@ async def execute_listing(
                         pipeline_id,
                     )
             if not codes and dedupe_skipped_results:
-                result = {"results": dedupe_skipped_results, "errors": [], "platform_skip_dedupe": True}
+                from pdd_agent.api.services.pipeline_listing_unit_results import (
+                    compose_all_skipped_listing_run_result,
+                    listing_result_item_labels,
+                )
+
+                result = compose_all_skipped_listing_run_result(
+                    dedupe_skipped_results=dedupe_skipped_results,
+                )
                 store.finish(
                     run_id,
                     RunStatus.SUCCESS,
                     "platform skip dedupe",
                     result=_compact_run_result_for_storage(result),
-                    listing_labels=[str(item.get("listing_label") or "") for item in dedupe_skipped_results],
+                    listing_labels=listing_result_item_labels(result.get("results") or []),
                 )
                 mark_feishu_terminal_logged(run_id)
                 return result
@@ -1421,6 +1429,12 @@ async def execute_listing(
 
         missing_folders = set(bag_guard.get("missing_codes") or []) if not bag_guard.get("skipped") else set()
         if missing_folders:
+            from pdd_agent.api.services.pipeline_listing_unit_results import (
+                build_bag_view_skip_result_items,
+                compose_all_skipped_listing_run_result,
+                listing_result_item_labels,
+            )
+
             publish_start, publish_end = _listing_run_timing(run_id)
             duration_seconds: float | None = None
             if publish_start and publish_end:
@@ -1429,6 +1443,12 @@ async def execute_listing(
             missing_selectors = [
                 selector for selector, folder in folder_by_selector.items() if folder in missing_folders
             ]
+            bag_view_skipped_results.extend(
+                build_bag_view_skip_result_items(
+                    missing_selectors=missing_selectors,
+                    folder_by_selector=folder_by_selector,
+                )
+            )
             if pipeline_id and missing_selectors:
                 try:
                     from pdd_agent.api.services.pipeline_listing_skip_record import (
@@ -1470,25 +1490,16 @@ async def execute_listing(
                 and folder_by_selector.get(str(item).strip(), "") not in missing_folders
             ]
             if not passed_codes:
-                result = {
-                    "results": [
-                        {
-                            "status": "skipped",
-                            "reason": "platform_not_applicable",
-                            "listing_label": selector,
-                            "platform_listing_code": folder_by_selector[selector],
-                            "error": PLATFORM_SKIP_REASON,
-                        }
-                        for selector in missing_selectors
-                    ],
-                    "errors": [],
-                }
+                result = compose_all_skipped_listing_run_result(
+                    dedupe_skipped_results=dedupe_skipped_results,
+                    bag_view_skipped_results=bag_view_skipped_results,
+                )
                 store.finish(
                     run_id,
                     RunStatus.FAILED,
                     PLATFORM_SKIP_REASON,
                     result=_compact_run_result_for_storage(result),
-                    listing_labels=[str(item.get("listing_label") or "") for item in result["results"]],
+                    listing_labels=listing_result_item_labels(result.get("results") or []),
                 )
                 mark_feishu_terminal_logged(run_id)
                 return result
@@ -1535,10 +1546,13 @@ async def execute_listing(
         result = _json_safe(raw)
         if batch_resume_plan is not None:
             result = merge_resumed_listing_graph_result(batch_resume_plan, result)
-        if dedupe_skipped_results:
-            merged = list(dedupe_skipped_results) + list(result.get("results") or [])
-            result["results"] = merged
-            result["platform_skip_dedupe"] = True
+        from pdd_agent.api.services.pipeline_listing_unit_results import merge_skip_results_into_listing_payload
+
+        result = merge_skip_results_into_listing_payload(
+            result,
+            dedupe_skipped_results=dedupe_skipped_results,
+            bag_view_skipped_results=bag_view_skipped_results,
+        )
         # 批次内已成功的商品先落库，避免取消/中断时丢失
         _persist_published_products(run_id, account_id, result)
         record = store.load(run_id)

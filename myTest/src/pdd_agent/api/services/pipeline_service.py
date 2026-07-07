@@ -656,14 +656,29 @@ def build_listing_unit_statuses(row) -> list[dict[str, Any]]:
     if not selectors:
         return []
 
+    from pdd_agent.api.services.pipeline_listing_unit_results import (
+        classify_listing_unit_pipeline_status,
+        index_listing_result_items,
+        load_pipeline_listing_skip_result_index,
+        merge_listing_result_indexes,
+        resolve_listing_result_item,
+    )
+
     preflight_errors: dict[str, str] = {}
     valid_labels: set[str] = set()
-    current_run_results: dict[str, dict[str, Any]] = {}
+    current_run_index: dict[str, dict[str, Any]] = {}
     run_status = ""
     run_phase = ""
 
     throttle = dict(meta.get("listing_throttle") or {})
-    accumulated_results = dict(throttle.get("unit_results_by_label") or {})
+    unit_results_raw = throttle.get("unit_results_by_label")
+    accumulated_index = index_listing_result_items(
+        [
+            item
+            for item in (unit_results_raw or {}).values()
+            if isinstance(unit_results_raw, dict) and isinstance(item, dict)
+        ]
+    )
 
     if row.listing_run_id:
         record = TaskRunStore().load(row.listing_run_id)
@@ -674,15 +689,9 @@ def build_listing_unit_statuses(row) -> list[dict[str, Any]]:
             run_phase = str(record.phase.value if hasattr(record.phase, "value") else record.phase)
             result = dict(record.result or {})
             preflight_errors, valid_labels = _parse_preflight_snapshot(result)
-            for item in result.get("results") or []:
-                if not isinstance(item, dict):
-                    continue
-                label = str(item.get("listing_label") or "").strip()
-                if label:
-                    current_run_results[label] = item
+            current_run_index = index_listing_result_items(result.get("results") or [])
 
-    result_by_label = dict(accumulated_results)
-    result_by_label.update(current_run_results)
+    result_by_label = merge_listing_result_indexes(accumulated_index, current_run_index)
 
     if throttle.get("enabled"):
         store = TaskRunStore()
@@ -702,6 +711,7 @@ def build_listing_unit_statuses(row) -> list[dict[str, Any]]:
                         run_ids_to_scan.append(rid)
             except Exception:
                 pass
+        batch_indexes: list[dict[str, dict[str, Any]]] = []
         for run_id in run_ids_to_scan:
             rid = str(run_id or "").strip()
             if not rid or rid in seen_run_ids:
@@ -711,12 +721,13 @@ def build_listing_unit_statuses(row) -> list[dict[str, Any]]:
             if not prior:
                 continue
             prior_result = dict(prior.result or {})
-            for item in prior_result.get("results") or []:
-                if not isinstance(item, dict):
-                    continue
-                label = str(item.get("listing_label") or "").strip()
-                if label and label not in result_by_label:
-                    result_by_label[label] = item
+            batch_indexes.append(index_listing_result_items(prior_result.get("results") or []))
+        result_by_label = merge_listing_result_indexes(result_by_label, *batch_indexes)
+
+    pipeline_id = str(getattr(row, "pipeline_id", "") or "").strip()
+    if pipeline_id:
+        skip_index = load_pipeline_listing_skip_result_index(pipeline_id)
+        result_by_label = merge_listing_result_indexes(skip_index, result_by_label)
 
     for label in meta.get("listing_failed_labels") or []:
         text = str(label or "").strip()
@@ -730,19 +741,9 @@ def build_listing_unit_statuses(row) -> list[dict[str, Any]]:
         if selector in skip_selectors:
             status = "skipped"
             reason_code = "skipped_already_listed"
-        elif label in result_by_label:
-            item = result_by_label[label]
-            item_status = str(item.get("status") or "").strip().lower()
-            item_reason = str(item.get("reason") or item.get("reason_code") or "").strip()
-            product_id = str(item.get("pdd_product_id") or "").strip()
-            if item_status in {"success", "listed"} and bool(product_id or item_status == "listed"):
-                status = "success"
-            elif item_status == "skipped" or item_reason == "platform_skip_dedupe":
-                status = "platform_skip_dedupe"
-                reason_code = "platform_skip_dedupe"
-            else:
-                status = "failed"
-                reason_code = item_reason or "listing_failed"
+        elif resolve_listing_result_item(result_by_label, selector):
+            item = resolve_listing_result_item(result_by_label, selector) or {}
+            status, reason_code = classify_listing_unit_pipeline_status(item)
         elif label in preflight_errors:
             status = "preflight_failed"
             reason_code = preflight_errors[label]
