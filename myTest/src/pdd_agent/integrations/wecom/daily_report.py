@@ -6,15 +6,21 @@ from dataclasses import dataclass, field
 from datetime import date
 from typing import Literal
 
+from pdd_agent.core.report_time_window import (
+    format_report_window_iso,
+    format_report_window_label,
+    report_listing_window,
+    today_in_tz,
+)
 from pdd_agent.integrations.git.digest import (
     GitCommitRecord,
-    collect_commits_for_day,
+    collect_commits_between,
     resolve_git_repo_path,
-    today_in_tz,
 )
 from pdd_agent.integrations.git.summarize import summarize_commits_as_progress
 from pdd_agent.integrations.wecom.daily_content import WecomDailyContent, load_wecom_daily_content
 from pdd_agent.integrations.wecom.daily_report_format import build_daily_report_markdown
+from pdd_agent.integrations.wecom.in_progress_draft import resolve_pdd_in_progress
 from pdd_agent.integrations.wecom.store_progress import (
     StoreListingSummary,
     collect_pdd_store_progress,
@@ -30,11 +36,16 @@ class DailyReportDraft:
     repo_path: str = ""
     commit_count: int = 0
     progress_summary: str = ""
+    progress_summary_from_cache: bool = False
     store_progress: str = ""
     netdisk_materials: str = ""
     in_progress: str = ""
+    in_progress_manual: str = ""
+    in_progress_auto_draft: str = ""
     listing_window_start: str = ""
     listing_window_end: str = ""
+    git_window_start: str = ""
+    git_window_end: str = ""
     store_summaries: list[StoreListingSummary] = field(default_factory=list)
     message: str = ""
     commits: list[GitCommitRecord] = field(default_factory=list)
@@ -50,14 +61,30 @@ def generate_pdd_daily_report_draft(
     resolved = resolve_git_repo_path(repo_path)
     target_day = day or today_in_tz()
     content = daily_content or load_wecom_daily_content(day=target_day)
-    commits = collect_commits_for_day(repo_path=resolved, day=target_day)
-    progress_summary = summarize_commits_as_progress(commits)
-    store_snapshot = collect_pdd_store_progress(reference_day=target_day)
-    in_progress = str(content.pdd.in_progress or "").strip()
-    listing_window = (
-        f"{store_snapshot.window_start.strftime('%m-%d %H:%M')} ~ "
-        f"{store_snapshot.window_end.strftime('%m-%d %H:%M')}"
+    window_start, window_end = report_listing_window(reference_day=target_day)
+    git_window_label = format_report_window_label(window_start, window_end)
+    listing_window_start, listing_window_end = format_report_window_iso(window_start, window_end)
+
+    commits = collect_commits_between(
+        repo_path=resolved,
+        start=window_start,
+        end=window_end,
+        inclusive_end=True,
     )
+    progress_summary, from_cache = summarize_commits_as_progress(
+        commits,
+        report_date=target_day,
+        window_start=window_start,
+        window_end=window_end,
+    )
+    store_snapshot = collect_pdd_store_progress(reference_day=target_day)
+    manual_in_progress = str(content.pdd.in_progress or "").strip()
+    in_progress, auto_draft = resolve_pdd_in_progress(
+        manual=manual_in_progress,
+        window_start=window_start,
+        window_end=window_end,
+    )
+    listing_window = git_window_label
     message = build_daily_report_markdown(
         platform="pdd",
         report_date=target_day.isoformat(),
@@ -65,6 +92,7 @@ def generate_pdd_daily_report_draft(
         store_progress=store_snapshot.text,
         in_progress=in_progress,
         listing_window=listing_window,
+        git_window=listing_window,
     )
     return DailyReportDraft(
         platform="pdd",
@@ -72,10 +100,15 @@ def generate_pdd_daily_report_draft(
         repo_path=str(resolved),
         commit_count=len(commits),
         progress_summary=progress_summary,
+        progress_summary_from_cache=from_cache,
         store_progress=store_snapshot.text,
         in_progress=in_progress,
-        listing_window_start=store_snapshot.window_start.strftime("%Y-%m-%d %H:%M"),
-        listing_window_end=store_snapshot.window_end.strftime("%Y-%m-%d %H:%M"),
+        in_progress_manual=manual_in_progress,
+        in_progress_auto_draft="\n".join(auto_draft),
+        listing_window_start=listing_window_start,
+        listing_window_end=listing_window_end,
+        git_window_start=listing_window_start,
+        git_window_end=listing_window_end,
         store_summaries=store_snapshot.shops,
         message=message,
         commits=commits,
@@ -103,6 +136,7 @@ def generate_taobao_daily_report_draft(
         report_date=target_day.isoformat(),
         netdisk_materials=netdisk_materials,
         in_progress=in_progress,
+        in_progress_manual=in_progress,
         message=message,
     )
 

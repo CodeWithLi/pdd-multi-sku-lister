@@ -7,7 +7,13 @@ from typing import Any
 import httpx
 
 from pdd_agent.core.logging import get_logger
-from pdd_agent.integrations.wecom.config import WecomConfig, load_wecom_config, wecom_configured
+from pdd_agent.integrations.wecom.config import (
+    WecomConfig,
+    load_wecom_config,
+    resolve_alert_webhook_url,
+    resolve_daily_report_webhook_url,
+    wecom_configured,
+)
 
 logger = get_logger(__name__)
 
@@ -41,7 +47,7 @@ def send_webhook_payload(
     timeout: float = 15.0,
 ) -> dict[str, Any]:
     cfg = cfg or load_wecom_config()
-    url = str(webhook_url or cfg.webhook_url or "").strip()
+    url = str(webhook_url or resolve_alert_webhook_url(cfg)).strip()
     if not url:
         raise WecomAPIError("未配置 webhook_url")
 
@@ -73,10 +79,19 @@ def send_markdown(
     webhook_url: str = "",
     cfg: WecomConfig | None = None,
     version: str = "markdown",
+    for_daily_report: bool = False,
 ) -> dict[str, Any]:
+    cfg = cfg or load_wecom_config()
+    resolved = str(webhook_url or "").strip()
+    if not resolved:
+        resolved = (
+            resolve_daily_report_webhook_url(cfg)
+            if for_daily_report
+            else resolve_alert_webhook_url(cfg)
+        )
     return send_webhook_payload(
         build_markdown_payload(content, version=version),
-        webhook_url=webhook_url,
+        webhook_url=resolved,
         cfg=cfg,
     )
 

@@ -18,6 +18,7 @@ _WEBHOOK_KEY_RE = re.compile(r"key=([0-9a-f-]{8,})", re.I)
 class WecomConfig(BaseModel):
     enabled: bool = False
     webhook_url: str = ""
+    webhook_url_daily_report: str = ""
     notify_on_listing_failed: bool = False
     notify_on_pipeline_failed: bool = False
     notify_on_commerce_queued: bool = False
@@ -29,9 +30,25 @@ class WecomConfig(BaseModel):
     @model_validator(mode="after")
     def normalize(self) -> "WecomConfig":
         self.webhook_url = str(self.webhook_url or "").strip()
+        self.webhook_url_daily_report = str(self.webhook_url_daily_report or "").strip()
         self.daily_report_schedule_hour = max(0, min(23, int(self.daily_report_schedule_hour)))
         self.daily_report_schedule_minute = max(0, min(59, int(self.daily_report_schedule_minute)))
         return self
+
+
+def resolve_alert_webhook_url(cfg: WecomConfig | None = None) -> str:
+    """业务告警 Webhook（上架失败、链路失败等）。"""
+    cfg = cfg or load_wecom_config()
+    return str(cfg.webhook_url or "").strip()
+
+
+def resolve_daily_report_webhook_url(cfg: WecomConfig | None = None) -> str:
+    """日报专用 Webhook；未配置时回退到 webhook_url。"""
+    cfg = cfg or load_wecom_config()
+    daily = str(cfg.webhook_url_daily_report or "").strip()
+    if daily:
+        return daily
+    return str(cfg.webhook_url or "").strip()
 
 
 def _load_yaml_raw(path: Path | None = None) -> tuple[Path, dict]:
@@ -63,7 +80,12 @@ def save_wecom_config(config: WecomConfig, path: Path | None = None) -> WecomCon
 
 def wecom_configured(cfg: WecomConfig | None = None) -> bool:
     cfg = cfg or load_wecom_config()
-    return bool(cfg.enabled and cfg.webhook_url)
+    return bool(cfg.enabled and resolve_alert_webhook_url(cfg))
+
+
+def daily_report_webhook_configured(cfg: WecomConfig | None = None) -> bool:
+    cfg = cfg or load_wecom_config()
+    return bool(cfg.enabled and resolve_daily_report_webhook_url(cfg))
 
 
 def mask_webhook_url(url: str) -> str:

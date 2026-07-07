@@ -29,6 +29,10 @@ class DailyListingRecordOut(BaseModel):
 
 class DailyListingRecordListResponse(BaseModel):
     listed_date: date
+    window_mode: str = "calendar"
+    window_start: str = ""
+    window_end: str = ""
+    window_description: str = ""
     total: int = 0
     active_total: int = 0
     delisted_total: int = 0
@@ -41,11 +45,21 @@ class DailyListingShopSummary(BaseModel):
     count: int = 0
     active_count: int = 0
     delisted_count: int = 0
+    limited_time_success_count: int = 0
+    activity_register_success_count: int = 0
+    promotion_success_count: int = 0
 
 
 class DailyListingSummaryResponse(BaseModel):
     listed_date: date
+    window_mode: str = "calendar"
+    window_start: str = ""
+    window_end: str = ""
+    window_description: str = ""
     total: int = 0
     active_total: int = 0
     delisted_total: int = 0
+    limited_time_success_total: int = 0
+    activity_register_success_total: int = 0
+    promotion_success_total: int = 0
     by_shop: list[DailyListingShopSummary] = Field(default_factory=list)

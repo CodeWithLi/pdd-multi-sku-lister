@@ -3,6 +3,8 @@
 
 enabled: false
 webhook_url: ""
+# 日报专用 Webhook；留空则回退使用 webhook_url
+webhook_url_daily_report: ""
 
 # 业务自动通知（需 enabled=true 且 webhook_url 已配置）
 notify_on_listing_failed: false

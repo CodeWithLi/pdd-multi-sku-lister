@@ -12,11 +12,15 @@ from pdd_agent.api.schemas.wecom import (
     WecomConfigUpdateIn,
     WecomDailyContentOut,
     WecomDailyContentUpdateIn,
+    WecomDailyReportLogDetailOut,
+    WecomDailyReportLogListOut,
+    WecomDailyReportLogOut,
     WecomDailyReportPlatform,
     WecomDailyReportPreviewOut,
     WecomDailyReportTriggerIn,
     WecomDailyReportTriggerOut,
     WecomHealthOut,
+    WecomInProgressDraftOut,
     WecomTestSendIn,
     WecomTestSendOut,
 )
@@ -30,8 +34,10 @@ from pdd_agent.integrations.wecom.client import (
 from pdd_agent.integrations.wecom.config import (
     DEFAULT_WECOM_CONFIG_PATH,
     WecomConfig,
+    daily_report_webhook_configured,
     load_wecom_config,
     mask_webhook_url,
+    resolve_alert_webhook_url,
     save_wecom_config,
     wecom_configured,
 )
@@ -44,6 +50,9 @@ from pdd_agent.integrations.wecom.daily_content import (
     save_wecom_daily_content,
 )
 from pdd_agent.integrations.wecom.daily_report import generate_daily_report_draft
+from pdd_agent.core.report_time_window import REPORT_WINDOW_DESCRIPTION, format_report_window_iso, report_listing_window
+from pdd_agent.integrations.wecom.in_progress_draft import collect_in_progress_draft_lines
+from pdd_agent.db.repositories import get_wecom_daily_report_log, list_wecom_daily_report_logs
 from pdd_agent.db.session import is_database_available
 
 router = APIRouter(prefix="/wecom", tags=["wecom"])
@@ -55,6 +64,7 @@ def _config_path() -> str:
 
 def _config_out(cfg: WecomConfig, *, expose_webhook: bool = False) -> WecomConfigOut:
     url = str(cfg.webhook_url or "").strip()
+    daily_url = str(cfg.webhook_url_daily_report or "").strip()
     scheduler = get_wecom_daily_report_scheduler()
     hour = int(cfg.daily_report_schedule_hour)
     minute = int(cfg.daily_report_schedule_minute)
@@ -63,6 +73,9 @@ def _config_out(cfg: WecomConfig, *, expose_webhook: bool = False) -> WecomConfi
         webhook_url=url if expose_webhook else "",
         webhook_url_masked=mask_webhook_url(url) if url else "",
         webhook_configured=bool(url),
+        webhook_url_daily_report=daily_url if expose_webhook else "",
+        webhook_url_daily_report_masked=mask_webhook_url(daily_url) if daily_url else "",
+        webhook_daily_report_configured=bool(daily_url or url),
         notify_on_listing_failed=bool(cfg.notify_on_listing_failed),
         notify_on_pipeline_failed=bool(cfg.notify_on_pipeline_failed),
         notify_on_commerce_queued=bool(cfg.notify_on_commerce_queued),
@@ -124,13 +137,18 @@ def get_wecom_config():
 def update_wecom_config(body: WecomConfigUpdateIn):
     existing = load_wecom_config()
     webhook_url = _merge_webhook_url(body.webhook_url, existing.webhook_url)
-    if body.enabled and not webhook_url:
-        raise HTTPException(status_code=400, detail="启用前请填写 Webhook 地址")
+    webhook_url_daily_report = _merge_webhook_url(
+        body.webhook_url_daily_report,
+        existing.webhook_url_daily_report,
+    )
+    if body.enabled and not webhook_url and not webhook_url_daily_report:
+        raise HTTPException(status_code=400, detail="启用前请填写至少一个 Webhook 地址")
 
     saved = save_wecom_config(
         WecomConfig(
             enabled=bool(body.enabled),
             webhook_url=webhook_url,
+            webhook_url_daily_report=webhook_url_daily_report,
             notify_on_listing_failed=bool(body.notify_on_listing_failed),
             notify_on_pipeline_failed=bool(body.notify_on_pipeline_failed),
             notify_on_commerce_queued=bool(body.notify_on_commerce_queued),
@@ -149,7 +167,7 @@ def test_wecom_send(body: WecomTestSendIn):
     cfg = load_wecom_config()
     webhook_url = str(body.webhook_url or "").strip()
     if body.use_saved_webhook or not webhook_url:
-        webhook_url = str(cfg.webhook_url or "").strip()
+        webhook_url = resolve_alert_webhook_url(cfg)
     if not webhook_url:
         raise HTTPException(status_code=400, detail="未配置 Webhook 地址")
 
@@ -196,16 +214,24 @@ def _preview_out(draft) -> WecomDailyReportPreviewOut:
         repo_path=draft.repo_path,
         commit_count=draft.commit_count,
         progress_summary=draft.progress_summary,
+        progress_summary_from_cache=bool(draft.progress_summary_from_cache),
         store_progress=draft.store_progress,
         netdisk_materials=draft.netdisk_materials,
         in_progress=draft.in_progress,
+        in_progress_manual=draft.in_progress_manual,
+        in_progress_auto_draft=draft.in_progress_auto_draft,
         listing_window_start=draft.listing_window_start,
         listing_window_end=draft.listing_window_end,
+        git_window_start=draft.git_window_start,
+        git_window_end=draft.git_window_end,
         store_summaries=[
             {
                 "account_id": s.account_id,
                 "shop_display_name": s.shop_display_name,
                 "count": s.count,
+                "limited_time_success_count": s.limited_time_success_count,
+                "activity_register_success_count": s.activity_register_success_count,
+                "promotion_success_count": s.promotion_success_count,
             }
             for s in draft.store_summaries
         ],
@@ -248,6 +274,71 @@ def update_wecom_daily_content(body: WecomDailyContentUpdateIn):
     return _daily_content_out(saved)
 
 
+def _log_out(row, *, include_message: bool = False) -> WecomDailyReportLogOut | WecomDailyReportLogDetailOut:
+    message = str(row.message or "")
+    preview = message[:240] + ("…" if len(message) > 240 else "")
+    window_start = row.window_start.strftime("%Y-%m-%d %H:%M") if row.window_start else ""
+    window_end = row.window_end.strftime("%Y-%m-%d %H:%M") if row.window_end else ""
+    created_at = row.created_at.strftime("%Y-%m-%d %H:%M:%S") if row.created_at else ""
+    common = dict(
+        log_id=row.log_id,
+        platform=row.platform,
+        report_date=row.report_date.isoformat(),
+        window_start=window_start,
+        window_end=window_end,
+        trigger_kind=str(row.trigger_kind or ""),
+        status=str(row.status or ""),
+        errcode=int(row.errcode or 0),
+        errmsg=str(row.errmsg or ""),
+        webhook_target=str(row.webhook_target or ""),
+        created_at=created_at,
+    )
+    if include_message:
+        return WecomDailyReportLogDetailOut(message=message, **common)
+    return WecomDailyReportLogOut(message_preview=preview, **common)
+
+
+@router.get("/daily-report/logs", response_model=WecomDailyReportLogListOut)
+def list_daily_report_logs(
+    platform: str = "",
+    page: int = 1,
+    page_size: int = 20,
+):
+    rows, total = list_wecom_daily_report_logs(
+        page=page,
+        page_size=page_size,
+        platform=str(platform or "").strip(),
+    )
+    return WecomDailyReportLogListOut(
+        items=[_log_out(row) for row in rows],  # type: ignore[arg-type]
+        total=total,
+        page=max(1, page),
+        page_size=max(1, min(100, page_size)),
+    )
+
+
+@router.get("/daily-report/logs/{log_id}", response_model=WecomDailyReportLogDetailOut)
+def get_daily_report_log(log_id: str):
+    row = get_wecom_daily_report_log(log_id)
+    if not row:
+        raise HTTPException(status_code=404, detail="日报发送记录不存在")
+    return _log_out(row, include_message=True)
+
+
+@router.get("/daily-report/in-progress-draft", response_model=WecomInProgressDraftOut)
+def get_in_progress_draft():
+    """获取 PDD 日报「正在解决/优化中」系统建议草稿。"""
+    start, end = report_listing_window()
+    window_start, window_end = format_report_window_iso(start, end)
+    lines = collect_in_progress_draft_lines(window_start=start, window_end=end)
+    return WecomInProgressDraftOut(
+        draft="\n".join(lines),
+        window_start=window_start,
+        window_end=window_end,
+        window_description=REPORT_WINDOW_DESCRIPTION,
+    )
+
+
 @router.get("/daily-report/preview", response_model=WecomDailyReportPreviewOut)
 def preview_daily_report(platform: WecomDailyReportPlatform = "pdd"):
     """预览指定平台日报草稿（不发送企业微信）。"""
@@ -268,8 +359,8 @@ def trigger_daily_report(body: WecomDailyReportTriggerIn | None = None):
     platform = (body.platform if body else "pdd")
     custom_message = str(body.message or "").strip() if body else ""
     cfg = load_wecom_config()
-    if not wecom_configured(cfg):
-        raise HTTPException(status_code=400, detail="请先启用企业微信并配置 Webhook")
+    if not daily_report_webhook_configured(cfg):
+        raise HTTPException(status_code=400, detail="请先启用企业微信并配置日报 Webhook")
     label = "PDD" if platform == "pdd" else "淘宝"
     try:
         ok = get_wecom_daily_report_scheduler().trigger_now(

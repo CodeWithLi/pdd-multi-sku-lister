@@ -100,6 +100,9 @@ import type {
   WecomDailyContentUpdatePayload,
   WecomDailyReportPlatform,
   WecomDailyReportPreview,
+  WecomInProgressDraft,
+  WecomDailyReportLogDetail,
+  WecomDailyReportLogListResponse,
   WecomDailyReportTriggerPayload,
   WecomDailyReportTriggerResult,
   WecomHealth,
@@ -1059,13 +1062,14 @@ export const api = {
       .get<DailyCycleRelistRecordListResponse>('/daily-cycle-relists', { params })
       .then((r) => r.data),
 
-  dailyListingSummary: (params?: { listed_date?: string }) =>
+  dailyListingSummary: (params?: { listed_date?: string; window_mode?: 'calendar' | 'report' }) =>
     http
       .get<DailyListingSummaryResponse>('/daily-listings/summary', { params })
       .then((r) => r.data),
 
   dailyListingRecords: (params?: {
     listed_date?: string
+    window_mode?: 'calendar' | 'report'
     account_id?: string
     limit?: number
     active_only?: boolean
@@ -1110,6 +1114,17 @@ export const api = {
     http
       .get<WecomDailyReportPreview>('/wecom/daily-report/preview', { params: { platform } })
       .then((r) => r.data),
+
+  wecomInProgressDraft: () =>
+    http.get<WecomInProgressDraft>('/wecom/daily-report/in-progress-draft').then((r) => r.data),
+
+  wecomDailyReportLogs: (params?: { platform?: string; page?: number; page_size?: number }) =>
+    http
+      .get<WecomDailyReportLogListResponse>('/wecom/daily-report/logs', { params })
+      .then((r) => r.data),
+
+  wecomDailyReportLog: (logId: string) =>
+    http.get<WecomDailyReportLogDetail>(`/wecom/daily-report/logs/${logId}`).then((r) => r.data),
 
   wecomDailyReportTrigger: (body: WecomDailyReportTriggerPayload) =>
     http.post<WecomDailyReportTriggerResult>('/wecom/daily-report/trigger', body).then((r) => r.data),

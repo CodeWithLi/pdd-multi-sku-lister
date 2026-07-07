@@ -36,6 +36,8 @@ export interface DailyReportMarkdownInput {
   inProgress?: string
   listingWindowStart?: string
   listingWindowEnd?: string
+  gitWindowStart?: string
+  gitWindowEnd?: string
 }
 
 export function buildDailyReportMarkdown(input: DailyReportMarkdownInput): string {
@@ -47,8 +49,15 @@ export function buildDailyReportMarkdown(input: DailyReportMarkdownInput): strin
   ]
 
   if (input.platform === 'pdd') {
+    parts.push('### 当日已完成交付技术项目进展')
+    const gitWindow = formatListingWindow(
+      input.gitWindowStart || input.listingWindowStart || '',
+      input.gitWindowEnd || input.listingWindowEnd || '',
+    )
+    if (gitWindow) {
+      parts.push(`> Git 统计窗口：<font color="comment">${gitWindow}</font>`)
+    }
     parts.push(
-      '### 当日已完成交付技术项目进展',
       bulletBlock(input.progressSummary || '', '今日暂无代码提交'),
       '',
       '### 店铺今日发布商品进度',

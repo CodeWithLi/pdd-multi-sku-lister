@@ -14,6 +14,7 @@ import type {
 
 const loading = ref(false)
 const queryDate = ref(formatDate(new Date()))
+const windowMode = ref<'calendar' | 'report'>('calendar')
 const showActiveOnly = ref(false)
 const skipKindFilter = ref('')
 const listingSummary = ref<DailyListingSummaryResponse | null>(null)
@@ -24,6 +25,13 @@ const skipSummary = ref<DailyPipelineListingSkipSummaryResponse | null>(null)
 const skipRecords = ref<DailyPipelineListingSkipRecord[]>([])
 
 const dateLabel = computed(() => queryDate.value || '—')
+const windowDescription = computed(() => listingSummary.value?.window_description || '')
+const windowRangeLabel = computed(() => {
+  const start = String(listingSummary.value?.window_start || '').trim()
+  const end = String(listingSummary.value?.window_end || '').trim()
+  if (!start || !end) return ''
+  return `${start} ~ ${end}`
+})
 const cyclePipelineIdSet = computed(() => {
   const ids = new Set<string>()
   for (const row of cycleRecords.value) {
@@ -83,6 +91,18 @@ function setYesterday() {
   void load()
 }
 
+function shopProgressLabel(shop: DailyListingSummaryResponse['by_shop'][number]) {
+  const name = shop.shop_display_name || shop.account_id
+  const segments = [`已发布${shop.count}个`]
+  const limited = Number(shop.limited_time_success_count || 0)
+  const activity = Number(shop.activity_register_success_count || 0)
+  const promotion = Number(shop.promotion_success_count || 0)
+  if (limited > 0) segments.push(`限时限量购${limited}个`)
+  if (activity > 0) segments.push(`活动报名${activity}个`)
+  if (promotion > 0) segments.push(`推广${promotion}个`)
+  return `${name}：${segments.join(' + ')}`
+}
+
 function listingStatusLabel(status: string) {
   return String(status || 'active') === 'active' ? '仍在上架' : '已下架'
 }
@@ -105,11 +125,12 @@ async function load() {
   }
   loading.value = true
   try {
+    const listingParams = { listed_date: date, window_mode: windowMode.value }
     const [listingSum, listingRows, cycleSum, cycleRows, pipelineSkipSum, pipelineSkipRows] =
       await Promise.all([
-      api.dailyListingSummary({ listed_date: date }),
+      api.dailyListingSummary(listingParams),
       api.dailyListingRecords({
-        listed_date: date,
+        ...listingParams,
         limit: 200,
         active_only: showActiveOnly.value,
       }),
@@ -151,6 +172,19 @@ onMounted(load)
       subtitle="按日期查询上架成功数、整合链路上架跳过数与失败日志循环跑整合链路次数"
     />
 
+    <el-alert
+      v-if="windowMode === 'report'"
+      type="info"
+      :closable="false"
+      show-icon
+      class="mb-16"
+      :title="`当前为日报统计窗口：${windowDescription || '昨天 18:01 ~ 今天 18:00'}`"
+    >
+      <template v-if="windowRangeLabel" #default>
+        参考日期 {{ dateLabel }} 对应窗口 {{ windowRangeLabel }}，与 PDD 企业微信日报一致。
+      </template>
+    </el-alert>
+
     <el-card shadow="never" class="mb-16">
       <el-form inline @submit.prevent="load">
         <el-form-item label="查询日期">
@@ -162,6 +196,12 @@ onMounted(load)
             :clearable="false"
             style="width: 180px"
           />
+        </el-form-item>
+        <el-form-item label="统计口径">
+          <el-radio-group v-model="windowMode" @change="load">
+            <el-radio-button value="calendar">自然日</el-radio-button>
+            <el-radio-button value="report">日报窗口</el-radio-button>
+          </el-radio-group>
         </el-form-item>
         <el-form-item>
           <el-button type="primary" @click="load">查询</el-button>
@@ -178,6 +218,9 @@ onMounted(load)
           <div class="summary-tags">
             <el-tag type="primary">当天总共 {{ listingSummary?.total ?? 0 }} 件</el-tag>
             <el-tag type="success">仍在上架 {{ listingSummary?.active_total ?? 0 }} 件</el-tag>
+            <el-tag type="warning">
+              限时限量购成功 {{ listingSummary?.limited_time_success_total ?? 0 }} 件
+            </el-tag>
             <el-tag type="info">已下架 {{ listingSummary?.delisted_total ?? 0 }} 件</el-tag>
           </div>
         </div>
@@ -194,8 +237,10 @@ onMounted(load)
         >
           <div class="shop-stat-card">
             <div class="shop-stat-title">{{ shop.shop_display_name || shop.account_id }}</div>
+            <div class="shop-stat-progress">{{ shopProgressLabel(shop) }}</div>
             <div class="shop-stat-values">
               <span>总共 {{ shop.count }} 件</span>
+              <span class="limited-time">限时限量购成功 {{ shop.limited_time_success_count ?? 0 }} 件</span>
               <span class="active">仍在上架 {{ shop.active_count }} 件</span>
               <span class="delisted">已下架 {{ shop.delisted_count }} 件</span>
             </div>
@@ -433,6 +478,12 @@ onMounted(load)
   font-weight: 600;
   margin-bottom: 8px;
 }
+.shop-stat-progress {
+  margin-bottom: 8px;
+  font-size: 13px;
+  color: var(--el-color-primary);
+  line-height: 1.5;
+}
 .shop-stat-values {
   display: flex;
   flex-direction: column;
@@ -442,6 +493,9 @@ onMounted(load)
 }
 .shop-stat-values .active {
   color: var(--el-color-success);
+}
+.shop-stat-values .limited-time {
+  color: var(--el-color-warning);
 }
 .shop-stat-values .delisted {
   color: var(--el-text-color-secondary);

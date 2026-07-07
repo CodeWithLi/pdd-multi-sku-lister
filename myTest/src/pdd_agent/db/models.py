@@ -618,3 +618,50 @@ class WecomDailyContentORM(Base):
     updated_at: Mapped[datetime] = mapped_column(
         DateTime, server_default=func.now(), onupdate=func.now(), nullable=False
     )
+
+
+class WecomGitDigestCacheORM(Base):
+    """企业微信日报 Git 进展 LLM 摘要缓存（按日报窗口 + commit 指纹）。"""
+
+    __tablename__ = "wecom_git_digest_cache"
+    __table_args__ = (Index("ux_wecom_git_digest_cache_key", "cache_key", unique=True),)
+
+    cache_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    cache_key: Mapped[str] = mapped_column(String(128), nullable=False)
+    report_date: Mapped[date] = mapped_column(Date, nullable=False)
+    commit_fingerprint: Mapped[str] = mapped_column(String(64), nullable=False)
+    window_start: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+    window_end: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+    summary: Mapped[str] = mapped_column(Text, default="", nullable=False)
+    commit_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, server_default=func.now(), nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, server_default=func.now(), onupdate=func.now(), nullable=False
+    )
+
+
+class WecomDailyReportLogORM(Base):
+    """企业微信日报发送历史。"""
+
+    __tablename__ = "wecom_daily_report_logs"
+    __table_args__ = (
+        Index("ix_wecom_daily_report_logs_platform_created", "platform", "created_at"),
+        Index("ix_wecom_daily_report_logs_report_date", "report_date"),
+    )
+
+    log_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    platform: Mapped[str] = mapped_column(String(16), index=True, nullable=False)
+    report_date: Mapped[date] = mapped_column(Date, nullable=False)
+    window_start: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    window_end: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    message: Mapped[str] = mapped_column(Text, default="", nullable=False)
+    trigger_kind: Mapped[str] = mapped_column(String(16), default="manual", nullable=False)
+    status: Mapped[str] = mapped_column(String(16), default="success", nullable=False)
+    errcode: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    errmsg: Mapped[str] = mapped_column(Text, default="", nullable=False)
+    webhook_target: Mapped[str] = mapped_column(String(32), default="daily_report", nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, server_default=func.now(), index=True, nullable=False
+    )

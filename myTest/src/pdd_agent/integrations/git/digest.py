@@ -76,6 +76,10 @@ def _since_arg(day: date) -> str:
     return f"{day.isoformat()} 00:00:00 +0800"
 
 
+def _git_time_arg(value: datetime) -> str:
+    return value.strftime("%Y-%m-%d %H:%M:%S") + " +0800"
+
+
 def _parse_commit_blocks(raw: str) -> list[GitCommitRecord]:
     blocks = [b.strip() for b in raw.split(_COMMIT_MARKER) if b.strip()]
     commits: list[GitCommitRecord] = []
@@ -136,13 +140,34 @@ def collect_commits_for_day(
     include_file_stats: bool = True,
 ) -> list[GitCommitRecord]:
     """采集某一天（默认今天，Asia/Shanghai）的全部提交。"""
-    path = Path(repo_path).resolve() if repo_path else resolve_git_repo_path()
     target_day = day or today_in_tz()
+    start = datetime(target_day.year, target_day.month, target_day.day)
+    end = start + timedelta(days=1) - timedelta(seconds=1)
+    return collect_commits_between(
+        repo_path=repo_path,
+        start=start,
+        end=end,
+        inclusive_end=True,
+        include_file_stats=include_file_stats,
+    )
+
+
+def collect_commits_between(
+    *,
+    repo_path: str | Path | None = None,
+    start: datetime,
+    end: datetime,
+    inclusive_end: bool = True,
+    include_file_stats: bool = True,
+) -> list[GitCommitRecord]:
+    """采集指定时间段内的 Git 提交（与日报统计窗口对齐）。"""
+    path = Path(repo_path).resolve() if repo_path else resolve_git_repo_path()
+    until = end + timedelta(seconds=1) if inclusive_end else end
     raw = _run_git(
         path,
         "log",
-        f"--since={_since_arg(target_day)}",
-        f"--until={(target_day.isoformat())} 23:59:59 +0800",
+        f"--since={_git_time_arg(start)}",
+        f"--until={_git_time_arg(until)}",
         "--pretty=format:===COMMIT===%n%H%n%h%n%an%n%ai%n%s%n%B",
         "--no-merges",
     )

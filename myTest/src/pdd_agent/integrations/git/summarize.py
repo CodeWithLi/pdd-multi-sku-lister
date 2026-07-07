@@ -2,10 +2,15 @@
 
 from __future__ import annotations
 
+import hashlib
+from datetime import date, datetime
+
 from langchain_core.messages import HumanMessage, SystemMessage
 
 from pdd_agent.core.config import get_env_settings
 from pdd_agent.core.logging import get_logger
+from pdd_agent.db.repositories import get_wecom_git_digest_cache, upsert_wecom_git_digest_cache
+from pdd_agent.db.session import is_database_available
 from pdd_agent.integrations.git.digest import GitCommitRecord, commits_to_context
 from pdd_agent.llm.factory import create_chat_model
 
@@ -67,8 +72,23 @@ def _clean_progress_lines(content: str) -> list[str]:
     return cleaned[:_MAX_PROGRESS_LINES]
 
 
-def summarize_commits_as_progress(commits: list[GitCommitRecord]) -> str:
-    """调用 LLM，将提交记录转为「当日已完成交付技术项目进展」条目。"""
+def commits_fingerprint(commits: list[GitCommitRecord]) -> str:
+    if not commits:
+        return "empty"
+    hashes = sorted(str(commit.full_hash or "").strip() for commit in commits if commit.full_hash)
+    digest = hashlib.sha256("\n".join(hashes).encode("utf-8")).hexdigest()
+    return digest[:32]
+
+
+def build_git_digest_cache_key(
+    *,
+    report_date: date,
+    commit_fingerprint: str,
+) -> str:
+    return f"{report_date.isoformat()}:{commit_fingerprint}"
+
+
+def _invoke_llm_summary(commits: list[GitCommitRecord]) -> str:
     env = get_env_settings()
     if not env.llm_api_key:
         raise RuntimeError("未配置 LLM_API_KEY，请在 myTest/.env 中填写后重启后台")
@@ -91,3 +111,52 @@ def summarize_commits_as_progress(commits: list[GitCommitRecord]) -> str:
     content = resp.content if isinstance(resp.content, str) else str(resp.content)
     cleaned = _clean_progress_lines(content)
     return "\n".join(cleaned) if cleaned else "今日暂无代码提交"
+
+
+def summarize_commits_as_progress(
+    commits: list[GitCommitRecord],
+    *,
+    report_date: date | None = None,
+    window_start: datetime | None = None,
+    window_end: datetime | None = None,
+    use_cache: bool = True,
+) -> tuple[str, bool]:
+    """调用 LLM 归纳提交记录；返回 (摘要, 是否命中缓存)。"""
+    if not commits:
+        return "今日暂无代码提交", False
+
+    fingerprint = commits_fingerprint(commits)
+    cache_key = ""
+    if report_date is not None:
+        cache_key = build_git_digest_cache_key(
+            report_date=report_date,
+            commit_fingerprint=fingerprint,
+        )
+
+    if use_cache and cache_key and is_database_available():
+        cached = get_wecom_git_digest_cache(cache_key)
+        if cached and str(cached.summary or "").strip():
+            logger.info("git digest cache hit key=%s commits=%s", cache_key, len(commits))
+            return str(cached.summary), True
+
+    summary = _invoke_llm_summary(commits)
+
+    if (
+        use_cache
+        and cache_key
+        and report_date is not None
+        and window_start is not None
+        and window_end is not None
+        and is_database_available()
+    ):
+        upsert_wecom_git_digest_cache(
+            cache_key=cache_key,
+            report_date=report_date,
+            commit_fingerprint=fingerprint,
+            window_start=window_start,
+            window_end=window_end,
+            summary=summary,
+            commit_count=len(commits),
+        )
+
+    return summary, False

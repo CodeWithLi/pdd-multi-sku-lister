@@ -31,6 +31,7 @@ def build_daily_report_markdown(
     netdisk_materials: str = "",
     in_progress: str = "",
     listing_window: str = "",
+    git_window: str = "",
 ) -> str:
     """组装企业微信群机器人 Markdown 日报。"""
     label = _platform_title(platform)
@@ -44,6 +45,15 @@ def build_daily_report_markdown(
         parts.extend(
             [
                 "### 当日已完成交付技术项目进展",
+            ]
+        )
+        effective_git_window = str(git_window or listing_window or "").strip()
+        if effective_git_window:
+            parts.append(
+                f"> Git 统计窗口：<font color=\"comment\">{effective_git_window}</font>"
+            )
+        parts.extend(
+            [
                 _bullet_block(progress_summary, empty_label="今日暂无代码提交"),
                 "",
                 "### 店铺今日发布商品进度",

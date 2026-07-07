@@ -5,11 +5,11 @@ from __future__ import annotations
 from datetime import date, datetime
 from unittest.mock import MagicMock
 
+from pdd_agent.api.services.daily_shop_publish_stats import ShopPublishStat
+from pdd_agent.core.report_time_window import report_listing_window
 from pdd_agent.integrations.wecom.store_progress import (
     collect_pdd_store_progress,
     format_store_progress_lines,
-    report_listing_window,
-    StoreListingSummary,
 )
 
 
@@ -22,26 +22,31 @@ def test_report_listing_window():
 def test_format_store_progress_lines():
     text = format_store_progress_lines(
         [
-            StoreListingSummary(
+            ShopPublishStat(
                 account_id="store_A",
                 shop_display_name="兔兔潮玩屋",
-                count=16,
+                published_count=16,
+                limited_time_success_count=12,
             ),
-            StoreListingSummary(
+            ShopPublishStat(
                 account_id="store_B",
                 shop_display_name="可可爱爱巴布豆店铺",
-                count=12,
+                published_count=12,
+                limited_time_success_count=0,
             ),
         ]
     )
-    assert text == "兔兔潮玩屋：已发布16个\n可可爱爱巴布豆店铺：已发布12个"
+    assert text == (
+        "兔兔潮玩屋：已发布16个 + 限时限量购12个\n"
+        "可可爱爱巴布豆店铺：已发布12个"
+    )
 
 
 def test_format_store_progress_skips_zero():
     text = format_store_progress_lines(
         [
-            StoreListingSummary(account_id="a", shop_display_name="A店", count=0),
-            StoreListingSummary(account_id="b", shop_display_name="B店", count=3),
+            ShopPublishStat(account_id="a", shop_display_name="A店", published_count=0),
+            ShopPublishStat(account_id="b", shop_display_name="B店", published_count=3),
         ]
     )
     assert text == "B店：已发布3个"
@@ -49,21 +54,18 @@ def test_format_store_progress_skips_zero():
 
 def test_collect_pdd_store_progress(monkeypatch):
     monkeypatch.setattr(
-        "pdd_agent.integrations.wecom.store_progress.is_database_available",
-        lambda: True,
-    )
-    monkeypatch.setattr(
-        "pdd_agent.integrations.wecom.store_progress.summarize_daily_listing_records_between",
+        "pdd_agent.integrations.wecom.store_progress.summarize_shop_publish_stats_for_report_day",
         lambda **kwargs: [
-            {
-                "account_id": "store_A",
-                "shop_display_name": "兔兔潮玩屋",
-                "count": 5,
-            }
+            ShopPublishStat(
+                account_id="store_A",
+                shop_display_name="兔兔潮玩屋",
+                published_count=5,
+                limited_time_success_count=3,
+            )
         ],
     )
     snapshot = collect_pdd_store_progress(reference_day=date(2026, 7, 6))
-    assert snapshot.text == "兔兔潮玩屋：已发布5个"
+    assert snapshot.text == "兔兔潮玩屋：已发布5个 + 限时限量购3个"
     assert len(snapshot.shops) == 1
     assert snapshot.window_start.hour == 18
     assert snapshot.window_end.hour == 18

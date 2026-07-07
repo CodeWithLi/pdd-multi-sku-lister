@@ -15,6 +15,9 @@ class WecomConfigOut(BaseModel):
     webhook_url: str = ""
     webhook_url_masked: str = ""
     webhook_configured: bool
+    webhook_url_daily_report: str = ""
+    webhook_url_daily_report_masked: str = ""
+    webhook_daily_report_configured: bool = False
     notify_on_listing_failed: bool = False
     notify_on_pipeline_failed: bool = False
     notify_on_commerce_queued: bool = False
@@ -31,6 +34,7 @@ class WecomConfigOut(BaseModel):
 class WecomConfigUpdateIn(BaseModel):
     enabled: bool = False
     webhook_url: str = ""
+    webhook_url_daily_report: str = ""
     notify_on_listing_failed: bool = False
     notify_on_pipeline_failed: bool = False
     notify_on_commerce_queued: bool = False
@@ -70,6 +74,13 @@ class WecomDailyReportTriggerOut(BaseModel):
     message: str = ""
 
 
+class WecomInProgressDraftOut(BaseModel):
+    draft: str = ""
+    window_start: str = ""
+    window_end: str = ""
+    window_description: str = ""
+
+
 class WecomDailyContentOut(BaseModel):
     content_date: str = ""
     pdd_in_progress: str = ""
@@ -105,6 +116,46 @@ class WecomDailyReportStoreOut(BaseModel):
     account_id: str
     shop_display_name: str
     count: int
+    limited_time_success_count: int = 0
+    activity_register_success_count: int = 0
+    promotion_success_count: int = 0
+
+
+class WecomDailyReportLogOut(BaseModel):
+    log_id: str
+    platform: WecomDailyReportPlatform
+    report_date: str
+    window_start: str = ""
+    window_end: str = ""
+    message_preview: str = ""
+    trigger_kind: str = ""
+    status: str = ""
+    errcode: int = 0
+    errmsg: str = ""
+    webhook_target: str = ""
+    created_at: str = ""
+
+
+class WecomDailyReportLogListOut(BaseModel):
+    items: list[WecomDailyReportLogOut] = Field(default_factory=list)
+    total: int = 0
+    page: int = 1
+    page_size: int = 20
+
+
+class WecomDailyReportLogDetailOut(BaseModel):
+    log_id: str
+    platform: WecomDailyReportPlatform
+    report_date: str
+    window_start: str = ""
+    window_end: str = ""
+    message: str = ""
+    trigger_kind: str = ""
+    status: str = ""
+    errcode: int = 0
+    errmsg: str = ""
+    webhook_target: str = ""
+    created_at: str = ""
 
 
 class WecomDailyReportPreviewOut(BaseModel):
@@ -113,11 +164,16 @@ class WecomDailyReportPreviewOut(BaseModel):
     repo_path: str = ""
     commit_count: int = 0
     progress_summary: str = ""
+    progress_summary_from_cache: bool = False
     store_progress: str = ""
     netdisk_materials: str = ""
     in_progress: str = ""
+    in_progress_manual: str = ""
+    in_progress_auto_draft: str = ""
     listing_window_start: str = ""
     listing_window_end: str = ""
+    git_window_start: str = ""
+    git_window_end: str = ""
     store_summaries: list[WecomDailyReportStoreOut] = Field(default_factory=list)
     message: str
     commits: list[WecomDailyReportCommitOut] = Field(default_factory=list)

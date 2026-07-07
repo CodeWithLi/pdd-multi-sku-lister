@@ -738,18 +738,32 @@ export interface DailyListingShopSummary {
   count: number
   active_count: number
   delisted_count: number
+  limited_time_success_count: number
+  activity_register_success_count: number
+  promotion_success_count: number
 }
 
 export interface DailyListingSummaryResponse {
   listed_date: string
+  window_mode: 'calendar' | 'report'
+  window_start: string
+  window_end: string
+  window_description: string
   total: number
   active_total: number
   delisted_total: number
+  limited_time_success_total: number
+  activity_register_success_total: number
+  promotion_success_total: number
   by_shop: DailyListingShopSummary[]
 }
 
 export interface DailyListingRecordListResponse {
   listed_date: string
+  window_mode: 'calendar' | 'report'
+  window_start: string
+  window_end: string
+  window_description: string
   total: number
   active_total: number
   delisted_total: number
@@ -1404,6 +1418,9 @@ export interface WecomConfig {
   webhook_url: string
   webhook_url_masked: string
   webhook_configured: boolean
+  webhook_url_daily_report: string
+  webhook_url_daily_report_masked: string
+  webhook_daily_report_configured: boolean
   notify_on_listing_failed: boolean
   notify_on_pipeline_failed: boolean
   notify_on_commerce_queued: boolean
@@ -1420,6 +1437,7 @@ export interface WecomConfig {
 export interface WecomConfigUpdatePayload {
   enabled: boolean
   webhook_url: string
+  webhook_url_daily_report: string
   notify_on_listing_failed: boolean
   notify_on_pipeline_failed: boolean
   notify_on_commerce_queued: boolean
@@ -1468,15 +1486,23 @@ export interface WecomDailyReportPreview {
   repo_path: string
   commit_count: number
   progress_summary: string
+  progress_summary_from_cache: boolean
   store_progress: string
   netdisk_materials: string
   in_progress: string
+  in_progress_manual: string
+  in_progress_auto_draft: string
   listing_window_start: string
   listing_window_end: string
+  git_window_start: string
+  git_window_end: string
   store_summaries: Array<{
     account_id: string
     shop_display_name: string
     count: number
+    limited_time_success_count: number
+    activity_register_success_count: number
+    promotion_success_count: number
   }>
   message: string
   commits: Array<{
@@ -1499,6 +1525,39 @@ export interface WecomDailyReportTriggerResult {
   ok: boolean
   platform: WecomDailyReportPlatform
   message: string
+}
+
+export interface WecomInProgressDraft {
+  draft: string
+  window_start: string
+  window_end: string
+  window_description: string
+}
+
+export interface WecomDailyReportLog {
+  log_id: string
+  platform: WecomDailyReportPlatform
+  report_date: string
+  window_start: string
+  window_end: string
+  message_preview: string
+  trigger_kind: string
+  status: string
+  errcode: number
+  errmsg: string
+  webhook_target: string
+  created_at: string
+}
+
+export interface WecomDailyReportLogDetail extends Omit<WecomDailyReportLog, 'message_preview'> {
+  message: string
+}
+
+export interface WecomDailyReportLogListResponse {
+  items: WecomDailyReportLog[]
+  total: number
+  page: number
+  page_size: number
 }
 
 export interface WecomHealth {

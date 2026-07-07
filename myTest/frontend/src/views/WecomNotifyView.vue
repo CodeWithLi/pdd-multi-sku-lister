@@ -47,12 +47,27 @@ const editableReport = reactive({
   in_progress: '',
   listing_window_start: '',
   listing_window_end: '',
+  git_window_start: '',
+  git_window_end: '',
 })
+
+const inProgressAutoDraft = ref('')
+const progressSummaryFromCache = ref(false)
 
 const webhookMasked = ref('')
 const webhookConfigured = ref(false)
 const webhookEditing = ref(false)
 const webhookDraft = ref('')
+const dailyReportWebhookMasked = ref('')
+const dailyReportWebhookConfigured = ref(false)
+const dailyReportWebhookEditing = ref(false)
+const dailyReportWebhookDraft = ref('')
+
+const reportLogs = ref<import('@/types').WecomDailyReportLog[]>([])
+const reportLogsTotal = ref(0)
+const reportLogsLoading = ref(false)
+const reportLogDetail = ref<import('@/types').WecomDailyReportLogDetail | null>(null)
+const reportLogDialogVisible = ref(false)
 
 const configForm = reactive({
   enabled: false,
@@ -102,6 +117,8 @@ function applyConfig(cfg: WecomConfig) {
   configForm.enabled = cfg.enabled
   webhookMasked.value = cfg.webhook_url_masked || ''
   webhookConfigured.value = Boolean(cfg.webhook_configured)
+  dailyReportWebhookMasked.value = cfg.webhook_url_daily_report_masked || ''
+  dailyReportWebhookConfigured.value = Boolean(cfg.webhook_daily_report_configured)
   configForm.notify_on_listing_failed = cfg.notify_on_listing_failed
   configForm.notify_on_pipeline_failed = cfg.notify_on_pipeline_failed
   configForm.notify_on_commerce_queued = cfg.notify_on_commerce_queued
@@ -113,6 +130,8 @@ function applyConfig(cfg: WecomConfig) {
   scheduleRunning.value = Boolean(cfg.daily_report_scheduler_running)
   webhookEditing.value = false
   webhookDraft.value = ''
+  dailyReportWebhookEditing.value = false
+  dailyReportWebhookDraft.value = ''
 }
 
 function startWebhookEdit() {
@@ -123,6 +142,16 @@ function startWebhookEdit() {
 function cancelWebhookEdit() {
   webhookEditing.value = false
   webhookDraft.value = ''
+}
+
+function startDailyReportWebhookEdit() {
+  dailyReportWebhookEditing.value = true
+  dailyReportWebhookDraft.value = ''
+}
+
+function cancelDailyReportWebhookEdit() {
+  dailyReportWebhookEditing.value = false
+  dailyReportWebhookDraft.value = ''
 }
 
 function applyDailyContent(data: {
@@ -141,17 +170,45 @@ function applyDailyContent(data: {
   dailyContentDbAvailable.value = Boolean(data.database_available)
 }
 
+async function loadReportLogs() {
+  reportLogsLoading.value = true
+  try {
+    const data = await api.wecomDailyReportLogs({ page: 1, page_size: 20 })
+    reportLogs.value = data.items
+    reportLogsTotal.value = data.total
+  } catch {
+    reportLogs.value = []
+    reportLogsTotal.value = 0
+  } finally {
+    reportLogsLoading.value = false
+  }
+}
+
+async function openReportLog(logId: string) {
+  try {
+    reportLogDetail.value = await api.wecomDailyReportLog(logId)
+    reportLogDialogVisible.value = true
+  } catch (e) {
+    ElMessage.error(e instanceof Error ? e.message : '加载日报记录失败')
+  }
+}
+
 async function load() {
   loading.value = true
   try {
-    const [cfg, h, dailyContent] = await Promise.all([
+    const [cfg, h, dailyContent, inProgressDraft] = await Promise.all([
       api.wecomConfig(),
       api.wecomHealth(),
       api.wecomDailyContent(),
+      api.wecomInProgressDraft().catch(() => null),
     ])
     health.value = h
     applyConfig(cfg)
     applyDailyContent(dailyContent)
+    if (inProgressDraft?.draft) {
+      inProgressAutoDraft.value = inProgressDraft.draft
+    }
+    void loadReportLogs()
   } catch (e) {
     ElMessage.error(e instanceof Error ? e.message : '加载配置失败')
   } finally {
@@ -163,9 +220,13 @@ async function save() {
   saving.value = true
   try {
     const webhookUrl = webhookEditing.value ? webhookDraft.value.trim() : ''
+    const dailyReportWebhookUrl = dailyReportWebhookEditing.value
+      ? dailyReportWebhookDraft.value.trim()
+      : ''
     const cfg = await api.updateWecomConfig({
       enabled: configForm.enabled,
       webhook_url: webhookUrl,
+      webhook_url_daily_report: dailyReportWebhookUrl,
       notify_on_listing_failed: configForm.notify_on_listing_failed,
       notify_on_pipeline_failed: configForm.notify_on_pipeline_failed,
       notify_on_commerce_queued: configForm.notify_on_commerce_queued,
@@ -239,6 +300,7 @@ async function sendEditedDailyReport() {
         const cfg = await api.wecomConfig()
         applyConfig(cfg)
       }
+      void loadReportLogs()
     } else {
       ElMessage.error(result.message || '发送失败')
     }
@@ -283,6 +345,7 @@ async function triggerDailyReport(platform: WecomDailyReportPlatform) {
         const cfg = await api.wecomConfig()
         applyConfig(cfg)
       }
+      void loadReportLogs()
     } else {
       ElMessage.error(result.message || '发送失败')
     }
@@ -364,6 +427,42 @@ function applyPreviewToEditable(preview: WecomDailyReportPreview) {
   editableReport.in_progress = preview.in_progress || ''
   editableReport.listing_window_start = preview.listing_window_start || ''
   editableReport.listing_window_end = preview.listing_window_end || ''
+  editableReport.git_window_start = preview.git_window_start || preview.listing_window_start || ''
+  editableReport.git_window_end = preview.git_window_end || preview.listing_window_end || ''
+  inProgressAutoDraft.value = preview.in_progress_auto_draft || ''
+  progressSummaryFromCache.value = Boolean(preview.progress_summary_from_cache)
+}
+
+function fillInProgressSuggestion() {
+  const draft = String(inProgressAutoDraft.value || '').trim()
+  if (!draft) {
+    ElMessage.info('当前没有系统建议条目')
+    return
+  }
+  const current = String(dailyContentForm.pdd_in_progress || '').trim()
+  if (!current) {
+    dailyContentForm.pdd_in_progress = draft
+    editableReport.in_progress = draft
+    ElMessage.success('已填入系统建议')
+    return
+  }
+  const seen = new Set(
+    current
+      .split('\n')
+      .map((line) => line.trim().toLowerCase())
+      .filter(Boolean),
+  )
+  const extras = draft
+    .split('\n')
+    .map((line) => line.trim())
+    .filter((line) => line && !seen.has(line.toLowerCase()))
+  if (!extras.length) {
+    ElMessage.info('手动内容已覆盖全部建议')
+    return
+  }
+  dailyContentForm.pdd_in_progress = `${current}\n${extras.join('\n')}`
+  editableReport.in_progress = dailyContentForm.pdd_in_progress
+  ElMessage.success('已追加未重复的系统建议')
 }
 
 const liveMarkdown = computed(() =>
@@ -376,6 +475,8 @@ const liveMarkdown = computed(() =>
     inProgress: editableReport.in_progress,
     listingWindowStart: editableReport.listing_window_start,
     listingWindowEnd: editableReport.listing_window_end,
+    gitWindowStart: editableReport.git_window_start,
+    gitWindowEnd: editableReport.git_window_end,
   }),
 )
 
@@ -439,7 +540,7 @@ onMounted(() => {
           </div>
 
           <div class="field-block">
-            <label class="field-label">Webhook 地址</label>
+            <label class="field-label">告警 Webhook 地址</label>
             <template v-if="!webhookEditing">
               <div class="webhook-row">
                 <el-input
@@ -449,7 +550,7 @@ onMounted(() => {
                 />
                 <el-button @click="startWebhookEdit">{{ webhookConfigured ? '更换' : '填写' }}</el-button>
               </div>
-              <p class="field-hint">地址脱敏显示，仅保存在服务端配置文件中。</p>
+              <p class="field-hint">用于上架失败、链路失败等业务告警；地址脱敏显示。</p>
             </template>
             <template v-else>
               <el-input
@@ -530,7 +631,17 @@ onMounted(() => {
           </div>
 
           <div v-show="contentTab === 'pdd'" class="platform-pane">
-            <div class="platform-note">技术进展与店铺数据自动生成，此处只需填写「正在解决/优化中」。</div>
+            <div class="platform-note">
+              技术进展与店铺数据自动生成（统计窗口：昨天 18:01 ~ 今天 18:00）。
+              「正在解决/优化中」可手填，预览时会自动合并当日链路报错建议。
+            </div>
+            <div v-if="inProgressAutoDraft" class="auto-draft-box">
+              <div class="auto-draft-head">
+                <span class="field-label">系统建议（未保存）</span>
+                <el-button link type="primary" @click="fillInProgressSuggestion">填入编辑框</el-button>
+              </div>
+              <pre class="auto-draft-text">{{ inProgressAutoDraft }}</pre>
+            </div>
             <el-input
               v-model="dailyContentForm.pdd_in_progress"
               type="textarea"
@@ -599,9 +710,33 @@ onMounted(() => {
           <div class="setting-row">
             <div class="setting-label">
               <span>启用定时发送</span>
-              <small>需已配置 Webhook 并启用通知</small>
+              <small>需已配置日报 Webhook 并启用通知</small>
             </div>
             <el-switch v-model="configForm.daily_report_schedule_enabled" />
+          </div>
+
+          <div class="field-block">
+            <label class="field-label">日报 Webhook 地址</label>
+            <template v-if="!dailyReportWebhookEditing">
+              <div class="webhook-row">
+                <el-input
+                  :model-value="dailyReportWebhookConfigured ? dailyReportWebhookMasked : (webhookConfigured ? '（回退使用告警 Webhook）' : '')"
+                  readonly
+                  placeholder="未单独配置，将使用告警 Webhook"
+                />
+                <el-button @click="startDailyReportWebhookEdit">配置</el-button>
+              </div>
+              <p class="field-hint">日报与业务告警可分到不同群；留空则回退告警 Webhook。修改后请在「连接与告警」保存配置。</p>
+            </template>
+            <template v-else>
+              <el-input
+                v-model="dailyReportWebhookDraft"
+                type="textarea"
+                :rows="3"
+                placeholder="https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=..."
+              />
+              <el-button link type="primary" @click="cancelDailyReportWebhookEdit">取消</el-button>
+            </template>
           </div>
 
           <div class="time-panel">
@@ -618,6 +753,48 @@ onMounted(() => {
 
           <div class="schedule-meta-box">
             <span>{{ scheduleLastRunDate ? `上次自动发送：${scheduleLastRunDate}` : '今天尚未自动发送' }}</span>
+          </div>
+        </div>
+      </section>
+
+      <section class="panel panel-history accent-slate" v-loading="reportLogsLoading">
+        <header class="panel-header">
+          <div class="panel-heading">
+            <div class="panel-icon slate"><el-icon><Document /></el-icon></div>
+            <div>
+              <div class="panel-title">日报发送历史</div>
+              <div class="panel-desc">查看最近发送记录与正文</div>
+            </div>
+          </div>
+          <el-button size="small" @click="loadReportLogs">刷新</el-button>
+        </header>
+        <div class="panel-body">
+          <el-table v-if="reportLogs.length" :data="reportLogs" size="small" stripe>
+            <el-table-column prop="created_at" label="发送时间" width="160" />
+            <el-table-column prop="platform" label="平台" width="72" />
+            <el-table-column prop="report_date" label="报告日" width="110" />
+            <el-table-column prop="trigger_kind" label="触发" width="88">
+              <template #default="{ row }">
+                {{ row.trigger_kind === 'scheduled' ? '定时' : '手动' }}
+              </template>
+            </el-table-column>
+            <el-table-column prop="status" label="状态" width="80">
+              <template #default="{ row }">
+                <el-tag :type="row.status === 'success' ? 'success' : 'danger'" size="small">
+                  {{ row.status === 'success' ? '成功' : '失败' }}
+                </el-tag>
+              </template>
+            </el-table-column>
+            <el-table-column prop="message_preview" label="摘要" min-width="220" show-overflow-tooltip />
+            <el-table-column label="操作" width="88" fixed="right">
+              <template #default="{ row }">
+                <el-button link type="primary" @click="openReportLog(row.log_id)">查看</el-button>
+              </template>
+            </el-table-column>
+          </el-table>
+          <el-empty v-else description="暂无发送记录" />
+          <div v-if="reportLogsTotal > reportLogs.length" class="field-hint">
+            共 {{ reportLogsTotal }} 条，仅显示最近 20 条
           </div>
         </div>
       </section>
@@ -700,7 +877,14 @@ onMounted(() => {
         <div class="preview-editor">
           <template v-if="editableReport.platform === 'pdd'">
             <div class="editor-block">
-              <label class="editor-label">技术项目进展</label>
+              <label class="editor-label">
+                技术项目进展
+                <span v-if="progressSummaryFromCache" class="cache-badge">已缓存</span>
+              </label>
+              <p class="editor-hint">
+                Git 统计窗口：{{ editableReport.git_window_start || '—' }}
+                ~ {{ editableReport.git_window_end || '—' }}
+              </p>
               <el-input
                 v-model="editableReport.progress_summary"
                 type="textarea"
@@ -725,6 +909,9 @@ onMounted(() => {
             </div>
             <div class="editor-block">
               <label class="editor-label">正在解决 / 优化中</label>
+              <p v-if="inProgressAutoDraft" class="editor-hint">
+                含系统建议；保存手动区后预览会合并去重。
+              </p>
               <el-input
                 v-model="editableReport.in_progress"
                 type="textarea"
@@ -847,6 +1034,29 @@ onMounted(() => {
       </div>
     </section>
   </div>
+
+  <el-dialog
+    v-model="reportLogDialogVisible"
+    title="日报发送详情"
+    width="720px"
+    destroy-on-close
+  >
+    <template v-if="reportLogDetail">
+      <div class="log-meta">
+        <span>{{ reportLogDetail.created_at }}</span>
+        <span>{{ reportLogDetail.platform === 'pdd' ? 'PDD' : '淘宝' }}</span>
+        <span>{{ reportLogDetail.trigger_kind === 'scheduled' ? '定时' : '手动' }}</span>
+        <el-tag :type="reportLogDetail.status === 'success' ? 'success' : 'danger'" size="small">
+          {{ reportLogDetail.status === 'success' ? '成功' : '失败' }}
+        </el-tag>
+      </div>
+      <p v-if="reportLogDetail.window_start" class="field-hint">
+        统计窗口：{{ reportLogDetail.window_start }} ~ {{ reportLogDetail.window_end }}
+      </p>
+      <p v-if="reportLogDetail.errmsg" class="field-hint error-text">{{ reportLogDetail.errmsg }}</p>
+      <pre class="log-message">{{ reportLogDetail.message }}</pre>
+    </template>
+  </el-dialog>
 </template>
 
 <style scoped>
@@ -1249,6 +1459,66 @@ onMounted(() => {
   font-size: 12px;
   color: #9a3412;
   line-height: 1.6;
+}
+
+.auto-draft-box {
+  margin-bottom: 12px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: #f8fafc;
+  border: 1px dashed #cbd5e1;
+}
+
+.auto-draft-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 8px;
+}
+
+.auto-draft-text {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.6;
+  color: #475569;
+  white-space: pre-wrap;
+}
+
+.cache-badge {
+  margin-left: 8px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: #ecfdf5;
+  color: #047857;
+  font-size: 11px;
+  font-weight: 500;
+}
+
+.log-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-bottom: 12px;
+  font-size: 13px;
+  color: #475569;
+}
+
+.log-message {
+  margin: 0;
+  padding: 12px;
+  border-radius: 10px;
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-size: 12px;
+  line-height: 1.6;
+  max-height: 420px;
+  overflow: auto;
+}
+
+.error-text {
+  color: #b91c1c;
 }
 
 .content-textarea :deep(textarea) {

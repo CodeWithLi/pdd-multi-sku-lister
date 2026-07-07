@@ -30,8 +30,11 @@ from pdd_agent.db.models import (
     FailureCycleRelistActionLogORM,
     FailureCycleRelistPollLogORM,
     ListedAssetFolderORM,
+    RunRecordORM,
     TaskQueueORM,
     WecomDailyContentORM,
+    WecomGitDigestCacheORM,
+    WecomDailyReportLogORM,
 )
 from pdd_agent.db.session import is_database_available, session_scope
 
@@ -2216,6 +2219,41 @@ def search_pipeline_issue_reports(
         return rows, total
 
 
+def list_pipeline_issue_reports_between(
+    *,
+    start: datetime,
+    end: datetime,
+    inclusive_end: bool = True,
+    severities: list[str] | None = None,
+    limit: int = 20,
+) -> list[IntegratedPipelineIssueReportORM]:
+    """查询时间段内的整合链路报错（用于日报「正在解决/优化中」草稿）。"""
+    if not is_database_available():
+        return []
+    limit = max(1, min(100, limit))
+    with session_scope() as session:
+        query = session.query(IntegratedPipelineIssueReportORM).filter(
+            IntegratedPipelineIssueReportORM.created_at >= start,
+        )
+        if inclusive_end:
+            query = query.filter(IntegratedPipelineIssueReportORM.created_at <= end)
+        else:
+            query = query.filter(IntegratedPipelineIssueReportORM.created_at < end)
+        if severities:
+            query = query.filter(IntegratedPipelineIssueReportORM.severity.in_(severities))
+        rows = (
+            query.order_by(
+                IntegratedPipelineIssueReportORM.created_at.desc(),
+                IntegratedPipelineIssueReportORM.issue_id.desc(),
+            )
+            .limit(limit)
+            .all()
+        )
+        for row in rows:
+            session.expunge(row)
+        return rows
+
+
 def count_pipeline_issue_reports(
     *,
     pipeline_id: str = "",
@@ -2375,6 +2413,68 @@ def list_daily_listing_records(
         return rows
 
 
+def list_daily_listing_records_between(
+    *,
+    account_id: str = "",
+    start: datetime,
+    end: datetime,
+    inclusive_end: bool = True,
+    limit: int = 200,
+    active_only: bool = False,
+) -> list[DailyListingRecordORM]:
+    if not is_database_available():
+        return []
+    limit = max(1, min(5000, limit))
+    with session_scope() as session:
+        query = session.query(DailyListingRecordORM).filter(
+            DailyListingRecordORM.listed_at >= start,
+        )
+        if inclusive_end:
+            query = query.filter(DailyListingRecordORM.listed_at <= end)
+        else:
+            query = query.filter(DailyListingRecordORM.listed_at < end)
+        if account_id:
+            query = query.filter(DailyListingRecordORM.account_id == account_id.strip())
+        if active_only:
+            query = query.filter(DailyListingRecordORM.status == "active")
+        rows = (
+            query.order_by(
+                DailyListingRecordORM.listed_at.desc(),
+                DailyListingRecordORM.record_id.desc(),
+            )
+            .limit(limit)
+            .all()
+        )
+        for row in rows:
+            session.expunge(row)
+        return rows
+
+
+def count_daily_listing_records_between(
+    *,
+    account_id: str = "",
+    start: datetime,
+    end: datetime,
+    inclusive_end: bool = True,
+    active_only: bool = False,
+) -> int:
+    if not is_database_available():
+        return 0
+    with session_scope() as session:
+        query = session.query(func.count(DailyListingRecordORM.record_id)).filter(
+            DailyListingRecordORM.listed_at >= start,
+        )
+        if inclusive_end:
+            query = query.filter(DailyListingRecordORM.listed_at <= end)
+        else:
+            query = query.filter(DailyListingRecordORM.listed_at < end)
+        if account_id:
+            query = query.filter(DailyListingRecordORM.account_id == account_id.strip())
+        if active_only:
+            query = query.filter(DailyListingRecordORM.status == "active")
+        return int(query.scalar() or 0)
+
+
 def count_daily_listing_records(
     *,
     account_id: str = "",
@@ -2451,6 +2551,7 @@ def summarize_daily_listing_records_between(
                 DailyListingRecordORM.account_id,
                 DailyListingRecordORM.shop_display_name,
                 func.count(DailyListingRecordORM.record_id),
+                func.sum(case((DailyListingRecordORM.status == "active", 1), else_=0)),
             )
             .filter(
                 DailyListingRecordORM.listed_at >= start,
@@ -2468,9 +2569,155 @@ def summarize_daily_listing_records_between(
                 "account_id": str(account_id or ""),
                 "shop_display_name": str(shop_name or "").strip(),
                 "count": int(count or 0),
+                "active_count": int(active_count or 0),
+                "delisted_count": int((count or 0) - (active_count or 0)),
             }
-            for account_id, shop_name, count in rows
+            for account_id, shop_name, count, active_count in rows
         ]
+
+
+def summarize_limited_time_success_between(
+    *,
+    start: datetime,
+    end: datetime,
+    inclusive_end: bool = True,
+) -> list[dict[str, str | int]]:
+    """按店铺汇总时间段内限时限量购成功数（依据 published_products.limited_time_completed_at）。"""
+    if not is_database_available():
+        return []
+    from pdd_agent.api.services.published_limited_time_status_resolver import (
+        LIMITED_TIME_STATUS_SUCCESS,
+    )
+
+    with session_scope() as session:
+        query = session.query(
+            PublishedProductORM.account_id,
+            func.count(PublishedProductORM.mapping_id),
+        ).filter(
+            PublishedProductORM.limited_time_status == LIMITED_TIME_STATUS_SUCCESS,
+            PublishedProductORM.limited_time_completed_at.isnot(None),
+            PublishedProductORM.limited_time_completed_at >= start,
+        )
+        if inclusive_end:
+            query = query.filter(PublishedProductORM.limited_time_completed_at <= end)
+        else:
+            query = query.filter(PublishedProductORM.limited_time_completed_at < end)
+        rows = (
+            query.group_by(PublishedProductORM.account_id)
+            .order_by(func.count(PublishedProductORM.mapping_id).desc())
+            .all()
+        )
+        return [
+            {
+                "account_id": str(account_id or ""),
+                "count": int(count or 0),
+            }
+            for account_id, count in rows
+        ]
+
+
+def _count_success_items_from_run_result(
+    result: dict | None,
+    *,
+    payload: dict | None = None,
+) -> int:
+    data = result if isinstance(result, dict) else {}
+    items = [item for item in (data.get("results") or []) if isinstance(item, dict)]
+    success = sum(
+        1 for item in items if str(item.get("status") or "").strip() == "success"
+    )
+    if success > 0:
+        return success
+    if items:
+        return 0
+    if str(data.get("error") or "").strip():
+        return 0
+    body = payload if isinstance(payload, dict) else {}
+    product_ids = [str(pid).strip() for pid in (body.get("pdd_product_ids") or []) if str(pid).strip()]
+    if product_ids:
+        return len(product_ids)
+    return 1
+
+
+def summarize_commerce_task_success_between(
+    *,
+    start: datetime,
+    end: datetime,
+    agent: str,
+    type_key: str,
+    type_value: str,
+    type_default: str = "",
+    inclusive_end: bool = True,
+) -> list[dict[str, str | int]]:
+    """按店铺汇总时间段内活动报名/推广等任务成功商品数。"""
+    if not is_database_available():
+        return []
+    counts: dict[str, int] = defaultdict(int)
+    with session_scope() as session:
+        query = (
+            session.query(TaskQueueORM, RunRecordORM)
+            .join(RunRecordORM, TaskQueueORM.run_id == RunRecordORM.run_id)
+            .filter(
+                TaskQueueORM.status == "success",
+                TaskQueueORM.agent == agent,
+                TaskQueueORM.finished_at.isnot(None),
+                TaskQueueORM.finished_at >= start,
+            )
+        )
+        if inclusive_end:
+            query = query.filter(TaskQueueORM.finished_at <= end)
+        else:
+            query = query.filter(TaskQueueORM.finished_at < end)
+        for task, run in query.all():
+            payload = task.payload if isinstance(task.payload, dict) else {}
+            actual_type = str(payload.get(type_key) or type_default or "").strip()
+            if actual_type != type_value:
+                continue
+            count = _count_success_items_from_run_result(
+                run.result if isinstance(run.result, dict) else {},
+                payload=payload,
+            )
+            if count <= 0:
+                continue
+            account_id = str(task.account_id or "").strip()
+            counts[account_id] += count
+    rows = [{"account_id": account_id, "count": count} for account_id, count in counts.items()]
+    rows.sort(key=lambda item: int(item.get("count") or 0), reverse=True)
+    return rows
+
+
+def summarize_activity_register_success_between(
+    *,
+    start: datetime,
+    end: datetime,
+    inclusive_end: bool = True,
+) -> list[dict[str, str | int]]:
+    return summarize_commerce_task_success_between(
+        start=start,
+        end=end,
+        agent="campaign",
+        type_key="campaign_type",
+        type_value="marketing_activity_register",
+        type_default="marketing_activity_register",
+        inclusive_end=inclusive_end,
+    )
+
+
+def summarize_promotion_success_between(
+    *,
+    start: datetime,
+    end: datetime,
+    inclusive_end: bool = True,
+) -> list[dict[str, str | int]]:
+    return summarize_commerce_task_success_between(
+        start=start,
+        end=end,
+        agent="traffic",
+        type_key="traffic_type",
+        type_value="promotion_create",
+        type_default="promotion_create",
+        inclusive_end=inclusive_end,
+    )
 
 
 def create_daily_cycle_relist_record(
@@ -2851,6 +3098,152 @@ def upsert_wecom_daily_content_row(
                 pdd_in_progress=str(pdd_in_progress or ""),
                 taobao_netdisk_materials=str(taobao_netdisk_materials or ""),
                 taobao_in_progress=str(taobao_in_progress or ""),
+                created_at=now,
+                updated_at=now,
+            )
+            session.add(row)
+        session.flush()
+        session.refresh(row)
+        session.expunge(row)
+        return row
+
+
+def insert_wecom_daily_report_log(
+    *,
+    platform: str,
+    report_date: date,
+    message: str,
+    trigger_kind: str = "manual",
+    status: str = "success",
+    errcode: int = 0,
+    errmsg: str = "",
+    window_start: datetime | None = None,
+    window_end: datetime | None = None,
+    webhook_target: str = "daily_report",
+) -> WecomDailyReportLogORM | None:
+    if not is_database_available():
+        return None
+    now = datetime.now()
+    row = WecomDailyReportLogORM(
+        log_id=uuid.uuid4().hex,
+        platform=str(platform or "pdd"),
+        report_date=report_date,
+        window_start=window_start,
+        window_end=window_end,
+        message=str(message or ""),
+        trigger_kind=str(trigger_kind or "manual"),
+        status=str(status or "success"),
+        errcode=int(errcode or 0),
+        errmsg=str(errmsg or ""),
+        webhook_target=str(webhook_target or "daily_report"),
+        created_at=now,
+    )
+    with session_scope() as session:
+        session.add(row)
+        session.flush()
+        session.refresh(row)
+        session.expunge(row)
+        return row
+
+
+def list_wecom_daily_report_logs(
+    *,
+    page: int = 1,
+    page_size: int = 20,
+    platform: str = "",
+) -> tuple[list[WecomDailyReportLogORM], int]:
+    if not is_database_available():
+        return [], 0
+    page = max(1, page)
+    page_size = max(1, min(100, page_size))
+    with session_scope() as session:
+        query = session.query(WecomDailyReportLogORM)
+        if platform:
+            query = query.filter(WecomDailyReportLogORM.platform == platform)
+        total = int(query.order_by(None).count())
+        rows = (
+            query.order_by(
+                WecomDailyReportLogORM.created_at.desc(),
+                WecomDailyReportLogORM.log_id.desc(),
+            )
+            .offset((page - 1) * page_size)
+            .limit(page_size)
+            .all()
+        )
+        for row in rows:
+            session.expunge(row)
+        return rows, total
+
+
+def get_wecom_daily_report_log(log_id: str) -> WecomDailyReportLogORM | None:
+    if not is_database_available():
+        return None
+    key = str(log_id or "").strip()
+    if not key:
+        return None
+    with session_scope() as session:
+        row = session.get(WecomDailyReportLogORM, key)
+        if row:
+            session.expunge(row)
+        return row
+
+
+def get_wecom_git_digest_cache(cache_key: str) -> WecomGitDigestCacheORM | None:
+    if not is_database_available():
+        return None
+    key = str(cache_key or "").strip()
+    if not key:
+        return None
+    with session_scope() as session:
+        row = (
+            session.query(WecomGitDigestCacheORM)
+            .filter(WecomGitDigestCacheORM.cache_key == key)
+            .first()
+        )
+        if row:
+            session.expunge(row)
+        return row
+
+
+def upsert_wecom_git_digest_cache(
+    *,
+    cache_key: str,
+    report_date: date,
+    commit_fingerprint: str,
+    window_start: datetime,
+    window_end: datetime,
+    summary: str,
+    commit_count: int,
+) -> WecomGitDigestCacheORM | None:
+    if not is_database_available():
+        return None
+    key = str(cache_key or "").strip()
+    if not key:
+        return None
+    now = datetime.now()
+    with session_scope() as session:
+        row = (
+            session.query(WecomGitDigestCacheORM)
+            .filter(WecomGitDigestCacheORM.cache_key == key)
+            .first()
+        )
+        if row:
+            row.summary = str(summary or "")
+            row.commit_count = int(commit_count or 0)
+            row.commit_fingerprint = str(commit_fingerprint or "")
+            row.window_start = window_start
+            row.window_end = window_end
+            row.updated_at = now
+        else:
+            row = WecomGitDigestCacheORM(
+                cache_id=uuid.uuid4().hex,
+                cache_key=key,
+                report_date=report_date,
+                commit_fingerprint=str(commit_fingerprint or ""),
+                window_start=window_start,
+                window_end=window_end,
+                summary=str(summary or ""),
+                commit_count=int(commit_count or 0),
                 created_at=now,
                 updated_at=now,
             )

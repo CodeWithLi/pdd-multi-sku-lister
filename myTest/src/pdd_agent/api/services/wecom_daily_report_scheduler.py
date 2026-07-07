@@ -6,9 +6,16 @@ import asyncio
 from datetime import date, datetime, timedelta, timezone
 
 from pdd_agent.core.logging import get_logger
+from pdd_agent.core.report_time_window import report_listing_window
 from pdd_agent.integrations.wecom.client import WecomAPIError, send_markdown
-from pdd_agent.integrations.wecom.config import load_wecom_config, wecom_configured
+from pdd_agent.integrations.wecom.config import (
+    daily_report_webhook_configured,
+    load_wecom_config,
+    resolve_daily_report_webhook_url,
+)
 from pdd_agent.integrations.wecom.daily_report import DailyReportPlatform, generate_daily_report_draft
+from pdd_agent.integrations.wecom.daily_report_log import record_daily_report_send
+from pdd_agent.integrations.wecom.store_progress import today_in_tz
 
 logger = get_logger(__name__)
 
@@ -98,7 +105,7 @@ class WecomDailyReportScheduler:
         cfg = load_wecom_config()
         if not cfg.daily_report_schedule_enabled:
             return
-        if not wecom_configured(cfg):
+        if not daily_report_webhook_configured(cfg):
             return
 
         now = datetime.now(TZ)
@@ -122,7 +129,12 @@ class WecomDailyReportScheduler:
             self._last_run_date = now.date()
             return
 
-        ok = await asyncio.to_thread(self._send_daily_report, "pdd", cfg)
+        ok = await asyncio.to_thread(
+            self._send_daily_report,
+            "pdd",
+            cfg,
+            trigger_kind="scheduled",
+        )
         if ok:
             self._last_run_date = now.date()
             print(
@@ -130,21 +142,106 @@ class WecomDailyReportScheduler:
                 flush=True,
             )
 
-    def _send_daily_report(self, platform: DailyReportPlatform, cfg) -> bool:
+    def _webhook_target_label(self, cfg) -> str:
+        return "daily_report" if str(cfg.webhook_url_daily_report or "").strip() else "default"
+
+    def _record_send(
+        self,
+        *,
+        platform: DailyReportPlatform,
+        report_date: date,
+        message: str,
+        trigger_kind: str,
+        ok: bool,
+        errcode: int = 0,
+        errmsg: str = "",
+        window_start: datetime | None = None,
+        window_end: datetime | None = None,
+        cfg=None,
+    ) -> None:
         try:
-            draft = generate_daily_report_draft(platform=platform)
-            send_markdown(draft.message, cfg=cfg)
+            record_daily_report_send(
+                platform=platform,
+                report_date=report_date,
+                message=message,
+                trigger_kind=trigger_kind,
+                ok=ok,
+                errcode=errcode,
+                errmsg=errmsg,
+                window_start=window_start,
+                window_end=window_end,
+                webhook_target=self._webhook_target_label(cfg or load_wecom_config()),
+            )
+        except Exception:
+            logger.exception("record wecom daily report log failed platform=%s", platform)
+
+    def _send_daily_report(
+        self,
+        platform: DailyReportPlatform,
+        cfg,
+        *,
+        trigger_kind: str = "manual",
+        message: str = "",
+    ) -> bool:
+        draft = None
+        content = str(message or "").strip()
+        try:
+            if not content:
+                draft = generate_daily_report_draft(platform=platform)
+                content = draft.message
+            send_markdown(content, cfg=cfg, for_daily_report=True)
+            report_day = date.fromisoformat(draft.report_date) if draft else today_in_tz()
+            window_start = None
+            window_end = None
+            if draft and draft.listing_window_start:
+                try:
+                    window_start = datetime.strptime(draft.listing_window_start, "%Y-%m-%d %H:%M")
+                    window_end = datetime.strptime(draft.listing_window_end, "%Y-%m-%d %H:%M")
+                except ValueError:
+                    window_start, window_end = report_listing_window(reference_day=report_day)
+            self._record_send(
+                platform=platform,
+                report_date=report_day,
+                message=content,
+                trigger_kind=trigger_kind,
+                ok=True,
+                window_start=window_start,
+                window_end=window_end,
+                cfg=cfg,
+            )
             logger.info(
-                "wecom daily report sent platform=%s commits=%s stores=%s",
+                "wecom daily report sent platform=%s commits=%s stores=%s webhook=%s",
                 platform,
-                draft.commit_count,
-                len(draft.store_summaries),
+                draft.commit_count if draft else 0,
+                len(draft.store_summaries) if draft else 0,
+                resolve_daily_report_webhook_url(cfg)[:32],
             )
             return True
-        except WecomAPIError:
+        except WecomAPIError as exc:
+            report_day = date.fromisoformat(draft.report_date) if draft else today_in_tz()
+            self._record_send(
+                platform=platform,
+                report_date=report_day,
+                message=content,
+                trigger_kind=trigger_kind,
+                ok=False,
+                errcode=int(exc.errcode or -1),
+                errmsg=str(exc),
+                cfg=cfg,
+            )
             logger.exception("wecom daily report send failed platform=%s", platform)
             return False
-        except Exception:
+        except Exception as exc:
+            report_day = date.fromisoformat(draft.report_date) if draft else today_in_tz()
+            self._record_send(
+                platform=platform,
+                report_date=report_day,
+                message=content,
+                trigger_kind=trigger_kind,
+                ok=False,
+                errmsg=str(exc),
+                cfg=cfg,
+            )
             logger.exception("wecom daily report generate/send failed platform=%s", platform)
             return False
 
@@ -156,25 +253,15 @@ class WecomDailyReportScheduler:
     ) -> bool:
         """手动触发：发送指定平台日报（可传入已编辑的 Markdown）。"""
         cfg = load_wecom_config()
-        if not wecom_configured(cfg):
-            raise RuntimeError("企业微信未配置或未启用")
+        if not daily_report_webhook_configured(cfg):
+            raise RuntimeError("企业微信未配置或未启用日报 Webhook")
         custom = str(message or "").strip()
-        if custom:
-            ok = self._send_markdown(custom, platform, cfg)
-        else:
-            ok = self._send_daily_report(platform, cfg)
+        ok = self._send_daily_report(
+            platform,
+            cfg,
+            trigger_kind="manual",
+            message=custom,
+        )
         if ok and platform == "pdd":
             self._last_run_date = datetime.now(TZ).date()
         return ok
-
-    def _send_markdown(self, message: str, platform: DailyReportPlatform, cfg) -> bool:
-        try:
-            send_markdown(message, cfg=cfg)
-            logger.info("wecom daily report sent platform=%s custom_message=true", platform)
-            return True
-        except WecomAPIError:
-            logger.exception("wecom daily report send failed platform=%s", platform)
-            return False
-        except Exception:
-            logger.exception("wecom daily report send failed platform=%s", platform)
-            return False
