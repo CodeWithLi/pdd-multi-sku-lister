@@ -700,6 +700,54 @@ def test_schedule_feishu_listing_result_log_writes_one_row_per_failure(monkeypat
     assert captured[1]["reason_code"] == "preflight_no_skus"
 
 
+def test_schedule_feishu_listing_result_log_skips_preflight_bridge_inventory_reasons(monkeypatch):
+    from pdd_agent.api.services import task_runner
+    from pdd_agent.domain.listing_errors import ListingErrorCode
+    from pdd_agent.integrations.feishu import pdd_upload_sync
+
+    captured: list[dict] = []
+
+    def fake_schedule_failure(**kwargs):
+        captured.append(kwargs)
+        return {"created": True}
+
+    monkeypatch.setattr(pdd_upload_sync, "schedule_pdd_upload_failure_log", fake_schedule_failure)
+
+    task_runner._schedule_feishu_listing_result_log(
+        account_id="store_A",
+        product_codes=["BD070/第一套图/BD070A"],
+        result={
+            "results": [
+                {
+                    "listing_label": "BD070A/第一套图",
+                    "merchant_code": "BD070A",
+                    "status": "skipped",
+                    "reason": ListingErrorCode.NEGATIVE_INVENTORY_SKIP,
+                    "error": "BD070Q可用库存小于0，跳过该商品上架",
+                }
+            ],
+            "preflight": {
+                "issues": [
+                    {
+                        "level": "error",
+                        "listing_label": "BD070A/第一套图",
+                        "message": "BD070Q可用库存小于0，跳过该商品上架",
+                        "reason_code": ListingErrorCode.NEGATIVE_INVENTORY_SKIP,
+                    },
+                    {
+                        "level": "error",
+                        "listing_label": "BD045A/第一套图",
+                        "message": "BD045A库存为0，跳过该商品上架",
+                        "reason_code": ListingErrorCode.ZERO_INVENTORY_SKIP,
+                    },
+                ]
+            },
+        },
+    )
+
+    assert captured == []
+
+
 def test_schedule_feishu_listing_result_log_expands_no_skus_system_reason(monkeypatch):
     from pdd_agent.api.services import task_runner
     from pdd_agent.integrations.feishu import pdd_upload_sync

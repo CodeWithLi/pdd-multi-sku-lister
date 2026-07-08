@@ -43,6 +43,13 @@ def schedule_listing_unit_failure_to_feishu(
             return False
 
         reason_code = str(item_result.get("reason") or item_result.get("reason_code") or "")
+        from pdd_agent.api.services.listing_preflight_feishu_bridge import (
+            is_preflight_feishu_bridge_reason,
+        )
+
+        if is_preflight_feishu_bridge_reason(reason_code):
+            return False
+
         error = str(item_result.get("error") or item_result.get("message") or "")
         merchant_code = str(
             item_result.get("platform_listing_code")

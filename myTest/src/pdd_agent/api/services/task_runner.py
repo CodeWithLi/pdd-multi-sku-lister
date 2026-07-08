@@ -857,6 +857,13 @@ def _schedule_feishu_listing_result_log(
         if status in {"failed", "retryable"} or item.get("error") or item.get("reason"):
             if item.get("feishu_failure_logged"):
                 continue
+            item_reason = str(item.get("reason") or item.get("reason_code") or "").strip()
+            from pdd_agent.api.services.listing_preflight_feishu_bridge import (
+                is_preflight_feishu_bridge_reason,
+            )
+
+            if is_preflight_feishu_bridge_reason(item_reason):
+                continue
             _queue_failure(
                 listing_label=listing_label,
                 merchant_code=merchant_code,
@@ -926,6 +933,12 @@ def _schedule_feishu_listing_result_log(
             reason_code = "feishu_product_catalog_missing"
         else:
             reason_code = "preflight_catalog"
+        from pdd_agent.api.services.listing_preflight_feishu_bridge import (
+            is_preflight_feishu_bridge_reason,
+        )
+
+        if is_preflight_feishu_bridge_reason(reason_code):
+            continue
         _queue_failure(
             listing_label=listing_label,
             reason_code=reason_code,

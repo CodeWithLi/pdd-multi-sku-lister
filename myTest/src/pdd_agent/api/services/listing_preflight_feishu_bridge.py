@@ -25,6 +25,18 @@ from pdd_agent.skills.listing.listing_zero_inventory_guard import (
 
 logger = get_logger(__name__)
 
+PREFLIGHT_FEISHU_BRIDGE_REASON_CODES = frozenset(
+    {
+        ListingErrorCode.NEGATIVE_INVENTORY_SKIP,
+        ListingErrorCode.ZERO_INVENTORY_SKIP,
+    }
+)
+
+
+def is_preflight_feishu_bridge_reason(reason_code: str) -> bool:
+    """预检桥接模块已即时写飞书的 reason_code，结束汇总时不再重复落表。"""
+    return str(reason_code or "").strip() in PREFLIGHT_FEISHU_BRIDGE_REASON_CODES
+
 
 def _iter_issues(report: PreflightReport) -> Iterable[PreflightIssue]:
     for issue in report.issues or []:
