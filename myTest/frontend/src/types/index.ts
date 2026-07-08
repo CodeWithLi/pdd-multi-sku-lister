@@ -712,6 +712,43 @@ export interface DailyCycleRelistRecordListResponse {
   items: DailyCycleRelistRecord[]
 }
 
+export interface DailyInventoryDelistShopSummary {
+  account_id: string
+  shop_display_name: string
+  count: number
+}
+
+export interface DailyInventoryDelistRecord {
+  record_id: string
+  account_id: string
+  shop_display_name: string
+  product_code: string
+  merchant_code: string
+  pdd_product_id: string
+  erp_available_qty: number | null
+  delist_status: string
+  message: string
+  is_relisted: boolean
+  delisted_at: string | null
+  relisted_at: string | null
+  trigger: string
+}
+
+export interface DailyInventoryDelistSummaryResponse {
+  stat_date: string
+  delist_total: number
+  relist_total: number
+  delist_by_shop: DailyInventoryDelistShopSummary[]
+  relist_by_shop: DailyInventoryDelistShopSummary[]
+}
+
+export interface DailyInventoryDelistRecordListResponse {
+  stat_date: string
+  action: 'delist' | 'relist'
+  total: number
+  items: DailyInventoryDelistRecord[]
+}
+
 export interface DailyListingRecord {
   record_id: string
   account_id: string

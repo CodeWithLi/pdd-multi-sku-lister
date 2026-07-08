@@ -1,6 +1,5 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, reactive, ref, watch } from 'vue'
-import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Search, Remove, Check, Document, Upload, Shop } from '@element-plus/icons-vue'
 import { inventoryDelistApi } from '@/api/inventoryDelist'
@@ -23,8 +22,6 @@ import type {
 } from '@/types/inventoryDelist'
 
 const mainTab = ref<'delist' | 'relist'>('delist')
-
-const router = useRouter()
 
 const loading = ref(false)
 const autoSaveState = ref<'idle' | 'saving' | 'saved' | 'error'>('idle')
@@ -158,12 +155,6 @@ const delistButtonLabel = computed(() => {
   return '立即下架'
 })
 
-const confirmDelistLabel = computed(() => {
-  const count = preview.value?.negative_inventory_codes.length ?? 0
-  const verb = form.test_override_enabled && form.test_delist_dry_run ? '模拟下架' : '确认下架'
-  return count > 0 ? `${verb}（${count}）` : verb
-})
-
 const canTriggerDelist = computed(
   () => form.account_ids.length > 0 && (preview.value?.negative_inventory_codes.length ?? 0) > 0,
 )
@@ -226,6 +217,30 @@ const autoSaveHint = computed(() => {
   if (autoSaveState.value === 'saved') return '已保存'
   if (autoSaveState.value === 'error') return '保存失败'
   return ''
+})
+
+const dockStatusText = computed(() => {
+  const parts: string[] = []
+  if (selectedShopCount.value > 0) {
+    parts.push(`已选 ${selectedShopCount.value} 店`)
+  } else {
+    parts.push('未选店铺')
+  }
+  if (mainTab.value === 'delist' && preview.value) {
+    const neg = preview.value.negative_inventory_codes.length
+    parts.push(neg > 0 ? `待下架 ${neg} 个` : '无负库存')
+  }
+  if (mainTab.value === 'relist' && relistPreview.value) {
+    parts.push(relistReadyCount.value > 0 ? `可上架 ${relistReadyCount.value} 个` : '暂无可上架')
+  }
+  return parts.join(' · ')
+})
+
+const scheduleStatusLabel = computed(() => {
+  if (!schedule.value?.database_available) return '数据库不可用'
+  if (!schedule.value?.enabled) return '定时未启用'
+  if (schedule.value?.scheduler_running) return `定时运行中 · 每 ${schedule.value.interval_hours}h`
+  return '调度未运行'
 })
 
 const onSaleCodeOptions = computed(() => {
@@ -564,11 +579,17 @@ async function runRelistPreview() {
 async function submitRelistSingle(row: {
   product_code: string
   account_ids: string[]
+  available_qty: number | null
   is_multi_shop: boolean
   shop_count: number
 }) {
   const code = String(row.product_code || '').trim()
   if (!code) return
+
+  if (row.available_qty !== null && row.available_qty < 0) {
+    ElMessage.warning(`编码 ${code} 当前可用数为 ${row.available_qty}，负库存不可上架`)
+    return
+  }
 
   const selected = new Set(form.account_ids)
   const accountIds = row.account_ids.filter((id) => selected.has(id))
@@ -578,13 +599,15 @@ async function submitRelistSingle(row: {
     return
   }
 
+  const qtyHint =
+    row.available_qty === null ? '' : `（当前可用数 ${row.available_qty}）`
   const shopHint =
     row.is_multi_shop && effectiveAccountIds.length > 1
       ? `（多店联动，将在 ${effectiveAccountIds.length} 家店铺执行）`
       : ''
   try {
     await ElMessageBox.confirm(
-      `仅上架编码 ${code}${shopHint}，确定继续？`,
+      `仅上架编码 ${code}${qtyHint}${shopHint}。触发前将重新查询聚水潭可用数，负库存将拒绝上架。`,
       '单条测试上架',
       {
         type: 'info',
@@ -602,11 +625,10 @@ async function submitRelistSingle(row: {
       account_ids: effectiveAccountIds,
       product_codes: [code],
       execution_mode: form.execution_mode,
-      force_feishu_refresh: false,
+      force_feishu_refresh: true,
     })
     ElMessage.success(`已启动单条上架：${code}（${result.job.job_id}）`)
     await loadRelistJobs()
-    router.push('/runs')
   } catch (e) {
     ElMessage.error(e instanceof Error ? e.message : '触发失败')
   } finally {
@@ -649,7 +671,6 @@ async function submitRelist() {
     })
     ElMessage.success(`已启动恢复上架任务：${result.job.job_id}`)
     await loadRelistJobs()
-    router.push('/runs')
   } catch (e) {
     ElMessage.error(e instanceof Error ? e.message : '触发失败')
   } finally {
@@ -696,7 +717,6 @@ async function submitDelist(options?: { requirePreview?: boolean }) {
     })
     ElMessage.success(`已启动下架任务：${result.job.job_id}${isDryRun ? '（模拟）' : ''}`)
     await loadJobs()
-    router.push('/runs')
   } catch (e) {
     ElMessage.error(e instanceof Error ? e.message : '触发失败')
   } finally {
@@ -759,12 +779,21 @@ onUnmounted(() => {
 </script>
 
 <template>
-  <div v-loading="loading" class="page">
+  <div v-loading="loading" class="page inventory-delist-page">
     <PageHeader
       title="负库存管理"
       desc="下架：扫描在售商品，聚水潭可用数 &lt; 0 时自动下架。恢复上架：对已下架记录查聚水潭，可用数恢复后联动多店重新上架。"
-    >
-      <template #actions>
+    />
+
+    <!-- 底部固定操作栏：滚动任意位置均可操作 -->
+    <div class="action-dock">
+      <div class="action-dock__left">
+        <span class="action-dock__status">{{ dockStatusText }}</span>
+        <el-tag v-if="schedule" :type="statusType" size="small" effect="plain" class="action-dock__tag">
+          {{ scheduleStatusLabel }}
+        </el-tag>
+      </div>
+      <div class="action-dock__actions">
         <el-button :icon="Document" @click="openRecordsDialog">下架记录</el-button>
         <template v-if="mainTab === 'delist'">
           <el-button :loading="previewing" type="primary" :icon="Search" @click="runPreview">
@@ -794,13 +823,13 @@ onUnmounted(() => {
             {{ relistButtonLabel }}
           </el-button>
         </template>
-      </template>
-    </PageHeader>
+      </div>
+    </div>
 
-    <el-card shadow="never" class="mb-16 shop-panel">
+    <el-card shadow="never" class="panel-card shop-panel">
       <template #header>
         <div class="card-head">
-          <span><el-icon class="head-icon"><Shop /></el-icon> 选择店铺</span>
+          <span class="card-head__title"><el-icon class="head-icon"><Shop /></el-icon> 选择店铺</span>
           <span class="shop-panel__actions">
             <span class="hint">已选 {{ selectedShopCount }} / {{ accounts.length }} 家</span>
             <el-button link type="primary" size="small" @click="selectAllShops">全选</el-button>
@@ -824,9 +853,9 @@ onUnmounted(() => {
       </div>
     </el-card>
 
-    <el-tabs v-model="mainTab" class="main-tabs mb-16">
+    <el-tabs v-model="mainTab" class="main-tabs">
       <el-tab-pane label="负库存下架" name="delist">
-        <el-alert v-if="schedule" :type="statusType" show-icon :closable="false" class="mb-16">
+        <el-alert v-if="schedule" :type="statusType" show-icon :closable="false" class="status-banner">
           <template #title>
             {{ schedule.scheduler_running ? '下架定时调度运行中' : '下架定时调度未运行' }}
           </template>
@@ -840,14 +869,14 @@ onUnmounted(() => {
           </template>
         </el-alert>
 
-        <el-card shadow="never" class="mb-16">
+        <el-card shadow="never" class="panel-card">
           <template #header>
             <div class="card-head">
-              <span>下架配置</span>
+              <span class="card-head__title">下架配置</span>
               <span v-if="autoSaveHint" class="hint">{{ autoSaveHint }}</span>
             </div>
           </template>
-          <el-form label-width="96px" class="config-form">
+          <el-form label-width="96px" class="config-form config-form--grid">
             <el-form-item label="定时间隔">
               <div class="inline">
                 <el-switch v-model="form.enabled" />
@@ -885,14 +914,48 @@ onUnmounted(() => {
           </el-form>
         </el-card>
 
-    <el-card shadow="never" class="mb-16">
+    <el-card shadow="never" class="panel-card preview-panel">
       <template #header>
-        <span>下架检测预览</span>
+        <div class="card-head">
+          <span class="card-head__title">下架检测预览</span>
+          <el-button
+            v-if="preview"
+            link
+            type="primary"
+            size="small"
+            :loading="previewing"
+            :icon="Search"
+            @click="runPreview"
+          >
+            重新检测
+          </el-button>
+        </div>
       </template>
 
       <div v-if="!preview" class="preview-empty">
-        <p>流程：读取各店已上架商品 → 整合共同/独有编码 → 查飞书聚水潭可用数 → 列出可用数 &lt; 0 的商品</p>
-        <el-button type="primary" :loading="previewing" :icon="Search" @click="runPreview">
+        <div class="workflow-steps">
+          <div class="workflow-step">
+            <span class="workflow-step__num">1</span>
+            <span>读取各店已上架商品</span>
+          </div>
+          <span class="workflow-step__arrow">→</span>
+          <div class="workflow-step">
+            <span class="workflow-step__num">2</span>
+            <span>整合共同/独有编码</span>
+          </div>
+          <span class="workflow-step__arrow">→</span>
+          <div class="workflow-step">
+            <span class="workflow-step__num">3</span>
+            <span>查聚水潭可用数</span>
+          </div>
+          <span class="workflow-step__arrow">→</span>
+          <div class="workflow-step">
+            <span class="workflow-step__num">4</span>
+            <span>列出可用数 &lt; 0</span>
+          </div>
+        </div>
+        <p class="preview-empty__hint">配置完成后，点击底部「检测预览」或下方按钮开始</p>
+        <el-button type="primary" size="large" :loading="previewing" :icon="Search" @click="runPreview">
           开始检测
         </el-button>
       </div>
@@ -937,7 +1000,7 @@ onUnmounted(() => {
           </el-table-column>
         </el-table>
 
-        <div class="preview-toolbar">
+        <div class="preview-results">
           <el-tabs v-model="previewTab" class="preview-tabs">
             <el-tab-pane
               :label="`待下架 (${preview.negative_inventory_codes.length})`"
@@ -997,23 +1060,14 @@ onUnmounted(() => {
               </div>
             </el-tab-pane>
           </el-tabs>
-
-          <el-button
-            type="warning"
-            :icon="Remove"
-            :loading="triggering"
-            :disabled="!canTriggerDelist"
-            class="preview-delist-btn"
-            @click="submitDelist({ requirePreview: true })"
-          >
-            {{ confirmDelistLabel }}
-          </el-button>
         </div>
       </template>
     </el-card>
 
-    <el-card shadow="never">
-      <template #header>最近任务</template>
+    <el-card shadow="never" class="panel-card">
+      <template #header>
+        <span class="card-head__title">最近任务</span>
+      </template>
       <el-table :data="jobs" size="small" stripe>
         <el-table-column prop="job_id" label="任务 ID" min-width="180" show-overflow-tooltip />
         <el-table-column prop="trigger" label="触发" width="72" />
@@ -1052,7 +1106,7 @@ onUnmounted(() => {
           </template>
         </el-alert>
 
-        <el-row :gutter="12" class="stat-row mb-16">
+        <el-row :gutter="12" class="stat-row">
           <el-col :xs="24" :sm="8">
             <div class="stat-card">
               <div class="stat-card__label">待恢复记录</div>
@@ -1073,10 +1127,10 @@ onUnmounted(() => {
           </el-col>
         </el-row>
 
-        <el-card shadow="never" class="mb-16">
+        <el-card shadow="never" class="panel-card">
           <template #header>
             <div class="card-head">
-              <span>恢复上架配置</span>
+              <span class="card-head__title">恢复上架配置</span>
               <el-tag size="small" type="info" effect="plain">定时任务 · 即将支持</el-tag>
             </div>
           </template>
@@ -1093,14 +1147,48 @@ onUnmounted(() => {
           </el-form>
         </el-card>
 
-        <el-card shadow="never">
+        <el-card shadow="never" class="panel-card preview-panel">
           <template #header>
-            <span>恢复检测预览</span>
+            <div class="card-head">
+              <span class="card-head__title">恢复检测预览</span>
+              <el-button
+                v-if="relistPreview"
+                link
+                type="primary"
+                size="small"
+                :loading="relistPreviewing"
+                :icon="Search"
+                @click="runRelistPreview"
+              >
+                重新检测
+              </el-button>
+            </div>
           </template>
 
           <div v-if="!relistPreview" class="preview-empty">
-            <p>流程：读取已下架记录 → 查聚水潭可用数 → 列出可用数已恢复的商品 → 多店联动展示</p>
-            <el-button type="primary" :loading="relistPreviewing" :icon="Search" @click="runRelistPreview">
+            <div class="workflow-steps">
+              <div class="workflow-step">
+                <span class="workflow-step__num">1</span>
+                <span>读取已下架记录</span>
+              </div>
+              <span class="workflow-step__arrow">→</span>
+              <div class="workflow-step">
+                <span class="workflow-step__num">2</span>
+                <span>查聚水潭可用数</span>
+              </div>
+              <span class="workflow-step__arrow">→</span>
+              <div class="workflow-step">
+                <span class="workflow-step__num">3</span>
+                <span>列出已恢复商品</span>
+              </div>
+              <span class="workflow-step__arrow">→</span>
+              <div class="workflow-step">
+                <span class="workflow-step__num">4</span>
+                <span>多店联动上架</span>
+              </div>
+            </div>
+            <p class="preview-empty__hint">点击底部「恢复检测」或下方按钮开始</p>
+            <el-button type="primary" size="large" :loading="relistPreviewing" :icon="Search" @click="runRelistPreview">
               开始检测
             </el-button>
           </div>
@@ -1144,7 +1232,10 @@ onUnmounted(() => {
                         type="success"
                         size="small"
                         :loading="relistTriggeringCode === row.product_code"
-                        :disabled="!!relistTriggeringCode && relistTriggeringCode !== row.product_code"
+                        :disabled="
+                          (row.available_qty !== null && row.available_qty < 0)
+                          || (!!relistTriggeringCode && relistTriggeringCode !== row.product_code)
+                        "
                         @click="submitRelistSingle(row)"
                       >
                         上架
@@ -1198,9 +1289,9 @@ onUnmounted(() => {
           </template>
         </el-card>
 
-        <el-card shadow="never" class="mt-16">
+        <el-card shadow="never" class="panel-card">
           <template #header>
-            <span>恢复上架任务</span>
+            <span class="card-head__title">恢复上架任务</span>
           </template>
           <el-table :data="relistJobs" size="small" border stripe empty-text="暂无任务">
             <el-table-column prop="job_id" label="任务 ID" min-width="200" show-overflow-tooltip />
@@ -1382,12 +1473,110 @@ onUnmounted(() => {
 </template>
 
 <style scoped>
-.page {
-  padding-bottom: 24px;
+.inventory-delist-page {
+  max-width: 1200px;
+  padding-bottom: 96px;
+}
+
+.panel-card {
+  margin-bottom: 16px;
+  border: 1px solid var(--border-color);
+  border-radius: 14px;
+  box-shadow: var(--card-shadow);
+  background: rgba(255, 255, 255, 0.92);
+  overflow: hidden;
+}
+
+.panel-card :deep(.el-card__header) {
+  padding: 14px 18px;
+  border-bottom: 1px solid var(--border-color);
+  background: rgba(248, 250, 252, 0.8);
+}
+
+.panel-card :deep(.el-card__body) {
+  padding: 18px;
+}
+
+.card-head__title {
+  font-weight: 600;
+  font-size: 15px;
+  color: #0f172a;
 }
 
 .main-tabs :deep(.el-tabs__header) {
+  position: sticky;
+  top: 0;
+  z-index: 90;
+  margin: 0 0 16px;
+  padding: 10px 14px;
+  background: rgba(248, 250, 252, 0.92);
+  backdrop-filter: blur(10px);
+  border: 1px solid var(--border-color);
+  border-radius: 12px;
+  box-shadow: 0 4px 16px rgba(15, 23, 42, 0.06);
+}
+
+.main-tabs :deep(.el-tabs__nav-wrap::after) {
+  display: none;
+}
+
+.main-tabs :deep(.el-tabs__item) {
+  font-size: 14px;
+  font-weight: 500;
+  height: 36px;
+}
+
+.main-tabs :deep(.el-tabs__item.is-active) {
+  font-weight: 600;
+}
+
+.status-banner {
   margin-bottom: 16px;
+  border-radius: 10px;
+}
+
+.action-dock {
+  position: fixed;
+  left: 220px;
+  right: 0;
+  bottom: 0;
+  z-index: 120;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 12px 32px;
+  background: rgba(255, 255, 255, 0.94);
+  backdrop-filter: blur(12px);
+  border-top: 1px solid var(--border-color);
+  box-shadow: 0 -8px 24px rgba(15, 23, 42, 0.08);
+}
+
+.action-dock__left {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+.action-dock__status {
+  font-size: 13px;
+  font-weight: 500;
+  color: #334155;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.action-dock__tag {
+  flex-shrink: 0;
+}
+
+.action-dock__actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
 }
 
 .head-icon {
@@ -1414,22 +1603,24 @@ onUnmounted(() => {
   align-items: flex-start;
   gap: 2px;
   padding: 12px 14px;
-  border: 1px solid var(--el-border-color-lighter);
-  border-radius: 8px;
+  border: 1px solid var(--border-color);
+  border-radius: 10px;
   background: #fff;
   cursor: pointer;
   text-align: left;
-  transition: border-color 0.15s, box-shadow 0.15s, background 0.15s;
+  transition: border-color 0.15s, box-shadow 0.15s, background 0.15s, transform 0.15s;
 }
 
 .shop-card:hover {
   border-color: var(--el-color-primary-light-5);
-  box-shadow: 0 2px 8px rgba(64, 158, 255, 0.08);
+  box-shadow: 0 4px 12px rgba(64, 158, 255, 0.1);
+  transform: translateY(-1px);
 }
 
 .shop-card--active {
   border-color: var(--el-color-primary);
-  background: var(--el-color-primary-light-9);
+  background: linear-gradient(135deg, var(--el-color-primary-light-9) 0%, #fff 100%);
+  box-shadow: 0 2px 8px rgba(64, 158, 255, 0.12);
 }
 
 .shop-card__name {
@@ -1456,9 +1647,9 @@ onUnmounted(() => {
 
 .stat-card {
   padding: 14px 16px;
-  border-radius: 8px;
+  border-radius: 10px;
   background: linear-gradient(135deg, #f5f7fa 0%, #eef1f6 100%);
-  border: 1px solid var(--el-border-color-lighter);
+  border: 1px solid var(--border-color);
 }
 
 .stat-card--success {
@@ -1496,6 +1687,7 @@ onUnmounted(() => {
   display: flex;
   justify-content: space-between;
   align-items: center;
+  gap: 12px;
 }
 
 .hint {
@@ -1508,39 +1700,21 @@ onUnmounted(() => {
   margin-bottom: 18px;
 }
 
+.config-form--grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 0 24px;
+}
+
+.config-form--grid :deep(.el-form-item:last-child) {
+  grid-column: 1 / -1;
+}
+
 .inline {
   display: flex;
   align-items: center;
   gap: 8px;
   flex-wrap: wrap;
-}
-
-.shop-box {
-  width: 100%;
-  max-width: 480px;
-  border: 1px solid var(--el-border-color-lighter);
-  border-radius: 4px;
-  padding: 8px 12px;
-}
-
-.shop-box__toolbar {
-  display: flex;
-  justify-content: space-between;
-  margin-bottom: 8px;
-  font-size: 13px;
-  color: #606266;
-}
-
-.shop-group {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-}
-
-.shop-sub {
-  margin-left: 6px;
-  font-size: 12px;
-  color: #909399;
 }
 
 .dev-link {
@@ -1549,31 +1723,62 @@ onUnmounted(() => {
 
 .preview-empty {
   text-align: center;
-  padding: 24px 16px;
+  padding: 32px 16px 24px;
   color: #606266;
 }
 
-.preview-empty p {
-  margin: 0 0 16px;
-  font-size: 14px;
-  line-height: 1.6;
+.preview-empty__hint {
+  margin: 0 0 20px;
+  font-size: 13px;
+  color: var(--text-muted);
 }
 
-.preview-toolbar {
+.workflow-steps {
   display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 16px;
+  align-items: center;
+  justify-content: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 20px;
+}
+
+.workflow-step {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  border-radius: 8px;
+  background: #f8fafc;
+  border: 1px solid var(--border-color);
+  font-size: 13px;
+  color: #475569;
+}
+
+.workflow-step__num {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: var(--el-color-primary-light-8);
+  color: var(--el-color-primary);
+  font-size: 11px;
+  font-weight: 700;
+  flex-shrink: 0;
+}
+
+.workflow-step__arrow {
+  color: #cbd5e1;
+  font-size: 14px;
+}
+
+.preview-results {
+  margin-top: 4px;
 }
 
 .preview-tabs {
-  flex: 1;
-  min-width: 0;
-}
-
-.preview-delist-btn {
-  flex-shrink: 0;
-  margin-top: 4px;
+  width: 100%;
 }
 
 .code-list {
@@ -1669,5 +1874,44 @@ onUnmounted(() => {
 
 .text-muted {
   color: #c0c4cc;
+}
+
+@media (max-width: 768px) {
+  .inventory-delist-page {
+    padding-bottom: 120px;
+  }
+
+  .action-dock {
+    left: 64px;
+    flex-direction: column;
+    align-items: stretch;
+    padding: 10px 16px;
+  }
+
+  .action-dock__left {
+    justify-content: center;
+  }
+
+  .action-dock__actions {
+    flex-wrap: wrap;
+    justify-content: center;
+  }
+
+  .action-dock__actions .el-button {
+    flex: 1;
+    min-width: 0;
+  }
+
+  .workflow-steps {
+    flex-direction: column;
+  }
+
+  .workflow-step__arrow {
+    display: none;
+  }
+
+  .config-form--grid {
+    grid-template-columns: 1fr;
+  }
 }
 </style>

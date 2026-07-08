@@ -304,6 +304,42 @@ def update_pdd_delist_log_relist(
     update_fields = {
         names.is_relisted: map_relist_label(is_relisted, config=cfg),
     }
+
+    row_obj = record if not isinstance(record, dict) else None
+    if row_obj is None and isinstance(record, dict):
+        record_id_db = str(record.get("record_id") or "").strip()
+        if record_id_db:
+            from pdd_agent.db.repositories import get_inventory_delist_record
+
+            row_obj = get_inventory_delist_record(record_id_db)
+    if row_obj is None and record_id:
+        from pdd_agent.db.repositories import get_inventory_delist_record
+
+        row_obj = get_inventory_delist_record(record_id)
+
+    product_code = ""
+    merchant_code = ""
+    if isinstance(record, dict):
+        product_code = str(record.get("product_code") or "").strip()
+        merchant_code = str(record.get("merchant_code") or "").strip()
+    elif row_obj is not None:
+        product_code = str(row_obj.product_code or "").strip()
+        merchant_code = str(row_obj.merchant_code or "").strip()
+
+    latest_qty = None
+    if row_obj is not None and row_obj.erp_available_qty is not None:
+        latest_qty = int(row_obj.erp_available_qty)
+    elif product_code or merchant_code:
+        from pdd_agent.integrations.feishu.jushuitan_erp_inventory import load_jushuitan_inventory_map
+        from pdd_agent.inventory_delist.analysis import _inventory_for_product_code
+
+        inventory_map = load_jushuitan_inventory_map(
+            codes=[c for c in [product_code, merchant_code] if c],
+            force_refresh=True,
+        )
+        latest_qty = _inventory_for_product_code(product_code, merchant_code, inventory_map)
+    if latest_qty is not None:
+        update_fields[names.available_qty] = int(latest_qty)
     mapped = map_fields_to_table_names(api, app_token, table_id, update_fields)
     updates = [{"record_id": str(row.get("record_id") or ""), "fields": mapped} for row in rows if row.get("record_id")]
     if not updates:

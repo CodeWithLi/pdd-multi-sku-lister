@@ -3398,6 +3398,7 @@ def update_inventory_delist_record_relist(
     *,
     is_relisted: bool,
     message: str = "",
+    erp_available_qty: int | None = None,
 ) -> bool:
     if not is_database_available():
         return False
@@ -3409,8 +3410,14 @@ def update_inventory_delist_record_relist(
         if not row:
             return False
         row.is_relisted = bool(is_relisted)
+        if is_relisted:
+            row.relisted_at = datetime.now()
+        else:
+            row.relisted_at = None
         if message:
             row.message = str(message).strip()
+        if erp_available_qty is not None:
+            row.erp_available_qty = int(erp_available_qty)
         session.flush()
         return True
 
@@ -3458,3 +3465,191 @@ def list_pending_relist_records(
         for row in rows:
             session.expunge(row)
         return rows
+
+
+def _inventory_delist_completed_filters():
+    return (
+        InventoryDelistRecordORM.delist_status == "completed",
+        InventoryDelistRecordORM.dry_run.is_(False),
+    )
+
+
+def list_daily_inventory_delist_records(
+    *,
+    stat_date: date | None = None,
+    account_id: str = "",
+    limit: int = 200,
+) -> list[InventoryDelistRecordORM]:
+    if not is_database_available():
+        return []
+    limit = max(1, min(5000, limit))
+    target = stat_date or datetime.now().date()
+    start, end = _day_bounds(target)
+    with session_scope() as session:
+        query = session.query(InventoryDelistRecordORM).filter(
+            InventoryDelistRecordORM.delisted_at >= start,
+            InventoryDelistRecordORM.delisted_at < end,
+            *_inventory_delist_completed_filters(),
+        )
+        if account_id:
+            query = query.filter(InventoryDelistRecordORM.account_id == account_id.strip())
+        rows = (
+            query.order_by(
+                InventoryDelistRecordORM.delisted_at.desc(),
+                InventoryDelistRecordORM.record_id.desc(),
+            )
+            .limit(limit)
+            .all()
+        )
+        for row in rows:
+            session.expunge(row)
+        return rows
+
+
+def count_daily_inventory_delist_records(
+    *,
+    stat_date: date | None = None,
+    account_id: str = "",
+) -> int:
+    if not is_database_available():
+        return 0
+    target = stat_date or datetime.now().date()
+    start, end = _day_bounds(target)
+    with session_scope() as session:
+        query = session.query(func.count(InventoryDelistRecordORM.record_id)).filter(
+            InventoryDelistRecordORM.delisted_at >= start,
+            InventoryDelistRecordORM.delisted_at < end,
+            *_inventory_delist_completed_filters(),
+        )
+        if account_id:
+            query = query.filter(InventoryDelistRecordORM.account_id == account_id.strip())
+        return int(query.scalar() or 0)
+
+
+def summarize_daily_inventory_delist_records(
+    *,
+    stat_date: date | None = None,
+) -> list[dict[str, str | int]]:
+    if not is_database_available():
+        return []
+    target = stat_date or datetime.now().date()
+    start, end = _day_bounds(target)
+    with session_scope() as session:
+        rows = (
+            session.query(
+                InventoryDelistRecordORM.account_id,
+                InventoryDelistRecordORM.shop_display_name,
+                func.count(InventoryDelistRecordORM.record_id),
+            )
+            .filter(
+                InventoryDelistRecordORM.delisted_at >= start,
+                InventoryDelistRecordORM.delisted_at < end,
+                *_inventory_delist_completed_filters(),
+            )
+            .group_by(
+                InventoryDelistRecordORM.account_id,
+                InventoryDelistRecordORM.shop_display_name,
+            )
+            .order_by(func.count(InventoryDelistRecordORM.record_id).desc())
+            .all()
+        )
+        return [
+            {
+                "account_id": str(account_id or ""),
+                "shop_display_name": str(shop_name or ""),
+                "count": int(count or 0),
+            }
+            for account_id, shop_name, count in rows
+        ]
+
+
+def list_daily_inventory_relist_records(
+    *,
+    stat_date: date | None = None,
+    account_id: str = "",
+    limit: int = 200,
+) -> list[InventoryDelistRecordORM]:
+    if not is_database_available():
+        return []
+    limit = max(1, min(5000, limit))
+    target = stat_date or datetime.now().date()
+    start, end = _day_bounds(target)
+    with session_scope() as session:
+        query = session.query(InventoryDelistRecordORM).filter(
+            InventoryDelistRecordORM.is_relisted.is_(True),
+            InventoryDelistRecordORM.relisted_at >= start,
+            InventoryDelistRecordORM.relisted_at < end,
+            InventoryDelistRecordORM.dry_run.is_(False),
+        )
+        if account_id:
+            query = query.filter(InventoryDelistRecordORM.account_id == account_id.strip())
+        rows = (
+            query.order_by(
+                InventoryDelistRecordORM.relisted_at.desc(),
+                InventoryDelistRecordORM.record_id.desc(),
+            )
+            .limit(limit)
+            .all()
+        )
+        for row in rows:
+            session.expunge(row)
+        return rows
+
+
+def count_daily_inventory_relist_records(
+    *,
+    stat_date: date | None = None,
+    account_id: str = "",
+) -> int:
+    if not is_database_available():
+        return 0
+    target = stat_date or datetime.now().date()
+    start, end = _day_bounds(target)
+    with session_scope() as session:
+        query = session.query(func.count(InventoryDelistRecordORM.record_id)).filter(
+            InventoryDelistRecordORM.is_relisted.is_(True),
+            InventoryDelistRecordORM.relisted_at >= start,
+            InventoryDelistRecordORM.relisted_at < end,
+            InventoryDelistRecordORM.dry_run.is_(False),
+        )
+        if account_id:
+            query = query.filter(InventoryDelistRecordORM.account_id == account_id.strip())
+        return int(query.scalar() or 0)
+
+
+def summarize_daily_inventory_relist_records(
+    *,
+    stat_date: date | None = None,
+) -> list[dict[str, str | int]]:
+    if not is_database_available():
+        return []
+    target = stat_date or datetime.now().date()
+    start, end = _day_bounds(target)
+    with session_scope() as session:
+        rows = (
+            session.query(
+                InventoryDelistRecordORM.account_id,
+                InventoryDelistRecordORM.shop_display_name,
+                func.count(InventoryDelistRecordORM.record_id),
+            )
+            .filter(
+                InventoryDelistRecordORM.is_relisted.is_(True),
+                InventoryDelistRecordORM.relisted_at >= start,
+                InventoryDelistRecordORM.relisted_at < end,
+                InventoryDelistRecordORM.dry_run.is_(False),
+            )
+            .group_by(
+                InventoryDelistRecordORM.account_id,
+                InventoryDelistRecordORM.shop_display_name,
+            )
+            .order_by(func.count(InventoryDelistRecordORM.record_id).desc())
+            .all()
+        )
+        return [
+            {
+                "account_id": str(account_id or ""),
+                "shop_display_name": str(shop_name or ""),
+                "count": int(count or 0),
+            }
+            for account_id, shop_name, count in rows
+        ]

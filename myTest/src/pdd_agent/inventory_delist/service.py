@@ -413,6 +413,51 @@ def relist_job_to_dict(job: InventoryRelistJob) -> dict[str, Any]:
     return data
 
 
+def _assert_relist_candidates_inventory_allowed(
+    candidates: list[RelistTarget],
+    *,
+    min_available_qty: int = 0,
+) -> None:
+    """触发上架前再次校验聚水潭可用数，负库存一律拒绝。"""
+    for target in candidates:
+        code = str(target.product_code or "").strip()
+        qty = target.available_qty
+        if qty is None:
+            raise ValueError(f"编码 {code} 聚水潭可用数未知，不可重新上架")
+        if int(qty) < int(min_available_qty):
+            raise ValueError(
+                f"编码 {code} 当前聚水潭可用数为 {qty}，"
+                f"仍低于恢复阈值 {min_available_qty}，不可重新上架"
+            )
+
+
+def _relist_filter_error_for_codes(
+    analysis: InventoryRelistAnalysis,
+    product_codes: list[str],
+) -> str:
+    wanted = [str(code or "").strip() for code in product_codes if str(code or "").strip()]
+    if not wanted:
+        return "请指定至少一个商品编码"
+
+    still_negative = {
+        str(t.product_code or "").strip().casefold(): t for t in analysis.still_negative_codes
+    }
+    unknown = {
+        str(t.product_code or "").strip().casefold(): t for t in analysis.unknown_inventory_codes
+    }
+    for code in wanted:
+        key = code.casefold()
+        if key in still_negative:
+            qty = still_negative[key].available_qty
+            return (
+                f"编码 {code} 当前聚水潭可用数为 {qty}，仍为负库存，不可重新上架。"
+                f"请确认聚水潭 ERP 可用数已恢复至 ≥0 后再试"
+            )
+        if key in unknown:
+            return f"编码 {code} 未匹配到聚水潭 ERP 可用数，不可重新上架"
+    return f"未找到可上架编码：{', '.join(wanted)}"
+
+
 def trigger_inventory_relist_run(
     *,
     account_ids: list[str] | None = None,
@@ -440,7 +485,7 @@ def trigger_inventory_relist_run(
 
     analysis = analyze_inventory_relist_targets(
         resolved,
-        force_feishu_refresh=bool(force_feishu_refresh),
+        force_feishu_refresh=True,
         min_available_qty=int(min_available_qty),
     )
     if not analysis.relist_candidates:
@@ -448,6 +493,8 @@ def trigger_inventory_relist_run(
         diag = str((analysis.diagnostics or {}).get("message") or "").strip()
         if diag:
             msg += f"（{diag}）"
+        if product_codes:
+            msg = _relist_filter_error_for_codes(analysis, list(product_codes))
         raise ValueError(msg)
 
     candidates = list(analysis.relist_candidates)
@@ -461,7 +508,9 @@ def trigger_inventory_relist_run(
             if str(target.product_code or "").strip().casefold() in wanted
         ]
         if not candidates:
-            raise ValueError(f"未找到可上架编码：{', '.join(sorted(product_codes))}")
+            raise ValueError(_relist_filter_error_for_codes(analysis, list(product_codes)))
+
+    _assert_relist_candidates_inventory_allowed(candidates, min_available_qty=int(min_available_qty))
 
     per_account_tasks = _build_relist_per_account_tasks(resolved, candidates)
     active_tasks = [row for row in per_account_tasks if row.get("candidate_codes")]

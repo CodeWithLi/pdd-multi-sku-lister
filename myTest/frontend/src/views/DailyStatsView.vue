@@ -6,6 +6,8 @@ import PageHeader from '@/components/PageHeader.vue'
 import type {
   DailyCycleRelistRecord,
   DailyCycleRelistSummaryResponse,
+  DailyInventoryDelistRecord,
+  DailyInventoryDelistSummaryResponse,
   DailyListingRecord,
   DailyListingSummaryResponse,
   DailyPipelineListingSkipRecord,
@@ -23,6 +25,10 @@ const cycleSummary = ref<DailyCycleRelistSummaryResponse | null>(null)
 const cycleRecords = ref<DailyCycleRelistRecord[]>([])
 const skipSummary = ref<DailyPipelineListingSkipSummaryResponse | null>(null)
 const skipRecords = ref<DailyPipelineListingSkipRecord[]>([])
+const inventorySummary = ref<DailyInventoryDelistSummaryResponse | null>(null)
+const inventoryDelistRecords = ref<DailyInventoryDelistRecord[]>([])
+const inventoryRelistRecords = ref<DailyInventoryDelistRecord[]>([])
+const inventoryActionTab = ref<'delist' | 'relist'>('delist')
 
 const dateLabel = computed(() => queryDate.value || '—')
 const windowDescription = computed(() => listingSummary.value?.window_description || '')
@@ -126,7 +132,7 @@ async function load() {
   loading.value = true
   try {
     const listingParams = { listed_date: date, window_mode: windowMode.value }
-    const [listingSum, listingRows, cycleSum, cycleRows, pipelineSkipSum, pipelineSkipRows] =
+    const [listingSum, listingRows, cycleSum, cycleRows, pipelineSkipSum, pipelineSkipRows, invSum, invDelistRows, invRelistRows] =
       await Promise.all([
       api.dailyListingSummary(listingParams),
       api.dailyListingRecords({
@@ -142,6 +148,9 @@ async function load() {
         skip_kind: skipKindFilter.value || undefined,
         limit: 200,
       }),
+      api.dailyInventoryDelistSummary({ stat_date: date }),
+      api.dailyInventoryDelistRecords({ stat_date: date, action: 'delist', limit: 200 }),
+      api.dailyInventoryDelistRecords({ stat_date: date, action: 'relist', limit: 200 }),
     ])
     listingSummary.value = listingSum
     listingRecords.value = listingRows.items
@@ -149,6 +158,11 @@ async function load() {
     cycleRecords.value = cycleRows.items
     skipSummary.value = pipelineSkipSum
     skipRecords.value = pipelineSkipRows.items
+    inventorySummary.value = invSum
+    inventoryDelistRecords.value = invDelistRows.items
+    inventoryRelistRecords.value = invRelistRows.items
+    inventoryActionTab.value =
+      (invDelistRows.total ?? 0) > 0 ? 'delist' : 'relist'
   } catch (e) {
     listingSummary.value = null
     listingRecords.value = []
@@ -156,6 +170,9 @@ async function load() {
     cycleRecords.value = []
     skipSummary.value = null
     skipRecords.value = []
+    inventorySummary.value = null
+    inventoryDelistRecords.value = []
+    inventoryRelistRecords.value = []
     ElMessage.error(e instanceof Error ? e.message : '加载失败')
   } finally {
     loading.value = false
@@ -169,7 +186,7 @@ onMounted(load)
   <div class="page" v-loading="loading">
     <PageHeader
       title="每日统计"
-      subtitle="按日期查询上架成功数、整合链路上架跳过数与失败日志循环跑整合链路次数"
+      subtitle="按日期查询上架成功数、负库存下架/恢复上架、整合链路上架跳过数与失败日志循环跑整合链路次数"
     />
 
     <el-alert
@@ -281,6 +298,92 @@ onMounted(load)
         <el-table-column prop="title" label="标题" min-width="160" show-overflow-tooltip />
         <el-table-column prop="merchant_code" label="平台货号" width="110" show-overflow-tooltip />
       </el-table>
+    </el-card>
+
+    <el-card shadow="never" class="mb-16">
+      <template #header>
+        <div class="card-header">
+          <span>{{ dateLabel }} 负库存下架 / 恢复上架</span>
+          <div class="summary-tags">
+            <el-tag type="danger">负库存下架 {{ inventorySummary?.delist_total ?? 0 }} 件</el-tag>
+            <el-tag type="success">恢复上架 {{ inventorySummary?.relist_total ?? 0 }} 件</el-tag>
+          </div>
+        </div>
+      </template>
+
+      <el-row
+        v-if="inventorySummary?.delist_by_shop?.length || inventorySummary?.relist_by_shop?.length"
+        :gutter="12"
+        class="mb-12"
+      >
+        <el-col
+          v-for="shop in inventorySummary?.delist_by_shop || []"
+          :key="`inv-delist-${shop.account_id}`"
+          :xs="24"
+          :sm="12"
+          :md="8"
+          :lg="6"
+        >
+          <div class="shop-stat-card">
+            <div class="shop-stat-title">{{ shop.shop_display_name || shop.account_id }}</div>
+            <div class="shop-stat-values">
+              <span class="delisted">下架 {{ shop.count }} 件</span>
+              <span class="active">
+                恢复上架
+                {{
+                  inventorySummary?.relist_by_shop?.find((row) => row.account_id === shop.account_id)
+                    ?.count ?? 0
+                }}
+                件
+              </span>
+            </div>
+          </div>
+        </el-col>
+      </el-row>
+
+      <el-tabs v-model="inventoryActionTab">
+        <el-tab-pane :label="`负库存下架 (${inventorySummary?.delist_total ?? 0})`" name="delist">
+          <el-table
+            :data="inventoryDelistRecords"
+            stripe
+            border
+            size="small"
+            empty-text="该日暂无负库存下架记录"
+          >
+            <el-table-column prop="delisted_at" label="下架时间" width="170" />
+            <el-table-column prop="shop_display_name" label="店铺" width="120" show-overflow-tooltip />
+            <el-table-column prop="product_code" label="商品编码" width="110" show-overflow-tooltip />
+            <el-table-column label="下架时可用数" width="110" align="center">
+              <template #default="{ row }: { row: DailyInventoryDelistRecord }">
+                {{ row.erp_available_qty ?? '—' }}
+              </template>
+            </el-table-column>
+            <el-table-column prop="pdd_product_id" label="商品 ID" width="130" show-overflow-tooltip />
+            <el-table-column prop="message" label="说明" min-width="160" show-overflow-tooltip />
+          </el-table>
+        </el-tab-pane>
+
+        <el-tab-pane :label="`恢复上架 (${inventorySummary?.relist_total ?? 0})`" name="relist">
+          <el-table
+            :data="inventoryRelistRecords"
+            stripe
+            border
+            size="small"
+            empty-text="该日暂无恢复上架记录"
+          >
+            <el-table-column prop="relisted_at" label="恢复上架时间" width="170" />
+            <el-table-column prop="shop_display_name" label="店铺" width="120" show-overflow-tooltip />
+            <el-table-column prop="product_code" label="商品编码" width="110" show-overflow-tooltip />
+            <el-table-column label="恢复时可用数" width="110" align="center">
+              <template #default="{ row }: { row: DailyInventoryDelistRecord }">
+                {{ row.erp_available_qty ?? '—' }}
+              </template>
+            </el-table-column>
+            <el-table-column prop="pdd_product_id" label="商品 ID" width="130" show-overflow-tooltip />
+            <el-table-column prop="message" label="说明" min-width="160" show-overflow-tooltip />
+          </el-table>
+        </el-tab-pane>
+      </el-tabs>
     </el-card>
 
     <el-card shadow="never" class="mb-16">

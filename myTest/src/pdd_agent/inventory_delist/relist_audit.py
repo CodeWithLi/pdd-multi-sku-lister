@@ -25,6 +25,45 @@ def _status_map(browser_status: str, *, dry_run: bool) -> tuple[bool, str]:
     return False, str(browser_status or "恢复上架失败")
 
 
+def _fresh_erp_available_qty(product_code: str, merchant_code: str = "") -> int | None:
+    from pdd_agent.integrations.feishu.jushuitan_erp_inventory import load_jushuitan_inventory_map
+    from pdd_agent.inventory_delist.analysis import _inventory_for_product_code
+
+    code = str(product_code or "").strip()
+    merchant = str(merchant_code or "").strip()
+    if not code and not merchant:
+        return None
+    lookup_codes = list(dict.fromkeys(c for c in [code, merchant] if c))
+    inventory_map = load_jushuitan_inventory_map(codes=lookup_codes, force_refresh=True)
+    return _inventory_for_product_code(code, merchant, inventory_map)
+
+
+def _finalize_relist_outcome(
+    *,
+    browser_status: str,
+    product_code: str,
+    merchant_code: str,
+    message: str,
+    dry_run: bool,
+) -> tuple[bool, str, int | None]:
+    is_relisted, default_msg = _status_map(browser_status, dry_run=dry_run)
+    if not message:
+        message = default_msg
+
+    fresh_qty: int | None = None
+    if browser_status == "relisted" and not dry_run:
+        fresh_qty = _fresh_erp_available_qty(product_code, merchant_code)
+        if fresh_qty is None:
+            is_relisted = False
+            message = "聚水潭可用数未知，未确认重新上架"
+        elif fresh_qty < 0:
+            is_relisted = False
+            message = f"聚水潭可用数仍为 {fresh_qty}，负库存不可重新上架"
+        else:
+            message = f"已重新上架（当前可用数={fresh_qty}）"
+    return is_relisted, message, fresh_qty
+
+
 def record_account_inventory_relist(
     job: InventoryRelistJob,
     account_task: AccountRelistTask,
@@ -51,9 +90,14 @@ def record_account_inventory_relist(
         code = str(item.get("product_code") or "").strip()
         browser_status = str(item.get("status") or "")
         message = str(item.get("message") or "").strip()
-        is_relisted, default_msg = _status_map(browser_status, dry_run=dry_run)
-        if not message:
-            message = default_msg
+        merchant_code = str(item.get("merchant_code") or "").strip()
+        is_relisted, message, fresh_qty = _finalize_relist_outcome(
+            browser_status=browser_status,
+            product_code=code,
+            merchant_code=merchant_code,
+            message=message,
+            dry_run=dry_run,
+        )
         record_ids = list(item.get("record_ids") or [])
         if not record_ids and code:
             record_ids = list((account_task.code_record_ids or {}).get(code) or [])
@@ -62,6 +106,7 @@ def record_account_inventory_relist(
                 rid,
                 is_relisted=is_relisted and not dry_run,
                 message=message,
+                erp_available_qty=fresh_qty,
             ):
                 written += 1
                 schedule_pdd_delist_log_relist_update(rid)

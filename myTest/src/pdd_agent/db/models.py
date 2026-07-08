@@ -698,6 +698,7 @@ class InventoryDelistRecordORM(Base):
     message: Mapped[str] = mapped_column(Text, default="", nullable=False)
     is_relisted: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     delisted_at: Mapped[datetime] = mapped_column(DateTime, index=True, nullable=False)
+    relisted_at: Mapped[datetime | None] = mapped_column(DateTime, index=True, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime, server_default=func.now(), nullable=False
     )

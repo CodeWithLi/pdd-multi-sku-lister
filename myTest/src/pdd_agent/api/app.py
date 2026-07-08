@@ -11,6 +11,7 @@ from pdd_agent.api.routes.catalog import router as catalog_router
 from pdd_agent.api.routes.commerce import router as commerce_router
 from pdd_agent.api.routes.config import router as config_router
 from pdd_agent.api.routes.daily_cycle_relists import router as daily_cycle_relists_router
+from pdd_agent.api.routes.daily_inventory_delist import router as daily_inventory_delist_router
 from pdd_agent.api.routes.daily_listings import router as daily_listings_router
 from pdd_agent.api.routes.daily_pipeline_listing_skips import (
     router as daily_pipeline_listing_skips_router,
@@ -302,6 +303,7 @@ def create_app() -> FastAPI:
     app.include_router(daily_listings_router, prefix="/api")
     app.include_router(daily_pipeline_listing_skips_router, prefix="/api")
     app.include_router(daily_cycle_relists_router, prefix="/api")
+    app.include_router(daily_inventory_delist_router, prefix="/api")
     app.include_router(tasks_router, prefix="/api")
     app.include_router(traffic_report_schedule_router, prefix="/api")
     app.include_router(pipelines_router, prefix="/api")

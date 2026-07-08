@@ -39,8 +39,8 @@ def test_trigger_inventory_relist_run_filters_product_codes(monkeypatch):
     from pdd_agent.inventory_delist.relist_analysis import InventoryRelistAnalysis, RelistTarget
     from pdd_agent.inventory_delist import service as relist_service
 
-    target_a = RelistTarget(product_code="AXB001", account_ids=["acc1"])
-    target_b = RelistTarget(product_code="AXB002", account_ids=["acc1"])
+    target_a = RelistTarget(product_code="AXB001", account_ids=["acc1"], available_qty=10)
+    target_b = RelistTarget(product_code="AXB002", account_ids=["acc1"], available_qty=5)
 
     def fake_analyze(*args, **kwargs):
         return InventoryRelistAnalysis(
@@ -73,9 +73,35 @@ def test_trigger_inventory_relist_run_filters_product_codes(monkeypatch):
     relist_service.trigger_inventory_relist_run(
         account_ids=["acc1"],
         product_codes=["AXB002"],
-        force_feishu_refresh=False,
     )
 
     assert created_snapshot["relist_candidates_count"] == 1
     assert created_snapshot["relist_candidates"][0]["product_code"] == "AXB002"
     assert created_snapshot["per_account_tasks"][0]["candidate_codes"] == ["AXB002"]
+
+
+def test_trigger_inventory_relist_run_rejects_negative_inventory(monkeypatch):
+    from pdd_agent.inventory_delist.relist_analysis import InventoryRelistAnalysis, RelistTarget
+    from pdd_agent.inventory_delist import service as relist_service
+    import pytest
+
+    def fake_analyze(*args, **kwargs):
+        return InventoryRelistAnalysis(
+            account_ids=["acc1"],
+            still_negative_codes=[RelistTarget(product_code="BD070B", available_qty=-1, account_ids=["acc1"])],
+        )
+
+    from types import SimpleNamespace
+
+    cfg = SimpleNamespace(account_ids=["acc1"], execution_mode="parallel")
+
+    monkeypatch.setattr(relist_service, "is_database_available", lambda: True)
+    monkeypatch.setattr(relist_service, "_resolve_account_ids", lambda ids: (["acc1"], []))
+    monkeypatch.setattr(relist_service, "load_inventory_delist_config", lambda: cfg)
+    monkeypatch.setattr(relist_service, "analyze_inventory_relist_targets", fake_analyze)
+
+    with pytest.raises(ValueError, match="仍为负库存"):
+        relist_service.trigger_inventory_relist_run(
+            account_ids=["acc1"],
+            product_codes=["BD070B"],
+        )

@@ -218,21 +218,28 @@ def _ensure_failure_sequential_batch_columns(engine: Engine) -> None:
 
 
 def _ensure_inventory_delist_records_columns(engine: Engine) -> None:
-    """为 inventory_delist_records 补充是否重新上架字段。"""
+    """为 inventory_delist_records 补充扩展字段。"""
     try:
         inspector = inspect(engine)
         if "inventory_delist_records" not in inspector.get_table_names():
             return
         existing = {col["name"] for col in inspector.get_columns("inventory_delist_records")}
-        if "is_relisted" in existing:
+        statements: list[str] = []
+        if "is_relisted" not in existing:
+            statements.append(
+                "ALTER TABLE inventory_delist_records "
+                "ADD COLUMN is_relisted TINYINT(1) NOT NULL DEFAULT 0"
+            )
+        if "relisted_at" not in existing:
+            statements.append(
+                "ALTER TABLE inventory_delist_records "
+                "ADD COLUMN relisted_at DATETIME NULL"
+            )
+        if not statements:
             return
         with engine.begin() as conn:
-            conn.execute(
-                text(
-                    "ALTER TABLE inventory_delist_records "
-                    "ADD COLUMN is_relisted TINYINT(1) NOT NULL DEFAULT 0"
-                )
-            )
+            for stmt in statements:
+                conn.execute(text(stmt))
     except Exception:
         return
 

@@ -42,6 +42,8 @@ import type {
   PddFailureCycleRelistPollLogListResponse,
   DailyCycleRelistRecordListResponse,
   DailyCycleRelistSummaryResponse,
+  DailyInventoryDelistRecordListResponse,
+  DailyInventoryDelistSummaryResponse,
   DailyListingRecordListResponse,
   DailyListingSummaryResponse,
   DailyPipelineListingSkipRecordListResponse,
@@ -1060,6 +1062,21 @@ export const api = {
   }) =>
     http
       .get<DailyCycleRelistRecordListResponse>('/daily-cycle-relists', { params })
+      .then((r) => r.data),
+
+  dailyInventoryDelistSummary: (params?: { stat_date?: string }) =>
+    http
+      .get<DailyInventoryDelistSummaryResponse>('/daily-inventory-delist/summary', { params })
+      .then((r) => r.data),
+
+  dailyInventoryDelistRecords: (params?: {
+    stat_date?: string
+    action?: 'delist' | 'relist'
+    account_id?: string
+    limit?: number
+  }) =>
+    http
+      .get<DailyInventoryDelistRecordListResponse>('/daily-inventory-delist', { params })
       .then((r) => r.data),
 
   dailyListingSummary: (params?: { listed_date?: string; window_mode?: 'calendar' | 'report' }) =>
