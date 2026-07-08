@@ -3391,3 +3391,35 @@ def list_inventory_delist_records(
         for row in rows:
             session.expunge(row)
         return rows
+
+
+def list_pending_relist_records(
+    *,
+    account_ids: list[str] | None = None,
+    limit: int = 500,
+) -> list[InventoryDelistRecordORM]:
+    """列出已下架成功、尚未重新上架的记录（不含 dry_run）。"""
+    if not is_database_available():
+        return []
+    limit = max(1, min(2000, limit))
+    with session_scope() as session:
+        query = session.query(InventoryDelistRecordORM).filter(
+            InventoryDelistRecordORM.delist_status == "completed",
+            InventoryDelistRecordORM.is_relisted.is_(False),
+            InventoryDelistRecordORM.dry_run.is_(False),
+        )
+        if account_ids:
+            ids = [str(aid).strip() for aid in account_ids if str(aid).strip()]
+            if ids:
+                query = query.filter(InventoryDelistRecordORM.account_id.in_(ids))
+        rows = (
+            query.order_by(
+                InventoryDelistRecordORM.delisted_at.desc(),
+                InventoryDelistRecordORM.record_id.desc(),
+            )
+            .limit(limit)
+            .all()
+        )
+        for row in rows:
+            session.expunge(row)
+        return rows

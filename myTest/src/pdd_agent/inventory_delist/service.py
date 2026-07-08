@@ -10,6 +10,7 @@ from pdd_agent.db.repositories import list_inventory_delist_records
 from pdd_agent.db.session import is_database_available
 from pdd_agent.inventory_delist.account_resolver import resolve_enabled_account_ids
 from pdd_agent.inventory_delist.analysis import InventoryDelistAnalysis, analyze_inventory_delist_targets
+from pdd_agent.inventory_delist.relist_analysis import InventoryRelistAnalysis, analyze_inventory_relist_targets
 from pdd_agent.inventory_delist.published_query import count_published_by_account
 from pdd_agent.inventory_delist.config import (
     InventoryDelistScheduleConfig,
@@ -293,3 +294,69 @@ def list_inventory_delist_record_items(
         limit=limit,
     )
     return [_record_to_dict(row) for row in rows]
+
+
+def _relist_target_to_dict(target) -> dict[str, Any]:
+    return {
+        "product_code": target.product_code,
+        "account_ids": list(target.account_ids),
+        "shop_names": list(target.shop_names),
+        "record_ids": list(target.record_ids),
+        "available_qty": target.available_qty,
+        "is_multi_shop": bool(target.is_multi_shop),
+        "was_common_delist": bool(target.was_common_delist),
+        "per_account": list(target.per_account),
+    }
+
+
+def relist_analysis_to_dict(analysis: InventoryRelistAnalysis) -> dict[str, Any]:
+    return {
+        "account_ids": analysis.account_ids,
+        "pending_record_count": analysis.pending_record_count,
+        "unique_product_codes": analysis.unique_product_codes,
+        "common_pending_codes": analysis.common_pending_codes,
+        "relist_candidates": [_relist_target_to_dict(t) for t in analysis.relist_candidates],
+        "still_negative_codes": [_relist_target_to_dict(t) for t in analysis.still_negative_codes],
+        "unknown_inventory_codes": [_relist_target_to_dict(t) for t in analysis.unknown_inventory_codes],
+        "inventory_by_code": analysis.inventory_by_code,
+        "feishu_query_count": analysis.feishu_query_count,
+        "feishu_called": analysis.feishu_called,
+        "feishu_rows_matched": analysis.feishu_rows_matched,
+        "feishu_force_refresh": analysis.feishu_force_refresh,
+        "feishu_error": analysis.feishu_error,
+        "database_available": analysis.database_available,
+        "diagnostics": analysis.diagnostics,
+    }
+
+
+def preview_inventory_relist(
+    account_ids: list[str] | None = None,
+    *,
+    force_feishu_refresh: bool = False,
+    min_available_qty: int = 0,
+) -> dict[str, Any]:
+    resolved, rejected = _resolve_account_ids(account_ids)
+    logger.info(
+        "inventory relist preview requested=%s resolved=%s rejected=%s",
+        account_ids,
+        resolved,
+        rejected,
+    )
+    if not resolved:
+        msg = "未匹配到有效店铺"
+        if rejected:
+            msg += f"（无效：{', '.join(rejected)}）"
+        raise ValueError(msg)
+
+    analysis = analyze_inventory_relist_targets(
+        resolved,
+        force_feishu_refresh=bool(force_feishu_refresh),
+        min_available_qty=int(min_available_qty),
+    )
+    result = relist_analysis_to_dict(analysis)
+    if rejected:
+        result["diagnostics"] = dict(result.get("diagnostics") or {})
+        result["diagnostics"]["rejected_account_ids"] = rejected
+    result["requested_account_ids"] = list(account_ids or [])
+    result["resolved_account_ids"] = resolved
+    return result

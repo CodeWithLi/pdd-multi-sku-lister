@@ -12,6 +12,8 @@ from pdd_agent.inventory_delist.schemas import (
     InventoryDelistPreviewOut,
     InventoryDelistRecordListOut,
     InventoryDelistRecordOut,
+    InventoryRelistPreviewIn,
+    InventoryRelistPreviewOut,
     InventoryDelistScheduleOut,
     InventoryDelistScheduleUpdateIn,
     InventoryDelistTriggerIn,
@@ -26,6 +28,7 @@ from pdd_agent.inventory_delist.service import (
     list_inventory_delist_record_items,
     list_on_sale_product_codes,
     preview_inventory_delist,
+    preview_inventory_relist,
     trigger_inventory_delist_run,
     update_schedule,
 )
@@ -72,6 +75,21 @@ def post_inventory_delist_preview(body: InventoryDelistPreviewIn):
             test_override_text=body.test_override_text or None,
         )
         return InventoryDelistPreviewOut(**data)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+@router.post("/relist/preview", response_model=InventoryRelistPreviewOut)
+def post_inventory_relist_preview(body: InventoryRelistPreviewIn):
+    try:
+        data = preview_inventory_relist(
+            account_ids=body.account_ids,
+            force_feishu_refresh=body.force_feishu_refresh,
+            min_available_qty=body.min_available_qty,
+        )
+        return InventoryRelistPreviewOut(**data)
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     except Exception as exc:

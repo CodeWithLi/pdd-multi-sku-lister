@@ -2,7 +2,7 @@
 import { computed, onMounted, onUnmounted, reactive, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { Search, Remove, Check, Document } from '@element-plus/icons-vue'
+import { Search, Remove, Check, Document, Upload, Shop } from '@element-plus/icons-vue'
 import { inventoryDelistApi } from '@/api/inventoryDelist'
 import { api } from '@/api/client'
 import PageHeader from '@/components/PageHeader.vue'
@@ -17,8 +17,11 @@ import type {
   InventoryDelistPreview,
   InventoryDelistRecord,
   InventoryDelistSchedule,
+  InventoryRelistPreview,
   OnSaleCodesResponse,
 } from '@/types/inventoryDelist'
+
+const mainTab = ref<'delist' | 'relist'>('delist')
 
 const router = useRouter()
 
@@ -29,6 +32,9 @@ const triggering = ref(false)
 const schedule = ref<InventoryDelistSchedule | null>(null)
 const accounts = ref<Account[]>([])
 const preview = ref<InventoryDelistPreview | null>(null)
+const relistPreview = ref<InventoryRelistPreview | null>(null)
+const relistPreviewing = ref(false)
+const relistPreviewTab = ref('ready')
 const jobs = ref<InventoryDelistJob[]>([])
 const records = ref<InventoryDelistRecord[]>([])
 const formReady = ref(false)
@@ -157,6 +163,49 @@ const confirmDelistLabel = computed(() => {
 const canTriggerDelist = computed(
   () => form.account_ids.length > 0 && (preview.value?.negative_inventory_codes.length ?? 0) > 0,
 )
+
+const relistReadyCount = computed(() => relistPreview.value?.relist_candidates.length ?? 0)
+const relistMultiShopCount = computed(
+  () => relistPreview.value?.relist_candidates.filter((row) => row.is_multi_shop).length ?? 0,
+)
+
+const relistReadyRows = computed(() => {
+  if (!relistPreview.value) return []
+  return relistPreview.value.relist_candidates.map((row) => ({
+    product_code: row.product_code,
+    available_qty: row.available_qty,
+    shops:
+      row.shop_names.join('、') ||
+      row.account_ids.map((id) => accountLabel(id)).join('、'),
+    shop_count: row.account_ids.length,
+    is_multi_shop: row.is_multi_shop,
+    was_common_delist: row.was_common_delist,
+  }))
+})
+
+const relistStillNegativeRows = computed(() => {
+  if (!relistPreview.value) return []
+  return relistPreview.value.still_negative_codes.map((row) => ({
+    product_code: row.product_code,
+    available_qty: row.available_qty,
+    shops:
+      row.shop_names.join('、') ||
+      row.account_ids.map((id) => accountLabel(id)).join('、'),
+    shop_count: row.account_ids.length,
+  }))
+})
+
+const relistDiagnosticsMessage = computed(() =>
+  String(relistPreview.value?.diagnostics?.message || '').trim(),
+)
+
+const relistDiagnosticsType = computed(() => {
+  if (!relistPreview.value) return 'info'
+  if (relistPreview.value.feishu_error) return 'error'
+  if (relistReadyCount.value > 0) return 'success'
+  if ((relistPreview.value.pending_record_count ?? 0) === 0) return 'warning'
+  return 'info'
+})
 
 const autoSaveHint = computed(() => {
   if (autoSaveState.value === 'saving') return '保存中…'
@@ -464,6 +513,31 @@ async function runPreview() {
   }
 }
 
+async function runRelistPreview() {
+  if (!form.account_ids.length) {
+    ElMessage.warning('请至少选择一个店铺')
+    return
+  }
+  relistPreviewing.value = true
+  try {
+    relistPreview.value = await inventoryDelistApi.relistPreview(form.account_ids, {
+      force_feishu_refresh: true,
+    })
+    relistPreviewTab.value = relistReadyCount.value > 0 ? 'ready' : 'pending'
+    const ready = relistReadyCount.value
+    const pending = relistPreview.value.pending_record_count
+    ElMessage.success(
+      ready > 0
+        ? `检测完成：${pending} 条待恢复记录，${ready} 个编码可上架`
+        : `检测完成：${pending} 条待恢复记录，暂无可用数已恢复的编码`,
+    )
+  } catch (e) {
+    ElMessage.error(e instanceof Error ? e.message : '恢复检测失败')
+  } finally {
+    relistPreviewing.value = false
+  }
+}
+
 async function submitDelist(options?: { requirePreview?: boolean }) {
   if (!form.account_ids.length) {
     ElMessage.warning('请至少选择一个店铺')
@@ -567,106 +641,125 @@ onUnmounted(() => {
 <template>
   <div v-loading="loading" class="page">
     <PageHeader
-      title="负库存下架"
-      desc="定时扫描所选店铺的在售商品，查询飞书「聚水潭ERP商品列表」可用数；可用数小于 0 的商品，复用整合链路仅执行下架（不上架）。"
+      title="负库存管理"
+      desc="下架：扫描在售商品，聚水潭可用数 &lt; 0 时自动下架。恢复上架：对已下架记录查聚水潭，可用数恢复后联动多店重新上架。"
     >
       <template #actions>
         <el-button :icon="Document" @click="openRecordsDialog">下架记录</el-button>
-        <el-button :loading="previewing" type="primary" :icon="Search" @click="runPreview">
-          检测预览
-        </el-button>
-        <el-button
-          :loading="triggering"
-          type="warning"
-          :icon="Remove"
-          :disabled="!canTriggerDelist && !form.test_override_enabled"
-          @click="submitDelist({ requirePreview: !form.test_override_enabled })"
-        >
-          {{ delistButtonLabel }}
-        </el-button>
+        <template v-if="mainTab === 'delist'">
+          <el-button :loading="previewing" type="primary" :icon="Search" @click="runPreview">
+            检测预览
+          </el-button>
+          <el-button
+            :loading="triggering"
+            type="warning"
+            :icon="Remove"
+            :disabled="!canTriggerDelist && !form.test_override_enabled"
+            @click="submitDelist({ requirePreview: !form.test_override_enabled })"
+          >
+            {{ delistButtonLabel }}
+          </el-button>
+        </template>
+        <template v-else>
+          <el-button :loading="relistPreviewing" type="primary" :icon="Search" @click="runRelistPreview">
+            恢复检测
+          </el-button>
+          <el-button type="success" :icon="Upload" disabled>立即上架（即将支持）</el-button>
+        </template>
       </template>
     </PageHeader>
 
-    <el-alert v-if="schedule" :type="statusType" show-icon :closable="false" class="mb-16">
-      <template #title>
-        {{ schedule.scheduler_running ? '定时调度运行中' : '定时调度未运行' }}
-      </template>
-      <template #default>
-        {{
-          schedule.enabled
-            ? `已启用：每 ${schedule.interval_hours} 小时自动检测并下架负库存商品`
-            : '定时未启用，可手动检测预览后下架'
-        }}
-        <span v-if="schedule.last_scheduled_run_at"> · 上次：{{ schedule.last_scheduled_run_at }}</span>
-      </template>
-    </el-alert>
-
-    <el-card shadow="never" class="mb-16">
+    <el-card shadow="never" class="mb-16 shop-panel">
       <template #header>
         <div class="card-head">
-          <span>任务配置</span>
-          <span v-if="autoSaveHint" class="hint">{{ autoSaveHint }}</span>
+          <span><el-icon class="head-icon"><Shop /></el-icon> 选择店铺</span>
+          <span class="shop-panel__actions">
+            <span class="hint">已选 {{ selectedShopCount }} / {{ accounts.length }} 家</span>
+            <el-button link type="primary" size="small" @click="selectAllShops">全选</el-button>
+            <el-button link type="info" size="small" @click="clearShops">清空</el-button>
+          </span>
         </div>
       </template>
-      <el-form label-width="96px" class="config-form">
-        <el-form-item label="定时间隔">
-          <div class="inline">
-            <el-switch v-model="form.enabled" />
-            <template v-if="form.enabled">
-              <span>每</span>
-              <el-input-number
-                v-model="form.interval_hours"
-                :min="0.5"
-                :max="168"
-                :step="0.5"
-                :precision="1"
-                controls-position="right"
-                style="width: 120px"
-              />
-              <span>小时执行</span>
-            </template>
-          </div>
-        </el-form-item>
-
-        <el-form-item label="选择店铺">
-          <div class="shop-box">
-            <div class="shop-box__toolbar">
-              <span>已选 {{ selectedShopCount }} 家</span>
-              <span>
-                <el-button link type="primary" size="small" @click="selectAllShops">全选</el-button>
-                <el-button link type="info" size="small" @click="clearShops">清空</el-button>
-              </span>
-            </div>
-            <el-checkbox-group v-model="form.account_ids" class="shop-group">
-              <el-checkbox v-for="acc in accounts" :key="acc.account_id" :label="acc.account_id">
-                <span>{{ shopDisplayName(acc) }}</span>
-                <span v-if="shopDisplaySub(acc)" class="shop-sub">{{ shopDisplaySub(acc) }}</span>
-              </el-checkbox>
-            </el-checkbox-group>
-          </div>
-        </el-form-item>
-
-        <el-form-item label="执行方式">
-          <el-radio-group v-model="form.execution_mode">
-            <el-radio label="parallel">多店同时下架</el-radio>
-            <el-radio label="sequential">逐店下架</el-radio>
-          </el-radio-group>
-        </el-form-item>
-
-        <el-form-item label="高级选项">
-          <el-checkbox v-model="form.delist_spec_code_search_enabled">
-            商品编码未命中时尝试规格编码搜索（较慢）
-          </el-checkbox>
-          <el-button link type="info" size="small" class="dev-link" @click="openDevDialog">
-            开发者联调
-          </el-button>
-        </el-form-item>
-      </el-form>
+      <div class="shop-grid">
+        <button
+          v-for="acc in accounts"
+          :key="acc.account_id"
+          type="button"
+          class="shop-card"
+          :class="{ 'shop-card--active': form.account_ids.includes(acc.account_id) }"
+          @click="toggleShop(acc.account_id, !form.account_ids.includes(acc.account_id))"
+        >
+          <span class="shop-card__name">{{ shopDisplayName(acc) }}</span>
+          <span v-if="shopDisplaySub(acc)" class="shop-card__sub">{{ shopDisplaySub(acc) }}</span>
+          <el-icon v-if="form.account_ids.includes(acc.account_id)" class="shop-card__check"><Check /></el-icon>
+        </button>
+      </div>
     </el-card>
+
+    <el-tabs v-model="mainTab" class="main-tabs mb-16">
+      <el-tab-pane label="负库存下架" name="delist">
+        <el-alert v-if="schedule" :type="statusType" show-icon :closable="false" class="mb-16">
+          <template #title>
+            {{ schedule.scheduler_running ? '下架定时调度运行中' : '下架定时调度未运行' }}
+          </template>
+          <template #default>
+            {{
+              schedule.enabled
+                ? `已启用：每 ${schedule.interval_hours} 小时自动检测并下架负库存商品`
+                : '定时未启用，可手动检测预览后下架'
+            }}
+            <span v-if="schedule.last_scheduled_run_at"> · 上次：{{ schedule.last_scheduled_run_at }}</span>
+          </template>
+        </el-alert>
+
+        <el-card shadow="never" class="mb-16">
+          <template #header>
+            <div class="card-head">
+              <span>下架配置</span>
+              <span v-if="autoSaveHint" class="hint">{{ autoSaveHint }}</span>
+            </div>
+          </template>
+          <el-form label-width="96px" class="config-form">
+            <el-form-item label="定时间隔">
+              <div class="inline">
+                <el-switch v-model="form.enabled" />
+                <template v-if="form.enabled">
+                  <span>每</span>
+                  <el-input-number
+                    v-model="form.interval_hours"
+                    :min="0.5"
+                    :max="168"
+                    :step="0.5"
+                    :precision="1"
+                    controls-position="right"
+                    style="width: 120px"
+                  />
+                  <span>小时执行</span>
+                </template>
+              </div>
+            </el-form-item>
+
+            <el-form-item label="执行方式">
+              <el-radio-group v-model="form.execution_mode">
+                <el-radio label="parallel">多店同时下架</el-radio>
+                <el-radio label="sequential">逐店下架</el-radio>
+              </el-radio-group>
+            </el-form-item>
+
+            <el-form-item label="高级选项">
+              <el-checkbox v-model="form.delist_spec_code_search_enabled">
+                商品编码未命中时尝试规格编码搜索（较慢）
+              </el-checkbox>
+              <el-button link type="info" size="small" class="dev-link" @click="openDevDialog">
+                开发者联调
+              </el-button>
+            </el-form-item>
+          </el-form>
+        </el-card>
 
     <el-card shadow="never" class="mb-16">
       <template #header>
-        <span>检测预览</span>
+        <span>下架检测预览</span>
       </template>
 
       <div v-if="!preview" class="preview-empty">
@@ -821,6 +914,149 @@ onUnmounted(() => {
       </el-table>
       <el-empty v-if="!jobs.length" description="暂无任务" :image-size="56" />
     </el-card>
+      </el-tab-pane>
+
+      <el-tab-pane label="库存恢复上架" name="relist">
+        <el-alert type="info" show-icon :closable="false" class="mb-16">
+          <template #title>多店联动规则</template>
+          <template #default>
+            读取「已下架且未重新上架」记录，查聚水潭当前可用数。同一商品若在多家店铺同时下架，可用数恢复后需<strong>全部店铺一起上架</strong>。浏览器自动上架功能下一步实现。
+          </template>
+        </el-alert>
+
+        <el-row :gutter="12" class="stat-row mb-16">
+          <el-col :xs="24" :sm="8">
+            <div class="stat-card">
+              <div class="stat-card__label">待恢复记录</div>
+              <div class="stat-card__value">{{ relistPreview?.pending_record_count ?? '—' }}</div>
+            </div>
+          </el-col>
+          <el-col :xs="24" :sm="8">
+            <div class="stat-card stat-card--success">
+              <div class="stat-card__label">可上架编码</div>
+              <div class="stat-card__value">{{ relistReadyCount || '—' }}</div>
+            </div>
+          </el-col>
+          <el-col :xs="24" :sm="8">
+            <div class="stat-card stat-card--warning">
+              <div class="stat-card__label">多店联动</div>
+              <div class="stat-card__value">{{ relistMultiShopCount || '—' }}</div>
+            </div>
+          </el-col>
+        </el-row>
+
+        <el-card shadow="never" class="mb-16">
+          <template #header>
+            <div class="card-head">
+              <span>恢复上架配置</span>
+              <el-tag size="small" type="info" effect="plain">定时任务 · 即将支持</el-tag>
+            </div>
+          </template>
+          <el-form label-width="96px" class="config-form">
+            <el-form-item label="定时间隔">
+              <div class="inline">
+                <el-switch :model-value="false" disabled />
+                <span class="text-muted">恢复上架定时检测（下一步实现）</span>
+              </div>
+            </el-form-item>
+            <el-form-item label="恢复条件">
+              <span>聚水潭可用数 ≥ 0</span>
+            </el-form-item>
+          </el-form>
+        </el-card>
+
+        <el-card shadow="never">
+          <template #header>
+            <span>恢复检测预览</span>
+          </template>
+
+          <div v-if="!relistPreview" class="preview-empty">
+            <p>流程：读取已下架记录 → 查聚水潭可用数 → 列出可用数已恢复的商品 → 多店联动展示</p>
+            <el-button type="primary" :loading="relistPreviewing" :icon="Search" @click="runRelistPreview">
+              开始检测
+            </el-button>
+          </div>
+
+          <template v-else>
+            <el-alert
+              :type="relistDiagnosticsType"
+              :closable="false"
+              show-icon
+              class="mb-12"
+              :title="relistDiagnosticsMessage || '检测完成'"
+            />
+
+            <el-tabs v-model="relistPreviewTab">
+              <el-tab-pane :label="`可上架 (${relistReadyCount})`" name="ready">
+                <el-table :data="relistReadyRows" size="small" border stripe empty-text="暂无可用数已恢复的编码">
+                  <el-table-column prop="product_code" label="商品编码" min-width="120" />
+                  <el-table-column label="当前可用数" width="100" align="center">
+                    <template #default="{ row }">
+                      <span :class="qtyClass(row.available_qty)">{{ row.available_qty ?? '—' }}</span>
+                    </template>
+                  </el-table-column>
+                  <el-table-column prop="shops" label="需上架店铺" min-width="180" show-overflow-tooltip />
+                  <el-table-column label="店铺数" width="80" align="center">
+                    <template #default="{ row }">
+                      <el-tag size="small" :type="row.is_multi_shop ? 'warning' : 'info'" effect="plain">
+                        {{ row.shop_count }} 家
+                      </el-tag>
+                    </template>
+                  </el-table-column>
+                  <el-table-column label="共同下架" width="96" align="center">
+                    <template #default="{ row }">
+                      <el-tag v-if="row.was_common_delist" size="small" type="warning" effect="plain">是</el-tag>
+                      <span v-else class="text-muted">否</span>
+                    </template>
+                  </el-table-column>
+                </el-table>
+              </el-tab-pane>
+
+              <el-tab-pane
+                :label="`仍负库存 (${relistPreview.still_negative_codes.length})`"
+                name="negative"
+              >
+                <el-table
+                  :data="relistStillNegativeRows"
+                  size="small"
+                  border
+                  stripe
+                  empty-text="无仍负库存的待恢复编码"
+                >
+                  <el-table-column prop="product_code" label="商品编码" min-width="120" />
+                  <el-table-column label="当前可用数" width="100" align="center">
+                    <template #default="{ row }">
+                      <span class="qty-negative">{{ row.available_qty ?? '—' }}</span>
+                    </template>
+                  </el-table-column>
+                  <el-table-column prop="shops" label="待恢复店铺" min-width="180" show-overflow-tooltip />
+                  <el-table-column prop="shop_count" label="店铺数" width="80" align="center" />
+                </el-table>
+              </el-tab-pane>
+
+              <el-tab-pane
+                :label="`待恢复编码 (${relistPreview.unique_product_codes.length})`"
+                name="pending"
+              >
+                <div class="code-list">
+                  <el-tag
+                    v-for="code in relistPreview.unique_product_codes"
+                    :key="code"
+                    size="small"
+                    :type="relistPreview.common_pending_codes.includes(code) ? 'warning' : 'info'"
+                    effect="plain"
+                  >
+                    {{ code }}
+                    <span v-if="relistPreview.common_pending_codes.includes(code)"> · 多店</span>
+                  </el-tag>
+                  <el-empty v-if="!relistPreview.unique_product_codes.length" description="暂无待恢复编码" />
+                </div>
+              </el-tab-pane>
+            </el-tabs>
+          </template>
+        </el-card>
+      </el-tab-pane>
+    </el-tabs>
 
     <el-dialog
       v-model="recordsDialogVisible"
@@ -977,6 +1213,104 @@ onUnmounted(() => {
 <style scoped>
 .page {
   padding-bottom: 24px;
+}
+
+.main-tabs :deep(.el-tabs__header) {
+  margin-bottom: 16px;
+}
+
+.head-icon {
+  vertical-align: -2px;
+  margin-right: 4px;
+}
+
+.shop-panel__actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.shop-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+  gap: 10px;
+}
+
+.shop-card {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  padding: 12px 14px;
+  border: 1px solid var(--el-border-color-lighter);
+  border-radius: 8px;
+  background: #fff;
+  cursor: pointer;
+  text-align: left;
+  transition: border-color 0.15s, box-shadow 0.15s, background 0.15s;
+}
+
+.shop-card:hover {
+  border-color: var(--el-color-primary-light-5);
+  box-shadow: 0 2px 8px rgba(64, 158, 255, 0.08);
+}
+
+.shop-card--active {
+  border-color: var(--el-color-primary);
+  background: var(--el-color-primary-light-9);
+}
+
+.shop-card__name {
+  font-size: 14px;
+  font-weight: 600;
+  color: #303133;
+}
+
+.shop-card__sub {
+  font-size: 12px;
+  color: #909399;
+}
+
+.shop-card__check {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  color: var(--el-color-primary);
+}
+
+.stat-row .el-col {
+  margin-bottom: 8px;
+}
+
+.stat-card {
+  padding: 14px 16px;
+  border-radius: 8px;
+  background: linear-gradient(135deg, #f5f7fa 0%, #eef1f6 100%);
+  border: 1px solid var(--el-border-color-lighter);
+}
+
+.stat-card--success {
+  background: linear-gradient(135deg, #f0f9eb 0%, #e8f5e1 100%);
+  border-color: #e1f3d8;
+}
+
+.stat-card--warning {
+  background: linear-gradient(135deg, #fdf6ec 0%, #faecd8 100%);
+  border-color: #faecd8;
+}
+
+.stat-card__label {
+  font-size: 12px;
+  color: #909399;
+  margin-bottom: 6px;
+}
+
+.stat-card__value {
+  font-size: 24px;
+  font-weight: 700;
+  color: #303133;
+  line-height: 1.2;
 }
 
 .mb-16 {

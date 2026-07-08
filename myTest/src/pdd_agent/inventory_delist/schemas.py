@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
@@ -160,3 +160,41 @@ class InventoryDelistRecordListOut(BaseModel):
     ok: bool = True
     total: int = 0
     items: list[InventoryDelistRecordOut] = Field(default_factory=list)
+
+
+class InventoryRelistPreviewIn(BaseModel):
+    account_ids: list[str] = Field(default_factory=list)
+    force_feishu_refresh: bool = True
+    min_available_qty: int = Field(default=0, ge=-9999, le=999999)
+
+
+class RelistTargetOut(BaseModel):
+    product_code: str
+    account_ids: list[str] = Field(default_factory=list)
+    shop_names: list[str] = Field(default_factory=list)
+    record_ids: list[str] = Field(default_factory=list)
+    available_qty: int | None = None
+    is_multi_shop: bool = False
+    was_common_delist: bool = False
+    per_account: list[dict[str, Any]] = Field(default_factory=list)
+
+
+class InventoryRelistPreviewOut(BaseModel):
+    ok: bool = True
+    account_ids: list[str] = Field(default_factory=list)
+    requested_account_ids: list[str] = Field(default_factory=list)
+    resolved_account_ids: list[str] = Field(default_factory=list)
+    pending_record_count: int = 0
+    unique_product_codes: list[str] = Field(default_factory=list)
+    common_pending_codes: list[str] = Field(default_factory=list)
+    relist_candidates: list[RelistTargetOut] = Field(default_factory=list)
+    still_negative_codes: list[RelistTargetOut] = Field(default_factory=list)
+    unknown_inventory_codes: list[RelistTargetOut] = Field(default_factory=list)
+    inventory_by_code: dict[str, int] = Field(default_factory=dict)
+    feishu_query_count: int = 0
+    feishu_called: bool = False
+    feishu_rows_matched: int = 0
+    feishu_force_refresh: bool = False
+    feishu_error: str = ""
+    database_available: bool = False
+    diagnostics: dict[str, Any] = Field(default_factory=dict)

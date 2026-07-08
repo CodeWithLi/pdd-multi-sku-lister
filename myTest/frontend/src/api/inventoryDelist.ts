@@ -2,6 +2,7 @@ import axios from 'axios'
 import type {
   InventoryDelistJob,
   InventoryDelistPreview,
+  InventoryRelistPreview,
   InventoryDelistRecord,
   InventoryDelistSchedule,
   OnSaleCodesResponse,
@@ -49,6 +50,18 @@ export const inventoryDelistApi = {
         test_override_enabled: options?.test_override_enabled ?? false,
         test_inventory_overrides: options?.test_inventory_overrides ?? {},
         test_override_text: options?.test_override_text ?? '',
+      })
+      .then((r) => r.data),
+
+  relistPreview: (
+    account_ids: string[],
+    options?: { force_feishu_refresh?: boolean; min_available_qty?: number },
+  ) =>
+    http
+      .post<InventoryRelistPreview>('/inventory-delist/relist/preview', {
+        account_ids,
+        force_feishu_refresh: options?.force_feishu_refresh ?? true,
+        min_available_qty: options?.min_available_qty ?? 0,
       })
       .then((r) => r.data),
 

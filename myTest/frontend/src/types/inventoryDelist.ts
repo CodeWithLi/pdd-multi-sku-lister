@@ -113,3 +113,43 @@ export interface InventoryDelistRecord {
   is_relisted: boolean
   delisted_at: string
 }
+
+export interface RelistTarget {
+  product_code: string
+  account_ids: string[]
+  shop_names: string[]
+  record_ids: string[]
+  available_qty: number | null
+  is_multi_shop: boolean
+  was_common_delist: boolean
+  per_account: Array<{
+    account_id: string
+    shop_display_name: string
+    record_id: string
+    mapping_id: string
+    pdd_product_id: string
+    delisted_at: string
+    delist_erp_qty: number | null
+  }>
+}
+
+export interface InventoryRelistPreview {
+  ok: boolean
+  account_ids: string[]
+  requested_account_ids?: string[]
+  resolved_account_ids?: string[]
+  pending_record_count: number
+  unique_product_codes: string[]
+  common_pending_codes: string[]
+  relist_candidates: RelistTarget[]
+  still_negative_codes: RelistTarget[]
+  unknown_inventory_codes: RelistTarget[]
+  inventory_by_code: Record<string, number>
+  feishu_query_count: number
+  feishu_called?: boolean
+  feishu_rows_matched?: number
+  feishu_force_refresh?: boolean
+  feishu_error?: string
+  database_available?: boolean
+  diagnostics?: Record<string, unknown> & { message?: string }
+}

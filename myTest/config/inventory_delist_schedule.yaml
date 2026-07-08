@@ -2,5 +2,7 @@ enabled: false
 interval_hours: 6.0
 account_ids:
 - 多多李子2601
+- 多多李子2603
+- 多多李子2602
 execution_mode: parallel
 delist_spec_code_search_enabled: false
