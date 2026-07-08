@@ -1,0 +1,6 @@
+# 库存下架定时任务配置示例（复制为 inventory_delist_schedule.yaml 后修改）
+enabled: false
+interval_hours: 6
+account_ids: []
+execution_mode: parallel  # parallel | sequential
+delist_spec_code_search_enabled: false

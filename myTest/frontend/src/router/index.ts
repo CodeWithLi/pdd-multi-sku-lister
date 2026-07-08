@@ -10,6 +10,7 @@ const router = createRouter({
     { path: '/campaign', name: 'campaign', component: () => import('@/views/CampaignView.vue'), meta: { title: '活动' } },
     { path: '/traffic', name: 'traffic', component: () => import('@/views/TrafficView.vue'), meta: { title: '推广' } },
     { path: '/traffic-report-schedule', name: 'traffic-report-schedule', component: () => import('@/views/TrafficReportScheduleView.vue'), meta: { title: '投流日报定时' } },
+    { path: '/inventory-delist', name: 'inventory-delist', component: () => import('@/views/InventoryDelistView.vue'), meta: { title: '负库存下架' } },
     { path: '/catalog', name: 'catalog', component: () => import('@/views/CatalogView.vue'), meta: { title: '素材检查' } },
     { path: '/accounts', name: 'accounts', component: () => import('@/views/AccountsView.vue'), meta: { title: '店铺设置' } },
     { path: '/login-health', name: 'login-health', component: () => import('@/views/LoginHealthView.vue'), meta: { title: '登录体检' } },

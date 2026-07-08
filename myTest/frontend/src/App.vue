@@ -21,6 +21,7 @@ import {
   List,
   Grid,
   Timer,
+  Remove,
   Tickets,
   ChatDotRound,
   Calendar,
@@ -53,6 +54,7 @@ const navGroups: NavGroup[] = [
     label: '日常操作',
     items: [
       { path: '/tasks', label: '上架 / 下架', icon: Goods },
+      { path: '/inventory-delist', label: '负库存下架', icon: Remove },
       { path: '/campaign', label: '活动', icon: Discount },
       { path: '/traffic', label: '推广', icon: TrendCharts },
       { path: '/traffic-report-schedule', label: '投流日报定时', icon: Timer },

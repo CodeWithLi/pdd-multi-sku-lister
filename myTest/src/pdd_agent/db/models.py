@@ -665,3 +665,38 @@ class WecomDailyReportLogORM(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime, server_default=func.now(), index=True, nullable=False
     )
+
+
+class InventoryDelistRecordORM(Base):
+    """负库存自动下架记录（聚水潭可用数 < 0 触发，含联调测试）。"""
+
+    __tablename__ = "inventory_delist_records"
+    __table_args__ = (
+        Index("ix_inventory_delist_records_delisted_at", "delisted_at"),
+        Index("ix_inventory_delist_records_job_account", "job_id", "account_id"),
+    )
+
+    record_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    job_id: Mapped[str] = mapped_column(String(64), index=True, nullable=False)
+    run_id: Mapped[str] = mapped_column(String(64), index=True, default="", nullable=False)
+    account_id: Mapped[str] = mapped_column(String(64), index=True, nullable=False)
+    shop_display_name: Mapped[str] = mapped_column(String(128), default="", nullable=False)
+    product_code: Mapped[str] = mapped_column(String(64), index=True, nullable=False)
+    merchant_code: Mapped[str] = mapped_column(String(255), default="", nullable=False)
+    mapping_id: Mapped[str] = mapped_column(String(96), index=True, default="", nullable=False)
+    pdd_product_id: Mapped[str] = mapped_column(String(64), default="", nullable=False)
+    family_code: Mapped[str] = mapped_column(String(64), default="", nullable=False)
+    image_set: Mapped[str] = mapped_column(String(255), default="", nullable=False)
+    erp_available_qty: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    erp_original_qty: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    is_test_override: Mapped[bool] = mapped_column(default=False, nullable=False)
+    is_common_on_sale: Mapped[bool] = mapped_column(default=False, nullable=False)
+    trigger: Mapped[str] = mapped_column(String(32), index=True, default="manual", nullable=False)
+    execution_mode: Mapped[str] = mapped_column(String(16), default="parallel", nullable=False)
+    dry_run: Mapped[bool] = mapped_column(default=False, nullable=False)
+    delist_status: Mapped[str] = mapped_column(String(32), index=True, default="", nullable=False)
+    message: Mapped[str] = mapped_column(Text, default="", nullable=False)
+    delisted_at: Mapped[datetime] = mapped_column(DateTime, index=True, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, server_default=func.now(), nullable=False
+    )

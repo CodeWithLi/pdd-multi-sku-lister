@@ -46,6 +46,11 @@ from pdd_agent.api.services.platform_skip_dedupe_scheduler import get_platform_s
 from pdd_agent.api.services.traffic_report_scheduler import get_traffic_report_scheduler
 from pdd_agent.api.services.wecom_daily_report_scheduler import get_wecom_daily_report_scheduler
 from pdd_agent.api.services.task_queue import TaskQueueWorker
+from pdd_agent.inventory_delist.bootstrap import (
+    register_inventory_delist,
+    start_inventory_delist_scheduler,
+    stop_inventory_delist_scheduler,
+)
 
 logger = get_logger(__name__)
 worker = TaskQueueWorker()
@@ -82,6 +87,7 @@ async def lifespan(app: FastAPI):
     platform_skip_dedupe_scheduler.start()
     commerce_dispatch_scheduler.start()
     mq_auto_phase2_scheduler.start()
+    start_inventory_delist_scheduler()
 
     from pdd_agent.integrations.minio.broadcast import bind_event_loop
     from pdd_agent.integrations.minio.rabbitmq_consumer import get_minio_rabbitmq_consumer
@@ -242,6 +248,7 @@ async def lifespan(app: FastAPI):
     await mq_auto_phase2_scheduler.stop()
     await traffic_report_scheduler.stop()
     await wecom_daily_report_scheduler.stop()
+    await stop_inventory_delist_scheduler()
     await worker.stop()
     logger.info("PDD Agent API stopped")
 
@@ -297,4 +304,5 @@ def create_app() -> FastAPI:
     app.include_router(runs_router, prefix="/api")
     app.include_router(agents_router, prefix="/api")
     app.include_router(wecom_router, prefix="/api")
+    register_inventory_delist(app)
     return app

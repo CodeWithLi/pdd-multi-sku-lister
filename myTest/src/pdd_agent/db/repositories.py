@@ -29,6 +29,7 @@ from pdd_agent.db.models import (
     DailyListingRecordORM,
     FailureCycleRelistActionLogORM,
     FailureCycleRelistPollLogORM,
+    InventoryDelistRecordORM,
     ListedAssetFolderORM,
     RunRecordORM,
     TaskQueueORM,
@@ -3299,3 +3300,92 @@ def upsert_wecom_git_digest_cache(
         session.refresh(row)
         session.expunge(row)
         return row
+
+
+def create_inventory_delist_record(
+    *,
+    job_id: str,
+    run_id: str = "",
+    account_id: str,
+    shop_display_name: str = "",
+    product_code: str,
+    merchant_code: str = "",
+    mapping_id: str = "",
+    pdd_product_id: str = "",
+    family_code: str = "",
+    image_set: str = "",
+    erp_available_qty: int | None = None,
+    erp_original_qty: int | None = None,
+    is_test_override: bool = False,
+    is_common_on_sale: bool = False,
+    trigger: str = "manual",
+    execution_mode: str = "parallel",
+    dry_run: bool = False,
+    delist_status: str = "",
+    message: str = "",
+    delisted_at: datetime | None = None,
+) -> InventoryDelistRecordORM | None:
+    if not is_database_available():
+        return None
+    product_code = str(product_code or "").strip()
+    if not product_code:
+        return None
+    now = delisted_at or datetime.now()
+    with session_scope() as session:
+        row = InventoryDelistRecordORM(
+            record_id=uuid.uuid4().hex,
+            job_id=str(job_id or "").strip(),
+            run_id=str(run_id or "").strip(),
+            account_id=str(account_id or "").strip(),
+            shop_display_name=str(shop_display_name or "").strip(),
+            product_code=product_code,
+            merchant_code=str(merchant_code or "").strip(),
+            mapping_id=str(mapping_id or "").strip(),
+            pdd_product_id=str(pdd_product_id or "").strip(),
+            family_code=str(family_code or "").strip(),
+            image_set=str(image_set or "").strip(),
+            erp_available_qty=erp_available_qty,
+            erp_original_qty=erp_original_qty,
+            is_test_override=bool(is_test_override),
+            is_common_on_sale=bool(is_common_on_sale),
+            trigger=str(trigger or "manual").strip() or "manual",
+            execution_mode=str(execution_mode or "parallel").strip() or "parallel",
+            dry_run=bool(dry_run),
+            delist_status=str(delist_status or "").strip(),
+            message=str(message or "").strip(),
+            delisted_at=now,
+            created_at=datetime.now(),
+        )
+        session.add(row)
+        session.flush()
+        session.refresh(row)
+        session.expunge(row)
+        return row
+
+
+def list_inventory_delist_records(
+    *,
+    account_id: str | None = None,
+    job_id: str | None = None,
+    limit: int = 50,
+) -> list[InventoryDelistRecordORM]:
+    if not is_database_available():
+        return []
+    limit = max(1, min(500, limit))
+    with session_scope() as session:
+        query = session.query(InventoryDelistRecordORM)
+        if account_id and str(account_id).strip():
+            query = query.filter(InventoryDelistRecordORM.account_id == str(account_id).strip())
+        if job_id and str(job_id).strip():
+            query = query.filter(InventoryDelistRecordORM.job_id == str(job_id).strip())
+        rows = (
+            query.order_by(
+                InventoryDelistRecordORM.delisted_at.desc(),
+                InventoryDelistRecordORM.record_id.desc(),
+            )
+            .limit(limit)
+            .all()
+        )
+        for row in rows:
+            session.expunge(row)
+        return rows
