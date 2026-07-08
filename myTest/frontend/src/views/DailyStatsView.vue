@@ -371,7 +371,11 @@ onMounted(load)
             size="small"
             empty-text="该日暂无恢复上架记录"
           >
-            <el-table-column prop="relisted_at" label="恢复上架时间" width="170" />
+            <el-table-column label="恢复上架时间" width="170">
+              <template #default="{ row }: { row: DailyInventoryDelistRecord }">
+                {{ row.relisted_at || row.delisted_at || '—' }}
+              </template>
+            </el-table-column>
             <el-table-column prop="shop_display_name" label="店铺" width="120" show-overflow-tooltip />
             <el-table-column prop="product_code" label="商品编码" width="110" show-overflow-tooltip />
             <el-table-column label="恢复时可用数" width="110" align="center">

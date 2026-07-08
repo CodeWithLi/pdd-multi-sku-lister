@@ -60,3 +60,36 @@ def test_list_daily_inventory_delist_items_relist(monkeypatch):
     assert result.action == "relist"
     assert result.total == 1
     assert result.items[0].product_code == "BD070B"
+
+
+def test_list_daily_inventory_delist_items_relist_legacy_null_relisted_at(monkeypatch):
+    """历史 is_relisted=true 但 relisted_at 为空时，仍应出现在恢复上架列表。"""
+    row = MagicMock()
+    row.record_id = "rec2"
+    row.account_id = "acc1"
+    row.shop_display_name = "兔兔潮流屋"
+    row.product_code = "BD070I"
+    row.merchant_code = "BD070I"
+    row.pdd_product_id = "456"
+    row.erp_available_qty = 10
+    row.delist_status = "completed"
+    row.message = "已重新上架"
+    row.is_relisted = True
+    row.delisted_at = datetime(2026, 7, 8, 14, 30, 18)
+    row.relisted_at = None
+    row.trigger = "manual"
+
+    monkeypatch.setattr(route_module, "is_database_available", lambda: True)
+    monkeypatch.setattr(route_module, "get_account_or_none", lambda _aid: object())
+    monkeypatch.setattr(route_module, "list_daily_inventory_relist_records", lambda **kwargs: [row])
+    monkeypatch.setattr(route_module, "count_daily_inventory_relist_records", lambda **kwargs: 1)
+
+    result = route_module.list_daily_inventory_delist_items(
+        stat_date="2026-07-08",
+        action="relist",
+        account_id="",
+        limit=50,
+    )
+    assert result.total == 1
+    assert result.items[0].is_relisted is True
+    assert result.items[0].relisted_at is None

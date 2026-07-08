@@ -235,11 +235,16 @@ def _ensure_inventory_delist_records_columns(engine: Engine) -> None:
                 "ALTER TABLE inventory_delist_records "
                 "ADD COLUMN relisted_at DATETIME NULL"
             )
-        if not statements:
-            return
         with engine.begin() as conn:
             for stmt in statements:
                 conn.execute(text(stmt))
+            conn.execute(
+                text(
+                    "UPDATE inventory_delist_records "
+                    "SET relisted_at = CURRENT_TIMESTAMP "
+                    "WHERE is_relisted = 1 AND relisted_at IS NULL"
+                )
+            )
     except Exception:
         return
 

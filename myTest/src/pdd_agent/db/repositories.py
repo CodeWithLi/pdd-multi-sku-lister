@@ -9,7 +9,7 @@ from collections import defaultdict
 from datetime import date, datetime, timedelta
 from pathlib import Path
 
-from sqlalchemy import case, func, select
+from sqlalchemy import and_, case, func, or_, select
 from sqlalchemy.exc import IntegrityError
 
 from pdd_agent.core.config import AccountConfig, YamlSettings
@@ -3474,6 +3474,26 @@ def _inventory_delist_completed_filters():
     )
 
 
+def _daily_inventory_relist_day_filters(start: datetime, end: datetime):
+    """恢复上架统计：优先 relisted_at；历史无时间戳时按下架日兜底。"""
+    return (
+        InventoryDelistRecordORM.is_relisted.is_(True),
+        InventoryDelistRecordORM.dry_run.is_(False),
+        or_(
+            and_(
+                InventoryDelistRecordORM.relisted_at.isnot(None),
+                InventoryDelistRecordORM.relisted_at >= start,
+                InventoryDelistRecordORM.relisted_at < end,
+            ),
+            and_(
+                InventoryDelistRecordORM.relisted_at.is_(None),
+                InventoryDelistRecordORM.delisted_at >= start,
+                InventoryDelistRecordORM.delisted_at < end,
+            ),
+        ),
+    )
+
+
 def list_daily_inventory_delist_records(
     *,
     stat_date: date | None = None,
@@ -3576,16 +3596,13 @@ def list_daily_inventory_relist_records(
     start, end = _day_bounds(target)
     with session_scope() as session:
         query = session.query(InventoryDelistRecordORM).filter(
-            InventoryDelistRecordORM.is_relisted.is_(True),
-            InventoryDelistRecordORM.relisted_at >= start,
-            InventoryDelistRecordORM.relisted_at < end,
-            InventoryDelistRecordORM.dry_run.is_(False),
+            *_daily_inventory_relist_day_filters(start, end),
         )
         if account_id:
             query = query.filter(InventoryDelistRecordORM.account_id == account_id.strip())
         rows = (
             query.order_by(
-                InventoryDelistRecordORM.relisted_at.desc(),
+                func.coalesce(InventoryDelistRecordORM.relisted_at, InventoryDelistRecordORM.delisted_at).desc(),
                 InventoryDelistRecordORM.record_id.desc(),
             )
             .limit(limit)
@@ -3607,10 +3624,7 @@ def count_daily_inventory_relist_records(
     start, end = _day_bounds(target)
     with session_scope() as session:
         query = session.query(func.count(InventoryDelistRecordORM.record_id)).filter(
-            InventoryDelistRecordORM.is_relisted.is_(True),
-            InventoryDelistRecordORM.relisted_at >= start,
-            InventoryDelistRecordORM.relisted_at < end,
-            InventoryDelistRecordORM.dry_run.is_(False),
+            *_daily_inventory_relist_day_filters(start, end),
         )
         if account_id:
             query = query.filter(InventoryDelistRecordORM.account_id == account_id.strip())
@@ -3632,12 +3646,7 @@ def summarize_daily_inventory_relist_records(
                 InventoryDelistRecordORM.shop_display_name,
                 func.count(InventoryDelistRecordORM.record_id),
             )
-            .filter(
-                InventoryDelistRecordORM.is_relisted.is_(True),
-                InventoryDelistRecordORM.relisted_at >= start,
-                InventoryDelistRecordORM.relisted_at < end,
-                InventoryDelistRecordORM.dry_run.is_(False),
-            )
+            .filter(*_daily_inventory_relist_day_filters(start, end))
             .group_by(
                 InventoryDelistRecordORM.account_id,
                 InventoryDelistRecordORM.shop_display_name,
