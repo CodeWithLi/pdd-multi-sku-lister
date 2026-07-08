@@ -276,6 +276,7 @@ def _record_to_dict(row) -> dict[str, Any]:
         "dry_run": bool(row.dry_run),
         "delist_status": row.delist_status,
         "message": row.message,
+        "is_relisted": bool(row.is_relisted),
         "delisted_at": delisted_at,
     }
 

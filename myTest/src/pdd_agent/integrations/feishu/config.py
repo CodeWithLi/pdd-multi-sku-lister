@@ -353,6 +353,30 @@ class PddPromotionLogConfig(BaseModel):
         return out
 
 
+class PddDelistLogFieldNames(BaseModel):
+    """PDD商品下架表列名。"""
+
+    date: str = "日期"
+    delisted_at: str = "下架时间"
+    account_name: str = "店铺名"
+    product_code: str = "商品编码"
+    available_qty: str = "当前可用数"
+    status: str = "状态"
+    is_relisted: str = "是否重新上架"
+    record_id: str = "记录ID"
+
+
+class PddDelistLogConfig(BaseModel):
+    enabled: bool = Field(default=True, description="是否启用 PDD 商品下架表")
+    table_id: str = Field(default="", description="PDD商品下架表 table_id")
+    table_name: str = Field(default="PDD商品下架表", description="负库存下架飞书表名")
+    status_options: list[str] = Field(
+        default_factory=lambda: ["已下架", "下架失败", "模拟下架", "跳过", "未找到"],
+    )
+    relist_options: list[str] = Field(default_factory=lambda: ["否", "是"])
+    field_names: PddDelistLogFieldNames = Field(default_factory=PddDelistLogFieldNames)
+
+
 class PddFailureCycleRelistWatchConfig(BaseModel):
     """失败日志轮询：筛选可循环上架的候选记录。"""
 
@@ -635,6 +659,7 @@ class FeishuYamlConfig(BaseModel):
     pdd_activity_log: PddActivityLogConfig = Field(default_factory=PddActivityLogConfig)
     pdd_marketing_log: PddMarketingLogConfig = Field(default_factory=PddMarketingLogConfig)
     pdd_promotion_log: PddPromotionLogConfig = Field(default_factory=PddPromotionLogConfig)
+    pdd_delist_log: PddDelistLogConfig = Field(default_factory=PddDelistLogConfig)
     pdd_price_compare: PddPriceCompareConfig = Field(default_factory=PddPriceCompareConfig)
     pdd_product_catalog: PddProductCatalogConfig = Field(default_factory=PddProductCatalogConfig)
     jushuitan_erp_inventory: JushuitanErpInventoryConfig = Field(default_factory=JushuitanErpInventoryConfig)
@@ -665,6 +690,7 @@ class FeishuConfig(BaseModel):
     pdd_activity_log: PddActivityLogConfig = Field(default_factory=PddActivityLogConfig)
     pdd_marketing_log: PddMarketingLogConfig = Field(default_factory=PddMarketingLogConfig)
     pdd_promotion_log: PddPromotionLogConfig = Field(default_factory=PddPromotionLogConfig)
+    pdd_delist_log: PddDelistLogConfig = Field(default_factory=PddDelistLogConfig)
     pdd_price_compare: PddPriceCompareConfig = Field(default_factory=PddPriceCompareConfig)
     pdd_product_catalog: PddProductCatalogConfig = Field(default_factory=PddProductCatalogConfig)
     jushuitan_erp_inventory: JushuitanErpInventoryConfig = Field(default_factory=JushuitanErpInventoryConfig)
@@ -726,6 +752,10 @@ def load_feishu_config(path: Path | None = None) -> FeishuConfig:
     if "pdd_promotion_log" in raw and isinstance(raw.get("pdd_promotion_log"), dict):
         pdd_promotion_log = PddPromotionLogConfig.model_validate(raw["pdd_promotion_log"])
 
+    pdd_delist_log = yaml_cfg.pdd_delist_log
+    if "pdd_delist_log" in raw and isinstance(raw.get("pdd_delist_log"), dict):
+        pdd_delist_log = PddDelistLogConfig.model_validate(raw["pdd_delist_log"])
+
     pdd_product_catalog = yaml_cfg.pdd_product_catalog
     if "pdd_product_catalog" in raw and isinstance(raw.get("pdd_product_catalog"), dict):
         pdd_product_catalog = PddProductCatalogConfig.model_validate(raw["pdd_product_catalog"])
@@ -760,6 +790,7 @@ def load_feishu_config(path: Path | None = None) -> FeishuConfig:
         pdd_activity_log=pdd_activity_log,
         pdd_marketing_log=pdd_marketing_log,
         pdd_promotion_log=pdd_promotion_log,
+        pdd_delist_log=pdd_delist_log,
         pdd_price_compare=pdd_price_compare,
         pdd_product_catalog=pdd_product_catalog,
         jushuitan_erp_inventory=jushuitan_erp_inventory,
@@ -998,6 +1029,22 @@ def save_pdd_promotion_table_id_to_config(table_id: str, path: Path | None = Non
         promo_raw = {}
     promo_raw["table_id"] = table_id
     data["pdd_promotion_log"] = promo_raw
+    cfg_path.parent.mkdir(parents=True, exist_ok=True)
+    with open(cfg_path, "w", encoding="utf-8") as f:
+        yaml.dump(data, f, allow_unicode=True, default_flow_style=False, sort_keys=False)
+
+
+def save_pdd_delist_table_id_to_config(table_id: str, path: Path | None = None) -> None:
+    cfg_path = path or Path(os.getenv("FEISHU_CONFIG_PATH", DEFAULT_FEISHU_CONFIG_PATH))
+    data: dict = {}
+    if cfg_path.is_file():
+        with open(cfg_path, encoding="utf-8") as f:
+            data = yaml.safe_load(f) or {}
+    delist_raw = data.get("pdd_delist_log")
+    if not isinstance(delist_raw, dict):
+        delist_raw = {}
+    delist_raw["table_id"] = table_id
+    data["pdd_delist_log"] = delist_raw
     cfg_path.parent.mkdir(parents=True, exist_ok=True)
     with open(cfg_path, "w", encoding="utf-8") as f:
         yaml.dump(data, f, allow_unicode=True, default_flow_style=False, sort_keys=False)

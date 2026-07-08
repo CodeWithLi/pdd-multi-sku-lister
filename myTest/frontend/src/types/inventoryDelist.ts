@@ -110,5 +110,6 @@ export interface InventoryDelistRecord {
   dry_run: boolean
   delist_status: string
   message: string
+  is_relisted: boolean
   delisted_at: string
 }

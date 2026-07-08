@@ -262,6 +262,28 @@ pdd_promotion_log:
     message: 备注
     failure_reason: 失败原因
     run_id: 运行ID
+pdd_delist_log:
+  enabled: true
+  table_id: tbl9ZTvRjhJty3BD
+  table_name: PDD商品下架表
+  status_options:
+  - 已下架
+  - 下架失败
+  - 模拟下架
+  - 跳过
+  - 未找到
+  relist_options:
+  - 否
+  - 是
+  field_names:
+    date: 日期
+    delisted_at: 下架时间
+    account_name: 店铺名
+    product_code: 商品编码
+    available_qty: 当前可用数
+    status: 状态
+    is_relisted: 是否重新上架
+    record_id: 记录ID
 pdd_product_catalog:
   enabled: true
   table_id: tblDbLZHttx80Giq

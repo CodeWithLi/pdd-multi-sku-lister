@@ -217,6 +217,26 @@ def _ensure_failure_sequential_batch_columns(engine: Engine) -> None:
         return
 
 
+def _ensure_inventory_delist_records_columns(engine: Engine) -> None:
+    """为 inventory_delist_records 补充是否重新上架字段。"""
+    try:
+        inspector = inspect(engine)
+        if "inventory_delist_records" not in inspector.get_table_names():
+            return
+        existing = {col["name"] for col in inspector.get_columns("inventory_delist_records")}
+        if "is_relisted" in existing:
+            return
+        with engine.begin() as conn:
+            conn.execute(
+                text(
+                    "ALTER TABLE inventory_delist_records "
+                    "ADD COLUMN is_relisted TINYINT(1) NOT NULL DEFAULT 0"
+                )
+            )
+    except Exception:
+        return
+
+
 def _ensure_daily_listing_records_columns(engine: Engine) -> None:
     """为 daily_listing_records 补充逻辑删除字段。"""
     try:
@@ -367,6 +387,7 @@ def init_database() -> bool:
         _ensure_published_products_columns(engine)
         _ensure_failure_sequential_job_columns(engine)
         _ensure_failure_sequential_batch_columns(engine)
+        _ensure_inventory_delist_records_columns(engine)
         _ensure_daily_listing_records_columns(engine)
         _ensure_integrated_pipelines_created_at_index(engine)
         # seed / backfill 会调用 is_database_available()，须先发布 session，避免 init 递归

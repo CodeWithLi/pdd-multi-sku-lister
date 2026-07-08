@@ -877,6 +877,13 @@ onUnmounted(() => {
             </el-tag>
           </template>
         </el-table-column>
+        <el-table-column label="重新上架" width="88" align="center">
+          <template #default="{ row }">
+            <el-tag size="small" :type="row.is_relisted ? 'success' : 'info'" effect="plain">
+              {{ row.is_relisted ? '是' : '否' }}
+            </el-tag>
+          </template>
+        </el-table-column>
         <el-table-column label="标记" width="100">
           <template #default="{ row }">
             <el-tag v-if="row.is_test_override" size="small" type="warning" effect="plain">测试</el-tag>

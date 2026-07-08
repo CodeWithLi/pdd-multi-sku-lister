@@ -154,6 +154,7 @@ async def lifespan(app: FastAPI):
         from pdd_agent.integrations.feishu.pdd_activity_log_sync import ensure_pdd_activity_log_table_ready
         from pdd_agent.integrations.feishu.pdd_upload_sync import ensure_pdd_upload_log_tables_ready
         from pdd_agent.integrations.feishu.pdd_promotion_log_sync import ensure_pdd_promotion_log_tables_ready
+        from pdd_agent.integrations.feishu.pdd_delist_log_sync import ensure_pdd_delist_log_tables_ready
         from pdd_agent.integrations.feishu.pdd_price_compare_sync import ensure_pdd_price_compare_table_ready
         from pdd_agent.integrations.feishu.pdd_product_catalog_sync import ensure_pdd_product_catalog_table_ready
 
@@ -162,6 +163,10 @@ async def lifespan(app: FastAPI):
         promotion_log_ready = await _ensure_feishu_table(
             "PDD推广日志表",
             ensure_pdd_promotion_log_tables_ready,
+        )
+        delist_log_ready = await _ensure_feishu_table(
+            "PDD商品下架表",
+            ensure_pdd_delist_log_tables_ready,
         )
         activity_ready = await _ensure_feishu_table("PDD营销-活动日志表", ensure_pdd_activity_log_table_ready)
         price_compare_ready = await _ensure_feishu_table(
@@ -200,6 +205,18 @@ async def lifespan(app: FastAPI):
             )
         elif not promotion_log_ready.get("skipped"):
             logger.error("pdd promotion log tables not ready: %s", promotion_log_ready)
+        if delist_log_ready.get("ready"):
+            logger.info(
+                "pdd delist log table ready table=%s(%s)",
+                delist_log_ready.get("table_id"),
+                delist_log_ready.get("resolve_method"),
+            )
+            print(
+                f"[feishu] PDD商品下架表已就绪：{delist_log_ready.get('table_id')}",
+                flush=True,
+            )
+        elif not delist_log_ready.get("skipped"):
+            logger.error("pdd delist log table not ready: %s", delist_log_ready)
         if activity_ready.get("ready"):
             logger.info(
                 "pdd activity log table ready table=%s(%s)",

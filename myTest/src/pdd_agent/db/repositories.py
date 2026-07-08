@@ -3323,6 +3323,7 @@ def create_inventory_delist_record(
     dry_run: bool = False,
     delist_status: str = "",
     message: str = "",
+    is_relisted: bool = False,
     delisted_at: datetime | None = None,
 ) -> InventoryDelistRecordORM | None:
     if not is_database_available():
@@ -3353,6 +3354,7 @@ def create_inventory_delist_record(
             dry_run=bool(dry_run),
             delist_status=str(delist_status or "").strip(),
             message=str(message or "").strip(),
+            is_relisted=bool(is_relisted),
             delisted_at=now,
             created_at=datetime.now(),
         )

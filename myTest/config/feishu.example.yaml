@@ -174,6 +174,30 @@ pdd_promotion_log:
     failure_reason: 失败原因
     run_id: 运行ID
 
+# 负库存自动下架完成后写入「PDD商品下架表」
+pdd_delist_log:
+  enabled: true
+  table_id: ""
+  table_name: PDD商品下架表
+  status_options:
+  - 已下架
+  - 下架失败
+  - 模拟下架
+  - 跳过
+  - 未找到
+  relist_options:
+  - 否
+  - 是
+  field_names:
+    date: 日期
+    delisted_at: 下架时间
+    account_name: 店铺名
+    product_code: 商品编码
+    available_qty: 当前可用数
+    status: 状态
+    is_relisted: 是否重新上架
+    record_id: 记录ID
+
 # 拼多多所有商品.xls → 飞书「拼多多比价定价」（商品编码/颜色规格/商品类型/可用库存/拼多多定价）
 pdd_product_catalog:
   enabled: true

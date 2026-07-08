@@ -152,6 +152,7 @@ class InventoryDelistRecordOut(BaseModel):
     dry_run: bool = False
     delist_status: str = ""
     message: str = ""
+    is_relisted: bool = False
     delisted_at: str = ""
 
 

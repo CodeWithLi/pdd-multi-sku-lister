@@ -8,6 +8,7 @@ from typing import Any
 from pdd_agent.core.account_display import resolve_account_display_name
 from pdd_agent.core.logging import get_logger
 from pdd_agent.db.repositories import create_inventory_delist_record
+from pdd_agent.integrations.feishu.pdd_delist_log_sync import schedule_pdd_delist_log
 from pdd_agent.inventory_delist.job_store import AccountDelistTask, InventoryDelistJob
 from pdd_agent.inventory_delist.published_query import OnSalePublishedItem, list_on_sale_items
 
@@ -164,6 +165,7 @@ def record_account_inventory_delist(
         )
         if row:
             written += 1
+            schedule_pdd_delist_log(row)
     if written:
         logger.info(
             "inventory delist audit recorded job_id=%s account=%s rows=%s",
