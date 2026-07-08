@@ -1,6 +1,305 @@
 {
   "jobs": [
     {
+      "job_id": "inv_delist_20260708_142810_80d10c98",
+      "status": "completed",
+      "trigger": "manual",
+      "created_at": "2026-07-08T14:28:10",
+      "started_at": "2026-07-08T14:28:10",
+      "finished_at": "2026-07-08T14:30:18",
+      "account_ids": [
+        "多多李子2601"
+      ],
+      "execution_mode": "parallel",
+      "common_on_sale_codes": [
+        "BD070A",
+        "BD070B",
+        "BD070C",
+        "BD070F",
+        "BD070G",
+        "BD070H",
+        "BD070I",
+        "BD070Z"
+      ],
+      "negative_inventory_codes": [
+        "BD070A",
+        "BD070B",
+        "BD070C",
+        "BD070F",
+        "BD070G",
+        "BD070H",
+        "BD070I",
+        "BD070Z"
+      ],
+      "per_account": [
+        {
+          "account_id": "多多李子2601",
+          "status": "completed",
+          "run_id": "20260708_142810_8323b13a",
+          "candidate_codes": [
+            "BD070A",
+            "BD070B",
+            "BD070C",
+            "BD070F",
+            "BD070G",
+            "BD070H",
+            "BD070I",
+            "BD070Z"
+          ],
+          "target_count": 8,
+          "deleted_mapping_ids": [
+            "5adab834d9045e6e24d98e60c62a1137",
+            "6f04f018bbcddcd651f60185db1c5c15",
+            "86685039fe403f193eed677b2ea1efc0",
+            "88e6d6673fc5e083cb4c975ccd43ef1e",
+            "9b9772e8af71e47cc4a2286f71af4afb",
+            "dc375d8f411f178aedfe2200e8524664",
+            "f1fb7c6393b24303475f9f0997a73ef2",
+            "f68ddfc030f76a8b73fb671def77be59"
+          ],
+          "warnings": [],
+          "error": ""
+        }
+      ],
+      "delist_dry_run": false,
+      "analysis_snapshot": {
+        "account_ids": [
+          "多多李子2601"
+        ],
+        "common_on_sale_codes": [
+          "BD070A",
+          "BD070B",
+          "BD070C",
+          "BD070F",
+          "BD070G",
+          "BD070H",
+          "BD070I",
+          "BD070Z"
+        ],
+        "all_on_sale_codes": [
+          "BD070A",
+          "BD070B",
+          "BD070C",
+          "BD070F",
+          "BD070G",
+          "BD070H",
+          "BD070I",
+          "BD070Z"
+        ],
+        "negative_inventory_codes": [
+          "BD070A",
+          "BD070B",
+          "BD070C",
+          "BD070F",
+          "BD070G",
+          "BD070H",
+          "BD070I",
+          "BD070Z"
+        ],
+        "inventory_by_code": {
+          "BD070G": -1,
+          "BD070I": -1,
+          "BD070C": -1,
+          "BD070B": -1,
+          "BD070F": -1,
+          "BD070H": -1,
+          "BD070A": -1,
+          "BD070Z": -1
+        },
+        "feishu_query_count": 8,
+        "feishu_called": true,
+        "feishu_rows_matched": 8,
+        "feishu_force_refresh": true,
+        "feishu_error": "",
+        "database_available": true,
+        "test_override_enabled": true,
+        "test_overrides_applied": [
+          {
+            "code": "BD070A",
+            "matched_key": "BD070A",
+            "original_qty": 11700,
+            "override_qty": -1,
+            "feishu_had_record": true
+          },
+          {
+            "code": "BD070B",
+            "matched_key": "BD070B",
+            "original_qty": 3019,
+            "override_qty": -1,
+            "feishu_had_record": true
+          },
+          {
+            "code": "BD070C",
+            "matched_key": "BD070C",
+            "original_qty": 5420,
+            "override_qty": -1,
+            "feishu_had_record": true
+          },
+          {
+            "code": "BD070F",
+            "matched_key": "BD070F",
+            "original_qty": 4176,
+            "override_qty": -1,
+            "feishu_had_record": true
+          },
+          {
+            "code": "BD070G",
+            "matched_key": "BD070G",
+            "original_qty": 2751,
+            "override_qty": -1,
+            "feishu_had_record": true
+          },
+          {
+            "code": "BD070H",
+            "matched_key": "BD070H",
+            "original_qty": 2375,
+            "override_qty": -1,
+            "feishu_had_record": true
+          },
+          {
+            "code": "BD070I",
+            "matched_key": "BD070I",
+            "original_qty": 3852,
+            "override_qty": -1,
+            "feishu_had_record": true
+          },
+          {
+            "code": "BD070Z",
+            "matched_key": "BD070Z",
+            "original_qty": 4100,
+            "override_qty": -1,
+            "feishu_had_record": true
+          }
+        ],
+        "diagnostics": {
+          "on_sale_total": 8,
+          "erp_codes_queried": 8,
+          "published_counts": {
+            "多多李子2601": {
+              "total": 8,
+              "on_sale": 8,
+              "delisted": 0,
+              "other": 0
+            }
+          },
+          "message": "已查询飞书聚水潭 ERP：8 个编码，命中 8 条。 【测试覆盖】已人为改写 8 个编码可用数，用于联调下架链路。",
+          "test_override_enabled": true,
+          "test_overrides_applied": [
+            {
+              "code": "BD070A",
+              "matched_key": "BD070A",
+              "original_qty": 11700,
+              "override_qty": -1,
+              "feishu_had_record": true
+            },
+            {
+              "code": "BD070B",
+              "matched_key": "BD070B",
+              "original_qty": 3019,
+              "override_qty": -1,
+              "feishu_had_record": true
+            },
+            {
+              "code": "BD070C",
+              "matched_key": "BD070C",
+              "original_qty": 5420,
+              "override_qty": -1,
+              "feishu_had_record": true
+            },
+            {
+              "code": "BD070F",
+              "matched_key": "BD070F",
+              "original_qty": 4176,
+              "override_qty": -1,
+              "feishu_had_record": true
+            },
+            {
+              "code": "BD070G",
+              "matched_key": "BD070G",
+              "original_qty": 2751,
+              "override_qty": -1,
+              "feishu_had_record": true
+            },
+            {
+              "code": "BD070H",
+              "matched_key": "BD070H",
+              "original_qty": 2375,
+              "override_qty": -1,
+              "feishu_had_record": true
+            },
+            {
+              "code": "BD070I",
+              "matched_key": "BD070I",
+              "original_qty": 3852,
+              "override_qty": -1,
+              "feishu_had_record": true
+            },
+            {
+              "code": "BD070Z",
+              "matched_key": "BD070Z",
+              "original_qty": 4100,
+              "override_qty": -1,
+              "feishu_had_record": true
+            }
+          ]
+        },
+        "per_account": [
+          {
+            "account_id": "多多李子2601",
+            "on_sale_codes": [
+              "BD070A",
+              "BD070B",
+              "BD070C",
+              "BD070F",
+              "BD070G",
+              "BD070H",
+              "BD070I",
+              "BD070Z"
+            ],
+            "exclusive_codes": [],
+            "negative_inventory_codes": [
+              "BD070A",
+              "BD070B",
+              "BD070C",
+              "BD070F",
+              "BD070G",
+              "BD070H",
+              "BD070I",
+              "BD070Z"
+            ],
+            "delist_candidate_codes": [
+              "BD070A",
+              "BD070B",
+              "BD070C",
+              "BD070F",
+              "BD070G",
+              "BD070H",
+              "BD070I",
+              "BD070Z"
+            ],
+            "inventory_by_code": {
+              "BD070G": -1,
+              "BD070I": -1,
+              "BD070C": -1,
+              "BD070B": -1,
+              "BD070F": -1,
+              "BD070H": -1,
+              "BD070A": -1,
+              "BD070Z": -1
+            },
+            "published_counts": {
+              "total": 8,
+              "on_sale": 8,
+              "delisted": 0,
+              "other": 0
+            }
+          }
+        ]
+      },
+      "message": "下架完成：1 家执行，0 家跳过",
+      "error": ""
+    },
+    {
       "job_id": "inv_delist_20260708_133411_976d3349",
       "status": "completed",
       "trigger": "manual",

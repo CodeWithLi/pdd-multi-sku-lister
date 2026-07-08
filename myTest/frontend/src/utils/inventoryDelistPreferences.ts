@@ -14,6 +14,13 @@ export interface InventoryDelistPreferences {
   test_delist_dry_run?: boolean
 }
 
+export interface AccountAliasSource {
+  account_id: string
+  username?: string
+  shop_display_name?: string
+  display_name?: string
+}
+
 const DEFAULTS: InventoryDelistPreferences = {
   enabled: false,
   interval_hours: 6,
@@ -70,6 +77,37 @@ export function saveInventoryDelistPreferences(prefs: Partial<InventoryDelistPre
   }
 }
 
+/** 将 account_id / 登录名 / 店铺展示名 统一解析为规范 account_id。 */
+export function resolveAccountIds(
+  accountIds: string[],
+  accounts: AccountAliasSource[],
+): string[] {
+  const validIds = new Set(
+    accounts.map((acc) => String(acc.account_id || '').trim()).filter(Boolean),
+  )
+  const aliasToId = new Map<string, string>()
+  for (const acc of accounts) {
+    const id = String(acc.account_id || '').trim()
+    if (!id) continue
+    for (const alias of [id, acc.username, acc.shop_display_name, acc.display_name]) {
+      const key = String(alias || '').trim()
+      if (key && !aliasToId.has(key)) aliasToId.set(key, id)
+    }
+  }
+  const resolved: string[] = []
+  const seen = new Set<string>()
+  for (const raw of accountIds) {
+    const key = String(raw).trim()
+    if (!key) continue
+    const id = aliasToId.get(key) ?? (validIds.has(key) ? key : '')
+    if (id && !seen.has(id)) {
+      seen.add(id)
+      resolved.push(id)
+    }
+  }
+  return resolved
+}
+
 export function filterValidAccountIds(
   accountIds: string[],
   availableIds: string[],
@@ -81,14 +119,12 @@ export function filterValidAccountIds(
 export function mergeInventoryDelistPreferences(
   server: Partial<InventoryDelistPreferences>,
   local: Partial<InventoryDelistPreferences>,
-  availableAccountIds: string[],
+  accounts: AccountAliasSource[],
 ): InventoryDelistPreferences {
   const localNorm = normalize(local)
   const serverNorm = normalize(server)
-  const account_ids = filterValidAccountIds(
-    localNorm.account_ids.length ? localNorm.account_ids : serverNorm.account_ids,
-    availableAccountIds,
-  )
+  const rawIds = localNorm.account_ids.length ? localNorm.account_ids : serverNorm.account_ids
+  const account_ids = resolveAccountIds(rawIds, accounts)
   return normalize({
     ...serverNorm,
     ...localNorm,

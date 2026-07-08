@@ -66,7 +66,7 @@ const form = reactive({
 const accountLabelMap = computed(() => {
   const map = new Map<string, string>()
   for (const acc of accounts.value) {
-    map.set(acc.account_id, acc.username || acc.account_id)
+    map.set(acc.account_id, shopDisplayName(acc))
   }
   return map
 })
@@ -214,7 +214,18 @@ function accountLabel(accountId: string) {
 }
 
 function shopDisplayName(acc: Account) {
-  return acc.username || acc.account_id
+  const shop = acc.shop_display_name?.trim() || acc.display_name?.trim()
+  if (shop) return shop
+  const username = acc.username?.trim()
+  if (username) return username
+  return acc.account_id
+}
+
+function shopDisplaySub(acc: Account) {
+  const shop = acc.shop_display_name?.trim() || acc.display_name?.trim()
+  const username = acc.username?.trim()
+  if (shop && username && shop !== username) return username
+  return ''
 }
 
 function applyForm(prefs: {
@@ -404,7 +415,7 @@ async function load() {
     const merged = mergeInventoryDelistPreferences(
       cfg,
       loadInventoryDelistPreferences(),
-      accs.map((acc) => acc.account_id),
+      accs,
     )
     applyForm(merged)
     schedule.value = cfg
@@ -628,7 +639,8 @@ onUnmounted(() => {
             </div>
             <el-checkbox-group v-model="form.account_ids" class="shop-group">
               <el-checkbox v-for="acc in accounts" :key="acc.account_id" :label="acc.account_id">
-                {{ shopDisplayName(acc) }}
+                <span>{{ shopDisplayName(acc) }}</span>
+                <span v-if="shopDisplaySub(acc)" class="shop-sub">{{ shopDisplaySub(acc) }}</span>
               </el-checkbox>
             </el-checkbox-group>
           </div>
@@ -1011,6 +1023,12 @@ onUnmounted(() => {
   display: flex;
   flex-direction: column;
   gap: 4px;
+}
+
+.shop-sub {
+  margin-left: 6px;
+  font-size: 12px;
+  color: #909399;
 }
 
 .dev-link {
