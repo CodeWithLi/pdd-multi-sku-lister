@@ -10,9 +10,27 @@ from pdd_agent.skills.pdd_blocking_overlay_guard import (
 )
 
 
+def test_clear_one_uses_registration_notice_handler_before_address_page():
+    page = MagicMock()
+    with patch(
+        "pdd_agent.skills.listing.upload._dismiss_business_address_registration_notice",
+        return_value=True,
+    ) as notice, patch(
+        "pdd_agent.skills.listing.upload._dismiss_address_required_page",
+        return_value=False,
+    ) as addr:
+        out = clear_one_pdd_blocking_overlay(page, "store", "label")
+    notice.assert_called_once()
+    addr.assert_not_called()
+    assert out == {"acted": True, "source": "address_required"}
+
+
 def test_clear_one_uses_existing_address_handler_first():
     page = MagicMock()
     with patch(
+        "pdd_agent.skills.listing.upload._dismiss_business_address_registration_notice",
+        return_value=False,
+    ), patch(
         "pdd_agent.skills.listing.upload._dismiss_address_required_page",
         return_value=True,
     ) as addr:
@@ -34,6 +52,9 @@ def test_clear_one_generic_when_handlers_miss():
         },
     ]
     with patch(
+        "pdd_agent.skills.listing.upload._dismiss_business_address_registration_notice",
+        return_value=False,
+    ), patch(
         "pdd_agent.skills.listing.upload._dismiss_address_required_page",
         return_value=False,
     ), patch(
@@ -52,6 +73,9 @@ def test_clear_one_skips_business_protected():
         {"acted": False, "skipped": True, "reason": "business_protected"},
     ]
     with patch(
+        "pdd_agent.skills.listing.upload._dismiss_business_address_registration_notice",
+        return_value=False,
+    ), patch(
         "pdd_agent.skills.listing.upload._dismiss_address_required_page",
         return_value=False,
     ), patch(

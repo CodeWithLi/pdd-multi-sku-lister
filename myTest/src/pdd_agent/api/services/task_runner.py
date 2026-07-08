@@ -1709,11 +1709,11 @@ async def execute_delist(
         )
         result = _json_safe(raw)
         delist_mode = str((params or {}).get("mode") or "").strip()
-        if delist_mode == "pipeline_relist_prep":
+        if delist_mode in {"pipeline_relist_prep", "inventory_relist"}:
             status = RunStatus.SUCCESS
         else:
             status = RunStatus.SUCCESS if not result.get("errors") else RunStatus.FAILED
-        if status == RunStatus.SUCCESS and delist_mode != "pipeline_relist_prep":
+        if status == RunStatus.SUCCESS and delist_mode not in {"pipeline_relist_prep", "inventory_relist"}:
             _sync_single_delist_result(result)
         store.finish(
             run_id,

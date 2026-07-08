@@ -240,8 +240,13 @@ def _dismiss_via_existing_handlers(
 
 def _try_address_dismiss(page: DpPage, account_id: str, label: str) -> bool:
     try:
-        from pdd_agent.skills.listing.upload import _dismiss_address_required_page
+        from pdd_agent.skills.listing.upload import (
+            _dismiss_address_required_page,
+            _dismiss_business_address_registration_notice,
+        )
 
+        if _dismiss_business_address_registration_notice(page, account_id, label):
+            return True
         return bool(_dismiss_address_required_page(page, account_id, label))
     except Exception:
         return False

@@ -88,3 +88,34 @@ def test_push_pdd_delist_log_success(mock_client_cls, mock_ready, mock_batch):
     assert result["success"] is True
     assert result["created_count"] == 1
     mock_batch.assert_called_once()
+
+
+@patch("pdd_agent.integrations.feishu.bitable.batch_update_records", return_value=["feishu1"])
+@patch("pdd_agent.integrations.feishu.bitable.search_records_by_field")
+@patch("pdd_agent.integrations.feishu.pdd_delist_log_sync.ensure_pdd_delist_log_table_ready")
+@patch("pdd_agent.integrations.feishu.pdd_delist_log_sync.FeishuClient")
+def test_update_pdd_delist_log_relist_success(mock_client_cls, mock_ready, mock_search, mock_update):
+    cfg = MagicMock()
+    cfg.pdd_delist_log.enabled = True
+    cfg.pdd_delist_log.field_names.record_id = "记录ID"
+    cfg.pdd_delist_log.field_names.is_relisted = "是否重新上架"
+    cfg.pdd_delist_log.relist_options = ["否", "是"]
+    cfg.bitable_app_token = "app"
+    cfg.app_id = "id"
+    cfg.app_secret = "secret"
+
+    mock_ready.return_value = {"ready": True, "table_id": "tbl1"}
+    mock_search.return_value = [{"record_id": "feishu_row_1"}]
+    mock_client_cls.return_value = MagicMock()
+
+    from pdd_agent.integrations.feishu.pdd_delist_log_sync import update_pdd_delist_log_relist
+
+    result = update_pdd_delist_log_relist(
+        {"record_id": "rec1", "is_relisted": True, "product_code": "BD070A"},
+        config=cfg,
+        client=mock_client_cls.return_value,
+    )
+    assert result["success"] is True
+    assert result["updated_count"] == 1
+    mock_update.assert_called_once()
+    mock_search.assert_called_once()

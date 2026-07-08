@@ -360,6 +360,129 @@ def _guard_pdd_overlays(
     )
 
 
+def _dismiss_business_address_registration_notice(
+    page: DpPage, account_id: str, label: str
+) -> bool:
+    """
+    商品列表等页面右下角「登记实际经营地址通知」卡片。
+    点击卡片右上角 X 关闭，避免挡住「上架」等操作。
+    """
+    try:
+        result = page.run_js(
+            """
+            const markers = ['登记实际经营地址通知', '登记实际经营地址', '实际经营地址'];
+            function isVisible(el) {
+                if (!el || !el.getBoundingClientRect) return false;
+                const r = el.getBoundingClientRect();
+                const s = window.getComputedStyle(el);
+                return r.width > 2 && r.height > 2
+                    && s.display !== 'none'
+                    && s.visibility !== 'hidden'
+                    && parseFloat(s.opacity || '1') > 0.05;
+            }
+            function norm(t) { return (t || '').replace(/\\s+/g, ''); }
+            function hasMarker(text) {
+                const c = norm(text);
+                return markers.some((m) => c.includes(norm(m)));
+            }
+            function clickableParent(el) {
+                let cur = el;
+                for (let i = 0; i < 6 && cur && cur !== document.body; i++) {
+                    const tag = (cur.tagName || '').toLowerCase();
+                    const role = cur.getAttribute?.('role') || '';
+                    const cls = (cur.className || '').toString().toLowerCase();
+                    const cursor = window.getComputedStyle(cur).cursor;
+                    if (tag === 'button' || tag === 'a' || role === 'button'
+                        || cursor === 'pointer' || cls.includes('close')) {
+                        return cur;
+                    }
+                    cur = cur.parentElement;
+                }
+                return el;
+            }
+            function findNoticeRoot() {
+                const candidates = [];
+                for (const el of document.querySelectorAll('div, section, article, aside')) {
+                    if (!isVisible(el)) continue;
+                    const text = el.innerText || el.textContent || '';
+                    if (!hasMarker(text)) continue;
+                    if (!text.includes('去补充') && !text.includes('经营地址')) continue;
+                    const r = el.getBoundingClientRect();
+                    if (r.width < 180 || r.height < 60) continue;
+                    candidates.push({ el, area: r.width * r.height });
+                }
+                if (!candidates.length) return null;
+                candidates.sort((a, b) => a.area - b.area);
+                return candidates[0].el;
+            }
+            function clickCloseOnRoot(root) {
+                if (!root) return { clicked: false, method: 'no_root' };
+                const rect = root.getBoundingClientRect();
+                const exact = Array.from(root.querySelectorAll(
+                    '[data-testid="beast-core-icon-close"], [class*="closeIcon"], [class*="CloseIcon"], '
+                    + '[class*="modal-close"], [aria-label="Close"], [aria-label="关闭"]'
+                )).find(isVisible);
+                if (exact) {
+                    clickableParent(exact).click();
+                    return { clicked: true, method: 'close_icon' };
+                }
+                const candidates = [];
+                for (const el of root.querySelectorAll('button, a, span, i, svg, div')) {
+                    if (!isVisible(el)) continue;
+                    const r = el.getBoundingClientRect();
+                    if (r.width > 56 || r.height > 56) continue;
+                    const text = (el.innerText || el.textContent || '').trim();
+                    const aria = (el.getAttribute?.('aria-label') || '').toLowerCase();
+                    const cls = (el.className || '').toString().toLowerCase();
+                    const nearTopRight = r.right >= rect.right - 72 && r.top <= rect.top + 72;
+                    if (!nearTopRight) continue;
+                    if (
+                        text === '×' || text === '✕' || text === 'X'
+                        || aria.includes('close') || aria.includes('关闭')
+                        || cls.includes('close')
+                    ) {
+                        candidates.push({ el, score: -(r.right) + r.top });
+                    }
+                }
+                candidates.sort((a, b) => a.score - b.score);
+                if (candidates.length) {
+                    clickableParent(candidates[0].el).click();
+                    return { clicked: true, method: 'top_right_x' };
+                }
+                return { clicked: false, method: 'not_found' };
+            }
+
+            const bodyText = document.body?.innerText || '';
+            if (!hasMarker(bodyText)) return { present: false, clicked: false };
+            const root = findNoticeRoot();
+            if (!root) return { present: true, clicked: false, method: 'root_not_found' };
+            const out = clickCloseOnRoot(root);
+            out.present = true;
+            return out;
+            """
+        )
+        if not isinstance(result, dict) or not result.get("present"):
+            return False
+        if result.get("clicked"):
+            print(
+                f"[{account_id}] [{label}] 已关闭「登记实际经营地址通知」（{result.get('method', 'close')}）",
+                flush=True,
+            )
+            time.sleep(0.8)
+            return True
+        print(
+            f"[{account_id}] [{label}] 检测到「登记实际经营地址通知」，但未定位到关闭按钮",
+            flush=True,
+        )
+        return False
+    except Exception as exc:
+        print(
+            f"[{account_id}] [{label}] 登记实际经营地址通知处理异常：{_safe_exc(exc)}",
+            flush=True,
+        )
+        return False
+
+
 def _dismiss_address_required_page(page: DpPage, account_id: str, label: str) -> bool:
     """
     拼多多偶尔会在发布页弹出「请尽快填写真实有效联系/经营地址」遮罩。

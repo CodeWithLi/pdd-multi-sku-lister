@@ -153,3 +153,29 @@ export interface InventoryRelistPreview {
   database_available?: boolean
   diagnostics?: Record<string, unknown> & { message?: string }
 }
+
+export interface AccountRelistTask {
+  account_id: string
+  status: string
+  run_id: string
+  candidate_codes: string[]
+  target_count: number
+  warnings: string[]
+  error: string
+}
+
+export interface InventoryRelistJob {
+  job_id: string
+  status: string
+  trigger: string
+  created_at: string
+  started_at: string
+  finished_at: string
+  account_ids: string[]
+  execution_mode: InventoryDelistExecutionMode
+  relist_candidates_count: number
+  per_account: AccountRelistTask[]
+  relist_dry_run: boolean
+  message: string
+  error: string
+}

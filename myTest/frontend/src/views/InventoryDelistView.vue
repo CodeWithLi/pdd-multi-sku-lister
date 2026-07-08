@@ -17,6 +17,7 @@ import type {
   InventoryDelistPreview,
   InventoryDelistRecord,
   InventoryDelistSchedule,
+  InventoryRelistJob,
   InventoryRelistPreview,
   OnSaleCodesResponse,
 } from '@/types/inventoryDelist'
@@ -34,7 +35,10 @@ const accounts = ref<Account[]>([])
 const preview = ref<InventoryDelistPreview | null>(null)
 const relistPreview = ref<InventoryRelistPreview | null>(null)
 const relistPreviewing = ref(false)
+const relistTriggering = ref(false)
+const relistTriggeringCode = ref('')
 const relistPreviewTab = ref('ready')
+const relistJobs = ref<InventoryRelistJob[]>([])
 const jobs = ref<InventoryDelistJob[]>([])
 const records = ref<InventoryDelistRecord[]>([])
 const formReady = ref(false)
@@ -165,6 +169,15 @@ const canTriggerDelist = computed(
 )
 
 const relistReadyCount = computed(() => relistPreview.value?.relist_candidates.length ?? 0)
+
+const canTriggerRelist = computed(
+  () => form.account_ids.length > 0 && relistReadyCount.value > 0,
+)
+
+const relistButtonLabel = computed(() =>
+  relistTriggering.value ? '启动中…' : '立即上架',
+)
+
 const relistMultiShopCount = computed(
   () => relistPreview.value?.relist_candidates.filter((row) => row.is_multi_shop).length ?? 0,
 )
@@ -173,6 +186,7 @@ const relistReadyRows = computed(() => {
   if (!relistPreview.value) return []
   return relistPreview.value.relist_candidates.map((row) => ({
     product_code: row.product_code,
+    account_ids: [...row.account_ids],
     available_qty: row.available_qty,
     shops:
       row.shop_names.join('、') ||
@@ -425,6 +439,15 @@ async function loadJobs() {
   jobs.value = result.items
 }
 
+async function loadRelistJobs() {
+  try {
+    const result = await inventoryDelistApi.relistJobs(15)
+    relistJobs.value = result.items
+  } catch {
+    relistJobs.value = []
+  }
+}
+
 async function loadRecords(accountId?: string) {
   try {
     const result = await inventoryDelistApi.records({
@@ -469,7 +492,7 @@ async function load() {
     applyForm(merged)
     schedule.value = cfg
     persistLocalPreferences()
-    await loadJobs()
+    await Promise.all([loadJobs(), loadRelistJobs()])
   } catch (e) {
     ElMessage.error(e instanceof Error ? e.message : '加载失败')
   } finally {
@@ -535,6 +558,102 @@ async function runRelistPreview() {
     ElMessage.error(e instanceof Error ? e.message : '恢复检测失败')
   } finally {
     relistPreviewing.value = false
+  }
+}
+
+async function submitRelistSingle(row: {
+  product_code: string
+  account_ids: string[]
+  is_multi_shop: boolean
+  shop_count: number
+}) {
+  const code = String(row.product_code || '').trim()
+  if (!code) return
+
+  const selected = new Set(form.account_ids)
+  const accountIds = row.account_ids.filter((id) => selected.has(id))
+  const effectiveAccountIds = accountIds.length ? accountIds : [...row.account_ids]
+  if (!effectiveAccountIds.length) {
+    ElMessage.warning('请先选择对应店铺')
+    return
+  }
+
+  const shopHint =
+    row.is_multi_shop && effectiveAccountIds.length > 1
+      ? `（多店联动，将在 ${effectiveAccountIds.length} 家店铺执行）`
+      : ''
+  try {
+    await ElMessageBox.confirm(
+      `仅上架编码 ${code}${shopHint}，确定继续？`,
+      '单条测试上架',
+      {
+        type: 'info',
+        confirmButtonText: '上架',
+        cancelButtonText: '取消',
+      },
+    )
+  } catch {
+    return
+  }
+
+  relistTriggeringCode.value = code
+  try {
+    const result = await inventoryDelistApi.relistTrigger({
+      account_ids: effectiveAccountIds,
+      product_codes: [code],
+      execution_mode: form.execution_mode,
+      force_feishu_refresh: false,
+    })
+    ElMessage.success(`已启动单条上架：${code}（${result.job.job_id}）`)
+    await loadRelistJobs()
+    router.push('/runs')
+  } catch (e) {
+    ElMessage.error(e instanceof Error ? e.message : '触发失败')
+  } finally {
+    relistTriggeringCode.value = ''
+  }
+}
+
+async function submitRelist() {
+  if (!form.account_ids.length) {
+    ElMessage.warning('请至少选择一个店铺')
+    return
+  }
+  if (!canTriggerRelist.value) {
+    ElMessage.warning('当前无可上架商品，请先恢复检测')
+    return
+  }
+
+  const ready = relistReadyCount.value
+  const multi = relistMultiShopCount.value
+  const message =
+    multi > 0
+      ? `将对 ${form.account_ids.length} 家店铺的 ${ready} 个编码执行恢复上架（含 ${multi} 个多店联动编码），确定继续？`
+      : `将对 ${form.account_ids.length} 家店铺的 ${ready} 个编码执行恢复上架，确定继续？`
+  try {
+    await ElMessageBox.confirm(message, '确认恢复上架', {
+      type: 'warning',
+      confirmButtonText: '立即上架',
+      cancelButtonText: '取消',
+    })
+  } catch {
+    return
+  }
+
+  relistTriggering.value = true
+  try {
+    const result = await inventoryDelistApi.relistTrigger({
+      account_ids: form.account_ids,
+      execution_mode: form.execution_mode,
+      force_feishu_refresh: true,
+    })
+    ElMessage.success(`已启动恢复上架任务：${result.job.job_id}`)
+    await loadRelistJobs()
+    router.push('/runs')
+  } catch (e) {
+    ElMessage.error(e instanceof Error ? e.message : '触发失败')
+  } finally {
+    relistTriggering.value = false
   }
 }
 
@@ -621,6 +740,7 @@ onMounted(() => {
   load()
   pollTimer = setInterval(() => {
     loadJobs().catch(() => {})
+    loadRelistJobs().catch(() => {})
     refreshScheduleMeta().catch(() => {})
   }, 15000)
 })
@@ -664,7 +784,15 @@ onUnmounted(() => {
           <el-button :loading="relistPreviewing" type="primary" :icon="Search" @click="runRelistPreview">
             恢复检测
           </el-button>
-          <el-button type="success" :icon="Upload" disabled>立即上架（即将支持）</el-button>
+          <el-button
+            :loading="relistTriggering"
+            type="success"
+            :icon="Upload"
+            :disabled="!canTriggerRelist"
+            @click="submitRelist"
+          >
+            {{ relistButtonLabel }}
+          </el-button>
         </template>
       </template>
     </PageHeader>
@@ -920,7 +1048,7 @@ onUnmounted(() => {
         <el-alert type="info" show-icon :closable="false" class="mb-16">
           <template #title>多店联动规则</template>
           <template #default>
-            读取「已下架且未重新上架」记录，查聚水潭当前可用数。同一商品若在多家店铺同时下架，可用数恢复后需<strong>全部店铺一起上架</strong>。浏览器自动上架功能下一步实现。
+            读取「已下架且未重新上架」记录，查聚水潭当前可用数。同一商品若在多家店铺同时下架，可用数恢复后需<strong>全部店铺一起上架</strong>。浏览器将在「已下架」列表按商品编码逐个搜索并点击上架。
           </template>
         </el-alert>
 
@@ -1009,6 +1137,20 @@ onUnmounted(() => {
                       <span v-else class="text-muted">否</span>
                     </template>
                   </el-table-column>
+                  <el-table-column label="操作" width="88" align="center" fixed="right">
+                    <template #default="{ row }">
+                      <el-button
+                        link
+                        type="success"
+                        size="small"
+                        :loading="relistTriggeringCode === row.product_code"
+                        :disabled="!!relistTriggeringCode && relistTriggeringCode !== row.product_code"
+                        @click="submitRelistSingle(row)"
+                      >
+                        上架
+                      </el-button>
+                    </template>
+                  </el-table-column>
                 </el-table>
               </el-tab-pane>
 
@@ -1054,6 +1196,35 @@ onUnmounted(() => {
               </el-tab-pane>
             </el-tabs>
           </template>
+        </el-card>
+
+        <el-card shadow="never" class="mt-16">
+          <template #header>
+            <span>恢复上架任务</span>
+          </template>
+          <el-table :data="relistJobs" size="small" border stripe empty-text="暂无任务">
+            <el-table-column prop="job_id" label="任务 ID" min-width="200" show-overflow-tooltip />
+            <el-table-column label="状态" width="96">
+              <template #default="{ row }">
+                <el-tag size="small" :type="jobStatusType(row.status)" effect="plain">
+                  {{ row.status }}
+                </el-tag>
+              </template>
+            </el-table-column>
+            <el-table-column label="可上架编码" width="100" align="center">
+              <template #default="{ row }">
+                {{ row.relist_candidates_count }}
+              </template>
+            </el-table-column>
+            <el-table-column label="方式" width="72">
+              <template #default="{ row }">
+                {{ row.execution_mode === 'parallel' ? '同时' : '逐店' }}
+              </template>
+            </el-table-column>
+            <el-table-column prop="created_at" label="时间" width="160" />
+            <el-table-column prop="message" label="说明" min-width="140" show-overflow-tooltip />
+          </el-table>
+          <el-empty v-if="!relistJobs.length" description="暂无任务" :image-size="56" />
         </el-card>
       </el-tab-pane>
     </el-tabs>

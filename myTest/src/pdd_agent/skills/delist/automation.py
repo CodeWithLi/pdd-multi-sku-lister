@@ -879,7 +879,7 @@ def _goods_list_empty_state(page) -> bool:
             page.run_js(
                 """
                 const text = (document.body?.innerText || '').replace(/\\s+/g, '');
-                const markers = ['暂无数据', '没有找到', '无符合条件', '未找到相关商品', '暂无商品'];
+                const markers = ['暂无数据', '没有找到', '无符合条件', '未找到相关商品', '暂无商品', '没有查询到符合要求的商品'];
                 return markers.some((m) => text.includes(m));
                 """
             )

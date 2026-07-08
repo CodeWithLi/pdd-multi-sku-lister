@@ -198,3 +198,49 @@ class InventoryRelistPreviewOut(BaseModel):
     feishu_error: str = ""
     database_available: bool = False
     diagnostics: dict[str, Any] = Field(default_factory=dict)
+
+
+class InventoryRelistTriggerIn(BaseModel):
+    account_ids: list[str] = Field(default_factory=list)
+    product_codes: list[str] = Field(default_factory=list)
+    execution_mode: ExecutionMode | None = None
+    force_feishu_refresh: bool = True
+    min_available_qty: int = Field(default=0, ge=-9999, le=999999)
+    relist_dry_run: bool = False
+
+
+class AccountRelistTaskOut(BaseModel):
+    account_id: str
+    status: str = "pending"
+    run_id: str = ""
+    candidate_codes: list[str] = Field(default_factory=list)
+    target_count: int = 0
+    warnings: list[str] = Field(default_factory=list)
+    error: str = ""
+
+
+class InventoryRelistJobOut(BaseModel):
+    job_id: str
+    status: str = "pending"
+    trigger: str = "manual"
+    created_at: str = ""
+    started_at: str = ""
+    finished_at: str = ""
+    account_ids: list[str] = Field(default_factory=list)
+    execution_mode: ExecutionMode = "parallel"
+    relist_candidates_count: int = 0
+    per_account: list[AccountRelistTaskOut] = Field(default_factory=list)
+    relist_dry_run: bool = False
+    message: str = ""
+    error: str = ""
+
+
+class InventoryRelistTriggerOut(BaseModel):
+    ok: bool = True
+    job: InventoryRelistJobOut
+
+
+class InventoryRelistJobListOut(BaseModel):
+    ok: bool = True
+    total: int = 0
+    items: list[InventoryRelistJobOut] = Field(default_factory=list)

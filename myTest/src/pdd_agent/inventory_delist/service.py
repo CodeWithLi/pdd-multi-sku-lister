@@ -25,6 +25,14 @@ from pdd_agent.inventory_delist.job_store import (
     get_last_scheduled_run_at,
     list_jobs,
 )
+from pdd_agent.inventory_delist.relist_analysis import RelistTarget
+from pdd_agent.inventory_delist.relist_job_store import (
+    InventoryRelistJob,
+    create_relist_job,
+    get_relist_job,
+    list_relist_jobs,
+)
+from pdd_agent.inventory_delist.relist_runner import start_inventory_relist_job
 
 logger = get_logger(__name__)
 
@@ -360,3 +368,137 @@ def preview_inventory_relist(
     result["requested_account_ids"] = list(account_ids or [])
     result["resolved_account_ids"] = resolved
     return result
+
+
+def _build_relist_per_account_tasks(
+    account_ids: list[str],
+    relist_candidates: list[RelistTarget],
+) -> list[dict[str, Any]]:
+    """按店铺拆分可恢复上架编码，保留编码 -> 下架记录 ID 映射。"""
+    buckets: dict[str, dict[str, Any]] = {
+        aid: {"account_id": aid, "candidate_codes": [], "code_record_ids": {}}
+        for aid in account_ids
+    }
+    for target in relist_candidates:
+        code = str(target.product_code or "").strip()
+        if not code:
+            continue
+        target_accounts = set(target.account_ids) & set(account_ids)
+        if not target_accounts:
+            continue
+        per_account = list(target.per_account or [])
+        for aid in account_ids:
+            if aid not in target_accounts:
+                continue
+            record_ids = [
+                str(row.get("record_id") or "").strip()
+                for row in per_account
+                if str(row.get("account_id") or "") == aid and str(row.get("record_id") or "").strip()
+            ]
+            buckets[aid]["candidate_codes"].append(code)
+            buckets[aid]["code_record_ids"][code] = record_ids
+    rows: list[dict[str, Any]] = []
+    for aid in account_ids:
+        row = buckets[aid]
+        codes = list(dict.fromkeys(row["candidate_codes"]))
+        row["candidate_codes"] = codes
+        row["target_count"] = len(codes)
+        rows.append(row)
+    return rows
+
+
+def relist_job_to_dict(job: InventoryRelistJob) -> dict[str, Any]:
+    data = asdict(job)
+    data["per_account"] = [asdict(row) for row in job.per_account]
+    return data
+
+
+def trigger_inventory_relist_run(
+    *,
+    account_ids: list[str] | None = None,
+    product_codes: list[str] | None = None,
+    execution_mode: str | None = None,
+    trigger: str = "manual",
+    force_feishu_refresh: bool = True,
+    min_available_qty: int = 0,
+    relist_dry_run: bool = False,
+) -> dict[str, Any]:
+    if not is_database_available():
+        raise RuntimeError("数据库不可用，无法入队恢复上架任务")
+
+    cfg = load_inventory_delist_config()
+    resolved, rejected = _resolve_account_ids(account_ids or cfg.account_ids)
+    if not resolved:
+        msg = "请至少选择一个有效店铺"
+        if rejected:
+            msg += f"（无效：{', '.join(rejected)}）"
+        raise ValueError(msg)
+
+    mode = str(execution_mode or cfg.execution_mode or "parallel").strip().lower()
+    if mode not in {"parallel", "sequential"}:
+        mode = "parallel"
+
+    analysis = analyze_inventory_relist_targets(
+        resolved,
+        force_feishu_refresh=bool(force_feishu_refresh),
+        min_available_qty=int(min_available_qty),
+    )
+    if not analysis.relist_candidates:
+        msg = "当前没有可恢复上架的商品编码"
+        diag = str((analysis.diagnostics or {}).get("message") or "").strip()
+        if diag:
+            msg += f"（{diag}）"
+        raise ValueError(msg)
+
+    candidates = list(analysis.relist_candidates)
+    if product_codes:
+        wanted = {str(code or "").strip().casefold() for code in product_codes if str(code or "").strip()}
+        if not wanted:
+            raise ValueError("请指定至少一个商品编码")
+        candidates = [
+            target
+            for target in candidates
+            if str(target.product_code or "").strip().casefold() in wanted
+        ]
+        if not candidates:
+            raise ValueError(f"未找到可上架编码：{', '.join(sorted(product_codes))}")
+
+    per_account_tasks = _build_relist_per_account_tasks(resolved, candidates)
+    active_tasks = [row for row in per_account_tasks if row.get("candidate_codes")]
+    if not active_tasks:
+        raise ValueError("所选店铺暂无匹配的恢复上架任务")
+
+    snapshot = relist_analysis_to_dict(analysis)
+    snapshot["relist_candidates"] = [_relist_target_to_dict(t) for t in candidates]
+    snapshot["per_account_tasks"] = per_account_tasks
+    snapshot["relist_candidates_count"] = len(candidates)
+    if relist_dry_run:
+        snapshot["relist_dry_run"] = True
+    if rejected:
+        snapshot["diagnostics"] = dict(snapshot.get("diagnostics") or {})
+        snapshot["diagnostics"]["rejected_account_ids"] = rejected
+
+    job = create_relist_job(
+        account_ids=resolved,
+        execution_mode=mode,
+        analysis_snapshot=snapshot,
+        trigger=trigger,
+    )
+    job = start_inventory_relist_job(job, dry_run=bool(relist_dry_run))
+    logger.info(
+        "inventory relist triggered job_id=%s accounts=%s codes=%s dry_run=%s",
+        job.job_id,
+        len(resolved),
+        len(candidates),
+        relist_dry_run,
+    )
+    return relist_job_to_dict(job)
+
+
+def list_inventory_relist_jobs(*, limit: int = 20) -> list[dict[str, Any]]:
+    return [relist_job_to_dict(job) for job in list_relist_jobs(limit=limit)]
+
+
+def get_inventory_relist_job(job_id: str) -> dict[str, Any] | None:
+    job = get_relist_job(job_id)
+    return relist_job_to_dict(job) if job else None

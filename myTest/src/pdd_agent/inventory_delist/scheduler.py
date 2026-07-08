@@ -10,6 +10,7 @@ from pdd_agent.db.session import is_database_available
 from pdd_agent.inventory_delist.account_resolver import resolve_enabled_account_ids
 from pdd_agent.inventory_delist.config import load_inventory_delist_config
 from pdd_agent.inventory_delist.job_store import get_last_scheduled_run_at, set_last_scheduled_run_at
+from pdd_agent.inventory_delist.relist_watcher import tick_inventory_relist_jobs
 from pdd_agent.inventory_delist.run_watcher import tick_inventory_delist_jobs
 
 logger = get_logger(__name__)
@@ -49,6 +50,7 @@ class InventoryDelistScheduler:
                 tick_inventory_delist_jobs(
                     delist_spec_code_search_enabled=bool(cfg.delist_spec_code_search_enabled),
                 )
+                tick_inventory_relist_jobs()
                 await self._maybe_trigger_scheduled_run(cfg)
             except Exception:
                 logger.exception("inventory delist scheduler tick failed")

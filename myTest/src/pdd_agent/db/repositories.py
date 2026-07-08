@@ -3393,6 +3393,41 @@ def list_inventory_delist_records(
         return rows
 
 
+def update_inventory_delist_record_relist(
+    record_id: str,
+    *,
+    is_relisted: bool,
+    message: str = "",
+) -> bool:
+    if not is_database_available():
+        return False
+    rid = str(record_id or "").strip()
+    if not rid:
+        return False
+    with session_scope() as session:
+        row = session.get(InventoryDelistRecordORM, rid)
+        if not row:
+            return False
+        row.is_relisted = bool(is_relisted)
+        if message:
+            row.message = str(message).strip()
+        session.flush()
+        return True
+
+
+def get_inventory_delist_record(record_id: str) -> InventoryDelistRecordORM | None:
+    if not is_database_available():
+        return None
+    rid = str(record_id or "").strip()
+    if not rid:
+        return None
+    with session_scope() as session:
+        row = session.get(InventoryDelistRecordORM, rid)
+        if row:
+            session.expunge(row)
+        return row
+
+
 def list_pending_relist_records(
     *,
     account_ids: list[str] | None = None,

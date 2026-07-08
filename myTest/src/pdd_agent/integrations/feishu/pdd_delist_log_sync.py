@@ -252,6 +252,128 @@ def push_pdd_delist_log(
     }
 
 
+def update_pdd_delist_log_relist(
+    record: InventoryDelistRecordORM | dict[str, Any],
+    *,
+    config: FeishuConfig | None = None,
+    client: FeishuClient | None = None,
+) -> dict[str, Any]:
+    """按「记录ID」更新飞书 PDD商品下架表中的「是否重新上架」。"""
+    from pdd_agent.integrations.feishu.bitable import batch_update_records, search_records_by_field
+
+    cfg = config or load_feishu_config()
+    delist_cfg = cfg.pdd_delist_log
+    if not delist_cfg.enabled:
+        return {"skipped": True, "reason": "pdd_delist_log_disabled"}
+
+    app_token = str(cfg.bitable_app_token or "").strip()
+    if not app_token or not cfg.app_id or not cfg.app_secret:
+        return {"skipped": True, "reason": "feishu_not_configured"}
+
+    if isinstance(record, dict):
+        record_id = str(record.get("record_id") or "").strip()
+        is_relisted = bool(record.get("is_relisted"))
+    else:
+        record_id = str(record.record_id or "").strip()
+        is_relisted = bool(record.is_relisted)
+
+    if not record_id:
+        return {"skipped": True, "reason": "missing_record_id"}
+
+    api = client or FeishuClient(cfg)
+    ready = ensure_pdd_delist_log_table_ready(cfg, api)
+    if ready.get("failed") or ready.get("skipped"):
+        return ready
+
+    table_id = str(ready.get("table_id") or "")
+    names = delist_cfg.field_names
+    rows = search_records_by_field(
+        api,
+        app_token,
+        table_id,
+        field_name=names.record_id,
+        value=record_id,
+        page_size=5,
+    )
+    if not rows:
+        logger.warning("pdd delist log relist update: feishu row not found record_id=%s", record_id)
+        fallback = push_pdd_delist_log(record, config=cfg, client=api)
+        fallback["fallback_create"] = True
+        return fallback
+
+    update_fields = {
+        names.is_relisted: map_relist_label(is_relisted, config=cfg),
+    }
+    mapped = map_fields_to_table_names(api, app_token, table_id, update_fields)
+    updates = [{"record_id": str(row.get("record_id") or ""), "fields": mapped} for row in rows if row.get("record_id")]
+    if not updates:
+        return {"failed": True, "reason": "empty_feishu_updates"}
+
+    try:
+        updated_ids = batch_update_records(api, app_token, table_id, updates)
+    except FeishuAPIError as exc:
+        logger.exception("update pdd delist log relist failed record_id=%s", record_id)
+        return {"failed": True, "error": str(exc), "code": exc.code}
+
+    logger.info(
+        "pdd delist log relist updated record_id=%s is_relisted=%s feishu_rows=%s",
+        record_id,
+        is_relisted,
+        len(updated_ids),
+    )
+    return {
+        "success": True,
+        "updated_count": len(updated_ids),
+        "record_ids": updated_ids,
+        "table_id": table_id,
+        "is_relisted": is_relisted,
+    }
+
+
+def _update_pdd_delist_log_relist_safe(record_id: str) -> None:
+    from pdd_agent.db.repositories import get_inventory_delist_record
+
+    rid = str(record_id or "").strip()
+    if not rid:
+        return
+    row = get_inventory_delist_record(rid)
+    if not row:
+        logger.warning("pdd delist log relist sync skipped: db record missing record_id=%s", rid)
+        return
+    product_code = str(row.product_code or "").strip()
+    try:
+        result = update_pdd_delist_log_relist(row)
+        if result.get("failed"):
+            logger.error("[%s] feishu relist sync failed: %s", product_code, result)
+        elif result.get("success"):
+            label = "是" if row.is_relisted else "否"
+            print(f"[{product_code}] 飞书下架表已更新「是否重新上架」={label}", flush=True)
+    except Exception:
+        logger.exception("update pdd delist log relist failed record_id=%s", rid)
+
+
+def schedule_pdd_delist_log_relist_update(record_id: str) -> None:
+    """恢复上架后异步同步飞书 PDD商品下架表。"""
+    rid = str(record_id or "").strip()
+    if not rid:
+        return
+    try:
+        cfg = load_feishu_config()
+    except Exception as exc:
+        logger.warning("load feishu config failed: %s", exc)
+        return
+    if not cfg.pdd_delist_log.enabled:
+        return
+
+    thread = threading.Thread(
+        target=_update_pdd_delist_log_relist_safe,
+        args=(rid,),
+        name="feishu-pdd-delist-relist",
+        daemon=True,
+    )
+    thread.start()
+
+
 def _push_pdd_delist_log_safe(record: InventoryDelistRecordORM | dict[str, Any]) -> None:
     product_code = ""
     if isinstance(record, dict):
@@ -295,4 +417,6 @@ __all__ = [
     "map_relist_label",
     "push_pdd_delist_log",
     "schedule_pdd_delist_log",
+    "schedule_pdd_delist_log_relist_update",
+    "update_pdd_delist_log_relist",
 ]

@@ -2,6 +2,7 @@ import axios from 'axios'
 import type {
   InventoryDelistJob,
   InventoryDelistPreview,
+  InventoryRelistJob,
   InventoryRelistPreview,
   InventoryDelistRecord,
   InventoryDelistSchedule,
@@ -64,6 +65,29 @@ export const inventoryDelistApi = {
         min_available_qty: options?.min_available_qty ?? 0,
       })
       .then((r) => r.data),
+
+  relistTrigger: (body: {
+    account_ids?: string[]
+    product_codes?: string[]
+    execution_mode?: 'parallel' | 'sequential'
+    force_feishu_refresh?: boolean
+    min_available_qty?: number
+    relist_dry_run?: boolean
+  }) =>
+    http
+      .post<{ ok: boolean; job: InventoryRelistJob }>('/inventory-delist/relist/trigger', body)
+      .then((r) => r.data),
+
+  relistJobs: (limit = 20) =>
+    http
+      .get<{ ok: boolean; total: number; items: InventoryRelistJob[] }>(
+        '/inventory-delist/relist/jobs',
+        { params: { limit } },
+      )
+      .then((r) => r.data),
+
+  relistJob: (jobId: string) =>
+    http.get<InventoryRelistJob>(`/inventory-delist/relist/jobs/${jobId}`).then((r) => r.data),
 
   trigger: (body: {
     account_ids?: string[]

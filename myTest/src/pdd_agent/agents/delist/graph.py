@@ -57,6 +57,17 @@ async def delist_browser_node(state: DelistState) -> dict:
                 dry_run=bool(raw.get("dry_run", False)),
                 delist_spec_code_search_enabled=bool(raw.get("delist_spec_code_search_enabled")),
             )
+        if mode == "inventory_relist":
+            from pdd_agent.skills.relist.inventory_goods_list_relist import process_inventory_relist
+
+            targets = list(raw.get("targets") or [])
+            return process_inventory_relist(
+                dp,
+                account_dict,
+                targets,
+                dry_run=bool(raw.get("dry_run", False)),
+                row_strategy=str(raw.get("row_strategy") or "first"),  # type: ignore[arg-type]
+            )
         if target_product_id:
             return process_single_product_delist(
                 dp,
@@ -94,6 +105,22 @@ async def delist_browser_node(state: DelistState) -> dict:
                 "warnings": list(stats.get("warnings") or []),
                 "finished": True,
             }
+        if mode == "inventory_relist":
+            if stats.get("errors"):
+                fatal = [str(e) for e in (stats.get("errors") or []) if str(e).strip()]
+                return {
+                    "phase": "relist_done",
+                    "results": stats.get("results") or [],
+                    "warnings": [*list(stats.get("warnings") or []), *fatal],
+                    "relist_issues": fatal,
+                    "finished": True,
+                }
+            return {
+                "phase": "relist_done",
+                "results": stats.get("results") or [],
+                "warnings": list(stats.get("warnings") or []),
+                "finished": True,
+            }
         if stats.get("error"):
             return {"errors": [stats["error"]], "results": [stats], "finished": True}
         return {"phase": "delist_done", "results": [stats], "finished": True}
@@ -105,6 +132,14 @@ async def delist_browser_node(state: DelistState) -> dict:
                 "results": [],
                 "warnings": [str(exc)],
                 "delist_issues": [str(exc)],
+                "finished": True,
+            }
+        if mode == "inventory_relist":
+            return {
+                "phase": "relist_done",
+                "results": [],
+                "warnings": [str(exc)],
+                "relist_issues": [str(exc)],
                 "finished": True,
             }
         return {"errors": [str(exc)], "finished": True}

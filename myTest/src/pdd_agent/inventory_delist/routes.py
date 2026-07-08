@@ -14,6 +14,10 @@ from pdd_agent.inventory_delist.schemas import (
     InventoryDelistRecordOut,
     InventoryRelistPreviewIn,
     InventoryRelistPreviewOut,
+    InventoryRelistJobListOut,
+    InventoryRelistJobOut,
+    InventoryRelistTriggerIn,
+    InventoryRelistTriggerOut,
     InventoryDelistScheduleOut,
     InventoryDelistScheduleUpdateIn,
     InventoryDelistTriggerIn,
@@ -28,8 +32,11 @@ from pdd_agent.inventory_delist.service import (
     list_inventory_delist_record_items,
     list_on_sale_product_codes,
     preview_inventory_delist,
+    get_inventory_relist_job,
     preview_inventory_relist,
+    list_inventory_relist_jobs,
     trigger_inventory_delist_run,
+    trigger_inventory_relist_run,
     update_schedule,
 )
 
@@ -94,6 +101,44 @@ def post_inventory_relist_preview(body: InventoryRelistPreviewIn):
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+@router.post("/relist/trigger", response_model=InventoryRelistTriggerOut)
+def post_inventory_relist_trigger(body: InventoryRelistTriggerIn):
+    try:
+        job = trigger_inventory_relist_run(
+            account_ids=body.account_ids,
+            product_codes=body.product_codes or None,
+            execution_mode=body.execution_mode,
+            trigger="manual",
+            force_feishu_refresh=body.force_feishu_refresh,
+            min_available_qty=body.min_available_qty,
+            relist_dry_run=body.relist_dry_run,
+        )
+        return InventoryRelistTriggerOut(job=InventoryRelistJobOut(**job))
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+@router.get("/relist/jobs", response_model=InventoryRelistJobListOut)
+def get_inventory_relist_jobs(limit: int = 20):
+    items = list_inventory_relist_jobs(limit=max(1, min(50, limit)))
+    return InventoryRelistJobListOut(
+        total=len(items),
+        items=[InventoryRelistJobOut(**item) for item in items],
+    )
+
+
+@router.get("/relist/jobs/{job_id}", response_model=InventoryRelistJobOut)
+def get_inventory_relist_job_detail(job_id: str):
+    job = get_inventory_relist_job(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="任务不存在")
+    return InventoryRelistJobOut(**job)
 
 
 @router.post("/trigger", response_model=InventoryDelistTriggerOut)
