@@ -20,6 +20,8 @@ from pdd_agent.api.schemas.pipelines import (
     PipelinePlatformSkipDedupeUpdateIn,
     PipelineAccessoryCostPricingOut,
     PipelineAccessoryCostPricingUpdateIn,
+    PipelineSubmitAiTitleOut,
+    PipelineSubmitAiTitleUpdateIn,
 )
 from pdd_agent.api.services.config_service import get_account_or_none
 from pdd_agent.api.services.pipeline_service import (
@@ -58,6 +60,10 @@ from pdd_agent.integrations.minio.auto_pipeline import (
     AutoPipelineConfig,
     load_auto_pipeline_config,
     save_auto_pipeline_config,
+)
+from pdd_agent.api.services.submit_ai_title_config_service import (
+    get_submit_ai_title_config,
+    update_submit_ai_title_config,
 )
 
 router = APIRouter(prefix="/pipelines", tags=["pipelines"])
@@ -123,6 +129,47 @@ def update_integrated_accessory_cost_pricing(body: PipelineAccessoryCostPricingU
         enabled=bool(body.enabled),
         float_min=float(pipe.accessory_cost_float_min),
         float_max=float(pipe.accessory_cost_float_max),
+    )
+
+
+@router.get("/integrated/submit-ai-title", response_model=PipelineSubmitAiTitleOut)
+def get_integrated_submit_ai_title():
+    """读取「提交前 AI 改标题」配置（独立于历史 page_ai 标题流程）。"""
+    cfg = get_submit_ai_title_config()
+    return PipelineSubmitAiTitleOut(
+        enabled=cfg.enabled,
+        provider=cfg.provider,
+        model=cfg.model,
+        base_url=cfg.base_url,
+        prompt=cfg.prompt,
+        temperature=cfg.temperature,
+        max_image_count=cfg.max_image_count,
+        has_api_key=bool(str(cfg.api_key or "").strip()),
+    )
+
+
+@router.put("/integrated/submit-ai-title", response_model=PipelineSubmitAiTitleOut)
+def update_integrated_submit_ai_title(body: PipelineSubmitAiTitleUpdateIn):
+    """更新「提交前 AI 改标题」配置（写入数据库）。"""
+    cfg = update_submit_ai_title_config(
+        enabled=body.enabled,
+        provider=body.provider,
+        model=body.model,
+        base_url=body.base_url,
+        api_key=body.api_key,
+        prompt=body.prompt,
+        temperature=body.temperature,
+        max_image_count=body.max_image_count,
+    )
+    return PipelineSubmitAiTitleOut(
+        enabled=cfg.enabled,
+        provider=cfg.provider,
+        model=cfg.model,
+        base_url=cfg.base_url,
+        prompt=cfg.prompt,
+        temperature=cfg.temperature,
+        max_image_count=cfg.max_image_count,
+        has_api_key=bool(str(cfg.api_key or "").strip()),
     )
 
 

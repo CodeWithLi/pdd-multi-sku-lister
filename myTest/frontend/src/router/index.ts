@@ -6,6 +6,7 @@ const router = createRouter({
     { path: '/', name: 'dashboard', component: () => import('@/views/DashboardView.vue'), meta: { title: '工作台' } },
     { path: '/daily-stats', name: 'daily-stats', component: () => import('@/views/DailyStatsView.vue'), meta: { title: '每日统计' } },
     { path: '/pipeline', name: 'pipeline', component: () => import('@/views/PipelineView.vue'), meta: { title: '整合链路' } },
+    { path: '/submit-ai-title-config', name: 'submit-ai-title-config', component: () => import('@/views/SubmitAiTitleConfigView.vue'), meta: { title: 'AI 标题配置' } },
     { path: '/tasks', name: 'tasks', component: () => import('@/views/TasksView.vue'), meta: { title: '上架 / 下架' } },
     { path: '/campaign', name: 'campaign', component: () => import('@/views/CampaignView.vue'), meta: { title: '活动' } },
     { path: '/traffic', name: 'traffic', component: () => import('@/views/TrafficView.vue'), meta: { title: '推广' } },

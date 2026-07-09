@@ -52,6 +52,9 @@ from pdd_agent.skills.listing.listing_page_validation_scan import (
     scan_listing_validation_issues,
 )
 from pdd_agent.skills.listing.listing_publish_settings import apply_listing_publish_settings
+from pdd_agent.skills.listing.listing_submit_ai_title import (
+    apply_submit_ai_title_before_submit,
+)
 from pdd_agent.skills.listing.publish_settings_failure_detail import (
     build_publish_settings_failure_detail,
 )
@@ -4543,6 +4546,21 @@ def upload_one_listing(
             step="publish_settings",
             page_url=page_url,
         )
+
+    submit_ai_title = apply_submit_ai_title_before_submit(
+        page,
+        account_id=account_id,
+        label=label,
+        image_paths=covers,
+        listing_info={
+            **dict(product_info),
+            **dict(listing_info),
+            "merchant_code": pcode,
+            "product_code": unit.product_code,
+        },
+    )
+    if submit_ai_title.get("applied"):
+        listing_info["title"] = str(submit_ai_title.get("title") or listing_info.get("title") or "")
 
     ok, submitted_at, blocked_reason = _click_submit(page, account_id, label)
     _clear_beforeunload(page)

@@ -275,6 +275,28 @@ class PipelineAccessoryCostPricingUpdateIn(BaseModel):
     enabled: bool
 
 
+class PipelineSubmitAiTitleOut(BaseModel):
+    enabled: bool
+    provider: str = "deepseek"
+    model: str = "deepseek-chat"
+    base_url: str = ""
+    prompt: str = ""
+    temperature: float = 0.3
+    max_image_count: int = 3
+    has_api_key: bool = False
+
+
+class PipelineSubmitAiTitleUpdateIn(BaseModel):
+    enabled: bool | None = None
+    provider: str | None = None
+    model: str | None = None
+    base_url: str | None = None
+    api_key: str | None = None
+    prompt: str | None = None
+    temperature: float | None = None
+    max_image_count: int | None = None
+
+
 class AutoUploadConfigResponse(BaseModel):
     enabled: bool = False
     trigger_mode: str = "new_product_folder"

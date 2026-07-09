@@ -138,6 +138,8 @@ const failureLogEnabled = ref(true)
 const failureLogSaving = ref(false)
 const failureLogTableName = ref('')
 const accessoryCostPricingEnabled = ref(true)
+const aiGenerateTitleLoading = ref(false)
+const submitAiTitleEnabled = ref(false)
 const accessoryCostPricingSaving = ref(false)
 const accessoryCostPricingFloatMin = ref(0)
 const accessoryCostPricingFloatMax = ref(5)
@@ -1160,6 +1162,29 @@ async function onAccessoryCostPricingChange(enabled: boolean) {
   }
 }
 
+function onAiGenerateTitleClick() {
+  onSubmitAiTitleToggle()
+}
+
+async function loadSubmitAiTitleSetting() {
+  const data = await api.getPipelineSubmitAiTitle()
+  submitAiTitleEnabled.value = !!data.enabled
+}
+
+async function onSubmitAiTitleToggle() {
+  aiGenerateTitleLoading.value = true
+  const next = !submitAiTitleEnabled.value
+  try {
+    const data = await api.updatePipelineSubmitAiTitle({ enabled: next })
+    submitAiTitleEnabled.value = !!data.enabled
+    ElMessage.success(data.enabled ? '已开启提交前 AI 标题' : '已关闭提交前 AI 标题')
+  } catch (e) {
+    ElMessage.error(e instanceof Error ? e.message : String(e))
+  } finally {
+    aiGenerateTitleLoading.value = false
+  }
+}
+
 async function loadLogSpecSkuRowsSetting() {
   const data = await api.getPipelineLogSpecSkuRows()
   logSpecSkuRowsEnabled.value = !!data.enabled
@@ -1662,6 +1687,7 @@ onMounted(async () => {
     await loadBaseData()
     await loadExcelFallbackSetting()
     await loadAccessoryCostPricingSetting()
+    await loadSubmitAiTitleSetting()
     await loadLogSpecSkuRowsSetting()
     await loadPlatformSkipDedupeSetting()
     await loadFailureLogSetting()
@@ -2361,6 +2387,19 @@ onUnmounted(() => {
                       :loading="accessoryCostPricingSaving"
                       @change="onAccessoryCostPricingChange"
                     />
+                  </div>
+                  <div class="switch-row">
+                    <el-button
+                      :type="submitAiTitleEnabled ? 'success' : 'primary'"
+                      :plain="!submitAiTitleEnabled"
+                      :loading="aiGenerateTitleLoading"
+                      @click="onAiGenerateTitleClick"
+                    >
+                      AI 生成标题{{ submitAiTitleEnabled ? '（已开启）' : '（未开启）' }}
+                    </el-button>
+                    <el-button link type="primary" @click="router.push('/submit-ai-title-config')">
+                      配置
+                    </el-button>
                   </div>
                 </div>
                 <div v-if="categoryNextBurstDemo" class="form-tip">

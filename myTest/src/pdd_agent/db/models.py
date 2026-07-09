@@ -702,3 +702,22 @@ class InventoryDelistRecordORM(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime, server_default=func.now(), nullable=False
     )
+
+
+class ListingSubmitAiTitleConfigORM(Base):
+    """提交前 AI 改标题配置（独立于历史 page_ai 标题流程）。"""
+
+    __tablename__ = "listing_submit_ai_title_config"
+
+    config_id: Mapped[str] = mapped_column(String(32), primary_key=True, default="default")
+    enabled: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    provider: Mapped[str] = mapped_column(String(32), default="deepseek", nullable=False)
+    model: Mapped[str] = mapped_column(String(128), default="deepseek-chat", nullable=False)
+    base_url: Mapped[str] = mapped_column(String(255), default="https://api.deepseek.com/v1", nullable=False)
+    api_key: Mapped[str] = mapped_column(Text, default="", nullable=False)
+    prompt: Mapped[str] = mapped_column(Text, default="", nullable=False)
+    temperature: Mapped[float] = mapped_column(Float, default=0.3, nullable=False)
+    max_image_count: Mapped[int] = mapped_column(Integer, default=3, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, server_default=func.now(), onupdate=func.now(), nullable=False
+    )

@@ -22,6 +22,7 @@ import type {
   IntegratedPipelineBatchStartPayload,
   IntegratedPipelineListResponse,
   IntegratedPipelineStartPayload,
+  PipelineSubmitAiTitleConfig,
   PipelineLateRetryStartResponse,
   PipelineIssueListResponse,
   PipelineIssueReport,
@@ -73,7 +74,6 @@ import type {
   StyleColorCreatePayload,
   StyleColorListResponse,
   StyleColorUpdatePayload,
-  ListingProductAttribute,
   ListingProductAttributeBatchUpdatePayload,
   ListingProductAttributeListResponse,
   ProductDetail,
@@ -730,6 +730,16 @@ export const api = {
         '/pipelines/integrated/accessory-cost-pricing',
         { enabled },
       )
+      .then((r) => r.data),
+
+  getPipelineSubmitAiTitle: () =>
+    http
+      .get<PipelineSubmitAiTitleConfig>('/pipelines/integrated/submit-ai-title')
+      .then((r) => r.data),
+
+  updatePipelineSubmitAiTitle: (body: Partial<PipelineSubmitAiTitleConfig> & { api_key?: string }) =>
+    http
+      .put<PipelineSubmitAiTitleConfig>('/pipelines/integrated/submit-ai-title', body)
       .then((r) => r.data),
 
   getPipelineLogSpecSkuRows: () =>

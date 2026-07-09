@@ -16,6 +16,22 @@ def create_chat_model(*, model: str | None = None, temperature: float = 0) -> Ch
     )
 
 
+def create_chat_model_with_runtime(
+    *,
+    model: str,
+    api_key: str,
+    base_url: str,
+    temperature: float = 0,
+) -> ChatOpenAI:
+    """按运行时配置创建模型（用于可热切换厂商/模型场景）。"""
+    return ChatOpenAI(
+        model=str(model or "").strip(),
+        api_key=str(api_key or "").strip() or "not-set",
+        base_url=str(base_url or "").strip() or None,
+        temperature=temperature,
+    )
+
+
 def create_orchestrator_model() -> ChatOpenAI:
     """Orchestrator 可用独立模型；未配置时回退到 llm_model。"""
     env = get_env_settings()

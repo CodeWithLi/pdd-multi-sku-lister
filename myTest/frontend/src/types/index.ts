@@ -1321,6 +1321,17 @@ export interface IntegratedPipelineBatchResponse {
   message: string
 }
 
+export interface PipelineSubmitAiTitleConfig {
+  enabled: boolean
+  provider: string
+  model: string
+  base_url: string
+  prompt: string
+  temperature: number
+  max_image_count: number
+  has_api_key: boolean
+}
+
 export interface PipelineIssueReport {
   issue_id: string
   pipeline_id: string

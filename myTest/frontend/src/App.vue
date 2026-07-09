@@ -59,6 +59,7 @@ const navGroups: NavGroup[] = [
       { path: '/traffic', label: '推广', icon: TrendCharts },
       { path: '/traffic-report-schedule', label: '投流日报定时', icon: Timer },
       { path: '/catalog', label: '素材检查', icon: FolderOpened },
+      { path: '/submit-ai-title-config', label: 'AI 标题配置', icon: ChatDotRound },
     ],
   },
   {
