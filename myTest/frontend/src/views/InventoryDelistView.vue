@@ -1357,6 +1357,7 @@ onUnmounted(() => {
         <el-table-column prop="delisted_at" label="下架时间" width="160" fixed />
         <el-table-column prop="shop_display_name" label="店铺" min-width="120" show-overflow-tooltip />
         <el-table-column prop="product_code" label="商品编码" min-width="110" />
+        <el-table-column prop="pdd_product_id" label="商品 ID" min-width="130" show-overflow-tooltip />
         <el-table-column label="可用数" width="80" align="center">
           <template #default="{ row }">
             <span :class="qtyClass(row.erp_available_qty)">{{ row.erp_available_qty ?? '—' }}</span>

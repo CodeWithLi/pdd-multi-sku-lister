@@ -21,6 +21,7 @@ class AccountRelistTask:
     run_id: str = ""
     candidate_codes: list[str] = field(default_factory=list)
     code_record_ids: dict[str, list[str]] = field(default_factory=dict)
+    code_pdd_product_ids: dict[str, str] = field(default_factory=dict)
     target_count: int = 0
     warnings: list[str] = field(default_factory=list)
     error: str = ""
@@ -77,6 +78,7 @@ def _task_from_dict(raw: dict) -> AccountRelistTask:
         run_id=str(raw.get("run_id") or ""),
         candidate_codes=list(raw.get("candidate_codes") or []),
         code_record_ids=dict(raw.get("code_record_ids") or {}),
+        code_pdd_product_ids=dict(raw.get("code_pdd_product_ids") or {}),
         target_count=int(raw.get("target_count") or 0),
         warnings=list(raw.get("warnings") or []),
         error=str(raw.get("error") or ""),
@@ -129,6 +131,7 @@ def create_relist_job(
                 account_id=aid,
                 candidate_codes=codes,
                 code_record_ids=dict(row.get("code_record_ids") or {}),
+                code_pdd_product_ids=dict(row.get("code_pdd_product_ids") or {}),
                 target_count=len(codes),
                 status="skipped" if not codes else "pending",
             )

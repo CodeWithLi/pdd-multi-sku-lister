@@ -376,7 +376,7 @@ def _build_relist_per_account_tasks(
 ) -> list[dict[str, Any]]:
     """按店铺拆分可恢复上架编码，保留编码 -> 下架记录 ID 映射。"""
     buckets: dict[str, dict[str, Any]] = {
-        aid: {"account_id": aid, "candidate_codes": [], "code_record_ids": {}}
+        aid: {"account_id": aid, "candidate_codes": [], "code_record_ids": {}, "code_pdd_product_ids": {}}
         for aid in account_ids
     }
     for target in relist_candidates:
@@ -397,6 +397,12 @@ def _build_relist_per_account_tasks(
             ]
             buckets[aid]["candidate_codes"].append(code)
             buckets[aid]["code_record_ids"][code] = record_ids
+            for row in per_account:
+                if str(row.get("account_id") or "") != aid:
+                    continue
+                product_id = str(row.get("pdd_product_id") or "").strip()
+                if product_id:
+                    buckets[aid]["code_pdd_product_ids"][code] = product_id
     rows: list[dict[str, Any]] = []
     for aid in account_ids:
         row = buckets[aid]

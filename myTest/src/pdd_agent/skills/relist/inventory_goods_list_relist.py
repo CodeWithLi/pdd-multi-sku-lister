@@ -18,9 +18,10 @@ from pdd_agent.skills.delist.automation import (
     merchant_code_matches_expected,
 )
 
-RelistRowStrategy = Literal["first"]
+RelistRowStrategy = Literal["first", "by_product_id"]
 
-RELIST_ROW_STRATEGY: RelistRowStrategy = "first"
+RELIST_ROW_STRATEGY: RelistRowStrategy = "by_product_id"
+PRODUCT_ID_MISMATCH_MESSAGE = "当前商品重新上架失败，商品id匹配不上"
 
 
 def _log(account_id: str, msg: str) -> None:
@@ -163,28 +164,88 @@ def _relist_row_via_action_link(page, row, account_id: str, product_id: str) -> 
         return False
 
 
+def _extract_product_id_from_row(row) -> str:
+    """优先从 span.goods-id 读取商品 ID，与拼多多已下架列表 DOM 结构一致。"""
+    try:
+        via_dom = row.run_js(
+            """
+            const tr = arguments[0];
+            if (!tr) return '';
+            const pick = tr.querySelector('span.goods-id span')
+                || tr.querySelector('.goods-id span')
+                || tr.querySelector('span.goods-id');
+            if (!pick) return '';
+            const text = (pick.innerText || pick.textContent || '').trim();
+            return /^\\d{10,}$/.test(text) ? text : '';
+            """
+        )
+        if via_dom:
+            return str(via_dom).strip()
+    except Exception:
+        pass
+    try:
+        text = row.text or ""
+    except Exception:
+        text = ""
+    return str(extract_product_id_from_text(text) or "").strip()
+
+
+def _enrich_rows_product_ids(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    enriched: list[dict[str, Any]] = []
+    for item in rows:
+        row = item.get("row")
+        product_id = str(item.get("product_id") or "").strip()
+        if row:
+            product_id = _extract_product_id_from_row(row) or product_id
+        enriched.append({**item, "product_id": product_id})
+    return enriched
+
+
+def _pick_row_by_product_id(
+    rows: list[dict[str, Any]],
+    target_product_id: str,
+) -> tuple[dict[str, Any] | None, int]:
+    target = str(target_product_id or "").strip()
+    if not target:
+        return None, 0
+    for index, item in enumerate(rows, start=1):
+        product_id = str(item.get("product_id") or "").strip()
+        if product_id == target:
+            return item, index
+    return None, 0
+
+
 def _pick_row_by_strategy(
     rows: list[dict[str, Any]],
     product_code: str,
     *,
     strategy: RelistRowStrategy = "first",
-) -> dict[str, Any] | None:
+    target_product_id: str = "",
+) -> tuple[dict[str, Any] | None, int]:
     if not rows:
-        return None
+        return None, 0
+    enriched = _enrich_rows_product_ids(rows)
+    target_id = str(target_product_id or "").strip()
+    if strategy == "by_product_id" and target_id:
+        picked, index = _pick_row_by_product_id(enriched, target_id)
+        if picked:
+            return picked, index
+        return None, 0
+
     expected = {str(product_code or "").strip()}
     matched = [
         item
-        for item in rows
+        for item in enriched
         if merchant_code_matches_expected(str(item.get("merchant_code") or ""), expected)
         or merchant_code_matches_expected(
             extract_merchant_code_from_row_text(str(item.get("row_text") or "")),
             expected,
         )
     ]
-    pool = matched or rows
-    if strategy == "first":
-        return pool[0]
-    return pool[0]
+    pool = matched or enriched
+    if strategy == "first" or not target_id:
+        return pool[0], 1
+    return None, 0
 
 
 def _search_delisted_by_merchant_code(page, account_id: str, merchant_code: str) -> str:
@@ -220,16 +281,19 @@ def relist_one_product_code(
     account_id: str,
     *,
     product_code: str,
+    target_pdd_product_id: str = "",
     dry_run: bool = False,
     row_strategy: RelistRowStrategy = RELIST_ROW_STRATEGY,
 ) -> dict[str, Any]:
-    """在已下架列表搜索单个编码并上架首条匹配行。"""
+    """在已下架列表搜索单个编码，按商品 ID 精准匹配后上架对应行。"""
     code = str(product_code or "").strip()
+    target_id = str(target_pdd_product_id or "").strip()
     result: dict[str, Any] = {
         "product_code": code,
         "status": "failed",
         "message": "",
-        "pdd_product_id": "",
+        "pdd_product_id": target_id,
+        "target_pdd_product_id": target_id,
         "merchant_code": code,
     }
     if not code:
@@ -243,14 +307,30 @@ def relist_one_product_code(
         result["message"] = "没有搜索到该商品"
         return result
 
-    rows = _scan_filtered_rows_on_page(page)
+    rows = _enrich_rows_product_ids(_scan_filtered_rows_on_page(page))
     if not rows:
         result["status"] = "not_found"
         result["message"] = "没有搜索到该商品"
         return result
 
-    picked = _pick_row_by_strategy(rows, code, strategy=row_strategy)
+    effective_strategy: RelistRowStrategy = "by_product_id" if target_id else row_strategy
+    picked, row_index = _pick_row_by_strategy(
+        rows,
+        code,
+        strategy=effective_strategy,
+        target_product_id=target_id,
+    )
     if not picked:
+        if target_id:
+            visible_ids = [str(item.get("product_id") or "").strip() for item in rows if item.get("product_id")]
+            _log(
+                account_id,
+                f"商品编码 {code} 搜索到 {len(rows)} 行，未匹配目标商品ID={target_id}"
+                + (f"（页面ID：{', '.join(visible_ids)}）" if visible_ids else ""),
+            )
+            result["status"] = "failed"
+            result["message"] = PRODUCT_ID_MISMATCH_MESSAGE
+            return result
         result["status"] = "not_found"
         result["message"] = "没有搜索到该商品"
         return result
@@ -259,6 +339,8 @@ def relist_one_product_code(
     row_merchant = str(picked.get("merchant_code") or "").strip() or code
     result["pdd_product_id"] = product_id
     result["merchant_code"] = row_merchant
+    if row_index > 0:
+        _log(account_id, f"商品编码 {code} 第 {row_index} 行匹配商品ID={product_id}")
 
     if dry_run:
         result["status"] = "dry_run"
@@ -327,6 +409,7 @@ def process_inventory_relist(
         {
             "product_code": str(item.get("product_code") or item.get("merchant_code") or "").strip(),
             "record_ids": list(item.get("record_ids") or []),
+            "pdd_product_id": str(item.get("pdd_product_id") or "").strip(),
         }
         for item in (targets or [])
         if str(item.get("product_code") or item.get("merchant_code") or "").strip()
@@ -341,6 +424,7 @@ def process_inventory_relist(
             page,
             account_id,
             product_code=code,
+            target_pdd_product_id=str(item.get("pdd_product_id") or "").strip(),
             dry_run=dry_run,
             row_strategy=row_strategy,
         )

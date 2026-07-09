@@ -51,6 +51,34 @@ def _group_result_items(result: dict[str, Any] | None) -> dict[str, list[dict[st
     return grouped
 
 
+def _resolve_pdd_product_id(
+    published_item: OnSalePublishedItem | None,
+    matched_results: list[dict[str, Any]],
+) -> str:
+    """优先用下架结果中的 target_product_id，否则回退到已发布商品记录。"""
+    for item in matched_results:
+        if str(item.get("status") or "") != "delisted":
+            continue
+        product_id = str(item.get("target_product_id") or "").strip()
+        if product_id:
+            return product_id
+    if published_item:
+        return str(published_item.pdd_product_id or "").strip()
+    return ""
+
+
+def _index_published_items_by_code(items: list[OnSalePublishedItem]) -> dict[str, OnSalePublishedItem]:
+    indexed: dict[str, OnSalePublishedItem] = {}
+    for item in items:
+        code = str(item.product_code or "").strip()
+        if not code:
+            continue
+        existing = indexed.get(code)
+        if not existing or (not existing.pdd_product_id and item.pdd_product_id):
+            indexed[code] = item
+    return indexed
+
+
 def _resolve_delist_status(
     *,
     account_success: bool,
@@ -109,7 +137,7 @@ def record_account_inventory_delist(
     items = prefetched_items
     if items is None:
         items = list_on_sale_items(account_task.account_id, product_codes=set(codes))
-    items_by_code = {item.product_code: item for item in items}
+    items_by_code = _index_published_items_by_code(items)
 
     written = 0
     now = datetime.now()
@@ -120,6 +148,7 @@ def record_account_inventory_delist(
         matched_results: list[dict[str, Any]] = []
         for key in lookup_keys:
             matched_results.extend(result_groups.get(key, []))
+        pdd_product_id = _resolve_pdd_product_id(item, matched_results)
 
         override = overrides.get(code.upper())
         erp_qty = inventory_map.get(code)
@@ -149,7 +178,7 @@ def record_account_inventory_delist(
             product_code=code,
             merchant_code=merchant,
             mapping_id=item.mapping_id if item else "",
-            pdd_product_id=item.pdd_product_id if item else "",
+            pdd_product_id=pdd_product_id,
             family_code=item.family_code if item else "",
             image_set=item.image_set if item else "",
             erp_available_qty=erp_qty,

@@ -16,6 +16,7 @@ logger = get_logger(__name__)
 
 def build_relist_targets_for_account(account_task: AccountRelistTask) -> list[dict[str, Any]]:
     targets: list[dict[str, Any]] = []
+    product_ids = dict(account_task.code_pdd_product_ids or {})
     for code in account_task.candidate_codes:
         code = str(code or "").strip()
         if not code:
@@ -24,6 +25,7 @@ def build_relist_targets_for_account(account_task: AccountRelistTask) -> list[di
             {
                 "product_code": code,
                 "record_ids": list((account_task.code_record_ids or {}).get(code) or []),
+                "pdd_product_id": str(product_ids.get(code) or "").strip(),
             }
         )
     return targets
@@ -34,7 +36,7 @@ def build_relist_delist_params(account_task: AccountRelistTask, *, dry_run: bool
         "mode": "inventory_relist",
         "dry_run": bool(dry_run),
         "targets": build_relist_targets_for_account(account_task),
-        "row_strategy": "first",
+        "row_strategy": "by_product_id",
     }
 
 
