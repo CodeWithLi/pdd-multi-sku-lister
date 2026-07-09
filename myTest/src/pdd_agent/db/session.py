@@ -249,6 +249,62 @@ def _ensure_inventory_delist_records_columns(engine: Engine) -> None:
         return
 
 
+def _ensure_listing_submit_ai_title_config_columns(engine: Engine) -> None:
+    """为 listing_submit_ai_title_config 表补充兜底模型字段（老库平滑升级）。"""
+    try:
+        inspector = inspect(engine)
+        if "listing_submit_ai_title_config" not in inspector.get_table_names():
+            return
+        existing = {col["name"] for col in inspector.get_columns("listing_submit_ai_title_config")}
+        dialect = engine.dialect.name
+        statements: list[str] = []
+        if "fallback_enabled" not in existing:
+            statements.append(
+                "ALTER TABLE listing_submit_ai_title_config "
+                "ADD COLUMN fallback_enabled TINYINT(1) NOT NULL DEFAULT 1"
+            )
+        if "fallback_provider" not in existing:
+            statements.append(
+                "ALTER TABLE listing_submit_ai_title_config "
+                "ADD COLUMN fallback_provider VARCHAR(32) NOT NULL DEFAULT 'glm'"
+            )
+        if "fallback_model" not in existing:
+            statements.append(
+                "ALTER TABLE listing_submit_ai_title_config "
+                "ADD COLUMN fallback_model VARCHAR(128) NOT NULL DEFAULT 'glm-4-flash'"
+            )
+        if "fallback_base_url" not in existing:
+            statements.append(
+                "ALTER TABLE listing_submit_ai_title_config "
+                "ADD COLUMN fallback_base_url VARCHAR(255) NOT NULL DEFAULT 'https://open.bigmodel.cn/api/paas/v4'"
+            )
+        if "fallback_api_key" not in existing:
+            if dialect.startswith("mysql"):
+                statements.append(
+                    "ALTER TABLE listing_submit_ai_title_config "
+                    "ADD COLUMN fallback_api_key TEXT NULL"
+                )
+                # MySQL TEXT 不允许 DEFAULT，这里后续读时按空串处理
+            else:
+                statements.append(
+                    "ALTER TABLE listing_submit_ai_title_config "
+                    "ADD COLUMN fallback_api_key TEXT NOT NULL DEFAULT ''"
+                )
+        if not statements:
+            return
+        from pdd_agent.core.logging import get_logger
+
+        log = get_logger(__name__)
+        for stmt in statements:
+            try:
+                with engine.begin() as conn:
+                    conn.execute(text(stmt))
+            except Exception:
+                log.warning("submit_ai_title_config migration skipped: %s", stmt, exc_info=True)
+    except Exception:
+        return
+
+
 def _ensure_daily_listing_records_columns(engine: Engine) -> None:
     """为 daily_listing_records 补充逻辑删除字段。"""
     try:
@@ -400,6 +456,7 @@ def init_database() -> bool:
         _ensure_failure_sequential_job_columns(engine)
         _ensure_failure_sequential_batch_columns(engine)
         _ensure_inventory_delist_records_columns(engine)
+        _ensure_listing_submit_ai_title_config_columns(engine)
         _ensure_daily_listing_records_columns(engine)
         _ensure_integrated_pipelines_created_at_index(engine)
         # seed / backfill 会调用 is_database_available()，须先发布 session，避免 init 递归

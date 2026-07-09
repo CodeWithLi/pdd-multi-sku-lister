@@ -718,6 +718,11 @@ class ListingSubmitAiTitleConfigORM(Base):
     prompt: Mapped[str] = mapped_column(Text, default="", nullable=False)
     temperature: Mapped[float] = mapped_column(Float, default=0.3, nullable=False)
     max_image_count: Mapped[int] = mapped_column(Integer, default=3, nullable=False)
+    fallback_enabled: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    fallback_provider: Mapped[str] = mapped_column(String(32), default="glm", nullable=False)
+    fallback_model: Mapped[str] = mapped_column(String(128), default="glm-4-flash", nullable=False)
+    fallback_base_url: Mapped[str] = mapped_column(String(255), default="https://open.bigmodel.cn/api/paas/v4", nullable=False)
+    fallback_api_key: Mapped[str] = mapped_column(Text, default="", nullable=False)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime, server_default=func.now(), onupdate=func.now(), nullable=False
     )

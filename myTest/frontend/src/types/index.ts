@@ -1326,10 +1326,15 @@ export interface PipelineSubmitAiTitleConfig {
   provider: string
   model: string
   base_url: string
+  fallback_enabled: boolean
+  fallback_provider: string
+  fallback_model: string
+  fallback_base_url: string
   prompt: string
   temperature: number
   max_image_count: number
   has_api_key: boolean
+  has_fallback_api_key: boolean
 }
 
 export interface PipelineIssueReport {

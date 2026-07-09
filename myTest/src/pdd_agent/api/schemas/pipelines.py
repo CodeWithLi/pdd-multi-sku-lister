@@ -280,10 +280,15 @@ class PipelineSubmitAiTitleOut(BaseModel):
     provider: str = "deepseek"
     model: str = "deepseek-chat"
     base_url: str = ""
+    fallback_enabled: bool = True
+    fallback_provider: str = "glm"
+    fallback_model: str = "glm-4-flash"
+    fallback_base_url: str = ""
     prompt: str = ""
     temperature: float = 0.3
     max_image_count: int = 3
     has_api_key: bool = False
+    has_fallback_api_key: bool = False
 
 
 class PipelineSubmitAiTitleUpdateIn(BaseModel):
@@ -292,6 +297,11 @@ class PipelineSubmitAiTitleUpdateIn(BaseModel):
     model: str | None = None
     base_url: str | None = None
     api_key: str | None = None
+    fallback_enabled: bool | None = None
+    fallback_provider: str | None = None
+    fallback_model: str | None = None
+    fallback_base_url: str | None = None
+    fallback_api_key: str | None = None
     prompt: str | None = None
     temperature: float | None = None
     max_image_count: int | None = None

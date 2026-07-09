@@ -23,6 +23,11 @@ class SubmitAiTitleConfig:
     model: str = "deepseek-chat"
     base_url: str = "https://api.deepseek.com/v1"
     api_key: str = ""
+    fallback_enabled: bool = True
+    fallback_provider: str = "glm"
+    fallback_model: str = "glm-4-flash"
+    fallback_base_url: str = "https://open.bigmodel.cn/api/paas/v4"
+    fallback_api_key: str = ""
     prompt: str = DEFAULT_SUBMIT_AI_TITLE_PROMPT
     temperature: float = 0.3
     max_image_count: int = 3
@@ -43,12 +48,23 @@ def _normalize_config(cfg: SubmitAiTitleConfig) -> SubmitAiTitleConfig:
         max_image_count = 1
     if max_image_count > 5:
         max_image_count = 5
+    fallback_provider = str(cfg.fallback_provider or "glm").strip() or "glm"
+    fallback_model = str(cfg.fallback_model or "glm-4-flash").strip() or "glm-4-flash"
+    fallback_base_url = (
+        str(cfg.fallback_base_url or "https://open.bigmodel.cn/api/paas/v4").strip()
+        or "https://open.bigmodel.cn/api/paas/v4"
+    )
     return SubmitAiTitleConfig(
         enabled=bool(cfg.enabled),
         provider=provider,
         model=model,
         base_url=base_url,
         api_key=str(cfg.api_key or "").strip(),
+        fallback_enabled=bool(cfg.fallback_enabled),
+        fallback_provider=fallback_provider,
+        fallback_model=fallback_model,
+        fallback_base_url=fallback_base_url,
+        fallback_api_key=str(cfg.fallback_api_key or "").strip(),
         prompt=prompt,
         temperature=temperature,
         max_image_count=max_image_count,
@@ -67,6 +83,11 @@ def _to_dataclass(row: ListingSubmitAiTitleConfigORM) -> SubmitAiTitleConfig:
             model=str(row.model or ""),
             base_url=str(row.base_url or ""),
             api_key=str(row.api_key or ""),
+            fallback_enabled=bool(getattr(row, "fallback_enabled", True)),
+            fallback_provider=str(getattr(row, "fallback_provider", "") or ""),
+            fallback_model=str(getattr(row, "fallback_model", "") or ""),
+            fallback_base_url=str(getattr(row, "fallback_base_url", "") or ""),
+            fallback_api_key=str(getattr(row, "fallback_api_key", "") or ""),
             prompt=str(row.prompt or ""),
             temperature=float(row.temperature or 0.3),
             max_image_count=int(row.max_image_count or 3),
@@ -91,6 +112,11 @@ def get_submit_ai_title_config() -> SubmitAiTitleConfig:
                 model=cfg.model,
                 base_url=cfg.base_url,
                 api_key=cfg.api_key,
+                fallback_enabled=cfg.fallback_enabled,
+                fallback_provider=cfg.fallback_provider,
+                fallback_model=cfg.fallback_model,
+                fallback_base_url=cfg.fallback_base_url,
+                fallback_api_key=cfg.fallback_api_key,
                 prompt=cfg.prompt,
                 temperature=cfg.temperature,
                 max_image_count=cfg.max_image_count,
@@ -106,6 +132,11 @@ def update_submit_ai_title_config(
     model: str | None = None,
     base_url: str | None = None,
     api_key: str | None = None,
+    fallback_enabled: bool | None = None,
+    fallback_provider: str | None = None,
+    fallback_model: str | None = None,
+    fallback_base_url: str | None = None,
+    fallback_api_key: str | None = None,
     prompt: str | None = None,
     temperature: float | None = None,
     max_image_count: int | None = None,
@@ -123,6 +154,16 @@ def update_submit_ai_title_config(
         payload["base_url"] = str(base_url or "").strip()
     if api_key is not None:
         payload["api_key"] = str(api_key or "").strip()
+    if fallback_enabled is not None:
+        payload["fallback_enabled"] = bool(fallback_enabled)
+    if fallback_provider is not None:
+        payload["fallback_provider"] = str(fallback_provider or "").strip()
+    if fallback_model is not None:
+        payload["fallback_model"] = str(fallback_model or "").strip()
+    if fallback_base_url is not None:
+        payload["fallback_base_url"] = str(fallback_base_url or "").strip()
+    if fallback_api_key is not None:
+        payload["fallback_api_key"] = str(fallback_api_key or "").strip()
     if prompt is not None:
         payload["prompt"] = str(prompt or "").strip()
     if temperature is not None:
@@ -142,6 +183,11 @@ def update_submit_ai_title_config(
         row.model = normalized.model
         row.base_url = normalized.base_url
         row.api_key = normalized.api_key
+        row.fallback_enabled = normalized.fallback_enabled
+        row.fallback_provider = normalized.fallback_provider
+        row.fallback_model = normalized.fallback_model
+        row.fallback_base_url = normalized.fallback_base_url
+        row.fallback_api_key = normalized.fallback_api_key
         row.prompt = normalized.prompt
         row.temperature = normalized.temperature
         row.max_image_count = normalized.max_image_count

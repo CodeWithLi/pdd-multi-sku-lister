@@ -87,6 +87,51 @@ def _invoke_title_model(
     return _normalize_title_text(raw)
 
 
+def _invoke_title_with_fallback(
+    *,
+    cfg: SubmitAiTitleConfig,
+    prompt: str,
+    images: list[Path],
+    account_id: str,
+    label: str,
+) -> tuple[str, str]:
+    """
+    一级：提交前标题配置（默认 deepseek）
+    二级兜底：环境 LLM（建议配成 glm）
+    """
+    try:
+        title = _invoke_title_model(cfg=cfg, prompt=prompt, images=images)
+        if title:
+            return title, "primary"
+        _log(account_id, label, "提交前 AI 标题：主模型返回空标题，尝试 GLM 兜底")
+    except Exception as exc:
+        _log(account_id, label, f"提交前 AI 标题：主模型失败，尝试 GLM 兜底（{exc}）")
+
+    if not cfg.fallback_enabled:
+        return "", "fallback_disabled"
+    if not str(cfg.fallback_api_key or "").strip():
+        return "", "fallback_missing_api_key"
+
+    fallback_cfg = SubmitAiTitleConfig(
+        enabled=True,
+        provider=cfg.fallback_provider,
+        model=cfg.fallback_model,
+        base_url=cfg.fallback_base_url,
+        api_key=cfg.fallback_api_key,
+        prompt=cfg.prompt,
+        temperature=cfg.temperature,
+        max_image_count=cfg.max_image_count,
+    )
+    try:
+        title = _invoke_title_model(cfg=fallback_cfg, prompt=prompt, images=images)
+        if title:
+            return title, "glm_fallback"
+        return "", "glm_fallback_empty"
+    except Exception as exc:
+        _log(account_id, label, f"提交前 AI 标题：GLM 兜底也失败（{exc}）")
+        return "", "glm_fallback_failed"
+
+
 def apply_submit_ai_title_before_submit(
     page,
     *,
@@ -121,15 +166,17 @@ def apply_submit_ai_title_before_submit(
         "请基于图片生成新标题，只返回最终标题。",
     ]
     final_prompt = f"{cfg.prompt}\n\n补充上下文：\n" + "\n".join(context_lines)
-    try:
-        generated = _invoke_title_model(cfg=cfg, prompt=final_prompt, images=images)
-    except Exception as exc:
-        _log(account_id, label, f"提交前 AI 标题调用失败：{exc}")
-        return {"ok": True, "applied": False, "reason": "invoke_failed", "error": str(exc)}
+    generated, source = _invoke_title_with_fallback(
+        cfg=cfg,
+        prompt=final_prompt,
+        images=images,
+        account_id=account_id,
+        label=label,
+    )
 
     if not generated:
         _log(account_id, label, "提交前 AI 标题：模型返回空标题，跳过")
-        return {"ok": True, "applied": False, "reason": "empty_title"}
+        return {"ok": True, "applied": False, "reason": source or "empty_title"}
 
     if not _fill_manual_title(page, account_id, generated):
         _log(account_id, label, "提交前 AI 标题：未找到标题输入框，跳过")
@@ -140,6 +187,7 @@ def apply_submit_ai_title_before_submit(
     return {
         "ok": True,
         "applied": True,
+        "source": source,
         "title": confirmed,
         "images_used": [str(p) for p in images],
     }

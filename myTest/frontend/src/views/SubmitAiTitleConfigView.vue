@@ -12,11 +12,17 @@ const form = reactive({
   provider: 'deepseek',
   model: 'deepseek-chat',
   base_url: 'https://api.deepseek.com/v1',
+  fallback_enabled: true,
+  fallback_provider: 'glm',
+  fallback_model: 'glm-4-flash',
+  fallback_base_url: 'https://open.bigmodel.cn/api/paas/v4',
   prompt: '',
   temperature: 0.3,
   max_image_count: 3,
   api_key: '',
   has_api_key: false,
+  fallback_api_key: '',
+  has_fallback_api_key: false,
 })
 
 async function loadConfig() {
@@ -27,11 +33,17 @@ async function loadConfig() {
     form.provider = String(data.provider || 'deepseek')
     form.model = String(data.model || 'deepseek-chat')
     form.base_url = String(data.base_url || 'https://api.deepseek.com/v1')
+    form.fallback_enabled = !!data.fallback_enabled
+    form.fallback_provider = String(data.fallback_provider || 'glm')
+    form.fallback_model = String(data.fallback_model || 'glm-4-flash')
+    form.fallback_base_url = String(data.fallback_base_url || 'https://open.bigmodel.cn/api/paas/v4')
     form.prompt = String(data.prompt || '')
     form.temperature = Number(data.temperature ?? 0.3)
     form.max_image_count = Number(data.max_image_count ?? 3)
     form.has_api_key = !!data.has_api_key
+    form.has_fallback_api_key = !!data.has_fallback_api_key
     form.api_key = ''
+    form.fallback_api_key = ''
   } catch (e) {
     ElMessage.error(e instanceof Error ? e.message : String(e))
   } finally {
@@ -47,15 +59,22 @@ async function saveConfig() {
       provider: form.provider,
       model: form.model,
       base_url: form.base_url,
+      fallback_enabled: form.fallback_enabled,
+      fallback_provider: form.fallback_provider,
+      fallback_model: form.fallback_model,
+      fallback_base_url: form.fallback_base_url,
       prompt: form.prompt,
       temperature: Number(form.temperature),
       max_image_count: Number(form.max_image_count),
     }
     if (form.api_key.trim()) payload.api_key = form.api_key.trim()
+    if (form.fallback_api_key.trim()) payload.fallback_api_key = form.fallback_api_key.trim()
     const data = await api.updatePipelineSubmitAiTitle(payload)
     form.enabled = !!data.enabled
     form.has_api_key = !!data.has_api_key
+    form.has_fallback_api_key = !!data.has_fallback_api_key
     form.api_key = ''
+    form.fallback_api_key = ''
     ElMessage.success('提交前 AI 标题配置已保存')
   } catch (e) {
     ElMessage.error(e instanceof Error ? e.message : String(e))
@@ -101,6 +120,36 @@ onMounted(loadConfig)
           />
           <div class="form-tip">
             当前密钥状态：{{ form.has_api_key ? '已配置' : '未配置' }}
+          </div>
+        </el-form-item>
+
+        <el-divider content-position="left">兜底模型（主模型失败自动调用）</el-divider>
+
+        <el-form-item label="启用兜底">
+          <el-switch v-model="form.fallback_enabled" />
+        </el-form-item>
+
+        <el-form-item label="兜底 provider">
+          <el-input v-model="form.fallback_provider" placeholder="glm / openai / 其他兼容厂商" />
+        </el-form-item>
+
+        <el-form-item label="兜底 model">
+          <el-input v-model="form.fallback_model" placeholder="例如 glm-4-flash" />
+        </el-form-item>
+
+        <el-form-item label="兜底 Base URL">
+          <el-input v-model="form.fallback_base_url" placeholder="例如 https://open.bigmodel.cn/api/paas/v4" />
+        </el-form-item>
+
+        <el-form-item label="兜底 API Key">
+          <el-input
+            v-model="form.fallback_api_key"
+            type="password"
+            show-password
+            placeholder="留空表示不修改当前兜底密钥"
+          />
+          <div class="form-tip">
+            当前兜底密钥状态：{{ form.has_fallback_api_key ? '已配置' : '未配置' }}
           </div>
         </el-form-item>
 

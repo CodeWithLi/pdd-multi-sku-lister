@@ -141,10 +141,15 @@ def get_integrated_submit_ai_title():
         provider=cfg.provider,
         model=cfg.model,
         base_url=cfg.base_url,
+        fallback_enabled=cfg.fallback_enabled,
+        fallback_provider=cfg.fallback_provider,
+        fallback_model=cfg.fallback_model,
+        fallback_base_url=cfg.fallback_base_url,
         prompt=cfg.prompt,
         temperature=cfg.temperature,
         max_image_count=cfg.max_image_count,
         has_api_key=bool(str(cfg.api_key or "").strip()),
+        has_fallback_api_key=bool(str(cfg.fallback_api_key or "").strip()),
     )
 
 
@@ -157,6 +162,11 @@ def update_integrated_submit_ai_title(body: PipelineSubmitAiTitleUpdateIn):
         model=body.model,
         base_url=body.base_url,
         api_key=body.api_key,
+        fallback_enabled=body.fallback_enabled,
+        fallback_provider=body.fallback_provider,
+        fallback_model=body.fallback_model,
+        fallback_base_url=body.fallback_base_url,
+        fallback_api_key=body.fallback_api_key,
         prompt=body.prompt,
         temperature=body.temperature,
         max_image_count=body.max_image_count,
@@ -166,10 +176,15 @@ def update_integrated_submit_ai_title(body: PipelineSubmitAiTitleUpdateIn):
         provider=cfg.provider,
         model=cfg.model,
         base_url=cfg.base_url,
+        fallback_enabled=cfg.fallback_enabled,
+        fallback_provider=cfg.fallback_provider,
+        fallback_model=cfg.fallback_model,
+        fallback_base_url=cfg.fallback_base_url,
         prompt=cfg.prompt,
         temperature=cfg.temperature,
         max_image_count=cfg.max_image_count,
         has_api_key=bool(str(cfg.api_key or "").strip()),
+        has_fallback_api_key=bool(str(cfg.fallback_api_key or "").strip()),
     )
 
 
