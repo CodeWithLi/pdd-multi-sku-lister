@@ -21,6 +21,8 @@ from pdd_agent.api.schemas.pipelines import (
     PipelineAccessoryCostPricingOut,
     PipelineAccessoryCostPricingUpdateIn,
     PipelineSubmitAiTitleOut,
+    PipelineSubmitAiTitleTestIn,
+    PipelineSubmitAiTitleTestOut,
     PipelineSubmitAiTitleUpdateIn,
 )
 from pdd_agent.api.services.config_service import get_account_or_none
@@ -65,6 +67,10 @@ from pdd_agent.api.services.submit_ai_title_config_service import (
     get_submit_ai_title_config,
     update_submit_ai_title_config,
 )
+from pdd_agent.api.services.catalog_service import MaterialSource
+from pdd_agent.core.config import load_yaml_settings
+from pdd_agent.skills.listing.catalog import parse_listing_target
+from pdd_agent.skills.listing.listing_submit_ai_title import generate_submit_ai_title
 
 router = APIRouter(prefix="/pipelines", tags=["pipelines"])
 
@@ -185,6 +191,71 @@ def update_integrated_submit_ai_title(body: PipelineSubmitAiTitleUpdateIn):
         max_image_count=cfg.max_image_count,
         has_api_key=bool(str(cfg.api_key or "").strip()),
         has_fallback_api_key=bool(str(cfg.fallback_api_key or "").strip()),
+    )
+
+
+@router.post("/integrated/submit-ai-title/test", response_model=PipelineSubmitAiTitleTestOut)
+def test_integrated_submit_ai_title(body: PipelineSubmitAiTitleTestIn):
+    """
+    配置页测试：选某套图（selector）/某个商品（product_code），调用提交前 AI 标题生成。
+
+    注意：该接口只做生成，不会改动任何发布页数据。
+    """
+    selector = str(body.selector or "").strip()
+    if not selector:
+        raise HTTPException(status_code=422, detail="selector is required")
+
+    source: MaterialSource = "minio" if str(body.material_source or "").strip() == "minio" else "local"
+    settings = load_yaml_settings()
+    assets_root = settings.paths.resolve("assets_root")
+    if source == "minio":
+        from pdd_agent.integrations.minio.config import minio_cache_root, minio_configured
+
+        if not minio_configured():
+            raise HTTPException(status_code=503, detail="MinIO 未配置，请填写 config/minio.yaml")
+        assets_root = minio_cache_root()
+
+    units = parse_listing_target(
+        selector,
+        settings,
+        include_excel_missing_previews=True,
+        assets_root=assets_root,
+    )
+    if not units:
+        raise HTTPException(status_code=404, detail=f"未找到套图/商品：{selector}")
+
+    product_code = str(body.product_code or "").strip()
+    unit = None
+    if product_code:
+        for u in units:
+            if str(u.product_code or "").strip() == product_code:
+                unit = u
+                break
+        if unit is None:
+            raise HTTPException(status_code=404, detail=f"selector 内未找到商品编码：{product_code}")
+    else:
+        unit = units[0]
+
+    image_paths = [str(p) for p in (unit.carousel_images or [])]
+    listing_info = {
+        "product_code": unit.product_code,
+        "merchant_code": unit.merchant_code,
+        "category_keyword": str(body.category_keyword or "").strip(),
+    }
+    result = generate_submit_ai_title(
+        account_id="",
+        label=f"{unit.product_code}/{unit.image_set or selector}",
+        image_paths=image_paths,
+        listing_info=listing_info,
+        current_title=str(body.current_title or "").strip(),
+    )
+    return PipelineSubmitAiTitleTestOut(
+        ok=bool(result.get("ok")),
+        applied=bool(result.get("applied")),
+        reason=str(result.get("reason") or ""),
+        source=str(result.get("source") or ""),
+        title=str(result.get("title") or ""),
+        images_used=[str(x) for x in (result.get("images_used") or [])],
     )
 
 

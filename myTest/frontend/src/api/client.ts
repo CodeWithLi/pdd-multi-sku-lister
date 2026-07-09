@@ -23,6 +23,8 @@ import type {
   IntegratedPipelineListResponse,
   IntegratedPipelineStartPayload,
   PipelineSubmitAiTitleConfig,
+  PipelineSubmitAiTitleTestPayload,
+  PipelineSubmitAiTitleTestResult,
   PipelineLateRetryStartResponse,
   PipelineIssueListResponse,
   PipelineIssueReport,
@@ -740,6 +742,11 @@ export const api = {
   updatePipelineSubmitAiTitle: (body: Partial<PipelineSubmitAiTitleConfig> & { api_key?: string }) =>
     http
       .put<PipelineSubmitAiTitleConfig>('/pipelines/integrated/submit-ai-title', body)
+      .then((r) => r.data),
+
+  testPipelineSubmitAiTitle: (body: PipelineSubmitAiTitleTestPayload) =>
+    http
+      .post<PipelineSubmitAiTitleTestResult>('/pipelines/integrated/submit-ai-title/test', body)
       .then((r) => r.data),
 
   getPipelineLogSpecSkuRows: () =>

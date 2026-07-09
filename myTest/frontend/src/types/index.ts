@@ -1337,6 +1337,23 @@ export interface PipelineSubmitAiTitleConfig {
   has_fallback_api_key: boolean
 }
 
+export interface PipelineSubmitAiTitleTestPayload {
+  selector: string
+  product_code?: string
+  category_keyword?: string
+  current_title?: string
+  material_source?: 'local' | 'minio'
+}
+
+export interface PipelineSubmitAiTitleTestResult {
+  ok: boolean
+  applied: boolean
+  reason?: string
+  source?: string
+  title?: string
+  images_used?: string[]
+}
+
 export interface PipelineIssueReport {
   issue_id: string
   pipeline_id: string

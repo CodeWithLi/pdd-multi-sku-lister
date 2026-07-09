@@ -307,6 +307,25 @@ class PipelineSubmitAiTitleUpdateIn(BaseModel):
     max_image_count: int | None = None
 
 
+class PipelineSubmitAiTitleTestIn(BaseModel):
+    """配置页测试：选某套图/商品，调用提交前 AI 标题生成。"""
+
+    selector: str = Field(default="", description="套图选择器，如 BD351/第一套图；也可传商品选择器")
+    product_code: str = Field(default="", description="可选：指定套图内某个商品编码")
+    category_keyword: str = Field(default="", description="可选：补充上下文类目词")
+    current_title: str = Field(default="", description="可选：模拟页面当前标题")
+    material_source: str = Field(default="local", description="local | minio")
+
+
+class PipelineSubmitAiTitleTestOut(BaseModel):
+    ok: bool
+    applied: bool
+    reason: str = ""
+    source: str = ""
+    title: str = ""
+    images_used: list[str] = Field(default_factory=list)
+
+
 class AutoUploadConfigResponse(BaseModel):
     enabled: bool = False
     trigger_mode: str = "new_product_folder"

@@ -208,3 +208,58 @@ def apply_submit_ai_title_before_submit(
         "previous_title": current_title,
         "images_used": [str(p) for p in images],
     }
+
+
+def generate_submit_ai_title(
+    *,
+    account_id: str,
+    label: str,
+    image_paths: list[str],
+    listing_info: dict[str, Any] | None = None,
+    current_title: str = "",
+) -> dict[str, Any]:
+    """
+    纯生成版本：用于配置页/接口测试（不依赖 Playwright page）。
+
+    - 若配置未启用或缺 key：返回 applied=False + reason
+    - 成功：返回 title + images_used + source
+    """
+    cfg = get_submit_ai_title_config()
+    if not cfg.enabled:
+        return {"ok": True, "applied": False, "reason": "disabled"}
+    if not str(cfg.api_key or "").strip():
+        return {"ok": True, "applied": False, "reason": "missing_api_key"}
+
+    images = _collect_valid_image_paths(image_paths, cfg.max_image_count)
+    if not images:
+        return {"ok": True, "applied": False, "reason": "no_images"}
+
+    li = listing_info or {}
+    context_lines = [
+        f"商品编码：{str(li.get('merchant_code') or li.get('product_code') or '').strip()}",
+        f"类目关键词：{str(li.get('category_keyword') or '').strip()}",
+        f"当前标题：{str(current_title or '').strip() or '（空）'}",
+        "请基于图片生成新标题，只返回最终标题。",
+    ]
+    final_prompt = f"{cfg.prompt}\n\n补充上下文：\n" + "\n".join(context_lines)
+    generated, source = _invoke_title_with_fallback(
+        cfg=cfg,
+        prompt=final_prompt,
+        images=images,
+        account_id=account_id,
+        label=label,
+    )
+    if not generated:
+        return {
+            "ok": True,
+            "applied": False,
+            "reason": source or "empty_title",
+            "images_used": [str(p) for p in images],
+        }
+    return {
+        "ok": True,
+        "applied": True,
+        "source": source,
+        "title": generated,
+        "images_used": [str(p) for p in images],
+    }

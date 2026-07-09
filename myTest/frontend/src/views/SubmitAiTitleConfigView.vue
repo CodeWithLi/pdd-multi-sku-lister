@@ -1,11 +1,29 @@
 <script setup lang="ts">
-import { onMounted, reactive, ref } from 'vue'
+import { computed, onMounted, reactive, ref } from 'vue'
 import { ElMessage } from 'element-plus'
 import PageHeader from '@/components/PageHeader.vue'
 import { api } from '@/api/client'
 
 const loading = ref(false)
 const saving = ref(false)
+const testing = ref(false)
+
+type ListingTargetOption = {
+  selector: string
+  family_code: string
+  image_set: string
+  product_codes: string[]
+  product_count: number
+}
+
+const listingTargetsLoading = ref(false)
+const listingTargets = ref<ListingTargetOption[]>([])
+const testResult = ref<{ title: string; reason: string; images: string[]; source: string }>({
+  title: '',
+  reason: '',
+  images: [],
+  source: '',
+})
 
 const form = reactive({
   enabled: false,
@@ -24,6 +42,30 @@ const form = reactive({
   fallback_api_key: '',
   has_fallback_api_key: false,
 })
+
+const testForm = reactive({
+  selector: '',
+  product_code: '',
+  category_keyword: '',
+  current_title: '',
+  material_source: 'local' as 'local' | 'minio',
+})
+
+const selectedTarget = computed(() => {
+  const sel = String(testForm.selector || '').trim()
+  return listingTargets.value.find((t) => t.selector === sel) || null
+})
+
+const targetProductOptions = computed(() => {
+  const codes = selectedTarget.value?.product_codes || []
+  return codes.slice().sort((a, b) => a.localeCompare(b))
+})
+
+function assetPreviewUrl(path: string) {
+  return `/api/catalog/asset?path=${encodeURIComponent(path)}&material_source=${encodeURIComponent(
+    testForm.material_source,
+  )}`
+}
 
 async function loadConfig() {
   loading.value = true
@@ -48,6 +90,21 @@ async function loadConfig() {
     ElMessage.error(e instanceof Error ? e.message : String(e))
   } finally {
     loading.value = false
+  }
+}
+
+async function loadListingTargets() {
+  listingTargetsLoading.value = true
+  try {
+    const data = await api.listingTargets(undefined, testForm.material_source)
+    listingTargets.value = (data || []) as ListingTargetOption[]
+    if (!testForm.selector && listingTargets.value.length) {
+      testForm.selector = listingTargets.value[0].selector
+    }
+  } catch (e) {
+    ElMessage.error(e instanceof Error ? e.message : String(e))
+  } finally {
+    listingTargetsLoading.value = false
   }
 }
 
@@ -83,7 +140,44 @@ async function saveConfig() {
   }
 }
 
-onMounted(loadConfig)
+async function runTest() {
+  const selector = String(testForm.selector || '').trim()
+  if (!selector) {
+    ElMessage.error('请选择要测试的套图')
+    return
+  }
+  testing.value = true
+  testResult.value = { title: '', reason: '', images: [], source: '' }
+  try {
+    const res = await api.testPipelineSubmitAiTitle({
+      selector,
+      product_code: String(testForm.product_code || '').trim() || undefined,
+      category_keyword: String(testForm.category_keyword || '').trim() || undefined,
+      current_title: String(testForm.current_title || '').trim() || undefined,
+      material_source: testForm.material_source,
+    })
+    testResult.value = {
+      title: String(res.title || ''),
+      reason: String(res.reason || ''),
+      images: Array.isArray(res.images_used) ? res.images_used.map(String) : [],
+      source: String(res.source || ''),
+    }
+    if (res.applied && res.title) {
+      ElMessage.success('测试生成成功')
+    } else {
+      ElMessage.warning(`测试未生成标题：${res.reason || 'unknown'}`)
+    }
+  } catch (e) {
+    ElMessage.error(e instanceof Error ? e.message : String(e))
+  } finally {
+    testing.value = false
+  }
+}
+
+onMounted(async () => {
+  await loadConfig()
+  await loadListingTargets()
+})
 </script>
 
 <template>
@@ -104,7 +198,10 @@ onMounted(loadConfig)
         </el-form-item>
 
         <el-form-item label="模型 model">
-          <el-input v-model="form.model" placeholder="例如 deepseek-chat" />
+          <el-input v-model="form.model" placeholder="例如 deepseek-chat / deepseek-vision(需支持图片)" />
+          <div class="form-tip">
+            如果要“根据图片生成标题”，请确保你填的模型本身支持图片输入（否则会报不支持 image_url）。
+          </div>
         </el-form-item>
 
         <el-form-item label="Base URL">
@@ -175,6 +272,90 @@ onMounted(loadConfig)
         </el-form-item>
       </el-form>
     </el-card>
+
+    <el-card shadow="never">
+      <template #header>
+        <div class="card-header">
+          <div class="card-title">测试：选某套图生成标题</div>
+          <div class="card-sub">用于验证 DeepSeek/其他兼容模型是否支持图片输入</div>
+        </div>
+      </template>
+
+      <el-form label-width="140px" v-loading="listingTargetsLoading">
+        <el-form-item label="素材来源">
+          <el-radio-group
+            v-model="testForm.material_source"
+            @change="
+              () => {
+                testForm.selector = ''
+                testForm.product_code = ''
+                loadListingTargets()
+              }
+            "
+          >
+            <el-radio-button label="local">本地</el-radio-button>
+            <el-radio-button label="minio">MinIO 缓存</el-radio-button>
+          </el-radio-group>
+        </el-form-item>
+
+        <el-form-item label="选择套图">
+          <el-select v-model="testForm.selector" filterable placeholder="选择 BDxxx/第一套图" style="width: 520px">
+            <el-option
+              v-for="opt in listingTargets"
+              :key="opt.selector"
+              :label="`${opt.selector}（${opt.product_count} 个商品）`"
+              :value="opt.selector"
+            />
+          </el-select>
+        </el-form-item>
+
+        <el-form-item label="指定商品(可选)">
+          <el-select
+            v-model="testForm.product_code"
+            clearable
+            filterable
+            placeholder="留空则用该套图第一个商品"
+            style="width: 520px"
+          >
+            <el-option v-for="code in targetProductOptions" :key="code" :label="code" :value="code" />
+          </el-select>
+        </el-form-item>
+
+        <el-form-item label="类目关键词(可选)">
+          <el-input v-model="testForm.category_keyword" placeholder="例如 笔袋 / 文具收纳" style="width: 520px" />
+        </el-form-item>
+
+        <el-form-item label="当前标题(可选)">
+          <el-input v-model="testForm.current_title" placeholder="用于测试“已生成标题时必须换卖点”" />
+        </el-form-item>
+
+        <el-form-item>
+          <el-button type="primary" :loading="testing" @click="runTest">开始测试生成</el-button>
+          <div v-if="testResult.source" class="form-tip">来源：{{ testResult.source }}</div>
+        </el-form-item>
+
+        <el-form-item v-if="testResult.title" label="生成结果">
+          <el-input :model-value="testResult.title" type="textarea" :rows="3" readonly />
+        </el-form-item>
+        <el-form-item v-else-if="testResult.reason" label="未生成原因">
+          <el-alert :title="testResult.reason" type="warning" :closable="false" />
+        </el-form-item>
+
+        <el-form-item v-if="testResult.images.length" label="使用图片">
+          <div class="image-grid">
+            <el-image
+              v-for="(img, idx) in testResult.images"
+              :key="img"
+              :src="assetPreviewUrl(img)"
+              :preview-src-list="testResult.images.map(assetPreviewUrl)"
+              :initial-index="idx"
+              fit="cover"
+              class="thumb"
+            />
+          </div>
+        </el-form-item>
+      </el-form>
+    </el-card>
   </div>
 </template>
 
@@ -189,5 +370,35 @@ onMounted(loadConfig)
   margin-top: 6px;
   color: var(--text-secondary);
   font-size: 12px;
+}
+
+.card-header {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.card-title {
+  font-weight: 600;
+}
+
+.card-sub {
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+.image-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(96px, 1fr));
+  gap: 10px;
+  width: 100%;
+}
+
+.thumb {
+  width: 96px;
+  height: 96px;
+  border-radius: 8px;
+  overflow: hidden;
+  border: 1px solid var(--el-border-color);
 }
 </style>
