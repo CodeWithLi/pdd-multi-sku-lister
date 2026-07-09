@@ -62,6 +62,40 @@ def _normalize_title_text(raw: str) -> str:
     return text
 
 
+def _classify_title_model_exception(exc: Exception) -> tuple[str, str]:
+    text = str(exc or "").strip()
+    lowered = text.lower()
+    if any(
+        token in lowered
+        for token in (
+            "image_url",
+            "image url",
+            "vision",
+            "multimodal",
+            "multi-modal",
+            "does not support images",
+            "doesn't support images",
+            "image input",
+        )
+    ):
+        return "model_not_vision_capable", text
+    if any(
+        token in lowered
+        for token in (
+            "invalid image",
+            "invalid base64",
+            "base64",
+            "payload too large",
+            "request too large",
+            "image too large",
+            "unsupported image",
+            "image format",
+        )
+    ):
+        return "image_payload_rejected", text
+    return "model_invoke_failed", text
+
+
 def _invoke_title_model(
     *,
     cfg: SubmitAiTitleConfig,
@@ -98,23 +132,54 @@ def _invoke_title_with_fallback(
     images: list[Path],
     account_id: str,
     label: str,
-) -> tuple[str, str]:
+) -> dict[str, Any]:
     """
     一级：提交前标题配置（默认 deepseek）
     二级兜底：环境 LLM（建议配成 glm）
     """
+    primary_reason = ""
+    primary_error = ""
     try:
         title = _invoke_title_model(cfg=cfg, prompt=prompt, images=images)
         if title:
-            return title, "primary"
+            return {
+                "title": title,
+                "source": "primary",
+                "reason": "",
+                "fallback_used": False,
+                "primary_reason": "",
+                "primary_error": "",
+                "fallback_reason": "",
+                "fallback_error": "",
+            }
         _log(account_id, label, "提交前 AI 标题：主模型返回空标题，尝试 GLM 兜底")
+        primary_reason = "empty_title"
     except Exception as exc:
-        _log(account_id, label, f"提交前 AI 标题：主模型失败，尝试 GLM 兜底（{exc}）")
+        primary_reason, primary_error = _classify_title_model_exception(exc)
+        _log(account_id, label, f"提交前 AI 标题：主模型失败，尝试 GLM 兜底（{primary_reason}: {exc}）")
 
     if not cfg.fallback_enabled:
-        return "", "fallback_disabled"
+        return {
+            "title": "",
+            "source": "primary",
+            "reason": primary_reason or "fallback_disabled",
+            "fallback_used": False,
+            "primary_reason": primary_reason,
+            "primary_error": primary_error,
+            "fallback_reason": "fallback_disabled",
+            "fallback_error": "",
+        }
     if not str(cfg.fallback_api_key or "").strip():
-        return "", "fallback_missing_api_key"
+        return {
+            "title": "",
+            "source": "primary",
+            "reason": primary_reason or "fallback_missing_api_key",
+            "fallback_used": False,
+            "primary_reason": primary_reason,
+            "primary_error": primary_error,
+            "fallback_reason": "fallback_missing_api_key",
+            "fallback_error": "",
+        }
 
     fallback_cfg = SubmitAiTitleConfig(
         enabled=True,
@@ -126,14 +191,35 @@ def _invoke_title_with_fallback(
         temperature=cfg.temperature,
         max_image_count=cfg.max_image_count,
     )
+    fallback_reason = ""
+    fallback_error = ""
     try:
         title = _invoke_title_model(cfg=fallback_cfg, prompt=prompt, images=images)
         if title:
-            return title, "glm_fallback"
-        return "", "glm_fallback_empty"
+            return {
+                "title": title,
+                "source": "glm_fallback",
+                "reason": "fallback_used",
+                "fallback_used": True,
+                "primary_reason": primary_reason,
+                "primary_error": primary_error,
+                "fallback_reason": "",
+                "fallback_error": "",
+            }
+        fallback_reason = "fallback_empty_title"
     except Exception as exc:
-        _log(account_id, label, f"提交前 AI 标题：GLM 兜底也失败（{exc}）")
-        return "", "glm_fallback_failed"
+        fallback_reason, fallback_error = _classify_title_model_exception(exc)
+        _log(account_id, label, f"提交前 AI 标题：GLM 兜底也失败（{fallback_reason}: {exc}）")
+    return {
+        "title": "",
+        "source": "glm_fallback",
+        "reason": fallback_reason or primary_reason or "fallback_failed",
+        "fallback_used": False,
+        "primary_reason": primary_reason,
+        "primary_error": primary_error,
+        "fallback_reason": fallback_reason,
+        "fallback_error": fallback_error,
+    }
 
 
 def apply_submit_ai_title_before_submit(
@@ -170,26 +256,44 @@ def apply_submit_ai_title_before_submit(
         "请基于图片生成新标题，只返回最终标题。",
     ]
     final_prompt = f"{cfg.prompt}\n\n补充上下文：\n" + "\n".join(context_lines)
-    generated, source = _invoke_title_with_fallback(
+    invoke_result = _invoke_title_with_fallback(
         cfg=cfg,
         prompt=final_prompt,
         images=images,
         account_id=account_id,
         label=label,
     )
+    generated = str(invoke_result.get("title") or "").strip()
+    source = str(invoke_result.get("source") or "")
+    reason = str(invoke_result.get("reason") or "")
+    fallback_used = bool(invoke_result.get("fallback_used"))
+    primary_reason = str(invoke_result.get("primary_reason") or "")
+    primary_error = str(invoke_result.get("primary_error") or "")
+    fallback_reason = str(invoke_result.get("fallback_reason") or "")
+    fallback_error = str(invoke_result.get("fallback_error") or "")
 
     if not generated:
         preserved = _read_title_from_input(page) or current_title or ""
         _log(
             account_id,
             label,
-            f"提交前 AI 标题：未生成可用标题（{source or 'empty_title'}），沿用页面现有标题并继续提交",
+            f"提交前 AI 标题：未生成可用标题（{reason or source or 'empty_title'}），沿用页面现有标题并继续提交",
         )
         return {
             "ok": True,
             "applied": False,
-            "reason": source or "empty_title",
+            "reason": reason or source or "empty_title",
             "preserved_title": preserved,
+            "previous_title": current_title,
+            "generated_title": "",
+            "final_title": preserved,
+            "length_reverted": False,
+            "fallback_used": fallback_used,
+            "primary_reason": primary_reason,
+            "primary_error": primary_error,
+            "fallback_reason": fallback_reason,
+            "fallback_error": fallback_error,
+            "images_used": [str(p) for p in images],
         }
 
     if not _fill_manual_title(page, account_id, generated):
@@ -200,6 +304,16 @@ def apply_submit_ai_title_before_submit(
             "applied": False,
             "reason": "title_input_not_found",
             "preserved_title": preserved,
+            "previous_title": current_title,
+            "generated_title": generated,
+            "final_title": preserved,
+            "length_reverted": False,
+            "fallback_used": fallback_used,
+            "primary_reason": primary_reason,
+            "primary_error": primary_error,
+            "fallback_reason": fallback_reason,
+            "fallback_error": fallback_error,
+            "images_used": [str(p) for p in images],
         }
 
     if _has_title_length_error(page):
@@ -219,17 +333,46 @@ def apply_submit_ai_title_before_submit(
             "reason": "title_length_exceeded_reverted",
             "preserved_title": preserved,
             "generated_title": generated,
+            "previous_title": current_title,
+            "final_title": preserved,
+            "length_reverted": True,
             "restored": restored,
+            "fallback_used": fallback_used,
+            "primary_reason": primary_reason,
+            "primary_error": primary_error,
+            "fallback_reason": fallback_reason,
+            "fallback_error": fallback_error,
+            "images_used": [str(p) for p in images],
         }
 
     confirmed = _read_title_from_input(page) or generated
-    _log(account_id, label, f"提交前 AI 标题已更新：{confirmed[:60]}")
+    _log(
+        account_id,
+        label,
+        "提交前 AI 标题结果："
+        f" source={source or '-'}"
+        f" reason={reason or '-'}"
+        f" fallback_used={fallback_used}"
+        f" previous={current_title[:40] or '（空）'}"
+        f" generated={generated[:40]}"
+        f" final={confirmed[:40]}"
+        f" images={len(images)}",
+    )
     return {
         "ok": True,
         "applied": True,
         "source": source,
+        "reason": reason,
         "title": confirmed,
         "previous_title": current_title,
+        "generated_title": generated,
+        "final_title": confirmed,
+        "length_reverted": False,
+        "fallback_used": fallback_used,
+        "primary_reason": primary_reason,
+        "primary_error": primary_error,
+        "fallback_reason": fallback_reason,
+        "fallback_error": fallback_error,
         "images_used": [str(p) for p in images],
     }
 
@@ -266,24 +409,46 @@ def generate_submit_ai_title(
         "请基于图片生成新标题，只返回最终标题。",
     ]
     final_prompt = f"{cfg.prompt}\n\n补充上下文：\n" + "\n".join(context_lines)
-    generated, source = _invoke_title_with_fallback(
+    invoke_result = _invoke_title_with_fallback(
         cfg=cfg,
         prompt=final_prompt,
         images=images,
         account_id=account_id,
         label=label,
     )
+    generated = str(invoke_result.get("title") or "").strip()
+    source = str(invoke_result.get("source") or "")
+    reason = str(invoke_result.get("reason") or "")
     if not generated:
         return {
             "ok": True,
             "applied": False,
-            "reason": source or "empty_title",
+            "reason": reason or source or "empty_title",
+            "source": source,
+            "fallback_used": bool(invoke_result.get("fallback_used")),
+            "primary_reason": str(invoke_result.get("primary_reason") or ""),
+            "primary_error": str(invoke_result.get("primary_error") or ""),
+            "fallback_reason": str(invoke_result.get("fallback_reason") or ""),
+            "fallback_error": str(invoke_result.get("fallback_error") or ""),
+            "previous_title": str(current_title or "").strip(),
+            "generated_title": "",
+            "final_title": str(current_title or "").strip(),
             "images_used": [str(p) for p in images],
         }
     return {
         "ok": True,
         "applied": True,
         "source": source,
+        "reason": reason,
         "title": generated,
+        "fallback_used": bool(invoke_result.get("fallback_used")),
+        "primary_reason": str(invoke_result.get("primary_reason") or ""),
+        "primary_error": str(invoke_result.get("primary_error") or ""),
+        "fallback_reason": str(invoke_result.get("fallback_reason") or ""),
+        "fallback_error": str(invoke_result.get("fallback_error") or ""),
+        "previous_title": str(current_title or "").strip(),
+        "generated_title": generated,
+        "final_title": generated,
+        "length_reverted": False,
         "images_used": [str(p) for p in images],
     }

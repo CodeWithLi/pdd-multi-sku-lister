@@ -4559,6 +4559,18 @@ def upload_one_listing(
             "product_code": unit.product_code,
         },
     )
+    print(
+        f"[{account_id}] [{label}] 提交前 AI 标题诊断："
+        f" reason={submit_ai_title.get('reason') or '-'}"
+        f" source={submit_ai_title.get('source') or '-'}"
+        f" fallback_used={bool(submit_ai_title.get('fallback_used'))}"
+        f" previous={str(submit_ai_title.get('previous_title') or '')[:60] or '（空）'}"
+        f" generated={str(submit_ai_title.get('generated_title') or '')[:60] or '（空）'}"
+        f" final={str(submit_ai_title.get('final_title') or submit_ai_title.get('title') or listing_info.get('title') or '')[:60] or '（空）'}"
+        f" length_reverted={bool(submit_ai_title.get('length_reverted'))}"
+        f" images={len(submit_ai_title.get('images_used') or [])}",
+        flush=True,
+    )
     if submit_ai_title.get("applied"):
         listing_info["title"] = str(submit_ai_title.get("title") or listing_info.get("title") or "")
 
@@ -4588,6 +4600,7 @@ def upload_one_listing(
             title=listing_info.get("title", ""),
             retryable=True,
             legacy_status="skipped",
+            extra={"submit_ai_title": dict(submit_ai_title)},
             phase="submit",
             step="blocked_by_validation",
             page_url=page_url,
@@ -4634,6 +4647,7 @@ def upload_one_listing(
                 title=listing_info.get("title", ""),
                 legacy_status="listed",
             )
+            result["submit_ai_title"] = dict(submit_ai_title)
             result["platform_listing_code"] = pcode
             result["publish_submitted_at"] = format_datetime(submitted_at) if submitted_at else ""
             result = _attach_capture_fields(result, capture)
@@ -4668,6 +4682,7 @@ def upload_one_listing(
                 extra={
                     "platform_listing_code": pcode,
                     "publish_submitted_at": format_datetime(submitted_at) if submitted_at else "",
+                    "submit_ai_title": dict(submit_ai_title),
                 },
                 phase="post_submit",
                 step="capture_outcome",
@@ -4689,6 +4704,7 @@ def upload_one_listing(
                 extra={
                     "platform_listing_code": pcode,
                     "publish_submitted_at": format_datetime(submitted_at) if submitted_at else "",
+                    "submit_ai_title": dict(submit_ai_title),
                 },
                 phase="post_submit",
                 step="capture_outcome_all_tab",
@@ -4711,6 +4727,7 @@ def upload_one_listing(
                 extra={
                     "platform_listing_code": pcode,
                     "publish_submitted_at": format_datetime(submitted_at) if submitted_at else "",
+                    "submit_ai_title": dict(submit_ai_title),
                 },
                 phase="post_submit",
                 step="capture_outcome_all_tab",
@@ -4733,6 +4750,7 @@ def upload_one_listing(
                 extra={
                     "platform_listing_code": pcode,
                     "publish_submitted_at": format_datetime(submitted_at) if submitted_at else "",
+                    "submit_ai_title": dict(submit_ai_title),
                 },
                 phase="post_submit",
                 step="capture_outcome_all_tab",
@@ -4757,6 +4775,7 @@ def upload_one_listing(
             extra={
                 "platform_listing_code": pcode,
                 "publish_submitted_at": format_datetime(submitted_at) if submitted_at else "",
+                "submit_ai_title": dict(submit_ai_title),
             },
             phase="post_submit",
             step="capture_outcome",
@@ -4773,6 +4792,7 @@ def upload_one_listing(
         title=listing_info.get("title", ""),
         retryable=True,
         legacy_status="submit_uncertain",
+        extra={"submit_ai_title": dict(submit_ai_title)},
         phase="submit",
         step="submit_button",
         page_url=page_url,
