@@ -754,7 +754,9 @@ export const api = {
 
   testPipelineSubmitAiTitle: (body: PipelineSubmitAiTitleTestPayload) =>
     http
-      .post<PipelineSubmitAiTitleTestResult>('/pipelines/integrated/submit-ai-title/test', body)
+      .post<PipelineSubmitAiTitleTestResult>('/pipelines/integrated/submit-ai-title/test', body, {
+        timeout: 300_000,
+      })
       .then((r) => r.data),
 
   getPipelineLogSpecSkuRows: () =>

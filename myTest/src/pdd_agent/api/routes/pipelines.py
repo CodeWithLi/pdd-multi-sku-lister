@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import logging
+
 from fastapi import APIRouter, HTTPException
 
 from pdd_agent.api.schemas.pipelines import (
@@ -73,10 +75,11 @@ from pdd_agent.api.services.submit_ai_title_config_service import (
 )
 from pdd_agent.api.services.catalog_service import MaterialSource
 from pdd_agent.core.config import load_yaml_settings
-from pdd_agent.skills.listing.catalog import parse_listing_target
+from pdd_agent.skills.listing.catalog import resolve_submit_ai_title_test_assets
 from pdd_agent.skills.listing.listing_submit_ai_title import generate_submit_ai_title
 
 router = APIRouter(prefix="/pipelines", tags=["pipelines"])
+logger = logging.getLogger(__name__)
 
 
 def _dedupe_account_ids(account_ids: list[str]) -> list[str]:
@@ -232,39 +235,46 @@ def test_integrated_submit_ai_title(body: PipelineSubmitAiTitleTestIn):
             raise HTTPException(status_code=503, detail="MinIO 未配置，请填写 config/minio.yaml")
         assets_root = minio_cache_root()
 
-    units = parse_listing_target(
+    product_code = str(body.product_code or "").strip()
+    logger.info(
+        "submit-ai-title test start selector=%s product_code=%s material_source=%s",
         selector,
-        settings,
-        include_excel_missing_previews=True,
+        product_code or "-",
+        source,
+    )
+    assets = resolve_submit_ai_title_test_assets(
+        selector,
+        product_code=product_code,
         assets_root=assets_root,
     )
-    if not units:
+    if not assets:
         raise HTTPException(status_code=404, detail=f"未找到套图/商品：{selector}")
+    if not assets.carousel_images:
+        raise HTTPException(status_code=404, detail=f"商品目录无可用主图：{assets.product_code}")
 
-    product_code = str(body.product_code or "").strip()
-    unit = None
-    if product_code:
-        for u in units:
-            if str(u.product_code or "").strip() == product_code:
-                unit = u
-                break
-        if unit is None:
-            raise HTTPException(status_code=404, detail=f"selector 内未找到商品编码：{product_code}")
-    else:
-        unit = units[0]
-
-    image_paths = [str(p) for p in (unit.carousel_images or [])]
+    image_paths = [str(p) for p in assets.carousel_images]
     listing_info = {
-        "product_code": unit.product_code,
-        "merchant_code": unit.merchant_code,
+        "product_code": assets.product_code,
+        "merchant_code": assets.merchant_code,
         "category_keyword": str(body.category_keyword or "").strip(),
     }
+    logger.info(
+        "submit-ai-title test assets resolved product=%s images=%d",
+        assets.product_code,
+        len(image_paths),
+    )
     result = generate_submit_ai_title(
         account_id="",
-        label=f"{unit.product_code}/{unit.image_set or selector}",
+        label=f"{assets.product_code}/{assets.image_set or selector}",
         image_paths=image_paths,
         listing_info=listing_info,
         current_title=str(body.current_title or "").strip(),
+    )
+    logger.info(
+        "submit-ai-title test done applied=%s reason=%s source=%s",
+        bool(result.get("applied")),
+        str(result.get("reason") or "-"),
+        str(result.get("source") or "-"),
     )
     return PipelineSubmitAiTitleTestOut(
         ok=bool(result.get("ok")),

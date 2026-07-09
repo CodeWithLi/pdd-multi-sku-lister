@@ -996,6 +996,75 @@ def parse_all_listings(
     ]
 
 
+@dataclass(slots=True)
+class SubmitAiTitleTestAssets:
+    product_code: str
+    family_code: str
+    image_set: str
+    merchant_code: str
+    carousel_images: list[Path]
+
+
+def _match_code_dir_for_ai_title_test(code_dirs: list[Path], product_code: str) -> Path | None:
+    wanted = str(product_code or "").strip()
+    if not wanted:
+        return code_dirs[0] if code_dirs else None
+    wanted_cf = wanted.casefold()
+    for code_dir in code_dirs:
+        name = code_dir.name
+        if name == wanted or name.casefold() == wanted_cf:
+            return code_dir
+    for code_dir in code_dirs:
+        name_cf = code_dir.name.casefold()
+        if wanted_cf in name_cf or name_cf in wanted_cf:
+            return code_dir
+    return None
+
+
+def resolve_submit_ai_title_test_assets(
+    selector: str,
+    *,
+    product_code: str = "",
+    assets_root: Path,
+) -> SubmitAiTitleTestAssets | None:
+    """
+    配置页 AI 标题测试专用：只解析单个商品目录主图，不加载飞书商品表/SKU。
+    """
+    raw = str(selector or "").strip()
+    family_code = ""
+    image_set = ""
+    resolved_product_code = str(product_code or "").strip()
+
+    product_selector = _parse_listing_target_product_selector(raw)
+    if product_selector:
+        family_code, image_set, selector_product_code = product_selector
+        if not resolved_product_code:
+            resolved_product_code = selector_product_code
+    else:
+        parsed = _parse_listing_target_selector(raw)
+        if not parsed:
+            return None
+        family_code, image_set = parsed
+
+    set_dir = assets_root / family_code / image_set
+    if not set_dir.is_dir():
+        return None
+
+    code_dirs = _list_sibling_code_dirs(set_dir)
+    code_dir = _match_code_dir_for_ai_title_test(code_dirs, resolved_product_code)
+    if not code_dir:
+        return None
+
+    carousel_images = _collect_numbered_images(code_dir, {1, 2, 3, 4, 5})
+    return SubmitAiTitleTestAssets(
+        product_code=code_dir.name,
+        family_code=family_code,
+        image_set=image_set,
+        merchant_code=code_dir.name,
+        carousel_images=carousel_images,
+    )
+
+
 def parse_listing_target(
     target: str,
     settings: YamlSettings,

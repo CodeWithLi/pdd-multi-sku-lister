@@ -148,6 +148,7 @@ async function runTest() {
   }
   testing.value = true
   testResult.value = { title: '', reason: '', images: [], source: '' }
+  ElMessage.info('正在解析素材并调用 AI，请稍候…')
   try {
     const res = await api.testPipelineSubmitAiTitle({
       selector,
