@@ -175,12 +175,28 @@ def apply_submit_ai_title_before_submit(
     )
 
     if not generated:
-        _log(account_id, label, "提交前 AI 标题：模型返回空标题，跳过")
-        return {"ok": True, "applied": False, "reason": source or "empty_title"}
+        preserved = _read_title_from_input(page) or current_title or ""
+        _log(
+            account_id,
+            label,
+            f"提交前 AI 标题：未生成可用标题（{source or 'empty_title'}），沿用页面现有标题并继续提交",
+        )
+        return {
+            "ok": True,
+            "applied": False,
+            "reason": source or "empty_title",
+            "preserved_title": preserved,
+        }
 
     if not _fill_manual_title(page, account_id, generated):
         _log(account_id, label, "提交前 AI 标题：未找到标题输入框，跳过")
-        return {"ok": True, "applied": False, "reason": "title_input_not_found"}
+        preserved = _read_title_from_input(page) or current_title or ""
+        return {
+            "ok": True,
+            "applied": False,
+            "reason": "title_input_not_found",
+            "preserved_title": preserved,
+        }
 
     confirmed = _read_title_from_input(page) or generated
     _log(account_id, label, f"提交前 AI 标题已更新：{confirmed[:60]}")
@@ -189,5 +205,6 @@ def apply_submit_ai_title_before_submit(
         "applied": True,
         "source": source,
         "title": confirmed,
+        "previous_title": current_title,
         "images_used": [str(p) for p in images],
     }
