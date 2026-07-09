@@ -393,6 +393,48 @@ def _fill_manual_title(page, account_id: str, title: str) -> bool:
     return filled
 
 
+def _has_title_length_error(page) -> bool:
+    """
+    检查标题输入后是否触发“最多填写30个汉字（60个字符）”之类的校验错误。
+
+    兼容两种情况：
+    - 错误文案直接渲染在标题输入框附近
+    - 页面 body 中已有对应校验文本
+    """
+    texts = (
+        "商品标题最多填写30个汉字",
+        "最多填写30个汉字",
+        "60个字符",
+        "商品标题最多填写",
+    )
+    try:
+        direct = page.run_js(
+            """
+            const texts = arguments[0] || [];
+            const bodyText = (document.body && (document.body.innerText || document.body.textContent) || '').replace(/\\s+/g, ' ');
+            return texts.some(t => bodyText.includes(t));
+            """,
+            list(texts),
+        )
+        if direct:
+            return True
+    except Exception:
+        pass
+
+    selectors = (
+        'text:商品标题最多填写30个汉字',
+        'text:最多填写30个汉字',
+        'text:60个字符',
+    )
+    for sel in selectors:
+        try:
+            if page.ele(sel, timeout=0.5):
+                return True
+        except Exception:
+            continue
+    return False
+
+
 def apply_title_after_cover_upload(
     page,
     account_id: str,

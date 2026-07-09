@@ -13,7 +13,11 @@ from pdd_agent.api.services.submit_ai_title_config_service import (
     get_submit_ai_title_config,
 )
 from pdd_agent.llm.factory import create_chat_model_with_runtime
-from pdd_agent.skills.listing.page_ai_title import _fill_manual_title, _read_title_from_input
+from pdd_agent.skills.listing.page_ai_title import (
+    _fill_manual_title,
+    _has_title_length_error,
+    _read_title_from_input,
+)
 
 
 def _log(account_id: str, label: str, msg: str) -> None:
@@ -196,6 +200,26 @@ def apply_submit_ai_title_before_submit(
             "applied": False,
             "reason": "title_input_not_found",
             "preserved_title": preserved,
+        }
+
+    if _has_title_length_error(page):
+        restored = False
+        original_title = (current_title or "").strip()
+        if original_title:
+            restored = _fill_manual_title(page, account_id, original_title)
+        preserved = _read_title_from_input(page) or original_title
+        _log(
+            account_id,
+            label,
+            "提交前 AI 标题：新标题触发页面长度校验，已回退到原标题",
+        )
+        return {
+            "ok": True,
+            "applied": False,
+            "reason": "title_length_exceeded_reverted",
+            "preserved_title": preserved,
+            "generated_title": generated,
+            "restored": restored,
         }
 
     confirmed = _read_title_from_input(page) or generated
