@@ -16,3 +16,5 @@ notify_on_commerce_dispatched: false
 daily_report_schedule_enabled: false
 daily_report_schedule_hour: 18
 daily_report_schedule_minute: 0
+# 开启后，定时发送优先使用「日报预览」中已保存的内容；未保存则回退实时生成
+daily_report_schedule_use_saved_preview: false

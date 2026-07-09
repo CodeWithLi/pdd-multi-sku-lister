@@ -102,6 +102,7 @@ import type {
   WecomConfigUpdatePayload,
   WecomDailyContent,
   WecomDailyContentUpdatePayload,
+  WecomDailyPreviewSavePayload,
   WecomDailyReportPlatform,
   WecomDailyReportPreview,
   WecomInProgressDraft,
@@ -1153,6 +1154,9 @@ export const api = {
 
   updateWecomDailyContent: (body: WecomDailyContentUpdatePayload) =>
     http.put<WecomDailyContent>('/wecom/daily-content', body).then((r) => r.data),
+
+  saveWecomDailyPreview: (body: WecomDailyPreviewSavePayload) =>
+    http.put<WecomDailyContent>('/wecom/daily-report/saved-preview', body).then((r) => r.data),
 
   wecomDailyReportPreview: (platform: WecomDailyReportPlatform) =>
     http

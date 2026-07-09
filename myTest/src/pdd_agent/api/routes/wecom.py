@@ -12,6 +12,7 @@ from pdd_agent.api.schemas.wecom import (
     WecomConfigUpdateIn,
     WecomDailyContentOut,
     WecomDailyContentUpdateIn,
+    WecomDailyPreviewSaveIn,
     WecomDailyReportLogDetailOut,
     WecomDailyReportLogListOut,
     WecomDailyReportLogOut,
@@ -48,6 +49,7 @@ from pdd_agent.integrations.wecom.daily_content import (
     WecomDailyContent,
     load_wecom_daily_content,
     save_wecom_daily_content,
+    save_wecom_daily_preview,
 )
 from pdd_agent.integrations.wecom.daily_report import generate_daily_report_draft
 from pdd_agent.core.report_time_window import REPORT_WINDOW_DESCRIPTION, format_report_window_iso, report_listing_window
@@ -83,6 +85,7 @@ def _config_out(cfg: WecomConfig, *, expose_webhook: bool = False) -> WecomConfi
         daily_report_schedule_enabled=bool(cfg.daily_report_schedule_enabled),
         daily_report_schedule_hour=hour,
         daily_report_schedule_minute=minute,
+        daily_report_schedule_use_saved_preview=bool(cfg.daily_report_schedule_use_saved_preview),
         daily_report_schedule_time=f"{hour:02d}:{minute:02d}",
         daily_report_scheduler_running=scheduler.is_running,
         daily_report_last_run_date=(
@@ -156,6 +159,7 @@ def update_wecom_config(body: WecomConfigUpdateIn):
             daily_report_schedule_enabled=bool(body.daily_report_schedule_enabled),
             daily_report_schedule_hour=int(body.daily_report_schedule_hour),
             daily_report_schedule_minute=int(body.daily_report_schedule_minute),
+            daily_report_schedule_use_saved_preview=bool(body.daily_report_schedule_use_saved_preview),
         )
     )
     get_wecom_daily_report_scheduler().reset_last_run_date()
@@ -200,6 +204,13 @@ def _daily_content_out(content: WecomDailyContent) -> WecomDailyContentOut:
     return WecomDailyContentOut(
         content_date=str(content.content_date or ""),
         pdd_in_progress=str(content.pdd.in_progress or ""),
+        pdd_progress_summary=str(content.pdd.progress_summary or ""),
+        pdd_store_progress=str(content.pdd.store_progress or ""),
+        pdd_listing_window_start=str(content.pdd.listing_window_start or ""),
+        pdd_listing_window_end=str(content.pdd.listing_window_end or ""),
+        pdd_git_window_start=str(content.pdd.git_window_start or ""),
+        pdd_git_window_end=str(content.pdd.git_window_end or ""),
+        pdd_preview_saved=bool(content.pdd.preview_saved),
         taobao_netdisk_materials=str(content.taobao.netdisk_materials or ""),
         taobao_in_progress=str(content.taobao.in_progress or ""),
         updated_at=str(content.updated_at or ""),
@@ -268,6 +279,26 @@ def update_wecom_daily_content(body: WecomDailyContentUpdateIn):
                     in_progress=str(body.taobao_in_progress or ""),
                 ),
             )
+        )
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    return _daily_content_out(saved)
+
+
+@router.put("/daily-report/saved-preview", response_model=WecomDailyContentOut)
+def save_daily_report_preview(body: WecomDailyPreviewSaveIn):
+    """保存 PDD 日报预览编辑内容（供定时发送使用）。"""
+    if not is_database_available():
+        raise HTTPException(status_code=503, detail="数据库不可用，无法保存日报预览")
+    try:
+        saved = save_wecom_daily_preview(
+            progress_summary=str(body.progress_summary or ""),
+            store_progress=str(body.store_progress or ""),
+            in_progress=str(body.in_progress or ""),
+            listing_window_start=str(body.listing_window_start or ""),
+            listing_window_end=str(body.listing_window_end or ""),
+            git_window_start=str(body.git_window_start or ""),
+            git_window_end=str(body.git_window_end or ""),
         )
     except RuntimeError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc

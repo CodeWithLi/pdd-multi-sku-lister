@@ -14,6 +14,7 @@ from pdd_agent.api.services.submit_ai_title_config_service import (
 )
 from pdd_agent.llm.factory import create_chat_model_with_runtime
 from pdd_agent.skills.listing.page_ai_title import (
+    _diagnose_title_length_error,
     _fill_manual_title,
     _has_title_length_error,
     _read_title_from_input,
@@ -316,6 +317,16 @@ def apply_submit_ai_title_before_submit(
             "images_used": [str(p) for p in images],
         }
 
+    length_diag = _diagnose_title_length_error(page)
+    _log(
+        account_id,
+        label,
+        "提交前 AI 标题长度校验探测："
+        f" has_error={bool(length_diag.get('has_error'))}"
+        f" matched={str(length_diag.get('matched_text') or '-')[:80]}"
+        f" source={str(length_diag.get('matched_source') or '-')}"
+        f" placeholder={str(length_diag.get('placeholder') or '-')[:60]}",
+    )
     if _has_title_length_error(page):
         restored = False
         original_title = (current_title or "").strip()
@@ -336,6 +347,7 @@ def apply_submit_ai_title_before_submit(
             "previous_title": current_title,
             "final_title": preserved,
             "length_reverted": True,
+            "length_check": length_diag,
             "restored": restored,
             "fallback_used": fallback_used,
             "primary_reason": primary_reason,

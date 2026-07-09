@@ -3121,6 +3121,13 @@ def upsert_wecom_daily_content_row(
     *,
     content_date: date,
     pdd_in_progress: str = "",
+    pdd_progress_summary: str = "",
+    pdd_store_progress: str = "",
+    pdd_listing_window_start: str = "",
+    pdd_listing_window_end: str = "",
+    pdd_git_window_start: str = "",
+    pdd_git_window_end: str = "",
+    pdd_preview_saved: bool = False,
     taobao_netdisk_materials: str = "",
     taobao_in_progress: str = "",
 ) -> WecomDailyContentORM | None:
@@ -3136,6 +3143,13 @@ def upsert_wecom_daily_content_row(
         )
         if row:
             row.pdd_in_progress = str(pdd_in_progress or "")
+            row.pdd_progress_summary = str(pdd_progress_summary or "")
+            row.pdd_store_progress = str(pdd_store_progress or "")
+            row.pdd_listing_window_start = str(pdd_listing_window_start or "")
+            row.pdd_listing_window_end = str(pdd_listing_window_end or "")
+            row.pdd_git_window_start = str(pdd_git_window_start or "")
+            row.pdd_git_window_end = str(pdd_git_window_end or "")
+            row.pdd_preview_saved = bool(pdd_preview_saved)
             row.taobao_netdisk_materials = str(taobao_netdisk_materials or "")
             row.taobao_in_progress = str(taobao_in_progress or "")
             row.updated_at = now
@@ -3144,6 +3158,13 @@ def upsert_wecom_daily_content_row(
                 record_id=uuid.uuid4().hex,
                 content_date=content_date,
                 pdd_in_progress=str(pdd_in_progress or ""),
+                pdd_progress_summary=str(pdd_progress_summary or ""),
+                pdd_store_progress=str(pdd_store_progress or ""),
+                pdd_listing_window_start=str(pdd_listing_window_start or ""),
+                pdd_listing_window_end=str(pdd_listing_window_end or ""),
+                pdd_git_window_start=str(pdd_git_window_start or ""),
+                pdd_git_window_end=str(pdd_git_window_end or ""),
+                pdd_preview_saved=bool(pdd_preview_saved),
                 taobao_netdisk_materials=str(taobao_netdisk_materials or ""),
                 taobao_in_progress=str(taobao_in_progress or ""),
                 created_at=now,

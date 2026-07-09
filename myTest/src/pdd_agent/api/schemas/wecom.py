@@ -25,6 +25,7 @@ class WecomConfigOut(BaseModel):
     daily_report_schedule_enabled: bool = False
     daily_report_schedule_hour: int = 18
     daily_report_schedule_minute: int = 0
+    daily_report_schedule_use_saved_preview: bool = False
     daily_report_schedule_time: str = "18:00"
     daily_report_scheduler_running: bool = False
     daily_report_last_run_date: str = ""
@@ -42,6 +43,7 @@ class WecomConfigUpdateIn(BaseModel):
     daily_report_schedule_enabled: bool = False
     daily_report_schedule_hour: int = 18
     daily_report_schedule_minute: int = 0
+    daily_report_schedule_use_saved_preview: bool = False
 
 
 class WecomTestSendIn(BaseModel):
@@ -84,6 +86,13 @@ class WecomInProgressDraftOut(BaseModel):
 class WecomDailyContentOut(BaseModel):
     content_date: str = ""
     pdd_in_progress: str = ""
+    pdd_progress_summary: str = ""
+    pdd_store_progress: str = ""
+    pdd_listing_window_start: str = ""
+    pdd_listing_window_end: str = ""
+    pdd_git_window_start: str = ""
+    pdd_git_window_end: str = ""
+    pdd_preview_saved: bool = False
     taobao_netdisk_materials: str = ""
     taobao_in_progress: str = ""
     updated_at: str = ""
@@ -94,6 +103,16 @@ class WecomDailyContentUpdateIn(BaseModel):
     pdd_in_progress: str = ""
     taobao_netdisk_materials: str = ""
     taobao_in_progress: str = ""
+
+
+class WecomDailyPreviewSaveIn(BaseModel):
+    progress_summary: str = ""
+    store_progress: str = ""
+    in_progress: str = ""
+    listing_window_start: str = ""
+    listing_window_end: str = ""
+    git_window_start: str = ""
+    git_window_end: str = ""
 
 
 class WecomHealthOut(BaseModel):

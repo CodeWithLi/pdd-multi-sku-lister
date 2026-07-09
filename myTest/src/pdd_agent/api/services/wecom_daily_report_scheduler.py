@@ -13,6 +13,11 @@ from pdd_agent.integrations.wecom.config import (
     load_wecom_config,
     resolve_daily_report_webhook_url,
 )
+from pdd_agent.integrations.wecom.daily_content import (
+    build_saved_pdd_daily_report_message,
+    has_saved_pdd_preview,
+    load_wecom_daily_content,
+)
 from pdd_agent.integrations.wecom.daily_report import DailyReportPlatform, generate_daily_report_draft
 from pdd_agent.integrations.wecom.daily_report_log import record_daily_report_send
 from pdd_agent.integrations.wecom.store_progress import today_in_tz
@@ -175,6 +180,25 @@ class WecomDailyReportScheduler:
         except Exception:
             logger.exception("record wecom daily report log failed platform=%s", platform)
 
+    def _resolve_scheduled_message(
+        self, platform: DailyReportPlatform, cfg
+    ) -> tuple[str, object | None, object | None]:
+        if platform != "pdd" or not cfg.daily_report_schedule_use_saved_preview:
+            draft = generate_daily_report_draft(platform=platform)
+            return draft.message, draft, None
+
+        saved = load_wecom_daily_content()
+        if has_saved_pdd_preview(saved):
+            message = build_saved_pdd_daily_report_message(saved)
+            logger.info("wecom daily report scheduled send uses saved preview for %s", saved.content_date)
+            return message, None, saved
+
+        logger.warning(
+            "wecom daily report schedule_use_saved_preview enabled but no saved preview; fallback to generate"
+        )
+        draft = generate_daily_report_draft(platform=platform)
+        return draft.message, draft, None
+
     def _send_daily_report(
         self,
         platform: DailyReportPlatform,
@@ -184,19 +208,37 @@ class WecomDailyReportScheduler:
         message: str = "",
     ) -> bool:
         draft = None
+        saved_content = None
         content = str(message or "").strip()
         try:
             if not content:
-                draft = generate_daily_report_draft(platform=platform)
-                content = draft.message
+                if trigger_kind == "scheduled":
+                    content, draft, saved_content = self._resolve_scheduled_message(platform, cfg)
+                else:
+                    draft = generate_daily_report_draft(platform=platform)
+                    content = draft.message
             send_markdown(content, cfg=cfg, for_daily_report=True)
-            report_day = date.fromisoformat(draft.report_date) if draft else today_in_tz()
+            report_day = today_in_tz()
+            if draft:
+                report_day = date.fromisoformat(draft.report_date)
+            elif saved_content and saved_content.content_date:
+                report_day = date.fromisoformat(saved_content.content_date)
             window_start = None
             window_end = None
             if draft and draft.listing_window_start:
                 try:
                     window_start = datetime.strptime(draft.listing_window_start, "%Y-%m-%d %H:%M")
                     window_end = datetime.strptime(draft.listing_window_end, "%Y-%m-%d %H:%M")
+                except ValueError:
+                    window_start, window_end = report_listing_window(reference_day=report_day)
+            elif saved_content and saved_content.pdd.listing_window_start:
+                try:
+                    window_start = datetime.strptime(
+                        saved_content.pdd.listing_window_start, "%Y-%m-%d %H:%M"
+                    )
+                    window_end = datetime.strptime(
+                        saved_content.pdd.listing_window_end, "%Y-%m-%d %H:%M"
+                    )
                 except ValueError:
                     window_start, window_end = report_listing_window(reference_day=report_day)
             self._record_send(
@@ -218,7 +260,11 @@ class WecomDailyReportScheduler:
             )
             return True
         except WecomAPIError as exc:
-            report_day = date.fromisoformat(draft.report_date) if draft else today_in_tz()
+            report_day = today_in_tz()
+            if draft:
+                report_day = date.fromisoformat(draft.report_date)
+            elif saved_content and saved_content.content_date:
+                report_day = date.fromisoformat(saved_content.content_date)
             self._record_send(
                 platform=platform,
                 report_date=report_day,
@@ -232,7 +278,11 @@ class WecomDailyReportScheduler:
             logger.exception("wecom daily report send failed platform=%s", platform)
             return False
         except Exception as exc:
-            report_day = date.fromisoformat(draft.report_date) if draft else today_in_tz()
+            report_day = today_in_tz()
+            if draft:
+                report_day = date.fromisoformat(draft.report_date)
+            elif saved_content and saved_content.content_date:
+                report_day = date.fromisoformat(saved_content.content_date)
             self._record_send(
                 platform=platform,
                 report_date=report_day,

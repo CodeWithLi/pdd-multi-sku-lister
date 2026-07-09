@@ -393,46 +393,97 @@ def _fill_manual_title(page, account_id: str, title: str) -> bool:
     return filled
 
 
-def _has_title_length_error(page) -> bool:
+def _diagnose_title_length_error(page) -> dict[str, object]:
     """
-    检查标题输入后是否触发“最多填写30个汉字（60个字符）”之类的校验错误。
+    检测标题输入框附近是否出现「超长」校验错误。
 
-    兼容两种情况：
-    - 错误文案直接渲染在标题输入框附近
-    - 页面 body 中已有对应校验文本
+    注意：placeholder 里常有「最多包含30个汉字（60个字符）」提示，不能当作错误。
+    真实报错文案通常是「最多填写30个汉字（60个字符）」并出现在 Form_itemError 区域。
     """
-    texts = (
-        "商品标题最多填写30个汉字",
-        "最多填写30个汉字",
-        "60个字符",
-        "商品标题最多填写",
-    )
     try:
-        direct = page.run_js(
+        detail = page.run_js(
             """
-            const texts = arguments[0] || [];
-            const bodyText = (document.body && (document.body.innerText || document.body.textContent) || '').replace(/\\s+/g, ' ');
-            return texts.some(t => bodyText.includes(t));
-            """,
-            list(texts),
-        )
-        if direct:
-            return True
-    except Exception:
-        pass
+            function norm(t) {
+                return String(t || '').replace(/\\s+/g, '').trim();
+            }
+            function isVisible(el) {
+                if (!el) return false;
+                const r = el.getBoundingClientRect();
+                const s = window.getComputedStyle(el);
+                return r.width > 0 && r.height > 0
+                    && s.display !== 'none' && s.visibility !== 'hidden'
+                    && parseFloat(s.opacity || '1') > 0.05;
+            }
+            const errorNeedles = [
+                '商品标题最多填写30个汉字',
+                '最多填写30个汉字（60个字符）',
+                '最多填写30个汉字',
+            ];
+            const titleInput = document.querySelector(
+                'input[placeholder*="商品标题"], input[placeholder*="标题组成"], input[placeholder*="标题"]'
+            );
+            const placeholder = titleInput ? String(titleInput.getAttribute('placeholder') || '') : '';
+            const samples = [];
+            let matchedText = '';
+            let matchedSource = '';
 
-    selectors = (
-        'text:商品标题最多填写30个汉字',
-        'text:最多填写30个汉字',
-        'text:60个字符',
-    )
-    for sel in selectors:
-        try:
-            if page.ele(sel, timeout=0.5):
-                return True
-        except Exception:
-            continue
-    return False
+            const roots = [];
+            if (titleInput) {
+                let p = titleInput;
+                for (let i = 0; i < 10 && p; i++) {
+                    roots.push(p);
+                    p = p.parentElement;
+                }
+            } else {
+                roots.push(document.body);
+            }
+
+            for (const root of roots) {
+                const nodes = root.querySelectorAll(
+                    '[class*="Form_itemError"], [class*="itemError"], [class*="error"], span, div'
+                );
+                for (const el of nodes) {
+                    if (!isVisible(el)) continue;
+                    const text = norm(el.innerText || el.textContent || '');
+                    if (!text) continue;
+                    if (placeholder && norm(placeholder) === text) continue;
+                    if (text.includes(norm('最多包含30个汉字'))) continue;
+                    const hit = errorNeedles.find(n => text.includes(norm(n)));
+                    if (!hit) continue;
+                    const inErrorBox = !!el.closest('[class*="Form_itemError"], [class*="itemError"]');
+                    if (!inErrorBox && !el.className.includes('Error')) continue;
+                    matchedText = text;
+                    matchedSource = inErrorBox ? 'form_item_error' : 'error_node';
+                    samples.push({ text, source: matchedSource, className: String(el.className || '') });
+                    return {
+                        has_error: true,
+                        matched_text: matchedText,
+                        matched_source: matchedSource,
+                        placeholder,
+                        samples,
+                    };
+                }
+            }
+
+            return {
+                has_error: false,
+                matched_text: '',
+                matched_source: '',
+                placeholder,
+                samples,
+            };
+            """
+        )
+        if isinstance(detail, dict):
+            return detail
+    except Exception as exc:
+        return {"has_error": False, "matched_text": "", "matched_source": "", "error": str(exc)}
+    return {"has_error": False, "matched_text": "", "matched_source": ""}
+
+
+def _has_title_length_error(page) -> bool:
+    detail = _diagnose_title_length_error(page)
+    return bool(detail.get("has_error"))
 
 
 def apply_title_after_cover_upload(

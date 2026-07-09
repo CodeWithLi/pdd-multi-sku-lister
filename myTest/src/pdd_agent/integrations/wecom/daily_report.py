@@ -18,7 +18,12 @@ from pdd_agent.integrations.git.digest import (
     resolve_git_repo_path,
 )
 from pdd_agent.integrations.git.summarize import summarize_commits_as_progress
-from pdd_agent.integrations.wecom.daily_content import WecomDailyContent, load_wecom_daily_content
+from pdd_agent.integrations.wecom.daily_content import (
+    WecomDailyContent,
+    format_saved_window_label,
+    has_saved_pdd_preview,
+    load_wecom_daily_content,
+)
 from pdd_agent.integrations.wecom.daily_report_format import build_daily_report_markdown
 from pdd_agent.integrations.wecom.in_progress_draft import resolve_pdd_in_progress
 from pdd_agent.integrations.wecom.store_progress import (
@@ -84,31 +89,50 @@ def generate_pdd_daily_report_draft(
         window_start=window_start,
         window_end=window_end,
     )
-    listing_window = git_window_label
+    progress_summary_out = progress_summary
+    store_progress_out = store_snapshot.text
+    in_progress_out = in_progress
+    git_window_start_out = listing_window_start
+    git_window_end_out = listing_window_end
+    if has_saved_pdd_preview(content):
+        progress_summary_out = str(content.pdd.progress_summary or progress_summary)
+        store_progress_out = str(content.pdd.store_progress or store_snapshot.text)
+        in_progress_out = str(content.pdd.in_progress or in_progress)
+        if content.pdd.listing_window_start and content.pdd.listing_window_end:
+            listing_window_start = content.pdd.listing_window_start
+            listing_window_end = content.pdd.listing_window_end
+        if content.pdd.git_window_start and content.pdd.git_window_end:
+            git_window_start_out = content.pdd.git_window_start
+            git_window_end_out = content.pdd.git_window_end
+        git_window_label = format_saved_window_label(
+            git_window_start_out,
+            git_window_end_out,
+        ) or git_window_label
+    listing_window = format_saved_window_label(listing_window_start, listing_window_end) or git_window_label
     message = build_daily_report_markdown(
         platform="pdd",
         report_date=target_day.isoformat(),
-        progress_summary=progress_summary,
-        store_progress=store_snapshot.text,
-        in_progress=in_progress,
+        progress_summary=progress_summary_out,
+        store_progress=store_progress_out,
+        in_progress=in_progress_out,
         listing_window=listing_window,
-        git_window=listing_window,
+        git_window=git_window_label,
     )
     return DailyReportDraft(
         platform="pdd",
         report_date=target_day.isoformat(),
         repo_path=str(resolved),
         commit_count=len(commits),
-        progress_summary=progress_summary,
+        progress_summary=progress_summary_out,
         progress_summary_from_cache=from_cache,
-        store_progress=store_snapshot.text,
-        in_progress=in_progress,
+        store_progress=store_progress_out,
+        in_progress=in_progress_out,
         in_progress_manual=manual_in_progress,
         in_progress_auto_draft="\n".join(auto_draft),
         listing_window_start=listing_window_start,
         listing_window_end=listing_window_end,
-        git_window_start=listing_window_start,
-        git_window_end=listing_window_end,
+        git_window_start=git_window_start_out,
+        git_window_end=git_window_end_out,
         store_summaries=store_snapshot.shops,
         message=message,
         commits=commits,

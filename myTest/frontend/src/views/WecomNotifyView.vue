@@ -23,6 +23,7 @@ import type {
 const loading = ref(false)
 const saving = ref(false)
 const savingDailyContent = ref(false)
+const savingPreview = ref(false)
 const sending = ref(false)
 const triggeringPddReport = ref(false)
 const triggeringTaobaoReport = ref(false)
@@ -34,6 +35,7 @@ const scheduleRunning = ref(false)
 const dailyContentDate = ref('')
 const dailyContentUpdatedAt = ref('')
 const dailyContentDbAvailable = ref(false)
+const pddPreviewSaved = ref(false)
 const previewPlatform = ref<WecomDailyReportPlatform>('pdd')
 const reportPreview = ref<WecomDailyReportPreview | null>(null)
 const sendingPreviewReport = ref(false)
@@ -78,6 +80,7 @@ const configForm = reactive({
   daily_report_schedule_enabled: false,
   daily_report_schedule_hour: 18,
   daily_report_schedule_minute: 0,
+  daily_report_schedule_use_saved_preview: false,
 })
 
 const scheduleTimeDisplay = computed(() => {
@@ -126,6 +129,7 @@ function applyConfig(cfg: WecomConfig) {
   configForm.daily_report_schedule_enabled = cfg.daily_report_schedule_enabled
   configForm.daily_report_schedule_hour = cfg.daily_report_schedule_hour
   configForm.daily_report_schedule_minute = cfg.daily_report_schedule_minute
+  configForm.daily_report_schedule_use_saved_preview = cfg.daily_report_schedule_use_saved_preview
   scheduleLastRunDate.value = cfg.daily_report_last_run_date || ''
   scheduleRunning.value = Boolean(cfg.daily_report_scheduler_running)
   webhookEditing.value = false
@@ -157,6 +161,13 @@ function cancelDailyReportWebhookEdit() {
 function applyDailyContent(data: {
   content_date: string
   pdd_in_progress: string
+  pdd_progress_summary?: string
+  pdd_store_progress?: string
+  pdd_listing_window_start?: string
+  pdd_listing_window_end?: string
+  pdd_git_window_start?: string
+  pdd_git_window_end?: string
+  pdd_preview_saved?: boolean
   taobao_netdisk_materials: string
   taobao_in_progress: string
   updated_at?: string
@@ -168,6 +179,7 @@ function applyDailyContent(data: {
   dailyContentDate.value = data.content_date || ''
   dailyContentUpdatedAt.value = data.updated_at || ''
   dailyContentDbAvailable.value = Boolean(data.database_available)
+  pddPreviewSaved.value = Boolean(data.pdd_preview_saved)
 }
 
 async function loadReportLogs() {
@@ -209,6 +221,9 @@ async function load() {
       inProgressAutoDraft.value = inProgressDraft.draft
     }
     void loadReportLogs()
+    if (dailyContent.pdd_preview_saved) {
+      void restoreSavedPreview('pdd', { silent: true })
+    }
   } catch (e) {
     ElMessage.error(e instanceof Error ? e.message : '加载配置失败')
   } finally {
@@ -234,6 +249,7 @@ async function save() {
       daily_report_schedule_enabled: configForm.daily_report_schedule_enabled,
       daily_report_schedule_hour: configForm.daily_report_schedule_hour,
       daily_report_schedule_minute: configForm.daily_report_schedule_minute,
+      daily_report_schedule_use_saved_preview: configForm.daily_report_schedule_use_saved_preview,
     })
     applyConfig(cfg)
     health.value = await api.wecomHealth()
@@ -279,6 +295,59 @@ async function previewDailyReport(platform: WecomDailyReportPlatform) {
     }
   } finally {
     previewing.value = false
+  }
+}
+
+async function restoreSavedPreview(
+  platform: WecomDailyReportPlatform = 'pdd',
+  options: { silent?: boolean } = {},
+) {
+  previewing.value = true
+  previewPlatform.value = platform
+  try {
+    const preview = await api.wecomDailyReportPreview(platform)
+    reportPreview.value = preview
+    applyPreviewToEditable(preview)
+    if (!options.silent) {
+      ElMessage.success('已加载今日保存的预览，可继续编辑')
+    }
+  } catch (e) {
+    if (!options.silent) {
+      ElMessage.error(e instanceof Error ? e.message : '加载已保存预览失败')
+    }
+  } finally {
+    previewing.value = false
+  }
+}
+
+async function savePreviewEdits() {
+  if (!reportPreview.value) {
+    ElMessage.warning('请先预览日报')
+    return
+  }
+  if (!dailyContentDbAvailable.value) {
+    ElMessage.error('数据库不可用，无法保存预览')
+    return
+  }
+  savingPreview.value = true
+  try {
+    const data = await api.saveWecomDailyPreview({
+      progress_summary: editableReport.progress_summary,
+      store_progress: editableReport.store_progress,
+      in_progress: editableReport.in_progress,
+      listing_window_start: editableReport.listing_window_start,
+      listing_window_end: editableReport.listing_window_end,
+      git_window_start: editableReport.git_window_start,
+      git_window_end: editableReport.git_window_end,
+    })
+    applyDailyContent(data)
+    dailyContentForm.pdd_in_progress = editableReport.in_progress
+    reportPreview.value = { ...reportPreview.value, message: liveMarkdown.value }
+    ElMessage.success('预览内容已保存，定时发送将使用此版本')
+  } catch (e) {
+    ElMessage.error(e instanceof Error ? e.message : '保存预览失败')
+  } finally {
+    savingPreview.value = false
   }
 }
 
@@ -634,7 +703,29 @@ onMounted(() => {
             <div class="platform-note">
               技术进展与店铺数据自动生成（统计窗口：昨天 18:01 ~ 今天 18:00）。
               「正在解决/优化中」可手填，预览时会自动合并当日链路报错建议。
+              每日仅保留一份已保存预览，多次点「保存预览」以最后一次为准；刷新后会自动恢复今日已保存预览。
             </div>
+            <el-alert
+              v-if="pddPreviewSaved && !reportPreview"
+              type="info"
+              :closable="false"
+              show-icon
+              class="inline-alert preview-restore-alert"
+            >
+              <template #title>
+                今日预览已保存
+                <template v-if="dailyContentUpdatedAt">（{{ dailyContentUpdatedAt }}）</template>
+              </template>
+              <el-button
+                size="small"
+                type="primary"
+                plain
+                :loading="previewing"
+                @click="restoreSavedPreview('pdd')"
+              >
+                打开已保存预览
+              </el-button>
+            </el-alert>
             <div v-if="inProgressAutoDraft" class="auto-draft-box">
               <div class="auto-draft-head">
                 <span class="field-label">系统建议（未保存）</span>
@@ -715,6 +806,17 @@ onMounted(() => {
             <el-switch v-model="configForm.daily_report_schedule_enabled" />
           </div>
 
+          <div class="setting-row">
+            <div class="setting-label">
+              <span>定时发送已保存预览</span>
+              <small>开启后，到点发送「日报预览」中已保存的内容；未保存则回退实时生成</small>
+            </div>
+            <el-switch
+              v-model="configForm.daily_report_schedule_use_saved_preview"
+              :disabled="!configForm.daily_report_schedule_enabled"
+            />
+          </div>
+
           <div class="field-block">
             <label class="field-label">日报 Webhook 地址</label>
             <template v-if="!dailyReportWebhookEditing">
@@ -753,6 +855,9 @@ onMounted(() => {
 
           <div class="schedule-meta-box">
             <span>{{ scheduleLastRunDate ? `上次自动发送：${scheduleLastRunDate}` : '今天尚未自动发送' }}</span>
+            <span v-if="configForm.daily_report_schedule_use_saved_preview">
+              {{ pddPreviewSaved ? ' · 今日预览已保存' : ' · 今日预览未保存' }}
+            </span>
           </div>
         </div>
       </section>
@@ -763,7 +868,7 @@ onMounted(() => {
             <div class="panel-icon slate"><el-icon><Document /></el-icon></div>
             <div>
               <div class="panel-title">日报发送历史</div>
-              <div class="panel-desc">查看最近发送记录与正文</div>
+              <div class="panel-desc">查看最近发送记录与正文（已发送版本，非编辑草稿）</div>
             </div>
           </div>
           <el-button size="small" @click="loadReportLogs">刷新</el-button>
@@ -853,16 +958,18 @@ onMounted(() => {
           <div>
             <div class="panel-title">
               日报预览与编辑
+              <span v-if="pddPreviewSaved" class="saved-badge">已保存</span>
               <span v-if="previewDirty" class="dirty-badge">已修改</span>
             </div>
             <div class="panel-desc">
               {{ editableReport.platform === 'pdd' ? 'PDD' : '淘宝' }} · {{ editableReport.report_date }}
-              · 修改后右侧实时更新，发送时将推送当前预览内容
+              · 修改后右侧实时更新；手动发送推送当前预览，定时发送需先「保存预览」
             </div>
           </div>
         </div>
         <div class="preview-header-actions">
           <el-button @click="resetPreviewEdits">恢复生成内容</el-button>
+          <el-button :loading="savingPreview" @click="savePreviewEdits">保存预览</el-button>
           <el-button
             type="primary"
             :loading="sendingPreviewReport"
@@ -1641,6 +1748,27 @@ onMounted(() => {
   font-size: 11px;
   font-weight: 600;
   vertical-align: middle;
+}
+
+.saved-badge {
+  display: inline-block;
+  margin-left: 8px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: #ecfdf5;
+  color: #047857;
+  border: 1px solid #a7f3d0;
+  font-size: 11px;
+  font-weight: 600;
+  vertical-align: middle;
+}
+
+.preview-restore-alert :deep(.el-alert__content) {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  width: 100%;
 }
 
 .preview-editor-layout {

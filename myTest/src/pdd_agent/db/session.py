@@ -331,6 +331,58 @@ def _ensure_daily_listing_records_columns(engine: Engine) -> None:
         return
 
 
+def _ensure_wecom_daily_contents_columns(engine: Engine) -> None:
+    """为 wecom_daily_contents 补充日报预览保存字段。"""
+    try:
+        inspector = inspect(engine)
+        if "wecom_daily_contents" not in inspector.get_table_names():
+            return
+        existing = {col["name"] for col in inspector.get_columns("wecom_daily_contents")}
+        statements: list[str] = []
+        if "pdd_progress_summary" not in existing:
+            statements.append(
+                "ALTER TABLE wecom_daily_contents "
+                "ADD COLUMN pdd_progress_summary TEXT NOT NULL"
+            )
+        if "pdd_store_progress" not in existing:
+            statements.append(
+                "ALTER TABLE wecom_daily_contents "
+                "ADD COLUMN pdd_store_progress TEXT NOT NULL"
+            )
+        if "pdd_listing_window_start" not in existing:
+            statements.append(
+                "ALTER TABLE wecom_daily_contents "
+                "ADD COLUMN pdd_listing_window_start VARCHAR(32) NOT NULL DEFAULT ''"
+            )
+        if "pdd_listing_window_end" not in existing:
+            statements.append(
+                "ALTER TABLE wecom_daily_contents "
+                "ADD COLUMN pdd_listing_window_end VARCHAR(32) NOT NULL DEFAULT ''"
+            )
+        if "pdd_git_window_start" not in existing:
+            statements.append(
+                "ALTER TABLE wecom_daily_contents "
+                "ADD COLUMN pdd_git_window_start VARCHAR(32) NOT NULL DEFAULT ''"
+            )
+        if "pdd_git_window_end" not in existing:
+            statements.append(
+                "ALTER TABLE wecom_daily_contents "
+                "ADD COLUMN pdd_git_window_end VARCHAR(32) NOT NULL DEFAULT ''"
+            )
+        if "pdd_preview_saved" not in existing:
+            statements.append(
+                "ALTER TABLE wecom_daily_contents "
+                "ADD COLUMN pdd_preview_saved TINYINT(1) NOT NULL DEFAULT 0"
+            )
+        if not statements:
+            return
+        with engine.begin() as conn:
+            for stmt in statements:
+                conn.execute(text(stmt))
+    except Exception:
+        return
+
+
 def _ensure_integrated_pipelines_created_at_index(engine: Engine) -> None:
     """为 integrated_pipelines.created_at 补充索引（list 按时间倒序）。"""
     try:
@@ -458,6 +510,7 @@ def init_database() -> bool:
         _ensure_inventory_delist_records_columns(engine)
         _ensure_listing_submit_ai_title_config_columns(engine)
         _ensure_daily_listing_records_columns(engine)
+        _ensure_wecom_daily_contents_columns(engine)
         _ensure_integrated_pipelines_created_at_index(engine)
         # seed / backfill 会调用 is_database_available()，须先发布 session，避免 init 递归
         _engine = engine

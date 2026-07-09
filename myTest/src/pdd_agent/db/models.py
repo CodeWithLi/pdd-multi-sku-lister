@@ -610,6 +610,13 @@ class WecomDailyContentORM(Base):
     record_id: Mapped[str] = mapped_column(String(64), primary_key=True)
     content_date: Mapped[date] = mapped_column(Date, nullable=False)
     pdd_in_progress: Mapped[str] = mapped_column(Text, default="", nullable=False)
+    pdd_progress_summary: Mapped[str] = mapped_column(Text, default="", nullable=False)
+    pdd_store_progress: Mapped[str] = mapped_column(Text, default="", nullable=False)
+    pdd_listing_window_start: Mapped[str] = mapped_column(String(32), default="", nullable=False)
+    pdd_listing_window_end: Mapped[str] = mapped_column(String(32), default="", nullable=False)
+    pdd_git_window_start: Mapped[str] = mapped_column(String(32), default="", nullable=False)
+    pdd_git_window_end: Mapped[str] = mapped_column(String(32), default="", nullable=False)
+    pdd_preview_saved: Mapped[bool] = mapped_column(default=False, nullable=False)
     taobao_netdisk_materials: Mapped[str] = mapped_column(Text, default="", nullable=False)
     taobao_in_progress: Mapped[str] = mapped_column(Text, default="", nullable=False)
     created_at: Mapped[datetime] = mapped_column(

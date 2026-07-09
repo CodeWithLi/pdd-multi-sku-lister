@@ -26,6 +26,7 @@ class WecomConfig(BaseModel):
     daily_report_schedule_enabled: bool = False
     daily_report_schedule_hour: int = 18
     daily_report_schedule_minute: int = 0
+    daily_report_schedule_use_saved_preview: bool = False
 
     @model_validator(mode="after")
     def normalize(self) -> "WecomConfig":

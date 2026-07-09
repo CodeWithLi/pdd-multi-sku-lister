@@ -1510,6 +1510,7 @@ export interface WecomConfig {
   daily_report_schedule_enabled: boolean
   daily_report_schedule_hour: number
   daily_report_schedule_minute: number
+  daily_report_schedule_use_saved_preview: boolean
   daily_report_schedule_time: string
   daily_report_scheduler_running: boolean
   daily_report_last_run_date: string
@@ -1527,6 +1528,7 @@ export interface WecomConfigUpdatePayload {
   daily_report_schedule_enabled: boolean
   daily_report_schedule_hour: number
   daily_report_schedule_minute: number
+  daily_report_schedule_use_saved_preview: boolean
 }
 
 export interface WecomTestSendPayload {
@@ -1548,6 +1550,13 @@ export interface WecomTestSendResult {
 export interface WecomDailyContent {
   content_date: string
   pdd_in_progress: string
+  pdd_progress_summary: string
+  pdd_store_progress: string
+  pdd_listing_window_start: string
+  pdd_listing_window_end: string
+  pdd_git_window_start: string
+  pdd_git_window_end: string
+  pdd_preview_saved: boolean
   taobao_netdisk_materials: string
   taobao_in_progress: string
   updated_at: string
@@ -1558,6 +1567,16 @@ export interface WecomDailyContentUpdatePayload {
   pdd_in_progress: string
   taobao_netdisk_materials: string
   taobao_in_progress: string
+}
+
+export interface WecomDailyPreviewSavePayload {
+  progress_summary: string
+  store_progress: string
+  in_progress: string
+  listing_window_start: string
+  listing_window_end: string
+  git_window_start: string
+  git_window_end: string
 }
 
 export type WecomDailyReportPlatform = 'pdd' | 'taobao'
