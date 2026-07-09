@@ -16,7 +16,12 @@ import random
 from contextvars import ContextVar
 from typing import Any
 
-from pdd_agent.integrations.feishu.config import FeishuConfig, accessory_cost_pricing_enabled, load_feishu_config
+from pdd_agent.integrations.feishu.config import (
+    FeishuConfig,
+    accessory_cost_pricing_enabled,
+    accessory_cost_tiered_float_enabled,
+    load_feishu_config,
+)
 from pdd_agent.skills.listing.listing_accessory_cost_float_registry import (
     accessory_float_key,
     accessory_float_key_for_codes,
@@ -43,6 +48,7 @@ _active_ctx: ContextVar[bool] = ContextVar("accessory_cost_pricing_active", defa
 _cost_map_ctx: ContextVar[dict[str, float]] = ContextVar("accessory_cost_pricing_cost_map", default={})
 _float_min_ctx: ContextVar[float] = ContextVar("accessory_cost_pricing_float_min", default=0.0)
 _float_max_ctx: ContextVar[float] = ContextVar("accessory_cost_pricing_float_max", default=5.0)
+_tiered_float_ctx: ContextVar[bool] = ContextVar("accessory_cost_tiered_float_enabled", default=False)
 _main_float_ctx: ContextVar[dict[tuple[str, str], float]] = ContextVar(
     "accessory_cost_pricing_main_float",
     default={},
@@ -71,6 +77,7 @@ def ensure_accessory_cost_pricing_active() -> bool:
         cost_map=load_jushuitan_cost_map(config=cfg),
         float_min=pipe.accessory_cost_float_min,
         float_max=pipe.accessory_cost_float_max,
+        tiered_float_enabled=accessory_cost_tiered_float_enabled(cfg),
     )
     return True
 
@@ -80,12 +87,14 @@ def activate_accessory_cost_pricing(
     cost_map: dict[str, float] | None = None,
     float_min: float = 0.0,
     float_max: float = 5.0,
+    tiered_float_enabled: bool = False,
 ) -> None:
     """上架任务开始前激活（通常由 task_runner 调用）。"""
     _active_ctx.set(True)
     _cost_map_ctx.set(dict(cost_map or {}))
     _float_min_ctx.set(max(0.0, float(float_min)))
     _float_max_ctx.set(max(_float_min_ctx.get(), float(float_max)))
+    _tiered_float_ctx.set(bool(tiered_float_enabled))
     _main_float_ctx.set({})
     _accessory_float_ctx.set({})
 
@@ -93,6 +102,7 @@ def activate_accessory_cost_pricing(
 def deactivate_accessory_cost_pricing() -> None:
     _active_ctx.set(False)
     _cost_map_ctx.set({})
+    _tiered_float_ctx.set(False)
     _main_float_ctx.set({})
     _accessory_float_ctx.set({})
 
@@ -104,7 +114,16 @@ def accessory_cost_pricing_config(cfg: FeishuConfig | None = None) -> dict[str, 
         "enabled": accessory_cost_pricing_enabled(active),
         "float_min": float(pipe.accessory_cost_float_min),
         "float_max": float(pipe.accessory_cost_float_max),
+        "tiered_float_enabled": accessory_cost_tiered_float_enabled(active),
     }
+
+
+def _accessory_float_drawer():
+    if not _tiered_float_ctx.get():
+        return None
+    from pdd_agent.skills.listing.listing_accessory_tiered_float import tiered_accessory_float_drawer
+
+    return tiered_accessory_float_drawer()
 
 
 def split_main_and_accessory_codes(
@@ -177,15 +196,19 @@ def _resolve_accessory_floats(
 ) -> float:
     scope = str(listing_scope or "").strip() or "__default__"
     accessory_floats = dict(_accessory_float_ctx.get())
+    tiered_drawer = _accessory_float_drawer()
     total = 0.0
     for code, cost in zip(accessory_codes, accessory_costs):
         key = accessory_float_key(code, cost)
         acc_sk = (scope, key)
         if acc_sk not in accessory_floats:
-            accessory_floats[acc_sk] = round(
-                random.uniform(_float_min_ctx.get(), _float_max_ctx.get()),
-                2,
-            )
+            if tiered_drawer is not None:
+                accessory_floats[acc_sk] = round(float(tiered_drawer(cost)), 2)
+            else:
+                accessory_floats[acc_sk] = round(
+                    random.uniform(_float_min_ctx.get(), _float_max_ctx.get()),
+                    2,
+                )
         total += accessory_floats[acc_sk]
     _accessory_float_ctx.set(accessory_floats)
     return round(total, 2)
@@ -339,6 +362,7 @@ def reconcile_accessory_cost_prices_for_unit(
         resolve_inventory=_resolve_inventory,
         format_price=_format_price,
         effective_single_price=registry.effective_single_price,
+        accessory_float_for_cost=_accessory_float_drawer(),
     )
 
 

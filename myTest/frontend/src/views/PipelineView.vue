@@ -138,6 +138,8 @@ const failureLogEnabled = ref(true)
 const failureLogSaving = ref(false)
 const failureLogTableName = ref('')
 const accessoryCostPricingEnabled = ref(true)
+const accessoryCostTieredFloatEnabled = ref(true)
+const accessoryCostTieredFloatSaving = ref(false)
 const aiGenerateTitleLoading = ref(false)
 const submitAiTitleEnabled = ref(false)
 const accessoryCostPricingSaving = ref(false)
@@ -1110,6 +1112,12 @@ async function confirmAutoUploadConfig() {
     accessoryCostPricingEnabled.value = !!pricing.enabled
     accessoryCostPricingFloatMin.value = Number(pricing.float_min ?? 0)
     accessoryCostPricingFloatMax.value = Number(pricing.float_max ?? 5)
+    if (accessoryCostPricingEnabled.value) {
+      const tiered = await api.updatePipelineAccessoryTieredFloat(accessoryCostTieredFloatEnabled.value)
+      accessoryCostTieredFloatEnabled.value = !!tiered.enabled
+    } else {
+      accessoryCostTieredFloatEnabled.value = false
+    }
     autoUploadConfigVisible.value = false
     ElMessage.success('自动上架配置已保存')
   } catch (e) {
@@ -1144,6 +1152,12 @@ async function loadAccessoryCostPricingSetting() {
   accessoryCostPricingEnabled.value = !!data.enabled
   accessoryCostPricingFloatMin.value = Number(data.float_min ?? 0)
   accessoryCostPricingFloatMax.value = Number(data.float_max ?? 5)
+  try {
+    const tiered = await api.getPipelineAccessoryTieredFloat()
+    accessoryCostTieredFloatEnabled.value = !!tiered.enabled
+  } catch {
+    accessoryCostTieredFloatEnabled.value = false
+  }
 }
 
 async function onAccessoryCostPricingChange(enabled: boolean) {
@@ -1153,12 +1167,34 @@ async function onAccessoryCostPricingChange(enabled: boolean) {
     accessoryCostPricingEnabled.value = !!data.enabled
     accessoryCostPricingFloatMin.value = Number(data.float_min ?? 0)
     accessoryCostPricingFloatMax.value = Number(data.float_max ?? 5)
+    if (!enabled) {
+      accessoryCostTieredFloatEnabled.value = false
+    }
     ElMessage.success(enabled ? '已开启配件成本定价' : '已关闭配件成本定价')
   } catch (e) {
     accessoryCostPricingEnabled.value = !enabled
     ElMessage.error(e instanceof Error ? e.message : String(e))
   } finally {
     accessoryCostPricingSaving.value = false
+  }
+}
+
+async function onAccessoryCostTieredFloatChange(enabled: boolean) {
+  if (!accessoryCostPricingEnabled.value) {
+    accessoryCostTieredFloatEnabled.value = false
+    ElMessage.warning('请先开启配件成本定价')
+    return
+  }
+  accessoryCostTieredFloatSaving.value = true
+  try {
+    const data = await api.updatePipelineAccessoryTieredFloat(enabled)
+    accessoryCostTieredFloatEnabled.value = !!data.enabled
+    ElMessage.success(enabled ? '已开启子商品档位浮动' : '已关闭子商品档位浮动')
+  } catch (e) {
+    accessoryCostTieredFloatEnabled.value = !enabled
+    ElMessage.error(e instanceof Error ? e.message : String(e))
+  } finally {
+    accessoryCostTieredFloatSaving.value = false
   }
 }
 
@@ -2389,6 +2425,15 @@ onUnmounted(() => {
                     />
                   </div>
                   <div class="switch-row">
+                    <span class="switch-label">子商品档位浮动</span>
+                    <el-switch
+                      v-model="accessoryCostTieredFloatEnabled"
+                      :disabled="!accessoryCostPricingEnabled"
+                      :loading="accessoryCostTieredFloatSaving"
+                      @change="onAccessoryCostTieredFloatChange"
+                    />
+                  </div>
+                  <div class="switch-row">
                     <el-button
                       :type="submitAiTitleEnabled ? 'success' : 'primary'"
                       :plain="!submitAiTitleEnabled"
@@ -2459,7 +2504,13 @@ onUnmounted(() => {
                   已关闭：发布过程中<strong>不会</strong>往飞书失败表写任何记录；本地任务记录与报错详情仍保留。发布前关掉、跑完再开即可。
                 </div>
                 <div v-if="accessoryCostPricingEnabled" class="form-tip">
-                  已开启：拼单价 = 主商品拼多多定价 + 所有子商品聚水潭成本 + {{ accessoryCostPricingFloatMin }}~{{ accessoryCostPricingFloatMax }} 元浮动（仅浮动一次）。主商品仍读「拼多多比价定价」，子商品读「聚水潭ERP商品列表」成本。
+                  已开启：拼单价 = 主商品拼多多定价 + 主商品浮动（{{ accessoryCostPricingFloatMin }}~{{ accessoryCostPricingFloatMax }}）+ 所有子商品聚水潭成本 + 子商品浮动。
+                  <template v-if="accessoryCostTieredFloatEnabled">
+                    子商品档位浮动：≤0.5 元 +1~1.5；0.5~1 元 +1.5~2.5；1~2 元 +3~4；&gt;2 元 +5~7。
+                  </template>
+                  <template v-else>
+                    子商品统一浮动 {{ accessoryCostPricingFloatMin }}~{{ accessoryCostPricingFloatMax }} 元。
+                  </template>
                 </div>
                 <div v-else class="form-tip">
                   默认关闭：拼单价按飞书「拼多多比价定价」各组件定价相加，并分别加浮动。
@@ -3170,12 +3221,23 @@ onUnmounted(() => {
               <span class="switch-label">配件成本定价</span>
               <el-switch v-model="accessoryCostPricingEnabled" />
             </div>
+            <div class="switch-row">
+              <span class="switch-label">子商品档位浮动</span>
+              <el-switch
+                v-model="accessoryCostTieredFloatEnabled"
+                :disabled="!accessoryCostPricingEnabled"
+              />
+            </div>
           </div>
           <div v-if="accessoryCostPricingEnabled" class="form-tip">
-            拼单价 = 主商品拼多多定价 + 所有子商品聚水潭成本 + {{ accessoryCostPricingFloatMin }}~{{
-              accessoryCostPricingFloatMax
-            }}
-            元浮动（仅浮动一次）。与下方「活动与推广」共用同一开关，RabbitMQ 自动上架同样生效。
+            拼单价 = 主商品拼多多定价 + 主商品浮动（{{ accessoryCostPricingFloatMin }}~{{ accessoryCostPricingFloatMax }}）+ 子商品聚水潭成本 + 子商品浮动。
+            <template v-if="accessoryCostTieredFloatEnabled">
+              子商品按成本档位：≤0.5 +1~1.5；0.5~1 +1.5~2.5；1~2 +3~4；&gt;2 +5~7。
+            </template>
+            <template v-else>
+              子商品统一浮动 {{ accessoryCostPricingFloatMin }}~{{ accessoryCostPricingFloatMax }} 元。
+            </template>
+            与「活动与推广」共用开关，RabbitMQ 自动上架同样生效。
           </div>
         </el-form-item>
       </el-form>

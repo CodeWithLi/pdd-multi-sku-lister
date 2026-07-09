@@ -240,6 +240,10 @@ class PipelineIntegrationConfig(BaseModel):
     )
     accessory_cost_float_min: float = Field(default=0.0, ge=0, description="配件成本定价模式：拼单价总浮动下限（元）")
     accessory_cost_float_max: float = Field(default=5.0, ge=0, description="配件成本定价模式：拼单价总浮动上限（元）")
+    accessory_cost_tiered_float_enabled: bool = Field(
+        default=True,
+        description="配件成本定价模式下，子商品按成本档位浮动（替代统一 0~5）",
+    )
     limited_time_first_spec_price_enabled: bool = Field(
         default=True,
         description="限时限量购：仅第一个规格立减后价对比商品编码零售综合成本（整合链路策略）",
@@ -715,6 +719,12 @@ def accessory_cost_pricing_enabled(cfg: FeishuConfig | None = None) -> bool:
     return bool(cfg.pipeline.accessory_cost_pricing_enabled)
 
 
+def accessory_cost_tiered_float_enabled(cfg: FeishuConfig | None = None) -> bool:
+    """配件成本定价模式下「子商品档位浮动」开关。"""
+    cfg = cfg or load_feishu_config()
+    return bool(cfg.pipeline.accessory_cost_tiered_float_enabled)
+
+
 def load_feishu_config(path: Path | None = None) -> FeishuConfig:
     """合并 feishu.yaml 与 .env 中的飞书凭据。"""
     cfg_path = path or Path(os.getenv("FEISHU_CONFIG_PATH", DEFAULT_FEISHU_CONFIG_PATH))
@@ -978,6 +988,23 @@ def save_pipeline_accessory_cost_pricing_to_config(enabled: bool, path: Path | N
     if not isinstance(pipeline_raw, dict):
         pipeline_raw = {}
     pipeline_raw["accessory_cost_pricing_enabled"] = bool(enabled)
+    data["pipeline"] = pipeline_raw
+    cfg_path.parent.mkdir(parents=True, exist_ok=True)
+    with open(cfg_path, "w", encoding="utf-8") as f:
+        yaml.dump(data, f, allow_unicode=True, default_flow_style=False, sort_keys=False)
+
+
+def save_pipeline_accessory_tiered_float_to_config(enabled: bool, path: Path | None = None) -> None:
+    """整合链路：写入「子商品档位浮动」开关到 feishu.yaml。"""
+    cfg_path = path or Path(os.getenv("FEISHU_CONFIG_PATH", DEFAULT_FEISHU_CONFIG_PATH))
+    data: dict = {}
+    if cfg_path.is_file():
+        with open(cfg_path, encoding="utf-8") as f:
+            data = yaml.safe_load(f) or {}
+    pipeline_raw = data.get("pipeline")
+    if not isinstance(pipeline_raw, dict):
+        pipeline_raw = {}
+    pipeline_raw["accessory_cost_tiered_float_enabled"] = bool(enabled)
     data["pipeline"] = pipeline_raw
     cfg_path.parent.mkdir(parents=True, exist_ok=True)
     with open(cfg_path, "w", encoding="utf-8") as f:

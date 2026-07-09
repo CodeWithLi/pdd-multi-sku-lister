@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import random
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Callable
 
 from pdd_agent.skills.listing.pdd_product_catalog import (
     PddProductEntry,
@@ -111,6 +111,7 @@ def reconcile_accessory_cost_floats(
     listing_scope: str,
     float_min: float,
     float_max: float,
+    accessory_float_for_cost: Callable[[float], float] | None = None,
 ) -> dict[int, tuple[float, float, float]]:
     """返回 sku_index -> (main_float, accessory_float_sum, group_price)。"""
     scope = str(listing_scope or "").strip() or "__default__"
@@ -125,7 +126,10 @@ def reconcile_accessory_cost_floats(
         for part in row.accessories:
             acc_sk = (scope, part.float_key)
             if acc_sk not in accessory_floats:
-                accessory_floats[acc_sk] = _draw_float(float_min, float_max)
+                if accessory_float_for_cost is not None:
+                    accessory_floats[acc_sk] = round(float(accessory_float_for_cost(part.cost)), 2)
+                else:
+                    accessory_floats[acc_sk] = _draw_float(float_min, float_max)
 
     out: dict[int, tuple[float, float, float]] = {}
     for row in rows:
@@ -163,6 +167,7 @@ def apply_reconciled_prices_to_unit(
     resolve_inventory,
     format_price,
     effective_single_price,
+    accessory_float_for_cost: Callable[[float], float] | None = None,
 ) -> None:
     """上架单元内所有 SKU 按主/配件分别浮动重算拼单价。"""
     rows: list[_SkuPricingRow] = []
@@ -206,6 +211,7 @@ def apply_reconciled_prices_to_unit(
         listing_scope=listing_scope,
         float_min=float_min,
         float_max=float_max,
+        accessory_float_for_cost=accessory_float_for_cost,
     )
 
     for row in rows:

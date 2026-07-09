@@ -1404,7 +1404,11 @@ async def execute_listing(
         logger.exception("platform skip dedupe filter failed run_id=%s", run_id)
 
     try:
-        from pdd_agent.integrations.feishu.config import accessory_cost_pricing_enabled, load_feishu_config
+        from pdd_agent.integrations.feishu.config import (
+            accessory_cost_pricing_enabled,
+            accessory_cost_tiered_float_enabled,
+            load_feishu_config,
+        )
         from pdd_agent.skills.listing.listing_accessory_cost_pricing import (
             activate_accessory_cost_pricing,
             deactivate_accessory_cost_pricing,
@@ -1421,6 +1425,7 @@ async def execute_listing(
                 cost_map=load_jushuitan_cost_map(config=feishu_cfg),
                 float_min=pipe_cfg.accessory_cost_float_min,
                 float_max=pipe_cfg.accessory_cost_float_max,
+                tiered_float_enabled=accessory_cost_tiered_float_enabled(feishu_cfg),
             )
             reset_listing_price_float_registry(
                 enabled=False,

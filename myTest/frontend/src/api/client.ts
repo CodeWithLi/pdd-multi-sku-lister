@@ -734,6 +734,14 @@ export const api = {
       )
       .then((r) => r.data),
 
+  getPipelineAccessoryTieredFloat: () =>
+    http.get<{ enabled: boolean }>('/pipelines/integrated/accessory-tiered-float').then((r) => r.data),
+
+  updatePipelineAccessoryTieredFloat: (enabled: boolean) =>
+    http
+      .put<{ enabled: boolean }>('/pipelines/integrated/accessory-tiered-float', { enabled })
+      .then((r) => r.data),
+
   getPipelineSubmitAiTitle: () =>
     http
       .get<PipelineSubmitAiTitleConfig>('/pipelines/integrated/submit-ai-title')

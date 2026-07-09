@@ -20,6 +20,8 @@ from pdd_agent.api.schemas.pipelines import (
     PipelinePlatformSkipDedupeUpdateIn,
     PipelineAccessoryCostPricingOut,
     PipelineAccessoryCostPricingUpdateIn,
+    PipelineAccessoryTieredFloatOut,
+    PipelineAccessoryTieredFloatUpdateIn,
     PipelineSubmitAiTitleOut,
     PipelineSubmitAiTitleTestIn,
     PipelineSubmitAiTitleTestOut,
@@ -42,10 +44,12 @@ from pdd_agent.api.schemas.pipeline_late_retry import (
 from pdd_agent.api.schemas.feishu_inspect import FeishuInspectListingPricesOut
 from pdd_agent.integrations.feishu.config import (
     accessory_cost_pricing_enabled,
+    accessory_cost_tiered_float_enabled,
     excel_fallback_enabled,
     platform_skip_dedupe_enabled,
     load_feishu_config,
     save_pipeline_accessory_cost_pricing_to_config,
+    save_pipeline_accessory_tiered_float_to_config,
     save_pipeline_excel_fallback_to_config,
     save_pipeline_platform_skip_dedupe_to_config,
     save_pdd_upload_log_spec_rows_to_config,
@@ -136,6 +140,19 @@ def update_integrated_accessory_cost_pricing(body: PipelineAccessoryCostPricingU
         float_min=float(pipe.accessory_cost_float_min),
         float_max=float(pipe.accessory_cost_float_max),
     )
+
+
+@router.get("/integrated/accessory-tiered-float", response_model=PipelineAccessoryTieredFloatOut)
+def get_integrated_accessory_tiered_float():
+    """读取「子商品档位浮动」开关。"""
+    return PipelineAccessoryTieredFloatOut(enabled=accessory_cost_tiered_float_enabled())
+
+
+@router.put("/integrated/accessory-tiered-float", response_model=PipelineAccessoryTieredFloatOut)
+def update_integrated_accessory_tiered_float(body: PipelineAccessoryTieredFloatUpdateIn):
+    """保存「子商品档位浮动」开关（写入 feishu.yaml）。"""
+    save_pipeline_accessory_tiered_float_to_config(body.enabled)
+    return PipelineAccessoryTieredFloatOut(enabled=bool(body.enabled))
 
 
 @router.get("/integrated/submit-ai-title", response_model=PipelineSubmitAiTitleOut)

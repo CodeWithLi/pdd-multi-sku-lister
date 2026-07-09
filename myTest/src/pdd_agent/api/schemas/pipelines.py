@@ -275,6 +275,14 @@ class PipelineAccessoryCostPricingUpdateIn(BaseModel):
     enabled: bool
 
 
+class PipelineAccessoryTieredFloatOut(BaseModel):
+    enabled: bool
+
+
+class PipelineAccessoryTieredFloatUpdateIn(BaseModel):
+    enabled: bool
+
+
 class PipelineSubmitAiTitleOut(BaseModel):
     enabled: bool
     provider: str = "deepseek"
