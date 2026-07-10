@@ -1264,6 +1264,7 @@ export interface IntegratedPipelineStartPayload {
   listing_per_batch_limited_time_enabled?: boolean
   listing_per_batch_campaign_enabled?: boolean
   listing_per_batch_lt_traffic_activity_enabled?: boolean
+  listing_per_batch_promote_lt_success_only_enabled?: boolean
   delist_spec_code_search_enabled?: boolean
 }
 
@@ -1299,6 +1300,7 @@ export interface IntegratedPipelineBatchStartPayload {
   listing_per_batch_limited_time_enabled?: boolean
   listing_per_batch_campaign_enabled?: boolean
   listing_per_batch_lt_traffic_activity_enabled?: boolean
+  listing_per_batch_promote_lt_success_only_enabled?: boolean
   store_sequential_enabled?: boolean
   delist_spec_code_search_enabled?: boolean
   activity_limited_time_success_only?: boolean

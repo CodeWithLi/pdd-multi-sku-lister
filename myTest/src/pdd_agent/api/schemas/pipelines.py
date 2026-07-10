@@ -54,6 +54,7 @@ class IntegratedPipelineStartRequest(BaseModel):
     listing_per_batch_limited_time_enabled: bool = False
     listing_per_batch_campaign_enabled: bool = False
     listing_per_batch_lt_traffic_activity_enabled: bool = False
+    listing_per_batch_promote_lt_success_only_enabled: bool = True
     delist_spec_code_search_enabled: bool = False
 
     @model_validator(mode="after")
@@ -102,6 +103,7 @@ class IntegratedPipelineBatchStartRequest(BaseModel):
     listing_per_batch_limited_time_enabled: bool = False
     listing_per_batch_campaign_enabled: bool = False
     listing_per_batch_lt_traffic_activity_enabled: bool = False
+    listing_per_batch_promote_lt_success_only_enabled: bool = True
     delist_spec_code_search_enabled: bool = False
     account_ids: list[str] = Field(default_factory=list)
     product_codes: list[str] = Field(default_factory=list)

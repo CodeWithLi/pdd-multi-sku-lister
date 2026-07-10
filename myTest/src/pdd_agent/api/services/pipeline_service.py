@@ -1250,6 +1250,7 @@ def start_integrated_pipeline(
     listing_per_batch_limited_time_enabled: bool = False,
     listing_per_batch_campaign_enabled: bool = False,
     listing_per_batch_lt_traffic_activity_enabled: bool = False,
+    listing_per_batch_promote_lt_success_only_enabled: bool = True,
     delist_spec_code_search_enabled: bool = False,
     activity_limited_time_success_only: bool = False,
     extra_meta: dict[str, Any] | None = None,
@@ -1339,6 +1340,7 @@ def start_integrated_pipeline(
                 "listing_per_batch_limited_time_enabled": listing_per_batch_limited_time_enabled,
                 "listing_per_batch_campaign_enabled": listing_per_batch_campaign_enabled,
                 "listing_per_batch_lt_traffic_activity_enabled": listing_per_batch_lt_traffic_activity_enabled,
+                "listing_per_batch_promote_lt_success_only_enabled": listing_per_batch_promote_lt_success_only_enabled,
                 "delist_spec_code_search_enabled": delist_spec_code_search_enabled,
                 "activity_limited_time_success_only": activity_limited_time_success_only,
                 "extra_meta": extra_meta,
@@ -1393,6 +1395,7 @@ def start_integrated_pipeline(
     meta.update(per_batch_campaign_meta_patch(enabled=bool(listing_per_batch_campaign_enabled)))
     from pdd_agent.api.services.pipeline_per_batch_lt_traffic_activity.bridge import (
         per_batch_lt_traffic_activity_meta_patch,
+        per_batch_promote_lt_success_only_meta_patch,
     )
 
     meta.update(
@@ -1400,6 +1403,12 @@ def start_integrated_pipeline(
             enabled=bool(listing_per_batch_lt_traffic_activity_enabled)
         )
     )
+    if listing_per_batch_lt_traffic_activity_enabled:
+        meta.update(
+            per_batch_promote_lt_success_only_meta_patch(
+                enabled=bool(listing_per_batch_promote_lt_success_only_enabled)
+            )
+        )
     if skip_selectors:
         meta["listing_skip_selectors"] = skip_selectors
     row = create_integrated_pipeline(
@@ -1697,6 +1706,7 @@ def start_integrated_pipeline_batch(
     listing_per_batch_limited_time_enabled: bool = False,
     listing_per_batch_campaign_enabled: bool = False,
     listing_per_batch_lt_traffic_activity_enabled: bool = False,
+    listing_per_batch_promote_lt_success_only_enabled: bool = True,
     store_sequential_enabled: bool = False,
     delist_spec_code_search_enabled: bool = False,
     activity_limited_time_success_only: bool = False,
@@ -1747,6 +1757,7 @@ def start_integrated_pipeline_batch(
         listing_per_batch_limited_time_enabled=listing_per_batch_limited_time_enabled,
         listing_per_batch_campaign_enabled=listing_per_batch_campaign_enabled,
         listing_per_batch_lt_traffic_activity_enabled=listing_per_batch_lt_traffic_activity_enabled,
+        listing_per_batch_promote_lt_success_only_enabled=listing_per_batch_promote_lt_success_only_enabled,
         delist_spec_code_search_enabled=delist_spec_code_search_enabled,
         activity_limited_time_success_only=activity_limited_time_success_only,
         trigger_source=trigger_source,
@@ -1842,6 +1853,7 @@ def start_integrated_pipeline_batch(
             listing_per_batch_limited_time_enabled=listing_per_batch_limited_time_enabled,
             listing_per_batch_campaign_enabled=listing_per_batch_campaign_enabled,
             listing_per_batch_lt_traffic_activity_enabled=listing_per_batch_lt_traffic_activity_enabled,
+            listing_per_batch_promote_lt_success_only_enabled=listing_per_batch_promote_lt_success_only_enabled,
             delist_spec_code_search_enabled=delist_spec_code_search_enabled,
             activity_limited_time_success_only=activity_limited_time_success_only,
         )

@@ -7,6 +7,7 @@ from typing import Any
 from pdd_agent.api.services.pipeline_per_batch_lt_traffic_activity import orchestrator
 
 per_batch_lt_traffic_activity_meta_patch = orchestrator.per_batch_lt_traffic_activity_meta_patch
+per_batch_promote_lt_success_only_meta_patch = orchestrator.per_batch_promote_lt_success_only_meta_patch
 is_per_batch_lt_traffic_activity_enabled = orchestrator.is_per_batch_lt_traffic_activity_enabled
 
 

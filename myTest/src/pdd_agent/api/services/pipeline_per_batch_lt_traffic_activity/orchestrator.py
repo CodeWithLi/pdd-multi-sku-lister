@@ -24,7 +24,10 @@ from pdd_agent.api.services.pipeline_per_batch_limited_time import (
     mark_per_batch_limited_time_continue_handled,
 )
 from pdd_agent.api.services.pipeline_per_batch_lt_traffic_activity.constants import (
+    ACCUMULATED_LT_MAPPING_IDS_KEY,
+    ACCUMULATED_LT_PDD_IDS_KEY,
     META_ENABLED_KEY,
+    META_PROMOTE_LT_SUCCESS_ONLY_KEY,
     META_STATE_KEY,
     PHASE_CAMPAIGN,
     PHASE_DONE,
@@ -42,6 +45,17 @@ def per_batch_lt_traffic_activity_meta_patch(*, enabled: bool) -> dict[str, Any]
     if not enabled:
         return {}
     return {META_ENABLED_KEY: True}
+
+
+def per_batch_promote_lt_success_only_meta_patch(*, enabled: bool) -> dict[str, Any]:
+    return {META_PROMOTE_LT_SUCCESS_ONLY_KEY: bool(enabled)}
+
+
+def _promote_lt_success_only(row) -> bool:
+    meta = dict(row.meta or {})
+    if META_PROMOTE_LT_SUCCESS_ONLY_KEY in meta:
+        return bool(meta.get(META_PROMOTE_LT_SUCCESS_ONLY_KEY))
+    return True
 
 
 def _throttle_state(row) -> dict[str, Any]:
@@ -120,16 +134,59 @@ def _resolve_lt_success_products(
     return list(extract.pdd_product_ids), list(extract.mapping_ids)
 
 
-def _resolve_activity_products(row) -> tuple[list[str], list[str]]:
-    from pdd_agent.api.services.pipeline_per_batch_limited_time import (
-        prepare_pipeline_row_for_post_listing_steps,
-        resolve_activity_products_after_per_batch_listing,
-    )
+def _merge_unique_ids(*groups: list[str]) -> list[str]:
+    merged: list[str] = []
+    seen: set[str] = set()
+    for group in groups:
+        for item in group:
+            pid = str(item or "").strip()
+            if pid and pid not in seen:
+                seen.add(pid)
+                merged.append(pid)
+    return merged
 
-    refreshed = prepare_pipeline_row_for_post_listing_steps(row) or row
-    pdd_ids = list(refreshed.pdd_product_ids or [])
-    mapping_ids = list(refreshed.mapping_ids or [])
-    return resolve_activity_products_after_per_batch_listing(refreshed, pdd_ids, mapping_ids)
+
+def _accumulated_lt_success_from_meta(meta: dict[str, Any]) -> tuple[list[str], list[str]]:
+    pdd_ids = _merge_unique_ids(list(meta.get(ACCUMULATED_LT_PDD_IDS_KEY) or []))
+    mapping_ids = _merge_unique_ids(list(meta.get(ACCUMULATED_LT_MAPPING_IDS_KEY) or []))
+    return pdd_ids, mapping_ids
+
+
+def _accumulate_lt_success_meta_patch(
+    meta: dict[str, Any],
+    *,
+    pdd_ids: list[str],
+    mapping_ids: list[str],
+) -> dict[str, Any]:
+    prev_pdd, prev_map = _accumulated_lt_success_from_meta(meta)
+    merged_pdd = _merge_unique_ids(prev_pdd, list(pdd_ids))
+    merged_map = _merge_unique_ids(prev_map, list(mapping_ids))
+    return {
+        ACCUMULATED_LT_PDD_IDS_KEY: merged_pdd,
+        ACCUMULATED_LT_MAPPING_IDS_KEY: merged_map,
+    }
+
+
+def _resolve_all_lt_success_for_activity(row) -> tuple[list[str], list[str]]:
+    """全部批次结束后：仅使用跨批累计的限时限量购成功商品报活动。"""
+    meta = dict(row.meta or {})
+    accumulated_pdd, accumulated_map = _accumulated_lt_success_from_meta(meta)
+    if accumulated_pdd:
+        from pdd_agent.api.services.pipeline_activity_limited_time_success import (
+            resolve_mapping_ids_for_pdd_products,
+        )
+
+        mapping_ids = resolve_mapping_ids_for_pdd_products(
+            str(row.account_id or ""),
+            accumulated_pdd,
+            fallback_mapping_ids=accumulated_map,
+        )
+        return accumulated_pdd, mapping_ids
+    return [], []
+
+
+def _resolve_activity_products(row) -> tuple[list[str], list[str]]:
+    return _resolve_all_lt_success_for_activity(row)
 
 
 def _build_flow_state(
@@ -315,9 +372,12 @@ def _start_final_activities(row, *, meta_patch: dict[str, Any] | None = None) ->
     if not activity_ids:
         _complete_pipeline(row, meta_patch=meta_patch)
         return True
-    pdd_ids, mapping_ids = _resolve_activity_products(row)
-    if not pdd_ids and not mapping_ids:
-        _complete_pipeline(row, meta_patch=meta_patch)
+    pdd_ids, mapping_ids = _resolve_all_lt_success_for_activity(row)
+    if not pdd_ids:
+        patch = dict(meta_patch or {})
+        patch["campaign_skip_reason"] = "全部批次无限时限量购成功商品，跳过活动报名"
+        patch["campaign_outcome"] = "skipped_no_lt_success"
+        _complete_pipeline(row, meta_patch=patch)
         return True
     patch = dict(meta_patch or {})
     flow = _build_flow_state(
@@ -326,8 +386,8 @@ def _start_final_activities(row, *, meta_patch: dict[str, Any] | None = None) ->
         batch_mapping_ids=mapping_ids,
         is_final_batch=True,
         pending_listing=None,
-        lt_success_pdd_ids=[],
-        lt_success_mapping_ids=[],
+        lt_success_pdd_ids=pdd_ids,
+        lt_success_mapping_ids=mapping_ids,
     )
     flow["phase"] = PHASE_CAMPAIGN
     flow["activity_index"] = 0
@@ -340,7 +400,7 @@ def _start_final_activities(row, *, meta_patch: dict[str, Any] | None = None) ->
         meta_patch=patch,
     )
     logger.info(
-        "pipeline %s ltta final activities started pdd_ids=%s activities=%s",
+        "pipeline %s ltta all-batch activities started pdd_ids=%s activities=%s",
         row.pipeline_id,
         pdd_ids,
         activity_ids,
@@ -401,16 +461,12 @@ def handle_limited_time_finished(
     is_final_batch = bool(lt_state.get("awaiting_final_activity"))
     pending_listing = dict(lt_state.get("pending") or {}) or None
 
-    lt_success_pdd_ids, lt_success_mapping_ids = (
-        _resolve_lt_success_products(
-            row,
-            run_id=run_id,
-            result=result,
-            batch_pdd_ids=batch_pdd_ids,
-            batch_mapping_ids=batch_mapping_ids,
-        )
-        if success
-        else ([], [])
+    lt_success_pdd_ids, lt_success_mapping_ids = _resolve_lt_success_products(
+        row,
+        run_id=run_id,
+        result=result,
+        batch_pdd_ids=batch_pdd_ids,
+        batch_mapping_ids=batch_mapping_ids,
     )
 
     failed_pdd = [pid for pid in batch_pdd_ids if pid not in set(lt_success_pdd_ids)]
@@ -419,16 +475,23 @@ def handle_limited_time_finished(
         batch_index=batch_index,
         success_pdd_ids=lt_success_pdd_ids,
         failed_pdd_ids=failed_pdd,
-        batch_failed=not success,
+        batch_failed=not success and not lt_success_pdd_ids,
         error=error or "限时限量购设置失败",
     )
 
     meta_patch: dict[str, Any] = {
         "limited_time_finish_handled": True,
-        "limited_time_outcome": "success" if success else "failed",
+        "limited_time_outcome": "success" if (success or lt_success_pdd_ids) else "failed",
     }
-    if not success:
+    if not success and not lt_success_pdd_ids:
         meta_patch["limited_time_skip_reason"] = error or "限时限量购设置失败"
+    meta_patch.update(
+        _accumulate_lt_success_meta_patch(
+            dict(row.meta or {}),
+            pdd_ids=lt_success_pdd_ids,
+            mapping_ids=lt_success_mapping_ids,
+        )
+    )
 
     flow_state = _build_flow_state(
         batch_index=batch_index,
@@ -441,64 +504,69 @@ def handle_limited_time_finished(
     )
     meta_patch[META_STATE_KEY] = flow_state
 
-    # 非最后一批：失败则跳过推广，继续下一批上架
-    if not is_final_batch and not success:
-        update_integrated_pipeline(
-            row.pipeline_id,
-            status="running",
-            current_step="waiting_limited_time_per_batch",
-            error="",
-            meta_patch=meta_patch,
-        )
-        return _schedule_next_listing_batch(row, state=flow_state, run_id=run_id)
+    promote_lt_success_only = _promote_lt_success_only(row)
+    if promote_lt_success_only:
+        promote_pdd_ids = list(lt_success_pdd_ids)
+        promote_mapping_ids = list(lt_success_mapping_ids)
+        skip_promotion_error = error or "本批无限时限量购成功商品，跳过推广"
+    else:
+        promote_pdd_ids = list(batch_pdd_ids)
+        promote_mapping_ids = list(batch_mapping_ids)
+        skip_promotion_error = "本批无上架成功商品，跳过推广"
 
-    # 最后一批限时失败：不跑推广，仍跑活动
-    if is_final_batch and not success:
-        update_integrated_pipeline(
-            row.pipeline_id,
-            status="running",
-            current_step="limited_time_failed_continue_ltta",
-            error="",
-            meta_patch=meta_patch,
-        )
+    flow_state["lt_success_pdd_ids"] = promote_pdd_ids
+    flow_state["lt_success_mapping_ids"] = promote_mapping_ids
+    flow_state["promote_lt_success_only"] = promote_lt_success_only
+    meta_patch[META_STATE_KEY] = flow_state
+
+    # 无推广目标：跳过推广，不中断，继续下一批或全部结束后报活动
+    if not promote_pdd_ids:
         record_promotion_batch(
             pipeline_id=row.pipeline_id,
             batch_index=batch_index,
             target_pdd_ids=[],
             success=False,
             skipped=True,
-            error="最后一批限时限量购失败，跳过推广",
+            error=skip_promotion_error,
         )
-        return _start_final_activities(get_integrated_pipeline(row.pipeline_id) or row, meta_patch=meta_patch)
+        update_integrated_pipeline(
+            row.pipeline_id,
+            status="running",
+            current_step="waiting_limited_time_per_batch" if not is_final_batch else "limited_time_failed_continue_ltta",
+            error="",
+            meta_patch=meta_patch,
+        )
+        if is_final_batch:
+            return _start_final_activities(get_integrated_pipeline(row.pipeline_id) or row, meta_patch=meta_patch)
+        return _schedule_next_listing_batch(row, state=flow_state, run_id=run_id)
 
-    # 有成功商品且开启推广：入队推广
-    if lt_success_pdd_ids and _auto_promotion(row):
+    # 有推广目标且开启自动推广
+    if _auto_promotion(row):
         update_integrated_pipeline(row.pipeline_id, meta_patch=meta_patch)
         _enqueue_traffic(
             get_integrated_pipeline(row.pipeline_id) or row,
-            pdd_ids=lt_success_pdd_ids,
-            mapping_ids=lt_success_mapping_ids,
+            pdd_ids=promote_pdd_ids,
+            mapping_ids=promote_mapping_ids,
             meta_patch=meta_patch,
         )
         logger.info(
-            "pipeline %s ltta traffic queued batch=%s final=%s pdd_ids=%s",
+            "pipeline %s ltta traffic queued batch=%s final=%s lt_success_only=%s pdd_ids=%s",
             row.pipeline_id,
             batch_index + 1,
             is_final_batch,
-            lt_success_pdd_ids,
+            promote_lt_success_only,
+            promote_pdd_ids,
         )
         return True
 
-    # 无成功商品：跳过推广
     record_promotion_batch(
         pipeline_id=row.pipeline_id,
         batch_index=batch_index,
-        target_pdd_ids=lt_success_pdd_ids,
+        target_pdd_ids=promote_pdd_ids,
         success=False,
         skipped=True,
-        error="本批无限时限量购成功商品，跳过推广",
+        error="未启用自动推广",
     )
-
     if is_final_batch:
         update_integrated_pipeline(row.pipeline_id, meta_patch=meta_patch)
         return _start_final_activities(get_integrated_pipeline(row.pipeline_id) or row, meta_patch=meta_patch)
@@ -575,7 +643,7 @@ def handle_campaign_finished(
     activity_skipped = (not success) and _should_skip_campaign(result, error)
     activity_continue = (not success) and not activity_skipped and _continue_after_activity_failure(row)
 
-    pdd_ids, _mapping_ids = _resolve_activity_products(row)
+    pdd_ids, _mapping_ids = _resolve_all_lt_success_for_activity(row)
     record_activity_for_pipeline(
         pipeline_id=row.pipeline_id,
         activity_index=activity_index,
@@ -601,7 +669,7 @@ def handle_campaign_finished(
 
     if next_index < len(activity_ids):
         refreshed = get_integrated_pipeline(row.pipeline_id) or row
-        pdd_ids, mapping_ids = _resolve_activity_products(refreshed)
+        pdd_ids, mapping_ids = _resolve_all_lt_success_for_activity(refreshed)
         _enqueue_campaign(
             refreshed,
             activity_index=next_index,

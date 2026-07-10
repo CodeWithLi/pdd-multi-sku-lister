@@ -9,6 +9,8 @@ const LISTING_PER_BATCH_LIMITED_TIME_KEY = 'pdd_agent.pipeline.listing_per_batch
 const LISTING_PER_BATCH_CAMPAIGN_KEY = 'pdd_agent.pipeline.listing_per_batch_campaign_enabled'
 const LISTING_PER_BATCH_LT_TRAFFIC_ACTIVITY_KEY =
   'pdd_agent.pipeline.listing_per_batch_lt_traffic_activity_enabled'
+const LISTING_PER_BATCH_PROMOTE_LT_SUCCESS_ONLY_KEY =
+  'pdd_agent.pipeline.listing_per_batch_promote_lt_success_only_enabled'
 const DELIST_SPEC_CODE_SEARCH_KEY = 'pdd_agent.pipeline.delist_spec_code_search_enabled'
 const ACTIVITY_LIMITED_TIME_SUCCESS_ONLY_KEY = 'pdd_agent.pipeline.activity_limited_time_success_only'
 const MINIO_MATERIAL_REFRESH_PAUSED_KEY = 'pdd_agent.minio_material_refresh_paused'
@@ -155,6 +157,25 @@ export function loadListingPerBatchLtTrafficActivityEnabled(): boolean {
 export function saveListingPerBatchLtTrafficActivityEnabled(enabled: boolean): void {
   try {
     localStorage.setItem(LISTING_PER_BATCH_LT_TRAFFIC_ACTIVITY_KEY, enabled ? '1' : '0')
+  } catch {
+    // ignore
+  }
+}
+
+export function loadListingPerBatchPromoteLtSuccessOnlyEnabled(): boolean {
+  try {
+    const raw = localStorage.getItem(LISTING_PER_BATCH_PROMOTE_LT_SUCCESS_ONLY_KEY)
+    if (raw === '0') return false
+    if (raw === '1') return true
+  } catch {
+    // ignore
+  }
+  return true
+}
+
+export function saveListingPerBatchPromoteLtSuccessOnlyEnabled(enabled: boolean): void {
+  try {
+    localStorage.setItem(LISTING_PER_BATCH_PROMOTE_LT_SUCCESS_ONLY_KEY, enabled ? '1' : '0')
   } catch {
     // ignore
   }

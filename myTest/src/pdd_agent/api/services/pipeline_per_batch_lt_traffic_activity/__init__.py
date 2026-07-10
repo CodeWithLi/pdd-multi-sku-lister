@@ -9,6 +9,7 @@ from pdd_agent.api.services.pipeline_per_batch_lt_traffic_activity.bridge import
     maybe_handle_traffic_finished,
     maybe_record_listing_batch,
     per_batch_lt_traffic_activity_meta_patch,
+    per_batch_promote_lt_success_only_meta_patch,
     should_absorb_queue_task_failure,
 )
 
@@ -19,5 +20,6 @@ __all__ = [
     "maybe_handle_traffic_finished",
     "maybe_record_listing_batch",
     "per_batch_lt_traffic_activity_meta_patch",
+    "per_batch_promote_lt_success_only_meta_patch",
     "should_absorb_queue_task_failure",
 ]

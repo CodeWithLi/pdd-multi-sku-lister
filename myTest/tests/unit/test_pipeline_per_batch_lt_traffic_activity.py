@@ -78,6 +78,37 @@ def test_is_enabled_requires_throttle_and_per_batch_lt():
 @patch("pdd_agent.api.services.pipeline_per_batch_lt_traffic_activity.orchestrator._enqueue_traffic")
 @patch("pdd_agent.api.services.pipeline_per_batch_lt_traffic_activity.orchestrator.update_integrated_pipeline")
 @patch("pdd_agent.api.services.pipeline_per_batch_lt_traffic_activity.orchestrator.get_integrated_pipeline")
+def test_lt_failed_promotes_all_listing_when_not_lt_success_only(
+    mock_get,
+    mock_update,
+    mock_enqueue_traffic,
+    mock_resolve_lt,
+    mock_record_lt,
+):
+    mock_get.side_effect = lambda pid: _row(
+        meta={"listing_per_batch_promote_lt_success_only_enabled": False}
+    )
+    mock_resolve_lt.return_value = ([], [])
+    mock_enqueue_traffic.return_value = "traffic_run_1"
+
+    handled = handle_limited_time_finished(
+        _row(meta={"listing_per_batch_promote_lt_success_only_enabled": False}),
+        run_id="lt_run_1",
+        success=False,
+        result={},
+        error="限时失败",
+    )
+
+    assert handled is True
+    mock_enqueue_traffic.assert_called_once()
+    assert mock_enqueue_traffic.call_args.kwargs["pdd_ids"] == ["111"]
+
+
+@patch("pdd_agent.api.services.pipeline_per_batch_lt_traffic_activity.orchestrator.record_limited_time_batch")
+@patch("pdd_agent.api.services.pipeline_per_batch_lt_traffic_activity.orchestrator._resolve_lt_success_products")
+@patch("pdd_agent.api.services.pipeline_per_batch_lt_traffic_activity.orchestrator._enqueue_traffic")
+@patch("pdd_agent.api.services.pipeline_per_batch_lt_traffic_activity.orchestrator.update_integrated_pipeline")
+@patch("pdd_agent.api.services.pipeline_per_batch_lt_traffic_activity.orchestrator.get_integrated_pipeline")
 def test_lt_success_with_products_enqueues_traffic(
     mock_get,
     mock_update,
@@ -131,6 +162,33 @@ def test_lt_success_without_products_skips_traffic_and_schedules_next_batch(
 
 
 @patch("pdd_agent.api.services.pipeline_per_batch_lt_traffic_activity.orchestrator.record_limited_time_batch")
+@patch("pdd_agent.api.services.pipeline_per_batch_lt_traffic_activity.orchestrator._resolve_lt_success_products")
+@patch("pdd_agent.api.services.pipeline_per_batch_lt_traffic_activity.orchestrator._schedule_next_listing_batch")
+@patch("pdd_agent.api.services.pipeline_per_batch_lt_traffic_activity.orchestrator.record_promotion_batch")
+@patch("pdd_agent.api.services.pipeline_per_batch_lt_traffic_activity.orchestrator.update_integrated_pipeline")
+def test_middle_batch_lt_failed_skips_traffic_continues_next(
+    mock_update,
+    mock_record_promo,
+    mock_schedule_next,
+    mock_resolve_lt,
+    mock_record_lt,
+):
+    mock_resolve_lt.return_value = ([], [])
+    mock_schedule_next.return_value = True
+    handled = handle_limited_time_finished(
+        _row(),
+        run_id="lt_run_1",
+        success=False,
+        result={},
+        error="限时失败",
+    )
+    assert handled is True
+    mock_record_promo.assert_called_once()
+    mock_schedule_next.assert_called_once()
+
+
+@patch("pdd_agent.api.services.pipeline_per_batch_lt_traffic_activity.orchestrator.record_limited_time_batch")
+@patch("pdd_agent.api.services.pipeline_per_batch_lt_traffic_activity.orchestrator._resolve_lt_success_products")
 @patch("pdd_agent.api.services.pipeline_per_batch_lt_traffic_activity.orchestrator._start_final_activities")
 @patch("pdd_agent.api.services.pipeline_per_batch_lt_traffic_activity.orchestrator.record_promotion_batch")
 @patch("pdd_agent.api.services.pipeline_per_batch_lt_traffic_activity.orchestrator.update_integrated_pipeline")
@@ -140,9 +198,12 @@ def test_final_batch_lt_failed_skips_traffic_starts_activity(
     mock_update,
     mock_record_promo,
     mock_start_activity,
+    mock_resolve_lt,
     mock_record_lt,
 ):
     meta = {
+        "ltta_accumulated_lt_success_pdd_product_ids": ["111", "222"],
+        "ltta_accumulated_lt_success_mapping_ids": ["m1", "m2"],
         "listing_per_batch_limited_time": {
             "enabled": True,
             "last_batch_index": 2,
@@ -161,8 +222,9 @@ def test_final_batch_lt_failed_skips_traffic_starts_activity(
             "completed": True,
         },
     }
-    row = _row(meta=meta)
+    row = _row(meta=meta, pdd_product_ids=["333"])
     mock_get.side_effect = lambda pid: row
+    mock_resolve_lt.return_value = ([], [])
     mock_start_activity.return_value = True
 
     handled = handle_limited_time_finished(
@@ -170,7 +232,7 @@ def test_final_batch_lt_failed_skips_traffic_starts_activity(
         run_id="lt_run_1",
         success=False,
         result={},
-        error="限时失败",
+        error="最后批限时失败",
     )
 
     assert handled is True
