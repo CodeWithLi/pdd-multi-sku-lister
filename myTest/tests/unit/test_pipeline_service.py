@@ -18,6 +18,7 @@ from pdd_agent.api.services.pipeline_service import (
     _normalize_pipeline_activity_ids,
     _on_listing_finished,
     _on_limited_time_finished,
+    _ensure_pipeline_failed_after_task,
     _on_campaign_finished,
     _resolve_activity_delay,
     cancel_integrated_pipeline,
@@ -915,45 +916,26 @@ def test_reconcile_absorbed_lt_failure_does_not_reprocess_handled_run():
     on_lt_finished.assert_not_called()
 
 
-def test_reconcile_absorbed_lt_failure_does_not_reprocess_handled_run():
-    from pdd_agent.api.services.pipeline_service import _reconcile_stuck_pipeline_row
-
+def test_ensure_pipeline_failed_skips_limited_time_when_finish_already_handled():
     row = SimpleNamespace(
-        pipeline_id="pipe_lt_reconcile",
+        pipeline_id="pipe_lt_finish",
         account_id="store_A",
         status="running",
-        current_step="waiting_listing_batch_2",
-        listing_run_id="listing_run_1",
-        campaign_run_id="",
-        traffic_run_id="",
-        scheduled_activity_at=None,
+        current_step="waiting_activity",
+        campaign_run_id="camp_run",
         meta={
+            "limited_time_run_id": "lt_run_final",
+            "limited_time_finish_handled": True,
             "activity_limited_time_success_only": True,
-            "listing_per_batch_limited_time_enabled": True,
-            "auto_limited_time_setup": True,
-            "limited_time_run_id": "lt_run_1",
-            "per_batch_limited_time_continue_handled_run_ids": ["lt_run_1"],
-            "listing_throttle": {
-                "enabled": True,
-                "batch_index": 1,
-                "total_batches": 16,
-                "batches": [[f"batch_{i}"] for i in range(16)],
-                "interval_minutes": 3,
-            },
-            "listing_per_batch_limited_time": {
-                "enabled": True,
-                "last_batch_index": 0,
-                "awaiting_final_activity": False,
-            },
         },
     )
-    failed_record = SimpleNamespace(
-        status=RunStatus.FAILED,
-        message="活动价格不符合价格区间，不继续创建活动",
-        result={"errors": ["活动价格不符合价格区间，不继续创建活动"]},
-    )
-    with patch("pdd_agent.api.services.task_runner.TaskRunStore") as mock_store_cls:
-        mock_store_cls.return_value.load.return_value = failed_record
-        with patch("pdd_agent.api.services.pipeline_service._on_limited_time_finished") as on_lt_finished:
-            _reconcile_stuck_pipeline_row(row)
-    on_lt_finished.assert_not_called()
+    with patch("pdd_agent.api.services.pipeline_service.get_integrated_pipeline", return_value=row):
+        with patch("pdd_agent.api.services.pipeline_service.update_integrated_pipeline") as update:
+            _ensure_pipeline_failed_after_task(
+                pipeline_id="pipe_lt_finish",
+                agent="campaign",
+                run_id="lt_run_final",
+                success=False,
+                error="未能勾选商品ID：975628710689",
+            )
+    update.assert_not_called()

@@ -2922,6 +2922,14 @@ def _reconcile_stuck_pipeline_row(row) -> Any:
                     _per_batch_batch_log_context(row),
                 )
                 continue
+            if dict(row.meta or {}).get("limited_time_finish_handled"):
+                logger.info(
+                    "pipeline %s reconcile stuck skip LT failure: finish already handled run_id=%s step=%s",
+                    row.pipeline_id,
+                    run_id,
+                    row.current_step,
+                )
+                continue
             if should_absorb_per_batch_limited_time_failure(row, run_id=run_id):
                 refreshed = get_integrated_pipeline(row.pipeline_id) or row
                 logger.warning(
@@ -3029,6 +3037,9 @@ def _ensure_pipeline_failed_after_task(
         agent == AgentKind.CAMPAIGN.value
         and _pipeline_limited_time_run_id(row) == str(run_id or "").strip()
     ):
+        meta = dict(row.meta or {})
+        if meta.get("limited_time_finish_handled"):
+            return
         from pdd_agent.api.services.pipeline_per_batch_lt_failure_policy import (
             should_absorb_per_batch_limited_time_failure,
         )
