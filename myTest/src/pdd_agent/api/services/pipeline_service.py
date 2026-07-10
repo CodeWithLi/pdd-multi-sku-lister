@@ -997,6 +997,16 @@ def _step_infos(row) -> list[dict[str, Any]]:
     limited_time_outcome = str((row.meta or {}).get("limited_time_outcome") or "")
     limited_time_skip_reason = str((row.meta or {}).get("limited_time_skip_reason") or "")
 
+    from pdd_agent.api.services.pipeline_per_batch_lt_aggregate.bridge import (
+        resolve_limited_time_step_display,
+    )
+
+    agg_lt_display = resolve_limited_time_step_display(row)
+    if agg_lt_display:
+        limited_time_status = str(agg_lt_display.get("status") or limited_time_status)
+        if agg_lt_display.get("outcome"):
+            limited_time_outcome = str(agg_lt_display.get("outcome") or limited_time_outcome)
+
     activity_detail = "等待限时限量购完成后预约"
     if str(row.current_step or "") == "waiting_mq_phase2":
         from pdd_agent.api.services.pipeline_mq_auto_commerce import format_mq_phase2_wait_detail
@@ -1051,6 +1061,8 @@ def _step_infos(row) -> list[dict[str, Any]]:
         limited_time_detail = "即将启动限时限量购（先于活动报名）"
     elif limited_time_outcome == "failed" and _pipeline_continue_after_limited_time_failure(row):
         limited_time_detail = limited_time_skip_reason or "限时限量购失败，仍将继续活动报名"
+    elif agg_lt_display and agg_lt_display.get("detail"):
+        limited_time_detail = str(agg_lt_display.get("detail") or limited_time_detail)
     elif listing_lt_phase_done:
         limited_time_detail = "已完成（活动已预约，不阻塞下一家店铺）"
 
@@ -1128,6 +1140,36 @@ def _step_infos(row) -> list[dict[str, Any]]:
     return steps
 
 
+def _per_batch_lt_aggregate_public_state(row) -> dict[str, Any]:
+    from pdd_agent.api.services.pipeline_per_batch_lt_aggregate.bridge import (
+        is_standard_per_batch_lt_pipeline,
+    )
+    from pdd_agent.api.services.pipeline_per_batch_lt_aggregate.constants import (
+        AGG_BATCH_LOG_KEY,
+        AGG_FINALIZED_KEY,
+        AGG_IN_PROGRESS_KEY,
+        AGG_OUTCOME_KEY,
+        AGG_PDD_IDS_KEY,
+    )
+
+    if not is_standard_per_batch_lt_pipeline(row):
+        return {}
+    meta = dict(row.meta or {})
+    pdd_ids = meta.get(AGG_PDD_IDS_KEY) or []
+    if not isinstance(pdd_ids, list):
+        pdd_ids = []
+    batch_log = meta.get(AGG_BATCH_LOG_KEY) or []
+    if not isinstance(batch_log, list):
+        batch_log = []
+    return {
+        "in_progress": bool(meta.get(AGG_IN_PROGRESS_KEY)),
+        "finalized": bool(meta.get(AGG_FINALIZED_KEY)),
+        "outcome": str(meta.get(AGG_OUTCOME_KEY) or ""),
+        "accumulated_success_count": len([str(x).strip() for x in pdd_ids if str(x).strip()]),
+        "batch_log": batch_log,
+    }
+
+
 def pipeline_to_dict(row) -> dict[str, Any]:
     if row is None:
         return {}
@@ -1158,6 +1200,7 @@ def pipeline_to_dict(row) -> dict[str, Any]:
         "limited_time_success_detail": str((row.meta or {}).get("limited_time_success_detail") or ""),
         "limited_time_outcome": str((row.meta or {}).get("limited_time_outcome") or ""),
         "limited_time_skip_reason": str((row.meta or {}).get("limited_time_skip_reason") or ""),
+        "per_batch_lt_aggregate": _per_batch_lt_aggregate_public_state(row),
         "activity_delay_hours": float(row.activity_delay_hours or 24.0),
         "demo_mode": bool(row.demo_mode),
         "slot_alignment_test": bool((row.meta or {}).get("slot_alignment_test")),
@@ -2095,11 +2138,20 @@ def _continue_pipeline_after_listing(
         mapping_ids=mapping_ids,
         listing_meta=listing_meta,
     ):
+        from pdd_agent.api.services.pipeline_per_batch_lt_aggregate.bridge import (
+            maybe_record_listing_batch as maybe_record_std_agg_listing_batch,
+        )
         from pdd_agent.api.services.pipeline_per_batch_lt_traffic_activity.bridge import (
             maybe_record_listing_batch,
         )
 
         maybe_record_listing_batch(
+            refreshed,
+            pdd_ids=pdd_ids,
+            mapping_ids=mapping_ids,
+            listing_result=result,
+        )
+        maybe_record_std_agg_listing_batch(
             refreshed,
             pdd_ids=pdd_ids,
             mapping_ids=mapping_ids,
@@ -2367,6 +2419,19 @@ def _on_campaign_finished(row, *, run_id: str, success: bool, result: dict[str, 
             run_id,
         )
         return
+
+    from pdd_agent.api.services.pipeline_per_batch_lt_aggregate.bridge import (
+        maybe_record_campaign_finished,
+    )
+
+    maybe_record_campaign_finished(
+        row,
+        run_id=run_id,
+        success=success,
+        result=result,
+        error=error,
+    )
+
     activity_ids = _pipeline_activity_ids(row)
     current_index = _campaign_activity_index(row)
     current_activity_id = (
@@ -2547,6 +2612,19 @@ def _on_limited_time_finished(row, *, run_id: str, success: bool, result: dict[s
         accumulate_per_batch_limited_time_success,
     )
 
+    from pdd_agent.api.services.pipeline_per_batch_lt_aggregate.bridge import (
+        record_limited_time_batch_finished as record_std_agg_limited_time_batch,
+        restore_intermediate_lt_progress_meta,
+    )
+
+    row = record_std_agg_limited_time_batch(
+        row,
+        run_id=run_id,
+        success=success,
+        result=result,
+        error=error,
+    )
+
     row = accumulate_per_batch_limited_time_success(row, run_id=run_id, result=result) or row
 
     if maybe_continue_after_per_batch_limited_time(
@@ -2555,6 +2633,7 @@ def _on_limited_time_finished(row, *, run_id: str, success: bool, result: dict[s
         success=success,
         error=error,
     ):
+        restore_intermediate_lt_progress_meta(get_integrated_pipeline(row.pipeline_id) or row)
         logger.info(
             "pipeline %s limited_time finished handled by per-batch continue run_id=%s ctx=%s",
             row.pipeline_id,
@@ -2589,6 +2668,27 @@ def _on_limited_time_finished(row, *, run_id: str, success: bool, result: dict[s
             row.pipeline_id,
             run_id,
             _per_batch_batch_log_context(get_integrated_pipeline(row.pipeline_id) or row),
+        )
+        return
+
+    from pdd_agent.api.services.pipeline_per_batch_lt_aggregate.bridge import (
+        maybe_finalize_after_all_batches as maybe_finalize_std_agg_limited_time,
+    )
+
+    if maybe_finalize_std_agg_limited_time(
+        row,
+        run_id=run_id,
+        success=success,
+        result=result,
+        error=error,
+        schedule_activity_fn=_schedule_pipeline_activity_after_limited_time,
+        advance_store_sequential_fn=_try_advance_store_sequential_after_listing_limited_time,
+        summarize_run_message_fn=_summarize_run_message,
+    ):
+        logger.info(
+            "pipeline %s limited_time finished handled by std per-batch LT aggregate run_id=%s",
+            row.pipeline_id,
+            run_id,
         )
         return
 
@@ -2747,6 +2847,17 @@ def _on_traffic_finished(row, *, run_id: str, success: bool, error: str) -> None
         error=error,
     ):
         return
+
+    from pdd_agent.api.services.pipeline_per_batch_lt_aggregate.bridge import (
+        maybe_record_traffic_finished,
+    )
+
+    maybe_record_traffic_finished(
+        row,
+        run_id=run_id,
+        success=success,
+        error=error,
+    )
 
     meta = dict(row.meta or {})
     if meta.get("traffic_finish_handled"):
@@ -3023,11 +3134,16 @@ def _ensure_pipeline_failed_after_task(
         return
     row = get_integrated_pipeline(pipeline_id)
     if row:
+        from pdd_agent.api.services.pipeline_per_batch_lt_aggregate.bridge import (
+            should_absorb_limited_time_task_failure,
+        )
         from pdd_agent.api.services.pipeline_per_batch_lt_traffic_activity.bridge import (
             should_absorb_queue_task_failure,
         )
 
         if should_absorb_queue_task_failure(row, agent=agent, run_id=run_id, success=success):
+            return
+        if should_absorb_limited_time_task_failure(row, agent=agent, run_id=run_id, success=success):
             return
     if agent == AgentKind.LISTING.value:
         from pdd_agent.api.services.pipeline_listing_batch_continue import (

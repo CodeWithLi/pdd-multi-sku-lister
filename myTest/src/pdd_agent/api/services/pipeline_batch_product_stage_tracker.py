@@ -291,6 +291,43 @@ def record_promotion_batch(
         )
 
 
+def record_promotion_for_pipeline(
+    *,
+    pipeline_id: str,
+    target_pdd_ids: list[str] | None,
+    success: bool,
+    skipped: bool = False,
+    error: str = "",
+) -> None:
+    """全链路级推广结果：更新所有匹配商品的 promotion 字段（不限 batch_index）。"""
+    if skipped:
+        status = STAGE_SKIPPED
+        err = error or "推广跳过"
+    elif success:
+        status = STAGE_SUCCESS
+        err = ""
+    else:
+        status = STAGE_FAILED
+        err = error or "推广创建失败"
+
+    pdd_set = {str(x).strip() for x in (target_pdd_ids or []) if str(x).strip()}
+
+    try:
+        with session_scope() as session:
+            rows = session.query(IntegratedPipelineBatchProductStageORM).filter_by(pipeline_id=pipeline_id).all()
+            for row in rows:
+                pid = str(row.pdd_product_id or "").strip()
+                if pdd_set and pid and pid not in pdd_set:
+                    continue
+                if not pid and pdd_set:
+                    continue
+                row.promotion_status = status
+                row.promotion_error = err
+                row.updated_at = datetime.now()
+    except Exception:
+        logger.exception("record promotion for pipeline failed pipeline_id=%s", pipeline_id)
+
+
 def record_activity_for_pipeline(
     *,
     pipeline_id: str,
