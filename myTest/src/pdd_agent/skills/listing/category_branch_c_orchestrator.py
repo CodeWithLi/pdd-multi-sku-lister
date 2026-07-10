@@ -65,6 +65,28 @@ def _run_strategy_simplified_auto(
     return True
 
 
+def _try_select_category_recent_fallback(
+    page: DpPage,
+    account_id: str,
+    label: str,
+    listing_info: dict[str, Any],
+) -> bool:
+    """正式选类失败后的兜底，不抛异常。"""
+    from pdd_agent.skills.listing.category_branch_c_select_category_fallback import (
+        try_branch_c_select_category_recent_fallback,
+    )
+
+    try:
+        return try_branch_c_select_category_recent_fallback(
+            page,
+            account_id,
+            label,
+            listing_info,
+        )
+    except Exception:
+        return False
+
+
 def _run_strategy_simplified_manual(
     page: DpPage,
     account_id: str,
@@ -80,6 +102,9 @@ def _run_strategy_simplified_manual(
         branch_c_needs_titled_manual_category_pick,
         run_branch_c_titled_manual_category_pick,
     )
+    from pdd_agent.skills.listing.category_branch_c_titled_recommendation_fallback import (
+        branch_c_titled_simplified_category_ready,
+    )
     from pdd_agent.skills.listing.category_page_flow import prepare_category_before_next
 
     if branch_c_category_path_ready_strict(page):
@@ -94,7 +119,9 @@ def _run_strategy_simplified_manual(
             listing_info,
         ):
             return True
-        _log(account_id, label, "分支 C 编排：形态 B-手动带标题选类失败")
+        _log(account_id, label, "分支 C 编排：形态 B-手动带标题选类失败，尝试选择分类兜底")
+        if _try_select_category_recent_fallback(page, account_id, label, listing_info):
+            return True
         return False
 
     _log(account_id, label, "分支 C 编排：形态 B-手动，打开选择分类并关键词搜索")
@@ -114,7 +141,9 @@ def _run_strategy_simplified_manual(
             page, account_id, label, listing_info
         ):
             return True
-        _log(account_id, label, "分支 C 编排：未找到「选择分类」入口")
+        _log(account_id, label, "分支 C 编排：未找到「选择分类」入口，尝试选择分类兜底")
+        if _try_select_category_recent_fallback(page, account_id, label, listing_info):
+            return True
         return False
     if not listing_upload._select_category_by_keyword_search(
         page,
@@ -122,7 +151,12 @@ def _run_strategy_simplified_manual(
         label,
         category_keyword,
     ):
-        _log(account_id, label, "分支 C 编排：分类关键词搜索失败")
+        _log(account_id, label, "分支 C 编排：分类关键词搜索失败，尝试选择分类兜底")
+        if _try_select_category_recent_fallback(page, account_id, label, listing_info):
+            return (
+                branch_c_category_path_ready_strict(page)
+                or branch_c_titled_simplified_category_ready(page)
+            )
         return False
     return branch_c_category_path_ready_strict(page)
 
