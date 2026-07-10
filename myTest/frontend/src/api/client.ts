@@ -18,6 +18,7 @@ import type {
   ConfigSummary,
   HealthResponse,
   IntegratedPipeline,
+  IntegratedPipelineBatchProductStageListResponse,
   IntegratedPipelineBatchResponse,
   IntegratedPipelineBatchStartPayload,
   IntegratedPipelineListResponse,
@@ -700,6 +701,14 @@ export const api = {
 
   getIntegratedPipeline: (pipelineId: string) =>
     http.get<IntegratedPipeline>(`/pipelines/integrated/${pipelineId}`).then((r) => r.data),
+
+  getIntegratedPipelineBatchProductStages: (pipelineId: string, batchIndex?: number) =>
+    http
+      .get<IntegratedPipelineBatchProductStageListResponse>(
+        `/pipelines/integrated/${pipelineId}/batch-product-stages`,
+        { params: batchIndex != null ? { batch_index: batchIndex } : undefined },
+      )
+      .then((r) => r.data),
 
   cancelIntegratedPipeline: (pipelineId: string) =>
     http.post<IntegratedPipeline>(`/pipelines/integrated/${pipelineId}/cancel`).then((r) => r.data),

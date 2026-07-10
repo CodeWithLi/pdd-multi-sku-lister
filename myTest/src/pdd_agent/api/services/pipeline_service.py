@@ -2145,14 +2145,15 @@ def _continue_pipeline_after_listing(
             maybe_record_listing_batch,
         )
 
+        record_row = get_integrated_pipeline(refreshed.pipeline_id) or refreshed
         maybe_record_listing_batch(
-            refreshed,
+            record_row,
             pdd_ids=pdd_ids,
             mapping_ids=mapping_ids,
             listing_result=result,
         )
         maybe_record_std_agg_listing_batch(
-            refreshed,
+            record_row,
             pdd_ids=pdd_ids,
             mapping_ids=mapping_ids,
             listing_result=result,

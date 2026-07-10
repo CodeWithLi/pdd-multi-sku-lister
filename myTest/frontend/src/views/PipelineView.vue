@@ -48,6 +48,7 @@ import type {
   CommerceOverview,
   FeishuInspectListingPricesResult,
   IntegratedPipeline,
+  IntegratedPipelineBatchProductStageItem,
   ListingTargetOption,
   MarketingActivityOption,
   PreflightResponse,
@@ -351,6 +352,135 @@ const feishuInspectLoading = ref(false)
 const feishuInspectRefreshing = ref(false)
 const feishuInspectData = ref<FeishuInspectListingPricesResult | null>(null)
 const feishuInspectPipelineId = ref('')
+
+const batchStageVisible = ref(false)
+const batchStageLoading = ref(false)
+const batchStageItems = ref<IntegratedPipelineBatchProductStageItem[]>([])
+const batchStagePipelineId = ref('')
+const batchStageExpandedNames = ref<number[]>([])
+const batchStageContextPipeline = ref<IntegratedPipeline | null>(null)
+
+const BATCH_STAGE_STATUS_LABELS: Record<string, string> = {
+  pending: '待处理',
+  success: '成功',
+  failed: '失败',
+  skipped: '已跳过',
+  running: '进行中',
+}
+
+function batchStageStatusLabel(status: string) {
+  return BATCH_STAGE_STATUS_LABELS[status] || status || '—'
+}
+
+function batchStageTagType(status: string) {
+  if (status === 'success') return 'success'
+  if (status === 'failed') return 'danger'
+  if (status === 'running') return 'warning'
+  if (status === 'skipped') return 'info'
+  return 'info'
+}
+
+function summarizeBatchStageStatuses(statuses: string[]) {
+  const valid = statuses.map((item) => String(item || '').trim()).filter(Boolean)
+  if (!valid.length) return '—'
+  const unique = [...new Set(valid)]
+  if (unique.length === 1) return batchStageStatusLabel(unique[0])
+  const parts: string[] = []
+  for (const key of ['success', 'running', 'failed', 'pending', 'skipped']) {
+    const count = valid.filter((item) => item === key).length
+    if (count) parts.push(`${batchStageStatusLabel(key)} ${count}`)
+  }
+  return parts.join(' · ')
+}
+
+function canViewBatchStagesForPipeline(pipeline: IntegratedPipeline | null | undefined) {
+  if (!pipeline) return false
+  const listingStep = pipeline.steps?.find((step) => step.key === 'listing')
+  if (listingStep?.detail?.includes('分批')) return true
+  if ((pipeline.per_batch_lt_aggregate?.batch_log?.length || 0) > 0) return true
+  if (String(pipeline.current_step || '').startsWith('waiting_listing_batch_')) return true
+  if (String(pipeline.current_step || '').includes('per_batch')) return true
+  return false
+}
+
+const canViewBatchStages = computed(() => canViewBatchStagesForPipeline(activePipeline.value))
+
+const batchStageGroups = computed(() => {
+  const grouped = new Map<number, IntegratedPipelineBatchProductStageItem[]>()
+  for (const item of batchStageItems.value) {
+    const index = Number(item.batch_index) || 0
+    const bucket = grouped.get(index) || []
+    bucket.push(item)
+    grouped.set(index, bucket)
+  }
+  return [...grouped.entries()]
+    .sort((a, b) => a[0] - b[0])
+    .map(([batchIndex, products]) => ({
+      batch_index: batchIndex,
+      batch_label: `第 ${batchIndex + 1} 批`,
+      products,
+      listing_summary: summarizeBatchStageStatuses(products.map((row) => row.listing_status)),
+      limited_time_summary: summarizeBatchStageStatuses(products.map((row) => row.limited_time_status)),
+      activity_1_summary: summarizeBatchStageStatuses(products.map((row) => row.activity_1_status)),
+      activity_2_summary: summarizeBatchStageStatuses(products.map((row) => row.activity_2_status)),
+      promotion_summary: summarizeBatchStageStatuses(products.map((row) => row.promotion_status)),
+    }))
+})
+
+const batchStageActivityIds = computed(() => {
+  const pipeline = batchStageContextPipeline.value || activePipeline.value
+  if (!pipeline) return [] as string[]
+  if (pipeline.activity_ids?.length) return pipeline.activity_ids
+  return pipeline.activity_id ? [pipeline.activity_id] : []
+})
+
+const batchStageHasActivity2 = computed(() => {
+  if (batchStageActivityIds.value.length > 1) return true
+  return batchStageItems.value.some((item) => Boolean(item.activity_2_id || item.activity_2_status !== 'pending'))
+})
+
+async function openBatchStageDialog(pipeline?: IntegratedPipeline | null) {
+  const target = pipeline || activePipeline.value
+  if (!target?.pipeline_id) return
+  batchStageContextPipeline.value = target
+  batchStagePipelineId.value = target.pipeline_id
+  batchStageVisible.value = true
+  batchStageLoading.value = true
+  batchStageItems.value = []
+  try {
+    const data = await api.getIntegratedPipelineBatchProductStages(target.pipeline_id)
+    batchStageItems.value = data.items || []
+    batchStageExpandedNames.value = [
+      ...new Set(batchStageItems.value.map((item) => Number(item.batch_index) || 0)),
+    ].sort((a, b) => a - b)
+    if (!batchStageItems.value.length) {
+      ElMessage.info('暂无分批记录，上架批次开始后会逐步写入')
+    }
+  } catch (err: any) {
+    ElMessage.error(err?.response?.data?.detail || err?.message || '读取每批状态失败')
+    batchStageVisible.value = false
+  } finally {
+    batchStageLoading.value = false
+  }
+}
+
+async function refreshBatchStageDialog() {
+  if (!batchStagePipelineId.value) return
+  batchStageLoading.value = true
+  try {
+    const data = await api.getIntegratedPipelineBatchProductStages(batchStagePipelineId.value)
+    batchStageItems.value = data.items || []
+    if (!batchStageExpandedNames.value.length) {
+      batchStageExpandedNames.value = [
+        ...new Set(batchStageItems.value.map((item) => Number(item.batch_index) || 0)),
+      ].sort((a, b) => a - b)
+    }
+  } catch (err: any) {
+    ElMessage.error(err?.response?.data?.detail || err?.message || '刷新每批状态失败')
+  } finally {
+    batchStageLoading.value = false
+  }
+}
 
 function merchantCodeFromPipelineSelector(raw: string): string {
   const text = String(raw || '').trim()
@@ -2693,6 +2823,16 @@ onUnmounted(() => {
               <span>当前链路</span>
               <div class="card-head-actions">
                 <el-button
+                  v-if="canViewBatchStages"
+                  link
+                  type="primary"
+                  size="small"
+                  :loading="batchStageLoading && batchStageVisible"
+                  @click="openBatchStageDialog(activePipeline)"
+                >
+                  每批状态
+                </el-button>
+                <el-button
                   link
                   type="primary"
                   size="small"
@@ -2803,6 +2943,10 @@ onUnmounted(() => {
 
           <p v-if="activePipeline.campaign_skip_reason" class="warn-text">
             活动：{{ activePipeline.campaign_skip_reason }}
+          </p>
+
+          <p v-if="canViewBatchStages" class="meta steps-overall-hint">
+            下方四步为<strong>整条链路总体进度</strong>；各批明细请点右上角「每批状态」。
           </p>
 
           <el-steps direction="vertical" :active="activePipeline.steps.length" class="steps">
@@ -3050,9 +3194,18 @@ onUnmounted(() => {
                 <el-tag size="small" :type="pipelineTagType(row.status)">{{ row.status }}</el-tag>
               </template>
             </el-table-column>
-            <el-table-column label="操作" width="148" fixed="right" align="center">
+            <el-table-column label="操作" width="196" fixed="right" align="center">
               <template #default="{ row }">
                 <el-button link type="primary" size="small" @click="activePipeline = row">查看</el-button>
+                <el-button
+                  v-if="canViewBatchStagesForPipeline(row)"
+                  link
+                  type="primary"
+                  size="small"
+                  @click.stop="openBatchStageDialog(row)"
+                >
+                  每批
+                </el-button>
                 <el-button
                   link
                   type="primary"
@@ -3181,6 +3334,121 @@ onUnmounted(() => {
           @click="refreshFeishuInspectDialog"
         >
           重新读取飞书
+        </el-button>
+      </template>
+    </el-dialog>
+
+    <el-dialog
+      v-model="batchStageVisible"
+      title="分批状态明细"
+      width="92%"
+      top="4vh"
+      destroy-on-close
+      class="batch-stage-dialog"
+    >
+      <div v-loading="batchStageLoading" class="batch-stage-body">
+        <p v-if="batchStageContextPipeline?.per_batch_lt_aggregate?.accumulated_success_count" class="batch-stage-meta">
+          限时累计成功 {{ batchStageContextPipeline.per_batch_lt_aggregate.accumulated_success_count }} 个商品
+          <template v-if="batchStageContextPipeline.per_batch_lt_aggregate.finalized">
+            · 限时阶段已汇总
+          </template>
+          <template v-else-if="batchStageContextPipeline.per_batch_lt_aggregate.in_progress">
+            · 分批进行中
+          </template>
+        </p>
+        <p class="batch-stage-meta">
+          按<strong>每一批</strong>展示商品的上架 / 限时限量购 / 活动 / 推广状态；活动与推广在全部批次完成后统一执行。
+        </p>
+
+        <el-empty v-if="!batchStageLoading && !batchStageGroups.length" description="暂无分批记录" />
+
+        <el-collapse v-else v-model="batchStageExpandedNames" class="batch-stage-collapse">
+          <el-collapse-item
+            v-for="group in batchStageGroups"
+            :key="group.batch_index"
+            :name="group.batch_index"
+          >
+            <template #title>
+              <div class="batch-stage-collapse-title">
+                <span class="batch-stage-collapse-label">{{ group.batch_label }}</span>
+                <span class="batch-stage-collapse-summary">
+                  上架 {{ group.listing_summary }}
+                  · 限时 {{ group.limited_time_summary }}
+                  · 活动1 {{ group.activity_1_summary }}
+                  <template v-if="batchStageHasActivity2"> · 活动2 {{ group.activity_2_summary }}</template>
+                  · 推广 {{ group.promotion_summary }}
+                </span>
+              </div>
+            </template>
+
+            <el-table :data="group.products" stripe size="small" class="batch-stage-product-table">
+              <el-table-column prop="listing_label" label="套图" min-width="140" show-overflow-tooltip />
+              <el-table-column prop="pdd_product_id" label="拼多多 ID" min-width="110" show-overflow-tooltip />
+              <el-table-column label="上架" width="88">
+                <template #default="{ row }">
+                  <el-tag size="small" :type="batchStageTagType(row.listing_status)">
+                    {{ batchStageStatusLabel(row.listing_status) }}
+                  </el-tag>
+                </template>
+              </el-table-column>
+              <el-table-column label="限时限量购" width="100">
+                <template #default="{ row }">
+                  <el-tag size="small" :type="batchStageTagType(row.limited_time_status)">
+                    {{ batchStageStatusLabel(row.limited_time_status) }}
+                  </el-tag>
+                </template>
+              </el-table-column>
+              <el-table-column
+                :label="batchStageActivityIds[0] ? `活动 ${batchStageActivityIds[0]}` : '活动1'"
+                width="96"
+              >
+                <template #default="{ row }">
+                  <el-tag size="small" :type="batchStageTagType(row.activity_1_status)">
+                    {{ batchStageStatusLabel(row.activity_1_status) }}
+                  </el-tag>
+                </template>
+              </el-table-column>
+              <el-table-column
+                v-if="batchStageHasActivity2"
+                :label="batchStageActivityIds[1] ? `活动 ${batchStageActivityIds[1]}` : '活动2'"
+                width="96"
+              >
+                <template #default="{ row }">
+                  <el-tag size="small" :type="batchStageTagType(row.activity_2_status)">
+                    {{ batchStageStatusLabel(row.activity_2_status) }}
+                  </el-tag>
+                </template>
+              </el-table-column>
+              <el-table-column label="推广" width="88">
+                <template #default="{ row }">
+                  <el-tag size="small" :type="batchStageTagType(row.promotion_status)">
+                    {{ batchStageStatusLabel(row.promotion_status) }}
+                  </el-tag>
+                </template>
+              </el-table-column>
+              <el-table-column label="错误说明" min-width="160" show-overflow-tooltip>
+                <template #default="{ row }">
+                  {{
+                    [
+                      row.listing_error,
+                      row.limited_time_error,
+                      row.activity_1_error,
+                      row.activity_2_error,
+                      row.promotion_error,
+                    ]
+                      .filter(Boolean)
+                      .join('；') || '—'
+                  }}
+                </template>
+              </el-table-column>
+            </el-table>
+          </el-collapse-item>
+        </el-collapse>
+      </div>
+      <template #footer>
+        <el-button @click="batchStageVisible = false">关闭</el-button>
+        <el-button type="primary" :loading="batchStageLoading" @click="refreshBatchStageDialog">
+          刷新
         </el-button>
       </template>
     </el-dialog>
@@ -4030,6 +4298,47 @@ onUnmounted(() => {
 
 .steps {
   margin-top: 8px;
+}
+
+.steps-overall-hint {
+  margin: 0 0 10px;
+}
+
+.batch-stage-body {
+  min-height: 120px;
+}
+
+.batch-stage-meta {
+  margin: 0 0 10px;
+  color: var(--el-text-color-secondary);
+  font-size: 13px;
+}
+
+.batch-stage-collapse {
+  border: none;
+}
+
+.batch-stage-collapse-title {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+  width: 100%;
+  padding-right: 12px;
+}
+
+.batch-stage-collapse-label {
+  font-weight: 600;
+  color: var(--el-text-color-primary);
+}
+
+.batch-stage-collapse-summary {
+  font-size: 12px;
+  color: var(--el-text-color-secondary);
+}
+
+.batch-stage-product-table {
+  width: 100%;
 }
 
 .step-desc {

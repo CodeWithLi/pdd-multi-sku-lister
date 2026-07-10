@@ -37,6 +37,16 @@ def _listing_label_from_selector(selector: str) -> str:
     return selector
 
 
+def resolve_finished_listing_batch_index(row) -> int:
+    """刚完成上架的那一批 index（优先 per_batch last_batch_index）。"""
+    meta = dict(getattr(row, "meta", None) or {})
+    lt_state = dict(meta.get("listing_per_batch_limited_time") or {})
+    if lt_state.get("last_batch_index") is not None:
+        return int(lt_state.get("last_batch_index") or 0)
+    throttle = dict(meta.get("listing_throttle") or {})
+    return int(throttle.get("batch_index") or 0)
+
+
 def ensure_batch_product_rows(
     *,
     pipeline_id: str,
@@ -143,15 +153,13 @@ def record_listing_batch_from_result(
         for item in (listing_result or {}).get("results") or []
         if isinstance(item, dict)
     ]
-    label_to_item: dict[str, dict[str, Any]] = {}
-    selector_to_item: dict[str, dict[str, Any]] = {}
-    for item in items:
-        label = str(item.get("listing_label") or "").strip()
-        if label:
-            label_to_item[label] = item
-        code = str(item.get("product_code") or item.get("platform_listing_code") or "").strip()
-        if code:
-            selector_to_item[code] = item
+    from pdd_agent.api.services.pipeline_listing_unit_results import (
+        canonical_listing_unit_label,
+        index_listing_result_items,
+        resolve_listing_result_item,
+    )
+
+    result_index = index_listing_result_items(items)
 
     try:
         with session_scope() as session:
@@ -161,9 +169,14 @@ def record_listing_batch_from_result(
                 .all()
             )
             for row in rows:
-                item = label_to_item.get(row.listing_label) or selector_to_item.get(row.product_selector)
+                item = resolve_listing_result_item(result_index, row.product_selector)
+                if not item:
+                    item = resolve_listing_result_item(result_index, row.listing_label)
                 if item:
                     _apply_listing_result_item(row, item)
+                    label = str(item.get("listing_label") or row.listing_label or "").strip()
+                    if label:
+                        row.listing_label = canonical_listing_unit_label(label) or label
                 elif row.listing_status == STAGE_PENDING:
                     row.listing_status = STAGE_FAILED
                     row.listing_error = "本批上架结果中未找到该商品"

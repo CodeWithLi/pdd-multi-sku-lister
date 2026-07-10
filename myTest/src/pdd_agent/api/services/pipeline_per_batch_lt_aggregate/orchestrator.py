@@ -152,8 +152,12 @@ def record_listing_batch(
 ) -> None:
     if not is_standard_per_batch_lt_pipeline(row):
         return
+    from pdd_agent.api.services.pipeline_batch_product_stage_tracker import (
+        resolve_finished_listing_batch_index,
+    )
+
+    batch_index = resolve_finished_listing_batch_index(row)
     throttle = _throttle_state(row)
-    batch_index = int(throttle.get("batch_index") or 0)
     batches = list(throttle.get("batches") or [])
     selectors = list(batches[batch_index]) if 0 <= batch_index < len(batches) else []
     record_listing_batch_from_result(

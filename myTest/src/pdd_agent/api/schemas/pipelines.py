@@ -161,6 +161,14 @@ class IntegratedPipelineListingUnitStatus(BaseModel):
     reason_code: str = ""
 
 
+class IntegratedPipelinePerBatchLtAggregate(BaseModel):
+    in_progress: bool = False
+    finalized: bool = False
+    outcome: str = ""
+    accumulated_success_count: int = 0
+    batch_log: list[dict[str, Any]] = Field(default_factory=list)
+
+
 class IntegratedPipelineResponse(BaseModel):
     pipeline_id: str = ""
     account_id: str = ""
@@ -200,6 +208,9 @@ class IntegratedPipelineResponse(BaseModel):
     limited_time_success_detail: str = ""
     listing_unit_statuses: list[IntegratedPipelineListingUnitStatus] = Field(default_factory=list)
     campaign_results: list[IntegratedPipelineCampaignResult] = Field(default_factory=list)
+    per_batch_lt_aggregate: IntegratedPipelinePerBatchLtAggregate = Field(
+        default_factory=IntegratedPipelinePerBatchLtAggregate
+    )
     steps: list[IntegratedPipelineStepInfo] = Field(default_factory=list)
     feishu_inspect_at: str = ""
     has_feishu_inspect: bool = False

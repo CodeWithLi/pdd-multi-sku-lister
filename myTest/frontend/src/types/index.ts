@@ -1023,6 +1023,52 @@ export interface IntegratedPipelineListingUnitStatus {
   reason_code: string
 }
 
+export interface IntegratedPipelinePerBatchLtAggregate {
+  in_progress?: boolean
+  finalized?: boolean
+  outcome?: string
+  accumulated_success_count?: number
+  batch_log?: Array<{
+    batch_index?: number
+    run_id?: string
+    success?: boolean
+    batch_success_count?: number
+    batch_failed_count?: number
+    error?: string
+  }>
+}
+
+export interface IntegratedPipelineBatchProductStageItem {
+  record_id: string
+  pipeline_id: string
+  account_id: string
+  batch_index: number
+  product_selector: string
+  listing_label: string
+  pdd_product_id: string
+  mapping_id: string
+  listing_status: string
+  listing_error: string
+  limited_time_status: string
+  limited_time_error: string
+  promotion_status: string
+  promotion_error: string
+  activity_1_id: string
+  activity_1_status: string
+  activity_1_error: string
+  activity_2_id: string
+  activity_2_status: string
+  activity_2_error: string
+  created_at: string
+  updated_at: string
+}
+
+export interface IntegratedPipelineBatchProductStageListResponse {
+  pipeline_id: string
+  items: IntegratedPipelineBatchProductStageItem[]
+  total: number
+}
+
 export interface IntegratedPipeline {
   pipeline_id: string
   account_id: string
@@ -1061,6 +1107,7 @@ export interface IntegratedPipeline {
   listing_skip_reason?: string
   listing_unit_statuses?: IntegratedPipelineListingUnitStatus[]
   campaign_results?: IntegratedPipelineCampaignResult[]
+  per_batch_lt_aggregate?: IntegratedPipelinePerBatchLtAggregate
   steps: IntegratedPipelineStepInfo[]
   feishu_inspect_at?: string
   has_feishu_inspect?: boolean
