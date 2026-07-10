@@ -54,7 +54,7 @@ def test_format_store_progress_skips_zero():
 
 def test_collect_pdd_store_progress(monkeypatch):
     monkeypatch.setattr(
-        "pdd_agent.integrations.wecom.store_progress.summarize_shop_publish_stats_for_report_day",
+        "pdd_agent.integrations.wecom.store_progress.collect_shop_publish_report_stats",
         lambda **kwargs: [
             ShopPublishStat(
                 account_id="store_A",
@@ -63,6 +63,10 @@ def test_collect_pdd_store_progress(monkeypatch):
                 limited_time_success_count=3,
             )
         ],
+    )
+    monkeypatch.setattr(
+        "pdd_agent.integrations.wecom.store_progress.build_shop_publish_report_text",
+        lambda stats, **kwargs: "兔兔潮玩屋：已发布5个 + 限时限量购3个",
     )
     snapshot = collect_pdd_store_progress(reference_day=date(2026, 7, 6))
     assert snapshot.text == "兔兔潮玩屋：已发布5个 + 限时限量购3个"

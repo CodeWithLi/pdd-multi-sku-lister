@@ -81,6 +81,8 @@ const configForm = reactive({
   daily_report_schedule_hour: 18,
   daily_report_schedule_minute: 0,
   daily_report_schedule_use_saved_preview: false,
+  daily_report_include_activity_promotion: false,
+  daily_report_include_limited_time_gap: true,
 })
 
 const scheduleTimeDisplay = computed(() => {
@@ -130,6 +132,8 @@ function applyConfig(cfg: WecomConfig) {
   configForm.daily_report_schedule_hour = cfg.daily_report_schedule_hour
   configForm.daily_report_schedule_minute = cfg.daily_report_schedule_minute
   configForm.daily_report_schedule_use_saved_preview = cfg.daily_report_schedule_use_saved_preview
+  configForm.daily_report_include_activity_promotion = cfg.daily_report_include_activity_promotion
+  configForm.daily_report_include_limited_time_gap = cfg.daily_report_include_limited_time_gap
   scheduleLastRunDate.value = cfg.daily_report_last_run_date || ''
   scheduleRunning.value = Boolean(cfg.daily_report_scheduler_running)
   webhookEditing.value = false
@@ -250,6 +254,8 @@ async function save() {
       daily_report_schedule_hour: configForm.daily_report_schedule_hour,
       daily_report_schedule_minute: configForm.daily_report_schedule_minute,
       daily_report_schedule_use_saved_preview: configForm.daily_report_schedule_use_saved_preview,
+      daily_report_include_activity_promotion: configForm.daily_report_include_activity_promotion,
+      daily_report_include_limited_time_gap: configForm.daily_report_include_limited_time_gap,
     })
     applyConfig(cfg)
     health.value = await api.wecomHealth()
@@ -380,10 +386,32 @@ async function sendEditedDailyReport() {
   }
 }
 
+async function regenerateDailyReport() {
+  if (!reportPreview.value) {
+    ElMessage.warning('请先预览日报')
+    return
+  }
+  previewing.value = true
+  previewPlatform.value = reportPreview.value.platform
+  try {
+    await saveDailyContent(true)
+    const preview = await api.wecomDailyReportPreview(reportPreview.value.platform, {
+      use_saved_preview: false,
+    })
+    reportPreview.value = preview
+    applyPreviewToEditable(preview)
+    ElMessage.success('已根据最新数据重新生成，未覆盖已保存预览')
+  } catch (e) {
+    ElMessage.error(e instanceof Error ? e.message : '重新生成失败')
+  } finally {
+    previewing.value = false
+  }
+}
+
 async function resetPreviewEdits() {
   if (!reportPreview.value) return
-  await previewDailyReport(reportPreview.value.platform)
-  ElMessage.info('已恢复为最新生成内容')
+  applyPreviewToEditable(reportPreview.value)
+  ElMessage.info('已恢复为当前预览内容')
 }
 
 function splitReportLines(text: string) {
@@ -817,6 +845,22 @@ onMounted(() => {
             />
           </div>
 
+          <div class="setting-row">
+            <div class="setting-label">
+              <span>统计活动与推广</span>
+              <small>开启后店铺行追加 618大促 / 7折 / 推广成功数；关闭则保持「已发布 + 限时限量购」</small>
+            </div>
+            <el-switch v-model="configForm.daily_report_include_activity_promotion" />
+          </div>
+
+          <div class="setting-row">
+            <div class="setting-label">
+              <span>限时限量购缺口明细</span>
+              <small>开启后，当已发布与限时限量购不匹配时，追加失败原因与未跑数量</small>
+            </div>
+            <el-switch v-model="configForm.daily_report_include_limited_time_gap" />
+          </div>
+
           <div class="field-block">
             <label class="field-label">日报 Webhook 地址</label>
             <template v-if="!dailyReportWebhookEditing">
@@ -968,7 +1012,8 @@ onMounted(() => {
           </div>
         </div>
         <div class="preview-header-actions">
-          <el-button @click="resetPreviewEdits">恢复生成内容</el-button>
+          <el-button :loading="previewing" @click="regenerateDailyReport">重新生成</el-button>
+          <el-button @click="resetPreviewEdits">恢复预览内容</el-button>
           <el-button :loading="savingPreview" @click="savePreviewEdits">保存预览</el-button>
           <el-button
             type="primary"

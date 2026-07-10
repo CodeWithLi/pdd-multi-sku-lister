@@ -18,3 +18,7 @@ daily_report_schedule_hour: 18
 daily_report_schedule_minute: 0
 # 开启后，定时发送优先使用「日报预览」中已保存的内容；未保存则回退实时生成
 daily_report_schedule_use_saved_preview: false
+# 开启后，店铺进度行追加 618大促 / 7折 / 推广成功数
+daily_report_include_activity_promotion: false
+# 开启后，当限时限量购与已发布不匹配时，追加失败原因与未跑数量
+daily_report_include_limited_time_gap: true

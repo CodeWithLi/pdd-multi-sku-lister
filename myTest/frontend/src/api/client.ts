@@ -1167,9 +1167,17 @@ export const api = {
   saveWecomDailyPreview: (body: WecomDailyPreviewSavePayload) =>
     http.put<WecomDailyContent>('/wecom/daily-report/saved-preview', body).then((r) => r.data),
 
-  wecomDailyReportPreview: (platform: WecomDailyReportPlatform) =>
+  wecomDailyReportPreview: (
+    platform: WecomDailyReportPlatform,
+    options?: { use_saved_preview?: boolean },
+  ) =>
     http
-      .get<WecomDailyReportPreview>('/wecom/daily-report/preview', { params: { platform } })
+      .get<WecomDailyReportPreview>('/wecom/daily-report/preview', {
+        params: {
+          platform,
+          use_saved_preview: options?.use_saved_preview ?? true,
+        },
+      })
       .then((r) => r.data),
 
   wecomInProgressDraft: () =>

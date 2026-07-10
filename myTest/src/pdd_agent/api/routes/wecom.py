@@ -86,6 +86,8 @@ def _config_out(cfg: WecomConfig, *, expose_webhook: bool = False) -> WecomConfi
         daily_report_schedule_hour=hour,
         daily_report_schedule_minute=minute,
         daily_report_schedule_use_saved_preview=bool(cfg.daily_report_schedule_use_saved_preview),
+        daily_report_include_activity_promotion=bool(cfg.daily_report_include_activity_promotion),
+        daily_report_include_limited_time_gap=bool(cfg.daily_report_include_limited_time_gap),
         daily_report_schedule_time=f"{hour:02d}:{minute:02d}",
         daily_report_scheduler_running=scheduler.is_running,
         daily_report_last_run_date=(
@@ -160,6 +162,8 @@ def update_wecom_config(body: WecomConfigUpdateIn):
             daily_report_schedule_hour=int(body.daily_report_schedule_hour),
             daily_report_schedule_minute=int(body.daily_report_schedule_minute),
             daily_report_schedule_use_saved_preview=bool(body.daily_report_schedule_use_saved_preview),
+            daily_report_include_activity_promotion=bool(body.daily_report_include_activity_promotion),
+            daily_report_include_limited_time_gap=bool(body.daily_report_include_limited_time_gap),
         )
     )
     get_wecom_daily_report_scheduler().reset_last_run_date()
@@ -371,10 +375,16 @@ def get_in_progress_draft():
 
 
 @router.get("/daily-report/preview", response_model=WecomDailyReportPreviewOut)
-def preview_daily_report(platform: WecomDailyReportPlatform = "pdd"):
+def preview_daily_report(
+    platform: WecomDailyReportPlatform = "pdd",
+    use_saved_preview: bool = True,
+):
     """预览指定平台日报草稿（不发送企业微信）。"""
     try:
-        draft = generate_daily_report_draft(platform=platform)
+        draft = generate_daily_report_draft(
+            platform=platform,
+            use_saved_preview=use_saved_preview,
+        )
     except GitDigestError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except RuntimeError as exc:

@@ -1569,6 +1569,8 @@ export interface WecomConfig {
   daily_report_schedule_hour: number
   daily_report_schedule_minute: number
   daily_report_schedule_use_saved_preview: boolean
+  daily_report_include_activity_promotion: boolean
+  daily_report_include_limited_time_gap: boolean
   daily_report_schedule_time: string
   daily_report_scheduler_running: boolean
   daily_report_last_run_date: string
@@ -1587,6 +1589,8 @@ export interface WecomConfigUpdatePayload {
   daily_report_schedule_hour: number
   daily_report_schedule_minute: number
   daily_report_schedule_use_saved_preview: boolean
+  daily_report_include_activity_promotion: boolean
+  daily_report_include_limited_time_gap: boolean
 }
 
 export interface WecomTestSendPayload {

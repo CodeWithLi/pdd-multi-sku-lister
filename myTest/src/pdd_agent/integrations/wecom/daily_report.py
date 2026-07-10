@@ -61,6 +61,7 @@ def generate_pdd_daily_report_draft(
     repo_path: str = "",
     day: date | None = None,
     daily_content: WecomDailyContent | None = None,
+    use_saved_preview: bool = True,
 ) -> DailyReportDraft:
     """生成 PDD 日报草稿（Git + 店铺数据 + 手动区块）。"""
     resolved = resolve_git_repo_path(repo_path)
@@ -94,7 +95,7 @@ def generate_pdd_daily_report_draft(
     in_progress_out = in_progress
     git_window_start_out = listing_window_start
     git_window_end_out = listing_window_end
-    if has_saved_pdd_preview(content):
+    if use_saved_preview and has_saved_pdd_preview(content):
         progress_summary_out = str(content.pdd.progress_summary or progress_summary)
         store_progress_out = str(content.pdd.store_progress or store_snapshot.text)
         in_progress_out = str(content.pdd.in_progress or in_progress)
@@ -171,6 +172,7 @@ def generate_daily_report_draft(
     repo_path: str = "",
     day: date | None = None,
     daily_content: WecomDailyContent | None = None,
+    use_saved_preview: bool = True,
 ) -> DailyReportDraft:
     if platform == "taobao":
         return generate_taobao_daily_report_draft(day=day, daily_content=daily_content)
@@ -178,4 +180,5 @@ def generate_daily_report_draft(
         repo_path=repo_path,
         day=day,
         daily_content=daily_content,
+        use_saved_preview=use_saved_preview,
     )
