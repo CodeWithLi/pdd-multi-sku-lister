@@ -696,6 +696,8 @@ _PIPELINE_PAYLOAD_KEYS = frozenset(
         "listing_per_batch_promote_lt_success_only_enabled",
         "delist_spec_code_search_enabled",
         "activity_limited_time_success_only",
+        "activity_traffic_batch_enabled",
+        "activity_traffic_batch_size",
         "extra_meta",
     }
 )

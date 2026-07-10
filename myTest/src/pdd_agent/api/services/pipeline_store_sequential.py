@@ -53,6 +53,9 @@ def build_store_sequential_common_params(
     listing_per_batch_lt_traffic_activity_enabled: bool = False,
     listing_per_batch_promote_lt_success_only_enabled: bool = True,
     delist_spec_code_search_enabled: bool = False,
+    activity_limited_time_success_only: bool = False,
+    activity_traffic_batch_enabled: bool = False,
+    activity_traffic_batch_size: int = 10,
     trigger_source: str = "manual",
 ) -> dict[str, Any]:
     return {
@@ -65,6 +68,8 @@ def build_store_sequential_common_params(
         "continue_after_activity_failure": continue_after_activity_failure,
         "promote_after_limited_time_failure": bool(promote_after_limited_time_failure),
         "activity_limited_time_success_only": bool(activity_limited_time_success_only),
+        "activity_traffic_batch_enabled": bool(activity_traffic_batch_enabled),
+        "activity_traffic_batch_size": max(1, min(500, int(activity_traffic_batch_size or 10))),
         "activity_delay_hours": activity_delay_hours,
         "demo_mode": demo_mode,
         "platform_listing_code": platform_listing_code,

@@ -1083,6 +1083,9 @@ export interface IntegratedPipeline {
   continue_after_activity_failure?: boolean
   promote_after_limited_time_failure?: boolean
   activity_limited_time_success_only?: boolean
+  activity_traffic_batch_enabled?: boolean
+  activity_traffic_batch_size?: number
+  activity_traffic_batch_display?: string
   limited_time_outcome?: string
   limited_time_skip_reason?: string
   activity_pdd_product_ids?: string[]
@@ -1313,6 +1316,8 @@ export interface IntegratedPipelineStartPayload {
   listing_per_batch_lt_traffic_activity_enabled?: boolean
   listing_per_batch_promote_lt_success_only_enabled?: boolean
   delist_spec_code_search_enabled?: boolean
+  activity_traffic_batch_enabled?: boolean
+  activity_traffic_batch_size?: number
 }
 
 export interface IntegratedPipelineBatchStartPayload {
@@ -1351,6 +1356,8 @@ export interface IntegratedPipelineBatchStartPayload {
   store_sequential_enabled?: boolean
   delist_spec_code_search_enabled?: boolean
   activity_limited_time_success_only?: boolean
+  activity_traffic_batch_enabled?: boolean
+  activity_traffic_batch_size?: number
 }
 
 export interface IntegratedPipelineBatchRunItem {

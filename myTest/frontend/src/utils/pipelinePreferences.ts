@@ -13,6 +13,8 @@ const LISTING_PER_BATCH_PROMOTE_LT_SUCCESS_ONLY_KEY =
   'pdd_agent.pipeline.listing_per_batch_promote_lt_success_only_enabled'
 const DELIST_SPEC_CODE_SEARCH_KEY = 'pdd_agent.pipeline.delist_spec_code_search_enabled'
 const ACTIVITY_LIMITED_TIME_SUCCESS_ONLY_KEY = 'pdd_agent.pipeline.activity_limited_time_success_only'
+const ACTIVITY_TRAFFIC_BATCH_ENABLED_KEY = 'pdd_agent.pipeline.activity_traffic_batch_enabled'
+const ACTIVITY_TRAFFIC_BATCH_SIZE_KEY = 'pdd_agent.pipeline.activity_traffic_batch_size'
 const MINIO_MATERIAL_REFRESH_PAUSED_KEY = 'pdd_agent.minio_material_refresh_paused'
 
 const VALID_RELIST_STRATEGIES = new Set<RelistStrategy>([
@@ -211,6 +213,43 @@ export function loadActivityLimitedTimeSuccessOnly(): boolean {
 export function saveActivityLimitedTimeSuccessOnly(enabled: boolean): void {
   try {
     localStorage.setItem(ACTIVITY_LIMITED_TIME_SUCCESS_ONLY_KEY, enabled ? '1' : '0')
+  } catch {
+    // ignore
+  }
+}
+
+export function loadActivityTrafficBatchEnabled(): boolean {
+  try {
+    return localStorage.getItem(ACTIVITY_TRAFFIC_BATCH_ENABLED_KEY) === '1'
+  } catch {
+    return false
+  }
+}
+
+export function saveActivityTrafficBatchEnabled(enabled: boolean): void {
+  try {
+    localStorage.setItem(ACTIVITY_TRAFFIC_BATCH_ENABLED_KEY, enabled ? '1' : '0')
+  } catch {
+    // ignore
+  }
+}
+
+export function loadActivityTrafficBatchSize(): number {
+  try {
+    const raw = Number(localStorage.getItem(ACTIVITY_TRAFFIC_BATCH_SIZE_KEY))
+    if (Number.isFinite(raw) && raw >= 1) return Math.min(500, Math.floor(raw))
+  } catch {
+    // ignore
+  }
+  return 10
+}
+
+export function saveActivityTrafficBatchSize(size: number): void {
+  try {
+    localStorage.setItem(
+      ACTIVITY_TRAFFIC_BATCH_SIZE_KEY,
+      String(Math.max(1, Math.min(500, size))),
+    )
   } catch {
     // ignore
   }

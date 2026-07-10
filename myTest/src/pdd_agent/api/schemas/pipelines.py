@@ -56,6 +56,8 @@ class IntegratedPipelineStartRequest(BaseModel):
     listing_per_batch_lt_traffic_activity_enabled: bool = False
     listing_per_batch_promote_lt_success_only_enabled: bool = True
     delist_spec_code_search_enabled: bool = False
+    activity_traffic_batch_enabled: bool = False
+    activity_traffic_batch_size: int = Field(default=10, ge=1, le=500)
 
     @model_validator(mode="after")
     def validate_activity_ids(self) -> "IntegratedPipelineStartRequest":
@@ -105,6 +107,8 @@ class IntegratedPipelineBatchStartRequest(BaseModel):
     listing_per_batch_lt_traffic_activity_enabled: bool = False
     listing_per_batch_promote_lt_success_only_enabled: bool = True
     delist_spec_code_search_enabled: bool = False
+    activity_traffic_batch_enabled: bool = False
+    activity_traffic_batch_size: int = Field(default=10, ge=1, le=500)
     account_ids: list[str] = Field(default_factory=list)
     product_codes: list[str] = Field(default_factory=list)
     items: list[IntegratedPipelineBatchItem] = Field(default_factory=list)

@@ -492,6 +492,20 @@ def _schedule_pipeline_activity_after_limited_time(
     pdd_ids: list[str] | None = None,
     mapping_ids: list[str] | None = None,
 ) -> None:
+    from pdd_agent.api.services.pipeline_activity_traffic_batch.bridge import (
+        maybe_start_after_limited_time as maybe_start_activity_traffic_batch,
+    )
+
+    if maybe_start_activity_traffic_batch(
+        row,
+        meta_patch=meta_patch,
+        pdd_ids=pdd_ids,
+        mapping_ids=mapping_ids,
+    ):
+        refreshed = get_integrated_pipeline(row.pipeline_id) or row
+        _try_advance_store_sequential_after_listing_limited_time(refreshed)
+        return
+
     scheduled_at = resolve_activity_scheduled_at(
         demo_mode=bool(row.demo_mode),
         activity_delay_hours=float(row.activity_delay_hours or 24.0),
@@ -1050,6 +1064,16 @@ def _step_infos(row) -> list[dict[str, Any]]:
     elif _pipeline_continue_after_activity_failure(row) and row.auto_promotion:
         traffic_detail = "活动有失败时仍按设置继续创建推广"
 
+    from pdd_agent.api.services.pipeline_activity_traffic_batch.bridge import (
+        resolve_activity_traffic_batch_step_hint,
+    )
+
+    at_batch_hint = resolve_activity_traffic_batch_step_hint(row)
+    if at_batch_hint:
+        activity_detail = at_batch_hint
+        if row.auto_promotion:
+            traffic_detail = f"{at_batch_hint}；本批活动完成后创建推广"
+
     limited_time_detail = (
         "上架完成后立即执行（先于活动报名，取消惊喜优惠）"
         if _pipeline_auto_limited_time(row)
@@ -1192,6 +1216,9 @@ def pipeline_to_dict(row) -> dict[str, Any]:
         "continue_after_activity_failure": _pipeline_continue_after_activity_failure(row),
         "promote_after_limited_time_failure": _pipeline_promote_after_limited_time_failure(row),
         "activity_limited_time_success_only": _pipeline_activity_limited_time_success_only(row),
+        "activity_traffic_batch_enabled": bool((row.meta or {}).get("activity_traffic_batch_enabled")),
+        "activity_traffic_batch_size": int((row.meta or {}).get("activity_traffic_batch_size") or 10),
+        "activity_traffic_batch_display": str((row.meta or {}).get("activity_traffic_batch_display") or ""),
         "activity_pdd_product_ids": list(
             (row.meta or {}).get("activity_pdd_product_ids")
             or (row.meta or {}).get("limited_time_success_pdd_product_ids")
@@ -1296,6 +1323,8 @@ def start_integrated_pipeline(
     listing_per_batch_promote_lt_success_only_enabled: bool = True,
     delist_spec_code_search_enabled: bool = False,
     activity_limited_time_success_only: bool = False,
+    activity_traffic_batch_enabled: bool = False,
+    activity_traffic_batch_size: int = 10,
     extra_meta: dict[str, Any] | None = None,
     trigger_source: str = "manual",
     skip_commerce_gate: bool = False,
@@ -1317,6 +1346,13 @@ def start_integrated_pipeline(
             raise ValueError("分批「限时→推广→活动」须同时开启每批限时限量购")
         if listing_per_batch_campaign_enabled:
             raise ValueError("分批「限时→推广→活动」与「每批活动/推广」不能同时开启")
+    if activity_traffic_batch_enabled:
+        if listing_per_batch_lt_traffic_activity_enabled:
+            raise ValueError("活动/推广分批与「分批：限时→推广→活动」不能同时开启")
+        if listing_per_batch_campaign_enabled:
+            raise ValueError("活动/推广分批与「每批活动/推广」不能同时开启")
+        if not auto_promotion:
+            raise ValueError("活动/推广分批须同时开启自动推广")
 
     from pdd_agent.api.services.pipeline_listing_throttle import (
         apply_throttle_to_listing_codes,
@@ -1386,6 +1422,8 @@ def start_integrated_pipeline(
                 "listing_per_batch_promote_lt_success_only_enabled": listing_per_batch_promote_lt_success_only_enabled,
                 "delist_spec_code_search_enabled": delist_spec_code_search_enabled,
                 "activity_limited_time_success_only": activity_limited_time_success_only,
+                "activity_traffic_batch_enabled": activity_traffic_batch_enabled,
+                "activity_traffic_batch_size": activity_traffic_batch_size,
                 "extra_meta": extra_meta,
                 "trigger_source": trigger_source,
             }
@@ -1452,6 +1490,16 @@ def start_integrated_pipeline(
                 enabled=bool(listing_per_batch_promote_lt_success_only_enabled)
             )
         )
+    from pdd_agent.api.services.pipeline_activity_traffic_batch.bridge import (
+        activity_traffic_batch_meta_patch,
+    )
+
+    meta.update(
+        activity_traffic_batch_meta_patch(
+            enabled=bool(activity_traffic_batch_enabled),
+            batch_size=int(activity_traffic_batch_size or 10),
+        )
+    )
     if skip_selectors:
         meta["listing_skip_selectors"] = skip_selectors
     row = create_integrated_pipeline(
@@ -1753,6 +1801,8 @@ def start_integrated_pipeline_batch(
     store_sequential_enabled: bool = False,
     delist_spec_code_search_enabled: bool = False,
     activity_limited_time_success_only: bool = False,
+    activity_traffic_batch_enabled: bool = False,
+    activity_traffic_batch_size: int = 10,
     trigger_source: str = "manual",
 ) -> dict[str, Any]:
     """批量创建整合链路；默认各店按启动间隔错开并行入队；串行模式下一家跑完再跑下一家。"""
@@ -1803,6 +1853,8 @@ def start_integrated_pipeline_batch(
         listing_per_batch_promote_lt_success_only_enabled=listing_per_batch_promote_lt_success_only_enabled,
         delist_spec_code_search_enabled=delist_spec_code_search_enabled,
         activity_limited_time_success_only=activity_limited_time_success_only,
+        activity_traffic_batch_enabled=activity_traffic_batch_enabled,
+        activity_traffic_batch_size=activity_traffic_batch_size,
         trigger_source=trigger_source,
     )
 
@@ -1899,6 +1951,8 @@ def start_integrated_pipeline_batch(
             listing_per_batch_promote_lt_success_only_enabled=listing_per_batch_promote_lt_success_only_enabled,
             delist_spec_code_search_enabled=delist_spec_code_search_enabled,
             activity_limited_time_success_only=activity_limited_time_success_only,
+            activity_traffic_batch_enabled=activity_traffic_batch_enabled,
+            activity_traffic_batch_size=activity_traffic_batch_size,
         )
         pipelines.append(
             _batch_run_item_from_start(data, scheduled_at=scheduled_at)
@@ -2413,6 +2467,19 @@ def _on_campaign_finished(row, *, run_id: str, success: bool, result: dict[str, 
     ):
         return
 
+    from pdd_agent.api.services.pipeline_activity_traffic_batch.bridge import (
+        maybe_handle_campaign_finished as maybe_handle_activity_traffic_batch_campaign,
+    )
+
+    if maybe_handle_activity_traffic_batch_campaign(
+        row,
+        run_id=run_id,
+        success=success,
+        result=result,
+        error=error,
+    ):
+        return
+
     if _campaign_run_already_handled(row, run_id):
         logger.debug(
             "skip duplicate campaign finished pipeline=%s run_id=%s",
@@ -2842,6 +2909,18 @@ def _on_traffic_finished(row, *, run_id: str, success: bool, error: str) -> None
     )
 
     if maybe_handle_ltta_traffic_finished(
+        row,
+        run_id=run_id,
+        success=success,
+        error=error,
+    ):
+        return
+
+    from pdd_agent.api.services.pipeline_activity_traffic_batch.bridge import (
+        maybe_handle_traffic_finished as maybe_handle_activity_traffic_batch_traffic,
+    )
+
+    if maybe_handle_activity_traffic_batch_traffic(
         row,
         run_id=run_id,
         success=success,

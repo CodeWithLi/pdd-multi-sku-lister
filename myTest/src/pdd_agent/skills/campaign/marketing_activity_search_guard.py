@@ -17,6 +17,9 @@ from pdd_agent.skills.campaign.marketing_activity_page_guard import (
     prepare_marketing_activities_page_after_open,
     wait_for_activity_search_input,
 )
+from pdd_agent.skills.campaign.marketing_activity_blocking_modal_dismiss import (
+    ensure_marketing_blocking_modals_cleared,
+)
 from pdd_agent.skills.campaign.marketing_activity_phone_popup_safe import dismiss_marketing_phone_popup_safe
 
 logger = get_logger(__name__)
@@ -89,11 +92,18 @@ def search_marketing_activity_guarded(
         )
 
         phone_popup = dismiss_marketing_phone_popup_safe(page, account_id)
+        blocking_modal = ensure_marketing_blocking_modals_cleared(page, account_id)
         ensure_marketing_activities_tab_focus(page, account_id)
 
         wait_result = wait_for_activity_search_input(page, account_id, timeout=12)
         search_input = wait_result.get("search_input") if isinstance(wait_result.get("search_input"), dict) else {}
         if not search_input.get("found"):
+            search_input = _find_activity_search_input(page)
+
+        blocking_modal_retry: dict[str, Any] | None = None
+        if not search_input.get("found"):
+            blocking_modal_retry = ensure_marketing_blocking_modals_cleared(page, account_id)
+            ensure_marketing_activities_tab_focus(page, account_id)
             search_input = _find_activity_search_input(page)
 
         if not search_input.get("found"):
@@ -115,6 +125,8 @@ def search_marketing_activity_guarded(
                 "page_guard": page_prepare,
                 "wait_search_input": wait_result,
                 "phone_popup": phone_popup,
+                "blocking_modal": blocking_modal,
+                "blocking_modal_retry": blocking_modal_retry,
                 "guarded": True,
             }
 

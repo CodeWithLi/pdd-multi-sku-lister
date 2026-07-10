@@ -23,6 +23,8 @@ import {
   loadListingPerBatchPromoteLtSuccessOnlyEnabled,
   loadDelistSpecCodeSearchEnabled,
   loadActivityLimitedTimeSuccessOnly,
+  loadActivityTrafficBatchEnabled,
+  loadActivityTrafficBatchSize,
   loadPipelineRelistStrategy,
   saveListingBatchIntervalMinutes,
   saveListingBatchSetCount,
@@ -34,6 +36,8 @@ import {
   saveListingPerBatchPromoteLtSuccessOnlyEnabled,
   saveDelistSpecCodeSearchEnabled,
   saveActivityLimitedTimeSuccessOnly,
+  saveActivityTrafficBatchEnabled,
+  saveActivityTrafficBatchSize,
   savePipelineRelistStrategy,
 } from '@/utils/pipelinePreferences'
 import {
@@ -133,6 +137,8 @@ const listingPerBatchLtTrafficActivityEnabled = ref(loadListingPerBatchLtTraffic
 const listingPerBatchPromoteLtSuccessOnlyEnabled = ref(loadListingPerBatchPromoteLtSuccessOnlyEnabled())
 const delistSpecCodeSearchEnabled = ref(loadDelistSpecCodeSearchEnabled())
 const activityLimitedTimeSuccessOnly = ref(loadActivityLimitedTimeSuccessOnly())
+const activityTrafficBatchEnabled = ref(loadActivityTrafficBatchEnabled())
+const activityTrafficBatchSize = ref(loadActivityTrafficBatchSize())
 const excelFallbackEnabled = ref(false)
 const excelFallbackSaving = ref(false)
 const logSpecSkuRowsEnabled = ref(true)
@@ -1689,6 +1695,8 @@ async function startPipeline() {
         store_sequential_enabled: storeSequentialEnabled.value,
         delist_spec_code_search_enabled: delistSpecCodeSearchEnabled.value,
         activity_limited_time_success_only: activityLimitedTimeSuccessOnly.value,
+        activity_traffic_batch_enabled: activityTrafficBatchEnabled.value,
+        activity_traffic_batch_size: activityTrafficBatchSize.value,
       })
       success.value = `批量整合链路已提交：${result.total} 家店铺${
         result.store_sequential_enabled
@@ -1736,6 +1744,8 @@ async function startPipeline() {
         listing_per_batch_promote_lt_success_only_enabled: listingPerBatchPromoteLtSuccessOnlyEnabled.value,
         delist_spec_code_search_enabled: delistSpecCodeSearchEnabled.value,
         activity_limited_time_success_only: activityLimitedTimeSuccessOnly.value,
+        activity_traffic_batch_enabled: activityTrafficBatchEnabled.value,
+        activity_traffic_batch_size: activityTrafficBatchSize.value,
       })
       pipelinePage.value = 1
       if (result.commerce_queued) {
@@ -1807,6 +1817,13 @@ const listingBatchPlanCount = computed(() => {
   return Math.ceil(selectedSetCount.value / Math.max(1, listingBatchSetCount.value))
 })
 
+const activityTrafficBatchDisabled = computed(
+  () =>
+    listingPerBatchLtTrafficActivityEnabled.value
+    || listingPerBatchCampaignEnabled.value
+    || !autoPromotion.value,
+)
+
 watch(relistStrategy, (value) => {
   savePipelineRelistStrategy(value)
 })
@@ -1839,6 +1856,7 @@ watch(listingPerBatchCampaignEnabled, (value) => {
   saveListingPerBatchCampaignEnabled(value)
   if (value) {
     listingPerBatchLtTrafficActivityEnabled.value = false
+    activityTrafficBatchEnabled.value = false
   }
 })
 
@@ -1846,6 +1864,7 @@ watch(listingPerBatchLtTrafficActivityEnabled, (value) => {
   saveListingPerBatchLtTrafficActivityEnabled(value)
   if (value) {
     listingPerBatchCampaignEnabled.value = false
+    activityTrafficBatchEnabled.value = false
     listingPerBatchLimitedTimeEnabled.value = true
     listingThrottleEnabled.value = true
   }
@@ -1863,6 +1882,20 @@ watch(activityLimitedTimeSuccessOnly, (value) => {
   saveActivityLimitedTimeSuccessOnly(value)
   if (value) {
     continueAfterLimitedTimeFailure.value = false
+  }
+})
+
+watch(activityTrafficBatchEnabled, (value) => {
+  saveActivityTrafficBatchEnabled(value)
+})
+
+watch(activityTrafficBatchSize, (value) => {
+  saveActivityTrafficBatchSize(Number(value) || 10)
+})
+
+watch(autoPromotion, (value) => {
+  if (!value) {
+    activityTrafficBatchEnabled.value = false
   }
 })
 
@@ -2507,6 +2540,35 @@ onUnmounted(() => {
                 </el-select>
                 <div v-if="activityIds.length > 1" class="form-tip">
                   已选 {{ activityIds.length }} 个活动，限时限量购完成后将按顺序依次报名，全部完成后再推广
+                </div>
+              </el-form-item>
+
+              <el-form-item label="活动/推广分批">
+                <div class="option-row listing-throttle-row">
+                  <div class="switch-row">
+                    <span class="switch-label">按商品数分批报名活动并推广</span>
+                    <el-switch
+                      v-model="activityTrafficBatchEnabled"
+                      :disabled="activityTrafficBatchDisabled"
+                    />
+                  </div>
+                  <template v-if="activityTrafficBatchEnabled">
+                    <span class="throttle-inline-label">每批</span>
+                    <el-input-number
+                      v-model="activityTrafficBatchSize"
+                      :min="1"
+                      :max="500"
+                      controls-position="right"
+                      size="small"
+                    />
+                    <span class="throttle-inline-label">个商品</span>
+                  </template>
+                </div>
+                <div v-if="activityTrafficBatchEnabled" class="form-tip">
+                  限时全部完成后：每批依次报名全部活动 → 推广 → 下一批。首批仍遵守活动延迟；后续批次在上批推广完成后立即执行。
+                </div>
+                <div v-else-if="activityTrafficBatchDisabled" class="form-tip muted">
+                  与「每批活动/推广」「分批：限时→推广→活动」互斥；须开启自动推广。
                 </div>
               </el-form-item>
 

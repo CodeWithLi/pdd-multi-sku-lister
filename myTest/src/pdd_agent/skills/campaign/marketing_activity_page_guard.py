@@ -11,6 +11,9 @@ from typing import Any
 
 from pdd_agent.browser.dp_compat_sync import DpPage
 from pdd_agent.core.logging import get_logger
+from pdd_agent.skills.campaign.marketing_activity_blocking_modal_dismiss import (
+    dismiss_one_marketing_blocking_modal,
+)
 from pdd_agent.skills.campaign.limited_time import _bind_page, _body_text, _live_context_pages
 
 logger = get_logger(__name__)
@@ -205,6 +208,7 @@ def wait_for_activity_search_input(
 
     for tick in range(max(1, timeout)):
         last_focus = ensure_marketing_activities_tab_focus(page, account_id)
+        dismiss_one_marketing_blocking_modal(page, account_id)
         text = _body_text(page)
         last_loading = _page_is_loading(text)
         last_state = _read_search_input_state(page)
