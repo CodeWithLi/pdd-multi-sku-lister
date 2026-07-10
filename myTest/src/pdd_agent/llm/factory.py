@@ -22,14 +22,18 @@ def create_chat_model_with_runtime(
     api_key: str,
     base_url: str,
     temperature: float = 0,
+    request_timeout: float | None = None,
 ) -> ChatOpenAI:
     """按运行时配置创建模型（用于可热切换厂商/模型场景）。"""
-    return ChatOpenAI(
-        model=str(model or "").strip(),
-        api_key=str(api_key or "").strip() or "not-set",
-        base_url=str(base_url or "").strip() or None,
-        temperature=temperature,
-    )
+    kwargs: dict = {
+        "model": str(model or "").strip(),
+        "api_key": str(api_key or "").strip() or "not-set",
+        "base_url": str(base_url or "").strip() or None,
+        "temperature": temperature,
+    }
+    if request_timeout is not None and float(request_timeout) > 0:
+        kwargs["timeout"] = float(request_timeout)
+    return ChatOpenAI(**kwargs)
 
 
 def create_orchestrator_model() -> ChatOpenAI:

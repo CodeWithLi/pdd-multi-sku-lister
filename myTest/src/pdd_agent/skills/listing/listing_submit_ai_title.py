@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import base64
+import time
+from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
 from pathlib import Path
 from typing import Any
 
@@ -19,6 +21,9 @@ from pdd_agent.skills.listing.page_ai_title import (
     _has_title_length_error,
     _read_title_from_input,
 )
+
+# 单次模型调用硬超时（秒）；超时视为失败并走兜底/跳过，避免上架线程无限阻塞。
+SUBMIT_AI_TITLE_REQUEST_TIMEOUT_SECONDS = 60
 
 
 def _log(account_id: str, label: str, msg: str) -> None:
@@ -94,15 +99,28 @@ def _classify_title_model_exception(exc: Exception) -> tuple[str, str]:
         )
     ):
         return "image_payload_rejected", text
+    if any(
+        token in lowered
+        for token in (
+            "timeout",
+            "timed out",
+            "time out",
+            "readtimeout",
+            "connecttimeout",
+            "deadline exceeded",
+        )
+    ):
+        return "model_invoke_timeout", text
     return "model_invoke_failed", text
 
 
-def _invoke_title_model(
-    *,
-    cfg: SubmitAiTitleConfig,
-    prompt: str,
-    images: list[Path],
-) -> str:
+def _model_label(cfg: SubmitAiTitleConfig) -> str:
+    provider = str(cfg.provider or "").strip() or "model"
+    model = str(cfg.model or "").strip() or "-"
+    return f"{provider}/{model}"
+
+
+def _build_title_message_content(prompt: str, images: list[Path]) -> list[dict[str, Any]]:
     content: list[dict[str, Any]] = [{"type": "text", "text": prompt}]
     for path in images:
         try:
@@ -115,15 +133,73 @@ def _invoke_title_model(
                 "image_url": {"url": f"data:{_image_media_type(path)};base64,{data}"},
             }
         )
+    return content
+
+
+def _invoke_title_model_once(
+    *,
+    cfg: SubmitAiTitleConfig,
+    prompt: str,
+    images: list[Path],
+    request_timeout: float,
+) -> str:
+    content = _build_title_message_content(prompt, images)
     model = create_chat_model_with_runtime(
         model=cfg.model,
         api_key=cfg.api_key,
         base_url=cfg.base_url,
         temperature=cfg.temperature,
+        request_timeout=request_timeout,
     )
     resp = model.invoke([HumanMessage(content=content)])
     raw = resp.content if isinstance(resp.content, str) else str(resp.content)
     return _normalize_title_text(raw)
+
+
+def _invoke_title_model(
+    *,
+    cfg: SubmitAiTitleConfig,
+    prompt: str,
+    images: list[Path],
+    account_id: str,
+    label: str,
+    role: str,
+    request_timeout: float = SUBMIT_AI_TITLE_REQUEST_TIMEOUT_SECONDS,
+) -> str:
+    timeout_seconds = max(1.0, float(request_timeout or SUBMIT_AI_TITLE_REQUEST_TIMEOUT_SECONDS))
+    model_name = _model_label(cfg)
+    _log(
+        account_id,
+        label,
+        f"提交前 AI 标题：开始调用{role} {model_name}，图片 {len(images)} 张，超时 {int(timeout_seconds)}s",
+    )
+    started = time.monotonic()
+
+    def _run() -> str:
+        return _invoke_title_model_once(
+            cfg=cfg,
+            prompt=prompt,
+            images=images,
+            request_timeout=timeout_seconds,
+        )
+
+    with ThreadPoolExecutor(max_workers=1, thread_name_prefix="submit-ai-title") as pool:
+        future = pool.submit(_run)
+        try:
+            title = future.result(timeout=timeout_seconds)
+        except FuturesTimeoutError as exc:
+            raise TimeoutError(
+                f"{role} 调用超时（>{int(timeout_seconds)}s） model={model_name}"
+            ) from exc
+
+    elapsed = time.monotonic() - started
+    preview = title[:40] if title else "（空）"
+    _log(
+        account_id,
+        label,
+        f"提交前 AI 标题：{role} {model_name} 返回（{elapsed:.1f}s） title={preview}",
+    )
+    return title
 
 
 def _invoke_title_with_fallback(
@@ -140,8 +216,17 @@ def _invoke_title_with_fallback(
     """
     primary_reason = ""
     primary_error = ""
+    timeout_seconds = SUBMIT_AI_TITLE_REQUEST_TIMEOUT_SECONDS
     try:
-        title = _invoke_title_model(cfg=cfg, prompt=prompt, images=images)
+        title = _invoke_title_model(
+            cfg=cfg,
+            prompt=prompt,
+            images=images,
+            account_id=account_id,
+            label=label,
+            role="主模型",
+            request_timeout=timeout_seconds,
+        )
         if title:
             return {
                 "title": title,
@@ -195,7 +280,15 @@ def _invoke_title_with_fallback(
     fallback_reason = ""
     fallback_error = ""
     try:
-        title = _invoke_title_model(cfg=fallback_cfg, prompt=prompt, images=images)
+        title = _invoke_title_model(
+            cfg=fallback_cfg,
+            prompt=prompt,
+            images=images,
+            account_id=account_id,
+            label=label,
+            role="兜底模型",
+            request_timeout=timeout_seconds,
+        )
         if title:
             return {
                 "title": title,
@@ -208,9 +301,10 @@ def _invoke_title_with_fallback(
                 "fallback_error": "",
             }
         fallback_reason = "fallback_empty_title"
+        _log(account_id, label, "提交前 AI 标题：兜底模型返回空标题，跳过 AI 改标题并继续提交")
     except Exception as exc:
         fallback_reason, fallback_error = _classify_title_model_exception(exc)
-        _log(account_id, label, f"提交前 AI 标题：GLM 兜底也失败（{fallback_reason}: {exc}）")
+        _log(account_id, label, f"提交前 AI 标题：GLM 兜底也失败（{fallback_reason}: {exc}），跳过并继续提交")
     return {
         "title": "",
         "source": "glm_fallback",
@@ -257,6 +351,11 @@ def apply_submit_ai_title_before_submit(
         "请基于图片生成新标题，只返回最终标题。",
     ]
     final_prompt = f"{cfg.prompt}\n\n补充上下文：\n" + "\n".join(context_lines)
+    _log(
+        account_id,
+        label,
+        "提交前 AI 标题：开始生成（失败或超时将沿用页面标题并继续提交）",
+    )
     invoke_result = _invoke_title_with_fallback(
         cfg=cfg,
         prompt=final_prompt,
