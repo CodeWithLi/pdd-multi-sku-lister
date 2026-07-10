@@ -53,7 +53,6 @@ def build_store_sequential_common_params(
     listing_per_batch_lt_traffic_activity_enabled: bool = False,
     listing_per_batch_promote_lt_success_only_enabled: bool = True,
     delist_spec_code_search_enabled: bool = False,
-    activity_limited_time_success_only: bool = False,
     activity_traffic_batch_enabled: bool = False,
     activity_traffic_batch_size: int = 10,
     trigger_source: str = "manual",
