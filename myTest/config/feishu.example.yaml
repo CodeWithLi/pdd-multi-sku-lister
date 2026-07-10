@@ -216,6 +216,7 @@ pdd_product_catalog:
     product_code: 商品编码
     color_spec: 颜色规格
     product_type: 商品类型
+    product_status: 产品状态
     available_inventory: 可用库存
     pricing: 拼多多定价+5元
 

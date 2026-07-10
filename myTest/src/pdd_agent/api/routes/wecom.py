@@ -22,6 +22,7 @@ from pdd_agent.api.schemas.wecom import (
     WecomDailyReportTriggerOut,
     WecomHealthOut,
     WecomInProgressDraftOut,
+    WecomStoreProgressPreviewOut,
     WecomTestSendIn,
     WecomTestSendOut,
 )
@@ -52,6 +53,10 @@ from pdd_agent.integrations.wecom.daily_content import (
     save_wecom_daily_preview,
 )
 from pdd_agent.integrations.wecom.daily_report import generate_daily_report_draft
+from pdd_agent.integrations.wecom.daily_shop_publish_progress_bridge import (
+    collect_shop_publish_report_snapshot,
+)
+from pdd_agent.integrations.wecom.store_progress_window import describe_store_progress_window
 from pdd_agent.core.report_time_window import REPORT_WINDOW_DESCRIPTION, format_report_window_iso, report_listing_window
 from pdd_agent.integrations.wecom.in_progress_draft import collect_in_progress_draft_lines
 from pdd_agent.db.repositories import get_wecom_daily_report_log, list_wecom_daily_report_logs
@@ -88,6 +93,11 @@ def _config_out(cfg: WecomConfig, *, expose_webhook: bool = False) -> WecomConfi
         daily_report_schedule_use_saved_preview=bool(cfg.daily_report_schedule_use_saved_preview),
         daily_report_include_activity_promotion=bool(cfg.daily_report_include_activity_promotion),
         daily_report_include_limited_time_gap=bool(cfg.daily_report_include_limited_time_gap),
+        daily_report_store_window_start_hour=int(cfg.daily_report_store_window_start_hour),
+        daily_report_store_window_start_minute=int(cfg.daily_report_store_window_start_minute),
+        daily_report_store_window_end_hour=int(cfg.daily_report_store_window_end_hour),
+        daily_report_store_window_end_minute=int(cfg.daily_report_store_window_end_minute),
+        daily_report_store_window_description=describe_store_progress_window(cfg),
         daily_report_schedule_time=f"{hour:02d}:{minute:02d}",
         daily_report_scheduler_running=scheduler.is_running,
         daily_report_last_run_date=(
@@ -164,6 +174,10 @@ def update_wecom_config(body: WecomConfigUpdateIn):
             daily_report_schedule_use_saved_preview=bool(body.daily_report_schedule_use_saved_preview),
             daily_report_include_activity_promotion=bool(body.daily_report_include_activity_promotion),
             daily_report_include_limited_time_gap=bool(body.daily_report_include_limited_time_gap),
+            daily_report_store_window_start_hour=int(body.daily_report_store_window_start_hour),
+            daily_report_store_window_start_minute=int(body.daily_report_store_window_start_minute),
+            daily_report_store_window_end_hour=int(body.daily_report_store_window_end_hour),
+            daily_report_store_window_end_minute=int(body.daily_report_store_window_end_minute),
         )
     )
     get_wecom_daily_report_scheduler().reset_last_run_date()
@@ -378,12 +392,16 @@ def get_in_progress_draft():
 def preview_daily_report(
     platform: WecomDailyReportPlatform = "pdd",
     use_saved_preview: bool = True,
+    listing_window_start: str = "",
+    listing_window_end: str = "",
 ):
     """预览指定平台日报草稿（不发送企业微信）。"""
     try:
         draft = generate_daily_report_draft(
             platform=platform,
             use_saved_preview=use_saved_preview,
+            listing_window_start=str(listing_window_start or "").strip(),
+            listing_window_end=str(listing_window_end or "").strip(),
         )
     except GitDigestError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -392,6 +410,26 @@ def preview_daily_report(
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"生成日报失败: {exc}") from exc
     return _preview_out(draft)
+
+
+@router.get("/daily-report/store-progress", response_model=WecomStoreProgressPreviewOut)
+def preview_store_progress(
+    listing_window_start: str = "",
+    listing_window_end: str = "",
+):
+    """按自定义或默认窗口重新统计店铺发布进度。"""
+    try:
+        start_text, end_text, store_progress, _stats = collect_shop_publish_report_snapshot(
+            listing_window_start=str(listing_window_start or "").strip(),
+            listing_window_end=str(listing_window_end or "").strip(),
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"统计店铺发布进度失败: {exc}") from exc
+    return WecomStoreProgressPreviewOut(
+        store_progress=store_progress,
+        listing_window_start=start_text,
+        listing_window_end=end_text,
+    )
 
 
 @router.post("/daily-report/trigger", response_model=WecomDailyReportTriggerOut)

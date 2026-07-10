@@ -188,6 +188,7 @@ class PddProductCatalogFieldNames(BaseModel):
     product_code: str = "商品编码"
     color_spec: str = "颜色规格"
     product_type: str = "商品类型"
+    product_status: str = "产品状态"
     available_inventory: str = "可用库存"
     pricing: str = "拼多多定价+5元"
 

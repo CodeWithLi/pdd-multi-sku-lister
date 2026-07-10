@@ -83,7 +83,13 @@ const configForm = reactive({
   daily_report_schedule_use_saved_preview: false,
   daily_report_include_activity_promotion: false,
   daily_report_include_limited_time_gap: true,
+  daily_report_store_window_start_hour: 18,
+  daily_report_store_window_start_minute: 1,
+  daily_report_store_window_end_hour: 18,
+  daily_report_store_window_end_minute: 0,
 })
+
+const storeWindowDescription = ref('昨天 18:01 ~ 今天 18:00')
 
 const scheduleTimeDisplay = computed(() => {
   const h = String(configForm.daily_report_schedule_hour).padStart(2, '0')
@@ -134,6 +140,11 @@ function applyConfig(cfg: WecomConfig) {
   configForm.daily_report_schedule_use_saved_preview = cfg.daily_report_schedule_use_saved_preview
   configForm.daily_report_include_activity_promotion = cfg.daily_report_include_activity_promotion
   configForm.daily_report_include_limited_time_gap = cfg.daily_report_include_limited_time_gap
+  configForm.daily_report_store_window_start_hour = cfg.daily_report_store_window_start_hour
+  configForm.daily_report_store_window_start_minute = cfg.daily_report_store_window_start_minute
+  configForm.daily_report_store_window_end_hour = cfg.daily_report_store_window_end_hour
+  configForm.daily_report_store_window_end_minute = cfg.daily_report_store_window_end_minute
+  storeWindowDescription.value = cfg.daily_report_store_window_description || storeWindowDescription.value
   scheduleLastRunDate.value = cfg.daily_report_last_run_date || ''
   scheduleRunning.value = Boolean(cfg.daily_report_scheduler_running)
   webhookEditing.value = false
@@ -256,6 +267,10 @@ async function save() {
       daily_report_schedule_use_saved_preview: configForm.daily_report_schedule_use_saved_preview,
       daily_report_include_activity_promotion: configForm.daily_report_include_activity_promotion,
       daily_report_include_limited_time_gap: configForm.daily_report_include_limited_time_gap,
+      daily_report_store_window_start_hour: configForm.daily_report_store_window_start_hour,
+      daily_report_store_window_start_minute: configForm.daily_report_store_window_start_minute,
+      daily_report_store_window_end_hour: configForm.daily_report_store_window_end_hour,
+      daily_report_store_window_end_minute: configForm.daily_report_store_window_end_minute,
     })
     applyConfig(cfg)
     health.value = await api.wecomHealth()
@@ -292,7 +307,11 @@ async function previewDailyReport(platform: WecomDailyReportPlatform) {
   previewPlatform.value = platform
   try {
     await saveDailyContent(true)
-    const preview = await api.wecomDailyReportPreview(platform)
+    const preview = await api.wecomDailyReportPreview(platform, {
+      use_saved_preview: false,
+      listing_window_start: editableReport.listing_window_start,
+      listing_window_end: editableReport.listing_window_end,
+    })
     reportPreview.value = preview
     applyPreviewToEditable(preview)
   } catch (e) {
@@ -311,7 +330,9 @@ async function restoreSavedPreview(
   previewing.value = true
   previewPlatform.value = platform
   try {
-    const preview = await api.wecomDailyReportPreview(platform)
+    const preview = await api.wecomDailyReportPreview(platform, {
+      use_saved_preview: true,
+    })
     reportPreview.value = preview
     applyPreviewToEditable(preview)
     if (!options.silent) {
@@ -348,7 +369,18 @@ async function savePreviewEdits() {
     })
     applyDailyContent(data)
     dailyContentForm.pdd_in_progress = editableReport.in_progress
-    reportPreview.value = { ...reportPreview.value, message: liveMarkdown.value }
+    applyPreviewToEditable({
+      ...reportPreview.value!,
+      progress_summary: data.pdd_progress_summary || '',
+      store_progress: data.pdd_store_progress || '',
+      in_progress: data.pdd_in_progress || '',
+      listing_window_start: data.pdd_listing_window_start || '',
+      listing_window_end: data.pdd_listing_window_end || '',
+      git_window_start: data.pdd_git_window_start || '',
+      git_window_end: data.pdd_git_window_end || '',
+      message: liveMarkdown.value,
+    })
+    reportPreview.value = { ...reportPreview.value!, message: liveMarkdown.value }
     ElMessage.success('预览内容已保存，定时发送将使用此版本')
   } catch (e) {
     ElMessage.error(e instanceof Error ? e.message : '保存预览失败')
@@ -397,12 +429,40 @@ async function regenerateDailyReport() {
     await saveDailyContent(true)
     const preview = await api.wecomDailyReportPreview(reportPreview.value.platform, {
       use_saved_preview: false,
+      listing_window_start: editableReport.listing_window_start,
+      listing_window_end: editableReport.listing_window_end,
     })
     reportPreview.value = preview
     applyPreviewToEditable(preview)
     ElMessage.success('已根据最新数据重新生成，未覆盖已保存预览')
   } catch (e) {
     ElMessage.error(e instanceof Error ? e.message : '重新生成失败')
+  } finally {
+    previewing.value = false
+  }
+}
+
+async function refreshStoreProgressByWindow() {
+  if (!editableReport.listing_window_start || !editableReport.listing_window_end) {
+    ElMessage.warning('请先填写统计开始和结束时间')
+    return
+  }
+  if (editableReport.listing_window_start >= editableReport.listing_window_end) {
+    ElMessage.warning('结束时间必须晚于开始时间')
+    return
+  }
+  previewing.value = true
+  try {
+    const data = await api.wecomDailyReportStoreProgress({
+      listing_window_start: editableReport.listing_window_start,
+      listing_window_end: editableReport.listing_window_end,
+    })
+    editableReport.store_progress = data.store_progress || ''
+    editableReport.listing_window_start = data.listing_window_start || editableReport.listing_window_start
+    editableReport.listing_window_end = data.listing_window_end || editableReport.listing_window_end
+    ElMessage.success('已按当前统计窗口重新统计店铺发布进度')
+  } catch (e) {
+    ElMessage.error(e instanceof Error ? e.message : '统计失败')
   } finally {
     previewing.value = false
   }
@@ -861,6 +921,22 @@ onMounted(() => {
             <el-switch v-model="configForm.daily_report_include_limited_time_gap" />
           </div>
 
+          <div class="time-panel">
+            <div class="time-panel-label">店铺发布默认统计窗口</div>
+            <p class="field-hint">相对日报日期：昨天 {{ String(configForm.daily_report_store_window_start_hour).padStart(2, '0') }}:{{ String(configForm.daily_report_store_window_start_minute).padStart(2, '0') }} ~ 今天 {{ String(configForm.daily_report_store_window_end_hour).padStart(2, '0') }}:{{ String(configForm.daily_report_store_window_end_minute).padStart(2, '0') }}</p>
+            <div class="time-row">
+              <span>昨天</span>
+              <el-input-number v-model="configForm.daily_report_store_window_start_hour" :min="0" :max="23" controls-position="right" />
+              <span>:</span>
+              <el-input-number v-model="configForm.daily_report_store_window_start_minute" :min="0" :max="59" controls-position="right" />
+              <span>今天</span>
+              <el-input-number v-model="configForm.daily_report_store_window_end_hour" :min="0" :max="23" controls-position="right" />
+              <span>:</span>
+              <el-input-number v-model="configForm.daily_report_store_window_end_minute" :min="0" :max="59" controls-position="right" />
+            </div>
+            <p class="field-hint">预览里也可单独改某次日报的统计起止时间，再点「按窗口统计」</p>
+          </div>
+
           <div class="field-block">
             <label class="field-label">日报 Webhook 地址</label>
             <template v-if="!dailyReportWebhookEditing">
@@ -894,7 +970,7 @@ onMounted(() => {
               <span>分</span>
             </div>
             <div class="time-badge">{{ scheduleTimeDisplay }} · Asia/Shanghai</div>
-            <p class="field-hint">店铺统计窗口：昨天 18:01 ~ 今天 18:00</p>
+            <p class="field-hint">店铺统计默认窗口：{{ storeWindowDescription }}</p>
           </div>
 
           <div class="schedule-meta-box">
@@ -1047,9 +1123,29 @@ onMounted(() => {
             </div>
             <div class="editor-block">
               <label class="editor-label">店铺发布进度</label>
+              <div class="window-editor-row">
+                <div class="window-field">
+                  <span class="window-field-label">开始</span>
+                  <el-input
+                    v-model="editableReport.listing_window_start"
+                    placeholder="2026-07-09 18:01"
+                    class="window-input"
+                  />
+                </div>
+                <div class="window-field">
+                  <span class="window-field-label">结束</span>
+                  <el-input
+                    v-model="editableReport.listing_window_end"
+                    placeholder="2026-07-10 18:00"
+                    class="window-input"
+                  />
+                </div>
+                <el-button size="small" :loading="previewing" @click="refreshStoreProgressByWindow">
+                  按窗口统计
+                </el-button>
+              </div>
               <p class="editor-hint">
-                统计窗口：{{ editableReport.listing_window_start || '—' }}
-                ~ {{ editableReport.listing_window_end || '—' }}
+                统计窗口可自定义；留空时重新生成将使用默认窗口（{{ storeWindowDescription }}）
               </p>
               <el-input
                 v-model="editableReport.store_progress"
@@ -1742,6 +1838,31 @@ onMounted(() => {
   display: flex;
   align-items: center;
   gap: 8px;
+  flex-wrap: wrap;
+}
+
+.window-editor-row {
+  display: flex;
+  align-items: flex-end;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-bottom: 8px;
+}
+
+.window-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 180px;
+}
+
+.window-field-label {
+  font-size: 12px;
+  color: #64748b;
+}
+
+.window-input {
+  width: 200px;
 }
 
 .time-badge {

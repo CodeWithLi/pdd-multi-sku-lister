@@ -22,3 +22,8 @@ daily_report_schedule_use_saved_preview: false
 daily_report_include_activity_promotion: false
 # 开启后，当限时限量购与已发布不匹配时，追加失败原因与未跑数量
 daily_report_include_limited_time_gap: true
+# 店铺发布进度默认统计窗口（相对日报日期：昨天 start ~ 今天 end）
+daily_report_store_window_start_hour: 18
+daily_report_store_window_start_minute: 1
+daily_report_store_window_end_hour: 18
+daily_report_store_window_end_minute: 0

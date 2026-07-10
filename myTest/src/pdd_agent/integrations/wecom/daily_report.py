@@ -30,6 +30,11 @@ from pdd_agent.integrations.wecom.store_progress import (
     StoreListingSummary,
     collect_pdd_store_progress,
 )
+from pdd_agent.integrations.wecom.store_progress_window import (
+    bounds_from_wecom_config,
+    resolve_store_progress_window_iso,
+)
+from pdd_agent.integrations.wecom.config import load_wecom_config
 
 DailyReportPlatform = Literal["pdd", "taobao"]
 
@@ -62,33 +67,56 @@ def generate_pdd_daily_report_draft(
     day: date | None = None,
     daily_content: WecomDailyContent | None = None,
     use_saved_preview: bool = True,
+    listing_window_start: str = "",
+    listing_window_end: str = "",
 ) -> DailyReportDraft:
     """生成 PDD 日报草稿（Git + 店铺数据 + 手动区块）。"""
     resolved = resolve_git_repo_path(repo_path)
     target_day = day or today_in_tz()
     content = daily_content or load_wecom_daily_content(day=target_day)
-    window_start, window_end = report_listing_window(reference_day=target_day)
-    git_window_label = format_report_window_label(window_start, window_end)
-    listing_window_start, listing_window_end = format_report_window_iso(window_start, window_end)
+    wecom_cfg = load_wecom_config()
+    git_bounds = bounds_from_wecom_config(wecom_cfg)
+    git_window_start_dt, git_window_end_dt = report_listing_window(
+        reference_day=target_day,
+        bounds=git_bounds,
+    )
+    git_window_label = format_report_window_label(git_window_start_dt, git_window_end_dt)
+    git_window_start, git_window_end = format_report_window_iso(
+        git_window_start_dt,
+        git_window_end_dt,
+    )
+
+    listing_window_start, listing_window_end, store_window_start, store_window_end = (
+        resolve_store_progress_window_iso(
+            reference_day=target_day,
+            listing_window_start=listing_window_start,
+            listing_window_end=listing_window_end,
+            config=wecom_cfg,
+        )
+    )
 
     commits = collect_commits_between(
         repo_path=resolved,
-        start=window_start,
-        end=window_end,
+        start=git_window_start_dt,
+        end=git_window_end_dt,
         inclusive_end=True,
     )
     progress_summary, from_cache = summarize_commits_as_progress(
         commits,
         report_date=target_day,
-        window_start=window_start,
-        window_end=window_end,
+        window_start=git_window_start_dt,
+        window_end=git_window_end_dt,
     )
-    store_snapshot = collect_pdd_store_progress(reference_day=target_day)
+    store_snapshot = collect_pdd_store_progress(
+        reference_day=target_day,
+        window_start=store_window_start,
+        window_end=store_window_end,
+    )
     manual_in_progress = str(content.pdd.in_progress or "").strip()
     in_progress, auto_draft = resolve_pdd_in_progress(
         manual=manual_in_progress,
-        window_start=window_start,
-        window_end=window_end,
+        window_start=git_window_start_dt,
+        window_end=git_window_end_dt,
     )
     progress_summary_out = progress_summary
     store_progress_out = store_snapshot.text
@@ -173,6 +201,8 @@ def generate_daily_report_draft(
     day: date | None = None,
     daily_content: WecomDailyContent | None = None,
     use_saved_preview: bool = True,
+    listing_window_start: str = "",
+    listing_window_end: str = "",
 ) -> DailyReportDraft:
     if platform == "taobao":
         return generate_taobao_daily_report_draft(day=day, daily_content=daily_content)
@@ -181,4 +211,6 @@ def generate_daily_report_draft(
         day=day,
         daily_content=daily_content,
         use_saved_preview=use_saved_preview,
+        listing_window_start=listing_window_start,
+        listing_window_end=listing_window_end,
     )

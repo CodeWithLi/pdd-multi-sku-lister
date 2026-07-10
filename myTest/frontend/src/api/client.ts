@@ -106,6 +106,7 @@ import type {
   WecomDailyPreviewSavePayload,
   WecomDailyReportPlatform,
   WecomDailyReportPreview,
+  WecomStoreProgressPreview,
   WecomInProgressDraft,
   WecomDailyReportLogDetail,
   WecomDailyReportLogListResponse,
@@ -1169,15 +1170,29 @@ export const api = {
 
   wecomDailyReportPreview: (
     platform: WecomDailyReportPlatform,
-    options?: { use_saved_preview?: boolean },
+    options?: {
+      use_saved_preview?: boolean
+      listing_window_start?: string
+      listing_window_end?: string
+    },
   ) =>
     http
       .get<WecomDailyReportPreview>('/wecom/daily-report/preview', {
         params: {
           platform,
           use_saved_preview: options?.use_saved_preview ?? true,
+          listing_window_start: options?.listing_window_start || undefined,
+          listing_window_end: options?.listing_window_end || undefined,
         },
       })
+      .then((r) => r.data),
+
+  wecomDailyReportStoreProgress: (params?: {
+    listing_window_start?: string
+    listing_window_end?: string
+  }) =>
+    http
+      .get<WecomStoreProgressPreview>('/wecom/daily-report/store-progress', { params })
       .then((r) => r.data),
 
   wecomInProgressDraft: () =>

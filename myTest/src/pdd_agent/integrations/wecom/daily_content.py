@@ -194,23 +194,24 @@ def save_wecom_daily_preview(
     git_window_end: str = "",
     day: date | None = None,
 ) -> WecomDailyContent:
-    """保存 PDD 日报预览编辑内容（供定时发送使用）。"""
+    """保存 PDD 日报预览编辑内容（供定时发送使用）；整段覆盖，允许清空字段。"""
+    if not is_database_available():
+        raise RuntimeError("数据库不可用，无法保存日报预览")
     target = _resolve_day(day)
     existing = load_wecom_daily_content(day=target)
-    return save_wecom_daily_content(
-        WecomDailyContent(
-            content_date=target.isoformat(),
-            pdd=PddDailyContent(
-                in_progress=str(in_progress or ""),
-                progress_summary=str(progress_summary or ""),
-                store_progress=str(store_progress or ""),
-                listing_window_start=str(listing_window_start or ""),
-                listing_window_end=str(listing_window_end or ""),
-                git_window_start=str(git_window_start or ""),
-                git_window_end=str(git_window_end or ""),
-                preview_saved=True,
-            ),
-            taobao=existing.taobao,
-        ),
-        day=target,
+    row = upsert_wecom_daily_content_row(
+        content_date=target,
+        pdd_in_progress=str(in_progress or ""),
+        pdd_progress_summary=str(progress_summary or ""),
+        pdd_store_progress=str(store_progress or ""),
+        pdd_listing_window_start=str(listing_window_start or ""),
+        pdd_listing_window_end=str(listing_window_end or ""),
+        pdd_git_window_start=str(git_window_start or ""),
+        pdd_git_window_end=str(git_window_end or ""),
+        pdd_preview_saved=True,
+        taobao_netdisk_materials=str(existing.taobao.netdisk_materials or ""),
+        taobao_in_progress=str(existing.taobao.in_progress or ""),
     )
+    if not row:
+        raise RuntimeError("保存日报预览失败")
+    return _row_to_content(row)

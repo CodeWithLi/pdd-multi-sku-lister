@@ -28,6 +28,11 @@ class WecomConfigOut(BaseModel):
     daily_report_schedule_use_saved_preview: bool = False
     daily_report_include_activity_promotion: bool = False
     daily_report_include_limited_time_gap: bool = True
+    daily_report_store_window_start_hour: int = 18
+    daily_report_store_window_start_minute: int = 1
+    daily_report_store_window_end_hour: int = 18
+    daily_report_store_window_end_minute: int = 0
+    daily_report_store_window_description: str = ""
     daily_report_schedule_time: str = "18:00"
     daily_report_scheduler_running: bool = False
     daily_report_last_run_date: str = ""
@@ -48,6 +53,16 @@ class WecomConfigUpdateIn(BaseModel):
     daily_report_schedule_use_saved_preview: bool = False
     daily_report_include_activity_promotion: bool = False
     daily_report_include_limited_time_gap: bool = True
+    daily_report_store_window_start_hour: int = 18
+    daily_report_store_window_start_minute: int = 1
+    daily_report_store_window_end_hour: int = 18
+    daily_report_store_window_end_minute: int = 0
+
+
+class WecomStoreProgressPreviewOut(BaseModel):
+    store_progress: str = ""
+    listing_window_start: str = ""
+    listing_window_end: str = ""
 
 
 class WecomTestSendIn(BaseModel):

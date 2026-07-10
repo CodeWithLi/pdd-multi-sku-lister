@@ -1352,9 +1352,27 @@ async def execute_listing(
                         "reason": "platform_skip_dedupe",
                         "listing_label": listing_label,
                         "platform_listing_code": folder,
+                        "selector": selector,
+                        "merchant_code": folder,
                         "error": PLATFORM_SKIP_REASON,
                         "dedupe": True,
                     }
+                )
+            if dedupe_skipped_results:
+                from pdd_agent.integrations.feishu.listing_feishu_product_status_skip import (
+                    enrich_platform_skip_items_with_delisted_status,
+                    schedule_platform_skip_feishu_failure_logs,
+                )
+
+                dedupe_status_map = enrich_platform_skip_items_with_delisted_status(
+                    dedupe_skipped_results,
+                )
+                schedule_platform_skip_feishu_failure_logs(
+                    account_id=account_id,
+                    account_name=_account_display_name(account_id),
+                    entries=dedupe_skipped_results,
+                    status_by_code=dedupe_status_map,
+                    write_mode="dedupe",
                 )
             codes = list(dedupe.get("passed_selectors") or [])
             if pipeline_id and dedupe_skipped_results:
@@ -1460,7 +1478,6 @@ async def execute_listing(
             PLATFORM_SKIP_REASON,
             check_product_folders_in_bag_view,
         )
-        from pdd_agent.integrations.feishu.pdd_upload_sync import schedule_pdd_upload_failure_log
 
         try:
             bag_guard = check_product_folders_in_bag_view(list(folder_by_selector.values()))
@@ -1490,6 +1507,14 @@ async def execute_listing(
                     folder_by_selector=folder_by_selector,
                 )
             )
+            from pdd_agent.integrations.feishu.listing_feishu_product_status_skip import (
+                enrich_platform_skip_items_with_delisted_status,
+                schedule_platform_skip_feishu_failure_logs,
+            )
+
+            bag_status_map = enrich_platform_skip_items_with_delisted_status(
+                bag_view_skipped_results,
+            )
             if pipeline_id and missing_selectors:
                 try:
                     from pdd_agent.api.services.pipeline_listing_skip_record import (
@@ -1508,21 +1533,16 @@ async def execute_listing(
                         "pipeline listing skip record failed pipeline_id=%s kind=bag_view_missing",
                         pipeline_id,
                     )
-            for selector in missing_selectors:
-                folder = folder_by_selector[selector]
-                schedule_pdd_upload_failure_log(
-                    account_id=account_id,
-                    account_name=_account_display_name(account_id),
-                    listing_label=selector,
-                    merchant_code=folder,
-                    record_type="跳过",
-                    failure_reason=PLATFORM_SKIP_REASON,
-                    system_reason=f"笔袋视图未找到：{folder}",
-                    report_platform="拼多多",
-                    publish_start=publish_start,
-                    publish_end=publish_end or now,
-                    duration_seconds=duration_seconds,
-                )
+            schedule_platform_skip_feishu_failure_logs(
+                account_id=account_id,
+                account_name=_account_display_name(account_id),
+                entries=bag_view_skipped_results,
+                status_by_code=bag_status_map,
+                write_mode="bag_view",
+                publish_start=publish_start,
+                publish_end=publish_end or now,
+                duration_seconds=duration_seconds,
+            )
 
             passed_codes = [
                 str(item).strip()

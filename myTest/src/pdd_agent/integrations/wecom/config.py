@@ -29,6 +29,10 @@ class WecomConfig(BaseModel):
     daily_report_schedule_use_saved_preview: bool = False
     daily_report_include_activity_promotion: bool = False
     daily_report_include_limited_time_gap: bool = True
+    daily_report_store_window_start_hour: int = 18
+    daily_report_store_window_start_minute: int = 1
+    daily_report_store_window_end_hour: int = 18
+    daily_report_store_window_end_minute: int = 0
 
     @model_validator(mode="after")
     def normalize(self) -> "WecomConfig":
@@ -36,6 +40,18 @@ class WecomConfig(BaseModel):
         self.webhook_url_daily_report = str(self.webhook_url_daily_report or "").strip()
         self.daily_report_schedule_hour = max(0, min(23, int(self.daily_report_schedule_hour)))
         self.daily_report_schedule_minute = max(0, min(59, int(self.daily_report_schedule_minute)))
+        self.daily_report_store_window_start_hour = max(
+            0, min(23, int(self.daily_report_store_window_start_hour))
+        )
+        self.daily_report_store_window_start_minute = max(
+            0, min(59, int(self.daily_report_store_window_start_minute))
+        )
+        self.daily_report_store_window_end_hour = max(
+            0, min(23, int(self.daily_report_store_window_end_hour))
+        )
+        self.daily_report_store_window_end_minute = max(
+            0, min(59, int(self.daily_report_store_window_end_minute))
+        )
         return self
 
 

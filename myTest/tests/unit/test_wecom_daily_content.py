@@ -170,6 +170,58 @@ def test_save_wecom_daily_preview_marks_saved():
     assert saved.pdd.preview_saved is True
 
 
+def test_save_wecom_daily_preview_overwrites_empty_store_progress():
+    existing_row = MagicMock()
+    existing_row.content_date = date(2026, 7, 10)
+    existing_row.pdd_in_progress = "旧进行中"
+    existing_row.pdd_progress_summary = "旧进展"
+    existing_row.pdd_store_progress = "旧店铺：已发布23个"
+    existing_row.pdd_listing_window_start = ""
+    existing_row.pdd_listing_window_end = ""
+    existing_row.pdd_git_window_start = ""
+    existing_row.pdd_git_window_end = ""
+    existing_row.pdd_preview_saved = True
+    existing_row.taobao_netdisk_materials = ""
+    existing_row.taobao_in_progress = ""
+    existing_row.updated_at = datetime(2026, 7, 10, 10, 0, 0)
+
+    saved_row = MagicMock()
+    saved_row.content_date = date(2026, 7, 10)
+    saved_row.pdd_in_progress = "新进行中"
+    saved_row.pdd_progress_summary = "新进展"
+    saved_row.pdd_store_progress = ""
+    saved_row.pdd_listing_window_start = "2026-07-09T18:01:00"
+    saved_row.pdd_listing_window_end = "2026-07-10T18:00:00"
+    saved_row.pdd_git_window_start = "2026-07-09T18:01:00"
+    saved_row.pdd_git_window_end = "2026-07-10T18:00:00"
+    saved_row.pdd_preview_saved = True
+    saved_row.taobao_netdisk_materials = ""
+    saved_row.taobao_in_progress = ""
+    saved_row.updated_at = datetime(2026, 7, 10, 17, 0, 0)
+
+    with patch("pdd_agent.integrations.wecom.daily_content.is_database_available", return_value=True):
+        with patch(
+            "pdd_agent.integrations.wecom.daily_content.get_wecom_daily_content_row",
+            return_value=existing_row,
+        ):
+            with patch(
+                "pdd_agent.integrations.wecom.daily_content.upsert_wecom_daily_content_row",
+                return_value=saved_row,
+            ) as mock_upsert:
+                with patch(
+                    "pdd_agent.integrations.wecom.daily_content.today_in_tz",
+                    return_value=date(2026, 7, 10),
+                ):
+                    saved = save_wecom_daily_preview(
+                        progress_summary="新进展",
+                        store_progress="",
+                        in_progress="新进行中",
+                    )
+
+    assert mock_upsert.call_args.kwargs["pdd_store_progress"] == ""
+    assert saved.pdd.store_progress == ""
+
+
 def test_save_wecom_daily_content_requires_database():
     with patch("pdd_agent.integrations.wecom.daily_content.is_database_available", return_value=False):
         with pytest.raises(RuntimeError, match="数据库不可用"):

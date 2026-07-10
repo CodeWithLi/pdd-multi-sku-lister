@@ -13,12 +13,15 @@ from pdd_agent.api.services.daily_shop_commerce_breakdown_stats import (
 from pdd_agent.api.services.daily_shop_published_product_report_stats import (
     summarize_published_product_report_between,
 )
-from pdd_agent.core.report_time_window import report_listing_window
 from pdd_agent.integrations.wecom.config import WecomConfig, load_wecom_config
 from pdd_agent.integrations.wecom.daily_shop_publish_progress_report import (
     ShopPublishReportFormatOptions,
     ShopPublishReportStat,
     format_shop_publish_report_lines,
+)
+from pdd_agent.integrations.wecom.store_progress_window import (
+    resolve_store_progress_window,
+    resolve_store_progress_window_iso,
 )
 
 
@@ -57,15 +60,21 @@ def collect_shop_publish_report_stats(
     *,
     reference_day: date | None = None,
     now: datetime | None = None,
+    window_start: datetime | None = None,
+    window_end: datetime | None = None,
     config: WecomConfig | None = None,
 ) -> list[ShopPublishReportStat]:
-    """采集日报窗口内店铺进度（以 published_products 为准）。"""
+    """采集指定窗口内店铺进度（以 published_products 为准）。"""
     cfg = config or load_wecom_config()
     options = _build_report_options(cfg)
-    start, end = report_listing_window(reference_day=reference_day, now=now)
+    if window_start is None or window_end is None:
+        window_start, window_end = resolve_store_progress_window(
+            reference_day=reference_day,
+            config=cfg,
+        )
     published_stats = summarize_published_product_report_between(
-        start=start,
-        end=end,
+        start=window_start,
+        end=window_end,
         inclusive_end=True,
     )
 
@@ -75,22 +84,22 @@ def collect_shop_publish_report_stats(
     if options.include_activity_promotion:
         activity_618_by_account = rows_to_count_map(
             summarize_activity_618_success_between(
-                start=start,
-                end=end,
+                start=window_start,
+                end=window_end,
                 inclusive_end=True,
             )
         )
         activity_discount_by_account = rows_to_count_map(
             summarize_activity_discount_success_between(
-                start=start,
-                end=end,
+                start=window_start,
+                end=window_end,
                 inclusive_end=True,
             )
         )
         promotion_by_account = rows_to_count_map(
             summarize_promotion_success_for_report(
-                start=start,
-                end=end,
+                start=window_start,
+                end=window_end,
                 inclusive_end=True,
             )
         )
@@ -149,11 +158,39 @@ def collect_shop_publish_report_text(
     *,
     reference_day: date | None = None,
     now: datetime | None = None,
+    window_start: datetime | None = None,
+    window_end: datetime | None = None,
     config: WecomConfig | None = None,
 ) -> str:
     stats = collect_shop_publish_report_stats(
         reference_day=reference_day,
         now=now,
+        window_start=window_start,
+        window_end=window_end,
         config=config,
     )
     return build_shop_publish_report_text(stats, config=config)
+
+
+def collect_shop_publish_report_snapshot(
+    *,
+    reference_day: date | None = None,
+    listing_window_start: str = "",
+    listing_window_end: str = "",
+    config: WecomConfig | None = None,
+) -> tuple[str, str, str, list[ShopPublishReportStat]]:
+    """按自定义或默认窗口采集店铺进度，返回窗口标签与统计行。"""
+    cfg = config or load_wecom_config()
+    start_text, end_text, window_start, window_end = resolve_store_progress_window_iso(
+        reference_day=reference_day,
+        listing_window_start=listing_window_start,
+        listing_window_end=listing_window_end,
+        config=cfg,
+    )
+    stats = collect_shop_publish_report_stats(
+        reference_day=reference_day,
+        window_start=window_start,
+        window_end=window_end,
+        config=cfg,
+    )
+    return start_text, end_text, build_shop_publish_report_text(stats, config=cfg), stats
