@@ -53,6 +53,7 @@ class IntegratedPipelineStartRequest(BaseModel):
     listing_batch_interval_minutes: int = Field(default=30, ge=1, le=1440)
     listing_per_batch_limited_time_enabled: bool = False
     listing_per_batch_campaign_enabled: bool = False
+    listing_per_batch_lt_traffic_activity_enabled: bool = False
     delist_spec_code_search_enabled: bool = False
 
     @model_validator(mode="after")
@@ -100,6 +101,7 @@ class IntegratedPipelineBatchStartRequest(BaseModel):
     listing_batch_interval_minutes: int = Field(default=30, ge=1, le=1440)
     listing_per_batch_limited_time_enabled: bool = False
     listing_per_batch_campaign_enabled: bool = False
+    listing_per_batch_lt_traffic_activity_enabled: bool = False
     delist_spec_code_search_enabled: bool = False
     account_ids: list[str] = Field(default_factory=list)
     product_codes: list[str] = Field(default_factory=list)
@@ -387,3 +389,34 @@ class AutoUploadConfigUpdateIn(BaseModel):
         self.account_ids = list(dict.fromkeys(account_ids))
         self.account_id = self.account_ids[0] if self.account_ids else ""
         return self
+
+
+class IntegratedPipelineBatchProductStageItem(BaseModel):
+    record_id: str = ""
+    pipeline_id: str = ""
+    account_id: str = ""
+    batch_index: int = 0
+    product_selector: str = ""
+    listing_label: str = ""
+    pdd_product_id: str = ""
+    mapping_id: str = ""
+    listing_status: str = "pending"
+    listing_error: str = ""
+    limited_time_status: str = "pending"
+    limited_time_error: str = ""
+    promotion_status: str = "pending"
+    promotion_error: str = ""
+    activity_1_id: str = ""
+    activity_1_status: str = "pending"
+    activity_1_error: str = ""
+    activity_2_id: str = ""
+    activity_2_status: str = "pending"
+    activity_2_error: str = ""
+    created_at: str = ""
+    updated_at: str = ""
+
+
+class IntegratedPipelineBatchProductStageListResponse(BaseModel):
+    pipeline_id: str = ""
+    items: list[IntegratedPipelineBatchProductStageItem] = Field(default_factory=list)
+    total: int = 0

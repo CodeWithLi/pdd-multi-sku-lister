@@ -11,6 +11,7 @@ from pdd_agent.api.schemas.pipelines import (
     AutoUploadConfigUpdateIn,
     IntegratedPipelineBatchResponse,
     IntegratedPipelineBatchStartRequest,
+    IntegratedPipelineBatchProductStageListResponse,
     IntegratedPipelineListResponse,
     IntegratedPipelineResponse,
     IntegratedPipelineStartRequest,
@@ -404,6 +405,7 @@ def start_integrated(body: IntegratedPipelineStartRequest):
             listing_batch_interval_minutes=body.listing_batch_interval_minutes,
             listing_per_batch_limited_time_enabled=body.listing_per_batch_limited_time_enabled,
             listing_per_batch_campaign_enabled=body.listing_per_batch_campaign_enabled,
+            listing_per_batch_lt_traffic_activity_enabled=body.listing_per_batch_lt_traffic_activity_enabled,
             delist_spec_code_search_enabled=body.delist_spec_code_search_enabled,
             activity_limited_time_success_only=body.activity_limited_time_success_only,
             trigger_source="manual",
@@ -477,6 +479,7 @@ def start_integrated_batch(body: IntegratedPipelineBatchStartRequest):
             listing_batch_interval_minutes=body.listing_batch_interval_minutes,
             listing_per_batch_limited_time_enabled=body.listing_per_batch_limited_time_enabled,
             listing_per_batch_campaign_enabled=body.listing_per_batch_campaign_enabled,
+            listing_per_batch_lt_traffic_activity_enabled=body.listing_per_batch_lt_traffic_activity_enabled,
             store_sequential_enabled=body.store_sequential_enabled,
             delist_spec_code_search_enabled=body.delist_spec_code_search_enabled,
             activity_limited_time_success_only=body.activity_limited_time_success_only,
@@ -523,6 +526,32 @@ def get_integrated_feishu_inspect(pipeline_id: str, refresh: bool = False):
     if not cached:
         raise HTTPException(status_code=404, detail="该链路尚未记录飞书定价数据")
     return FeishuInspectListingPricesOut(**cached, from_cache=True)
+
+
+@router.get(
+    "/integrated/{pipeline_id}/batch-product-stages",
+    response_model=IntegratedPipelineBatchProductStageListResponse,
+)
+def list_integrated_batch_product_stages(pipeline_id: str, batch_index: int | None = None):
+    """查询整合链路分批模式下每批每商品的阶段状态。"""
+    if not is_database_available():
+        raise HTTPException(status_code=503, detail="数据库不可用")
+    data = get_pipeline(pipeline_id)
+    if not data:
+        raise HTTPException(status_code=404, detail="pipeline not found")
+    from pdd_agent.api.services.pipeline_batch_product_stage_tracker import (
+        list_pipeline_batch_product_stages,
+    )
+
+    items = list_pipeline_batch_product_stages(
+        pipeline_id=pipeline_id,
+        batch_index=batch_index,
+    )
+    return IntegratedPipelineBatchProductStageListResponse(
+        pipeline_id=pipeline_id,
+        items=items,
+        total=len(items),
+    )
 
 
 @router.get("/integrated/{pipeline_id}", response_model=IntegratedPipelineResponse)

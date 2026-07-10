@@ -19,6 +19,7 @@ import {
   loadListingThrottleEnabled,
   loadListingPerBatchLimitedTimeEnabled,
   loadListingPerBatchCampaignEnabled,
+  loadListingPerBatchLtTrafficActivityEnabled,
   loadDelistSpecCodeSearchEnabled,
   loadActivityLimitedTimeSuccessOnly,
   loadPipelineRelistStrategy,
@@ -28,6 +29,7 @@ import {
   saveListingThrottleEnabled,
   saveListingPerBatchLimitedTimeEnabled,
   saveListingPerBatchCampaignEnabled,
+  saveListingPerBatchLtTrafficActivityEnabled,
   saveDelistSpecCodeSearchEnabled,
   saveActivityLimitedTimeSuccessOnly,
   savePipelineRelistStrategy,
@@ -124,6 +126,7 @@ const randomSelectCount = ref(loadRandomSelectCount())
 const listingBatchIntervalMinutes = ref(loadListingBatchIntervalMinutes())
 const listingPerBatchLimitedTimeEnabled = ref(loadListingPerBatchLimitedTimeEnabled())
 const listingPerBatchCampaignEnabled = ref(loadListingPerBatchCampaignEnabled())
+const listingPerBatchLtTrafficActivityEnabled = ref(loadListingPerBatchLtTrafficActivityEnabled())
 const delistSpecCodeSearchEnabled = ref(loadDelistSpecCodeSearchEnabled())
 const activityLimitedTimeSuccessOnly = ref(loadActivityLimitedTimeSuccessOnly())
 const excelFallbackEnabled = ref(false)
@@ -1548,6 +1551,7 @@ async function startPipeline() {
         listing_batch_interval_minutes: listingBatchIntervalMinutes.value,
         listing_per_batch_limited_time_enabled: listingPerBatchLimitedTimeEnabled.value,
         listing_per_batch_campaign_enabled: listingPerBatchCampaignEnabled.value,
+        listing_per_batch_lt_traffic_activity_enabled: listingPerBatchLtTrafficActivityEnabled.value,
         store_sequential_enabled: storeSequentialEnabled.value,
         delist_spec_code_search_enabled: delistSpecCodeSearchEnabled.value,
         activity_limited_time_success_only: activityLimitedTimeSuccessOnly.value,
@@ -1594,6 +1598,7 @@ async function startPipeline() {
         listing_batch_interval_minutes: listingBatchIntervalMinutes.value,
         listing_per_batch_limited_time_enabled: listingPerBatchLimitedTimeEnabled.value,
         listing_per_batch_campaign_enabled: listingPerBatchCampaignEnabled.value,
+        listing_per_batch_lt_traffic_activity_enabled: listingPerBatchLtTrafficActivityEnabled.value,
         delist_spec_code_search_enabled: delistSpecCodeSearchEnabled.value,
         activity_limited_time_success_only: activityLimitedTimeSuccessOnly.value,
       })
@@ -1697,6 +1702,18 @@ watch(listingPerBatchLimitedTimeEnabled, (value) => {
 
 watch(listingPerBatchCampaignEnabled, (value) => {
   saveListingPerBatchCampaignEnabled(value)
+  if (value) {
+    listingPerBatchLtTrafficActivityEnabled.value = false
+  }
+})
+
+watch(listingPerBatchLtTrafficActivityEnabled, (value) => {
+  saveListingPerBatchLtTrafficActivityEnabled(value)
+  if (value) {
+    listingPerBatchCampaignEnabled.value = false
+    listingPerBatchLimitedTimeEnabled.value = true
+    listingThrottleEnabled.value = true
+  }
 })
 
 watch(delistSpecCodeSearchEnabled, (value) => {
@@ -2276,7 +2293,22 @@ onUnmounted(() => {
                 <div v-if="listingThrottleEnabled" class="option-row listing-throttle-row per-batch-lt-row">
                   <div class="switch-row">
                     <span class="switch-label">每批完成后跑活动{{ autoPromotion ? '/推广' : '' }}</span>
-                    <el-switch v-model="listingPerBatchCampaignEnabled" />
+                    <el-switch
+                      v-model="listingPerBatchCampaignEnabled"
+                      :disabled="listingPerBatchLtTrafficActivityEnabled"
+                    />
+                  </div>
+                </div>
+                <div v-if="listingThrottleEnabled" class="option-row listing-throttle-row per-batch-lt-row">
+                  <div class="switch-row">
+                    <span class="switch-label">每批限时→推广→活动（最后一批报活动）</span>
+                    <el-switch
+                      v-model="listingPerBatchLtTrafficActivityEnabled"
+                      :disabled="listingPerBatchCampaignEnabled || !listingPerBatchLimitedTimeEnabled"
+                    />
+                  </div>
+                  <div v-if="listingPerBatchLtTrafficActivityEnabled" class="form-tip option-tip">
+                    每批：限时限量购 → 推广（仅限时成功商品；失败跳过）→ 下一批；最后一批限时失败仍报活动，推广失败不阻断。
                   </div>
                 </div>
                 <div v-else class="form-tip">

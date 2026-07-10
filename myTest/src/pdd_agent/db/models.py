@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import date, datetime
 
-from sqlalchemy import Boolean, Date, DateTime, Float, Index, Integer, String, Text, func
+from sqlalchemy import Boolean, Date, DateTime, Float, Index, Integer, String, Text, UniqueConstraint, func
 from sqlalchemy.dialects.mysql import JSON as MySQLJSON
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -708,6 +708,54 @@ class InventoryDelistRecordORM(Base):
     relisted_at: Mapped[datetime | None] = mapped_column(DateTime, index=True, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime, server_default=func.now(), nullable=False
+    )
+
+
+class IntegratedPipelineBatchProductStageORM(Base):
+    """整合链路分批模式 — 每批每商品的上架/限时限量购/推广/活动阶段状态。"""
+
+    __tablename__ = "integrated_pipeline_batch_product_stages"
+    __table_args__ = (
+        UniqueConstraint(
+            "pipeline_id",
+            "batch_index",
+            "product_selector",
+            name="uq_pipeline_batch_product_stage",
+        ),
+        Index("ix_pipe_batch_stage_pipeline_batch", "pipeline_id", "batch_index"),
+        Index("ix_pipe_batch_stage_pipeline_pdd", "pipeline_id", "pdd_product_id"),
+        Index("ix_pipe_batch_stage_account_created", "account_id", "created_at"),
+        Index("ix_pipe_batch_stage_pipeline_selector", "pipeline_id", "product_selector"),
+        Index("ix_pipe_batch_stage_listing_status", "pipeline_id", "listing_status"),
+        Index("ix_pipe_batch_stage_limited_time_status", "pipeline_id", "limited_time_status"),
+        Index("ix_pipe_batch_stage_promotion_status", "pipeline_id", "promotion_status"),
+    )
+
+    record_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    pipeline_id: Mapped[str] = mapped_column(String(64), index=True, nullable=False)
+    account_id: Mapped[str] = mapped_column(String(64), index=True, nullable=False)
+    batch_index: Mapped[int] = mapped_column(Integer, index=True, nullable=False)
+    product_selector: Mapped[str] = mapped_column(String(512), default="", nullable=False)
+    listing_label: Mapped[str] = mapped_column(String(255), default="", nullable=False)
+    pdd_product_id: Mapped[str] = mapped_column(String(64), default="", index=True, nullable=False)
+    mapping_id: Mapped[str] = mapped_column(String(64), default="", nullable=False)
+    listing_status: Mapped[str] = mapped_column(String(32), default="pending", nullable=False)
+    listing_error: Mapped[str] = mapped_column(Text, default="", nullable=False)
+    limited_time_status: Mapped[str] = mapped_column(String(32), default="pending", nullable=False)
+    limited_time_error: Mapped[str] = mapped_column(Text, default="", nullable=False)
+    promotion_status: Mapped[str] = mapped_column(String(32), default="pending", nullable=False)
+    promotion_error: Mapped[str] = mapped_column(Text, default="", nullable=False)
+    activity_1_id: Mapped[str] = mapped_column(String(32), default="", nullable=False)
+    activity_1_status: Mapped[str] = mapped_column(String(32), default="pending", nullable=False)
+    activity_1_error: Mapped[str] = mapped_column(Text, default="", nullable=False)
+    activity_2_id: Mapped[str] = mapped_column(String(32), default="", nullable=False)
+    activity_2_status: Mapped[str] = mapped_column(String(32), default="pending", nullable=False)
+    activity_2_error: Mapped[str] = mapped_column(Text, default="", nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, server_default=func.now(), index=True, nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, server_default=func.now(), onupdate=func.now(), nullable=False
     )
 
 

@@ -1249,6 +1249,7 @@ def start_integrated_pipeline(
     listing_batch_interval_minutes: int = 30,
     listing_per_batch_limited_time_enabled: bool = False,
     listing_per_batch_campaign_enabled: bool = False,
+    listing_per_batch_lt_traffic_activity_enabled: bool = False,
     delist_spec_code_search_enabled: bool = False,
     activity_limited_time_success_only: bool = False,
     extra_meta: dict[str, Any] | None = None,
@@ -1265,6 +1266,13 @@ def start_integrated_pipeline(
         raise ValueError("activity_ids is required")
     if slot_alignment_test and spec_fill_verify_test:
         raise ValueError("spec_fill_verify_test 与 slot_alignment_test 不能同时开启")
+    if listing_per_batch_lt_traffic_activity_enabled:
+        if not listing_throttle_enabled:
+            raise ValueError("分批「限时→推广→活动」须同时开启分批上架")
+        if not listing_per_batch_limited_time_enabled:
+            raise ValueError("分批「限时→推广→活动」须同时开启每批限时限量购")
+        if listing_per_batch_campaign_enabled:
+            raise ValueError("分批「限时→推广→活动」与「每批活动/推广」不能同时开启")
 
     from pdd_agent.api.services.pipeline_listing_throttle import (
         apply_throttle_to_listing_codes,
@@ -1330,6 +1338,7 @@ def start_integrated_pipeline(
                 "listing_batch_interval_minutes": listing_batch_interval_minutes,
                 "listing_per_batch_limited_time_enabled": listing_per_batch_limited_time_enabled,
                 "listing_per_batch_campaign_enabled": listing_per_batch_campaign_enabled,
+                "listing_per_batch_lt_traffic_activity_enabled": listing_per_batch_lt_traffic_activity_enabled,
                 "delist_spec_code_search_enabled": delist_spec_code_search_enabled,
                 "activity_limited_time_success_only": activity_limited_time_success_only,
                 "extra_meta": extra_meta,
@@ -1382,6 +1391,15 @@ def start_integrated_pipeline(
     from pdd_agent.api.services.pipeline_per_batch_campaign import per_batch_campaign_meta_patch
 
     meta.update(per_batch_campaign_meta_patch(enabled=bool(listing_per_batch_campaign_enabled)))
+    from pdd_agent.api.services.pipeline_per_batch_lt_traffic_activity.bridge import (
+        per_batch_lt_traffic_activity_meta_patch,
+    )
+
+    meta.update(
+        per_batch_lt_traffic_activity_meta_patch(
+            enabled=bool(listing_per_batch_lt_traffic_activity_enabled)
+        )
+    )
     if skip_selectors:
         meta["listing_skip_selectors"] = skip_selectors
     row = create_integrated_pipeline(
@@ -1678,6 +1696,7 @@ def start_integrated_pipeline_batch(
     listing_batch_interval_minutes: int = 30,
     listing_per_batch_limited_time_enabled: bool = False,
     listing_per_batch_campaign_enabled: bool = False,
+    listing_per_batch_lt_traffic_activity_enabled: bool = False,
     store_sequential_enabled: bool = False,
     delist_spec_code_search_enabled: bool = False,
     activity_limited_time_success_only: bool = False,
@@ -1727,6 +1746,7 @@ def start_integrated_pipeline_batch(
         listing_batch_interval_minutes=listing_batch_interval_minutes,
         listing_per_batch_limited_time_enabled=listing_per_batch_limited_time_enabled,
         listing_per_batch_campaign_enabled=listing_per_batch_campaign_enabled,
+        listing_per_batch_lt_traffic_activity_enabled=listing_per_batch_lt_traffic_activity_enabled,
         delist_spec_code_search_enabled=delist_spec_code_search_enabled,
         activity_limited_time_success_only=activity_limited_time_success_only,
         trigger_source=trigger_source,
@@ -1821,6 +1841,7 @@ def start_integrated_pipeline_batch(
             listing_batch_interval_minutes=listing_batch_interval_minutes,
             listing_per_batch_limited_time_enabled=listing_per_batch_limited_time_enabled,
             listing_per_batch_campaign_enabled=listing_per_batch_campaign_enabled,
+            listing_per_batch_lt_traffic_activity_enabled=listing_per_batch_lt_traffic_activity_enabled,
             delist_spec_code_search_enabled=delist_spec_code_search_enabled,
             activity_limited_time_success_only=activity_limited_time_success_only,
         )
@@ -2062,6 +2083,16 @@ def _continue_pipeline_after_listing(
         mapping_ids=mapping_ids,
         listing_meta=listing_meta,
     ):
+        from pdd_agent.api.services.pipeline_per_batch_lt_traffic_activity.bridge import (
+            maybe_record_listing_batch,
+        )
+
+        maybe_record_listing_batch(
+            refreshed,
+            pdd_ids=pdd_ids,
+            mapping_ids=mapping_ids,
+            listing_result=result,
+        )
         return True
 
     if maybe_run_per_batch_campaign_after_listing(
@@ -2304,6 +2335,19 @@ def _on_campaign_finished(row, *, run_id: str, success: bool, result: dict[str, 
     ):
         return
 
+    from pdd_agent.api.services.pipeline_per_batch_lt_traffic_activity.bridge import (
+        maybe_handle_campaign_finished as maybe_handle_ltta_campaign_finished,
+    )
+
+    if maybe_handle_ltta_campaign_finished(
+        row,
+        run_id=run_id,
+        success=success,
+        result=result,
+        error=error,
+    ):
+        return
+
     if _campaign_run_already_handled(row, run_id):
         logger.debug(
             "skip duplicate campaign finished pipeline=%s run_id=%s",
@@ -2455,6 +2499,24 @@ def _on_limited_time_finished(row, *, run_id: str, success: bool, result: dict[s
         str(error or "").strip()[:200],
         _per_batch_batch_log_context(row),
     )
+
+    from pdd_agent.api.services.pipeline_per_batch_lt_traffic_activity.bridge import (
+        maybe_handle_limited_time_finished as maybe_handle_ltta_limited_time_finished,
+    )
+
+    if maybe_handle_ltta_limited_time_finished(
+        row,
+        run_id=run_id,
+        success=success,
+        result=result,
+        error=error,
+    ):
+        logger.info(
+            "pipeline %s limited_time finished handled by per-batch ltta run_id=%s",
+            row.pipeline_id,
+            run_id,
+        )
+        return
 
     if maybe_start_per_batch_campaign_after_limited_time(
         row,
@@ -2655,6 +2717,18 @@ def _on_traffic_finished(row, *, run_id: str, success: bool, error: str) -> None
     from pdd_agent.api.services.pipeline_per_batch_campaign import maybe_continue_after_per_batch_traffic
 
     if maybe_continue_after_per_batch_traffic(
+        row,
+        run_id=run_id,
+        success=success,
+        error=error,
+    ):
+        return
+
+    from pdd_agent.api.services.pipeline_per_batch_lt_traffic_activity.bridge import (
+        maybe_handle_traffic_finished as maybe_handle_ltta_traffic_finished,
+    )
+
+    if maybe_handle_ltta_traffic_finished(
         row,
         run_id=run_id,
         success=success,
@@ -2927,6 +3001,14 @@ def _ensure_pipeline_failed_after_task(
 ) -> None:
     if success:
         return
+    row = get_integrated_pipeline(pipeline_id)
+    if row:
+        from pdd_agent.api.services.pipeline_per_batch_lt_traffic_activity.bridge import (
+            should_absorb_queue_task_failure,
+        )
+
+        if should_absorb_queue_task_failure(row, agent=agent, run_id=run_id, success=success):
+            return
     if agent == AgentKind.LISTING.value:
         from pdd_agent.api.services.pipeline_listing_batch_continue import (
             is_listing_batch_failure_continuing,
