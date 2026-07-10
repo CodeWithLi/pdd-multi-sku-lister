@@ -117,6 +117,19 @@ async def marketing_activity_register_node(state: CampaignState) -> dict:
     try:
         result = await run_browser_job_async(settings, account, _job)
         if result.get("status") != "success":
+            logger.warning(
+                "[%s] marketing activity register failed step=%s error=%s url=%s",
+                account_id,
+                result.get("step"),
+                result.get("error") or result.get("message"),
+                result.get("current_url"),
+            )
+            print(
+                f"[{account_id}] 活动报名失败: step={result.get('step')} "
+                f"error={result.get('error') or result.get('message')} "
+                f"url={result.get('current_url')}",
+                flush=True,
+            )
             return {
                 "phase": "campaign_failed",
                 "results": [result],

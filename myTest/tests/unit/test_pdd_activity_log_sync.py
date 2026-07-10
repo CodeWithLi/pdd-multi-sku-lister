@@ -79,6 +79,10 @@ def test_normalize_activity_register_failure_reason_option():
     )
     assert normalize_activity_register_failure_reason_option("立减后低于成本", opts) == "活动价格低于成本价"
     assert normalize_activity_register_failure_reason_option("RecursionError: max depth", opts) == "程序异常"
+    assert (
+        normalize_activity_register_failure_reason_option("未能填入活动 ID", opts)
+        == "程序异常"
+    )
     assert normalize_activity_register_failure_reason_option("", opts) == ""
 
 
@@ -425,6 +429,10 @@ def test_push_pdd_activity_log_activity_register_618_and_discount(monkeypatch, a
         config=activity_cfg,
     )
     assert captured[-1]["patch_fields"][names.activity_discount_status] == "失败"
+    assert (
+        captured[-1]["patch_fields"][names.activity_discount_failure_reason]
+        == "程序异常"
+    )
     assert names.activity_discount_published_at in captured[-1]["patch_fields"]
 
 

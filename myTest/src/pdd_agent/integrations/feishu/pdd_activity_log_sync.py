@@ -180,7 +180,8 @@ def normalize_activity_register_failure_reason_option(
     for opt in opts:
         if opt in brief or brief in opt:
             return opt
-    return ""
+    # 七折失败原因为飞书单选，未命中预设选项时回退「程序异常」，避免状态已写失败但原因为空。
+    return _pick_failure_reason_option(opts, exact="程序异常", contains="程序异常")
 
 
 def resolve_activity_log_phase(activity_id: str, config: FeishuConfig | None = None) -> str:

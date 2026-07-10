@@ -52,6 +52,7 @@ class FakeDpPage:
         self._body_text = body_text
         self.popup_visible = popup_visible
         self.search_found = search_found
+        self.search_value = ""
         self.calls: list[tuple[str, object]] = []
         self.mouse = FakeMouse(self)
         self.keyboard = FakeKeyboard(self)
@@ -74,8 +75,37 @@ class FakeDpPage:
         self.url = url
         self._page.url = url
 
-    def run_js(self, script: str):
-        self.calls.append(("run_js", script))
+    def run_js(self, script: str, *args):
+        self.calls.append(("run_js", script, args))
+        if "collectScopedInputs" in script and "mode = arguments[2]" in script:
+            mode = args[2] if len(args) > 2 else "find"
+            if mode == "find":
+                if self.search_found:
+                    return {
+                        "found": True,
+                        "placeholder": "输入活动名称或ID搜索，多个ID以逗号隔开",
+                        "value": self.search_value,
+                        "scoped": True,
+                    }
+                return {"found": False, "reason": "activity_registration_search_input_not_found"}
+            activity_id = str(args[3] if len(args) > 3 else "20981")
+            self.search_value = activity_id
+            return {
+                "found": True,
+                "filled": True,
+                "value": activity_id,
+                "placeholder": "输入活动名称或ID搜索，多个ID以逗号隔开",
+                "method": "scoped_react_input_setter",
+                "scoped": True,
+            }
+        if "scoped_near_input" in script:
+            return {"clicked": True, "text": "查询", "method": "scoped_near_input", "scoped": True}
+        if "registration_title_not_found" in script or "marketing_registration_title" in script:
+            return {"scrolled": True, "method": "marketing_registration_title"}
+        if "no_unexpected_modal" in script or "findUnexpectedModals" in script:
+            return {"dismissed": False, "present": False, "reason": "no_unexpected_modal"}
+        if "unchecked" in script and "inPendingSection" in script:
+            return {"unchecked": 0, "acted": False}
         if "document.body" in script and "innerText" in script and "findExactText" not in script:
             return self._body_text
         if "findExactText('营销活动报名')" in script:
@@ -160,14 +190,6 @@ def test_search_marketing_activity_guarded_success(monkeypatch):
     monkeypatch.setattr(
         "pdd_agent.skills.campaign.marketing_activities._open_marketing_activities_page",
         lambda page, account_id, account=None: True,
-    )
-    monkeypatch.setattr(
-        "pdd_agent.skills.campaign.marketing_activities._activity_search_input_locator",
-        lambda page: None,
-    )
-    monkeypatch.setattr(
-        "pdd_agent.skills.campaign.marketing_activities._read_activity_search_input_value",
-        lambda page: "20981",
     )
     monkeypatch.setattr(
         "pdd_agent.skills.campaign.marketing_activity_page_guard.ensure_marketing_activities_tab_focus",

@@ -14,6 +14,13 @@ from pdd_agent.core.logging import get_logger
 from pdd_agent.skills.campaign.marketing_activity_blocking_modal_dismiss import (
     dismiss_one_marketing_blocking_modal,
 )
+from pdd_agent.skills.campaign.marketing_activity_pending_section_guard import (
+    dismiss_unexpected_pending_modals,
+    prepare_marketing_registration_surface,
+)
+from pdd_agent.skills.campaign.marketing_activity_search_input_scope import (
+    find_activity_search_input_scoped,
+)
 from pdd_agent.skills.campaign.limited_time import _bind_page, _body_text, _live_context_pages
 
 logger = get_logger(__name__)
@@ -72,9 +79,7 @@ def _score_marketing_tab(url: str, text: str, has_search_input: bool) -> int:
 
 
 def _read_search_input_state(page: DpPage) -> dict[str, Any]:
-    from pdd_agent.skills.campaign.marketing_activities import _find_activity_search_input
-
-    return _find_activity_search_input(page)
+    return find_activity_search_input_scoped(page)
 
 
 def _close_blank_tabs(page: DpPage, account_id: str) -> list[str]:
@@ -209,10 +214,22 @@ def wait_for_activity_search_input(
     for tick in range(max(1, timeout)):
         last_focus = ensure_marketing_activities_tab_focus(page, account_id)
         dismiss_one_marketing_blocking_modal(page, account_id)
+        dismiss_unexpected_pending_modals(page, account_id)
+        if tick >= 2:
+            prepare_marketing_registration_surface(page, account_id)
         text = _body_text(page)
         last_loading = _page_is_loading(text)
         last_state = _read_search_input_state(page)
         if last_state.get("found"):
+            _guard_log(
+                account_id,
+                "搜索框就绪",
+                "已找到",
+                tick=tick,
+                method=last_state.get("method"),
+                placeholder=last_state.get("placeholder"),
+                section_score=last_state.get("section_score"),
+            )
             return {
                 "ready": True,
                 "found": True,
@@ -222,7 +239,27 @@ def wait_for_activity_search_input(
                 "search_input": last_state,
                 "current_url": str(getattr(page, "url", "") or ""),
             }
+        if tick in {0, timeout - 1} or tick % 3 == 0:
+            _guard_log(
+                account_id,
+                "等待搜索框",
+                "轮询中",
+                tick=tick + 1,
+                total=timeout,
+                loading=last_loading,
+                reason=last_state.get("reason"),
+                url=str(getattr(page, "url", "") or ""),
+            )
         time.sleep(1)
+
+    _guard_log(
+        account_id,
+        "等待搜索框",
+        "超时",
+        tick=timeout,
+        reason=last_state.get("reason"),
+        search_input=last_state,
+    )
 
     return {
         "ready": False,

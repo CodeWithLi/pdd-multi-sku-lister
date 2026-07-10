@@ -81,6 +81,7 @@ def run_sync_browser_job(
                 pass
             context.close()
             pw.stop()
+            print(f"[browser_job] 浏览器任务结束 account={account.account_id}", flush=True)
 
 
 async def run_browser_job_async(
