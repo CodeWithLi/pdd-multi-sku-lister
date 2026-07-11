@@ -232,3 +232,19 @@ def test_feishu_brief_preview_file_size_rejected():
         merchant_code="BD201A",
     )
     assert by_code == "预览图大小不能超过3MB"
+
+
+def test_compact_feishu_line_goods_list_zero_inventory():
+    line = ListingErrors.compact_feishu_line(
+        "该商品上架后库存为0",
+        reason_code=ListingErrorCode.GOODS_LIST_ZERO_INVENTORY,
+        merchant_code="BD987A",
+    )
+    assert line == "提交后在商品列表核验，该商品总库存为0"
+
+    by_code = ListingErrors.compact_feishu_line(
+        "",
+        reason_code=ListingErrorCode.GOODS_LIST_ZERO_INVENTORY,
+        merchant_code="BD987A",
+    )
+    assert by_code == "提交后在商品列表核验，该商品总库存为0"

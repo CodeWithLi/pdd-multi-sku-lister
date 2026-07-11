@@ -61,6 +61,7 @@ class ListingErrorCode:
     LISTED = "listed"
     REJECTED_AFTER_PUBLISH = "rejected_after_publish"
     PUBLISHED_BUT_NOT_FOUND = "published_but_not_found_in_on_sale_or_rejected"
+    GOODS_LIST_ZERO_INVENTORY = "goods_list_zero_inventory"
 
     # 分类页 / 选类
     CATEGORY_NEXT_STEP_NO_ADVANCE = "category_next_step_no_advance"
@@ -109,6 +110,7 @@ class ListingErrors:
         ListingErrorCode.LISTED: "已提交但后续抓取商品 ID 失败",
         ListingErrorCode.REJECTED_AFTER_PUBLISH: "提交后被平台驳回",
         ListingErrorCode.PUBLISHED_BUT_NOT_FOUND: "提交后未在售列表/驳回列表中找到商品",
+        ListingErrorCode.GOODS_LIST_ZERO_INVENTORY: "提交后商品列表核验：总库存为0",
         ListingErrorCode.CATEGORY_NEXT_STEP_NO_ADVANCE: "分类页点下一步后未进入商品详情",
         ListingErrorCode.CATEGORY_NEXT_STEP_NOT_FOUND: "分类页未找到「下一步」按钮",
         ListingErrorCode.CATEGORY_RECOMMENDATION_MODAL_BLOCKING: "推荐分类弹窗未确认，无法点下一步",
@@ -216,6 +218,7 @@ class ListingErrors:
         ListingErrorCode.LISTED: "已提交但未抓到商品 ID",
         ListingErrorCode.REJECTED_AFTER_PUBLISH: "提交后在「已驳回」找到商品，平台已驳回",
         ListingErrorCode.PUBLISHED_BUT_NOT_FOUND: "提交后在在售/驳回列表没找到刚上的商品，请人工核对",
+        ListingErrorCode.GOODS_LIST_ZERO_INVENTORY: "提交后在商品列表核验，该商品总库存为0",
         ListingErrorCode.CATEGORY_NEXT_STEP_NO_ADVANCE: "分类页点下一步后未进入商品详情",
         ListingErrorCode.CATEGORY_NEXT_STEP_NOT_FOUND: "分类页未找到「下一步」按钮",
         ListingErrorCode.CATEGORY_RECOMMENDATION_MODAL_BLOCKING: "推荐分类弹窗未确认，无法点下一步",
@@ -366,6 +369,7 @@ class ListingErrors:
         {
             ListingErrorCode.REJECTED_AFTER_PUBLISH,
             ListingErrorCode.PUBLISHED_BUT_NOT_FOUND,
+            ListingErrorCode.GOODS_LIST_ZERO_INVENTORY,
             ListingErrorCode.SUBMIT_UNCERTAIN,
             ListingErrorCode.SUBMIT_BLOCKED,
             ListingErrorCode.SUBMIT_EXCEPTION,

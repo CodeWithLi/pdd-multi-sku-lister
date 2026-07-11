@@ -29,11 +29,11 @@ from pdd_agent.skills.listing.goods_list_capture import (
 )
 from pdd_agent.skills.listing.multi_spec_page import (
     _safe_exc,
-    add_style_and_model_specs,
     collect_price_table_field_gaps,
     fill_multi_spec_rows,
     wait_multi_sku_rows,
 )
+from pdd_agent.skills.listing.multi_spec_page_new_shop import add_style_and_model_specs_auto
 from pdd_agent.skills.listing.category_branch_c_flow import run_branch_c_category_after_covers
 from pdd_agent.skills.listing.category_next_step_failure_detail import (
     build_category_next_step_failure_detail,
@@ -4133,7 +4133,9 @@ def upload_one_listing(
             label=label,
         )
         time.sleep(1)
+        print(f"[{account_id}] [{label}] 商品属性填写完成，准备上传详情图...", flush=True)
         _apply_listing_product_attributes_after_title(page, account_id, label)
+        print(f"[{account_id}] [{label}] 商品属性步骤结束", flush=True)
     else:
         if ui_type == "B":
             tab = page.ele('css:[data-tracking-click-viewid="cate_tree_tab"]')
@@ -4249,20 +4251,38 @@ def upload_one_listing(
             page, account_id, product_info, listing_info.get("title", "")
         )
         time.sleep(1)
+        print(f"[{account_id}] [{label}] 商品属性填写完成，准备上传详情图...", flush=True)
         _apply_listing_product_attributes_after_title(page, account_id, label)
+        print(f"[{account_id}] [{label}] 商品属性步骤结束", flush=True)
 
-    print(f"[{account_id}] [{label}] 正在上传详情图...")
+    print(f"[{account_id}] [{label}] 正在上传详情图（共 {len(details)} 张）...", flush=True)
     detail_input = page.ele('css:input[data-tracking-click-viewid="detail_img_localfile_upload"]')
     if detail_input and details:
         detail_input.input(details)
+        print(f"[{account_id}] [{label}] 详情图已提交上传", flush=True)
+    else:
+        print(
+            f"[{account_id}] [{label}] 跳过详情图：input={'有' if detail_input else '无'} "
+            f"details={len(details)}",
+            flush=True,
+        )
     time.sleep(2)
 
     if material_path:
+        print(f"[{account_id}] [{label}] 正在上传素材图...", flush=True)
         _upload_product_material_image(page, account_id, label, material_path)
         time.sleep(1)
 
-    print(f"[{account_id}] [{label}] 正在录入多规格（款式 + 型号）...")
-    add_style_and_model_specs(page, account_id, style_names, size_names)
+    print(
+        f"[{account_id}] [{label}] 正在录入多规格（款式 + 型号）"
+        f" style={style_names} size={size_names}...",
+        flush=True,
+    )
+    spec_ok = add_style_and_model_specs_auto(page, account_id, style_names, size_names)
+    print(
+        f"[{account_id}] [{label}] 多规格录入{'成功' if spec_ok else '失败'}，等待价格表...",
+        flush=True,
+    )
     time.sleep(1)
     sku_rows = wait_multi_sku_rows(
         page, account_id, unit.skus, style_names=style_names, size_names=size_names
@@ -4696,8 +4716,8 @@ def upload_one_listing(
                 account_id,
                 unit,
                 status="failed",
-                reason="goods_list_zero_inventory",
-                error="该商品上架后库存为0",
+                reason=ListingErrorCode.GOODS_LIST_ZERO_INVENTORY,
+                error=ListingErrors.feishu_label(ListingErrorCode.GOODS_LIST_ZERO_INVENTORY),
                 title=listing_info.get("title", ""),
                 retryable=False,
                 legacy_status="failed",
