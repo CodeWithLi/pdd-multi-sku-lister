@@ -4,7 +4,7 @@ from datetime import datetime, timedelta
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
-from pdd_agent.domain.enums import RunStatus
+from pdd_agent.domain.enums import AgentKind, RunStatus
 from pdd_agent.api.services.pipeline_service import (
     CAMPAIGN_TIME_REQUIREMENT_STEP,
     DEMO_ACTIVITY_DELAY_MINUTES,
@@ -203,6 +203,41 @@ def test_on_queue_task_finished_ignores_canceled_pipeline():
                 result={"results": [{"status": "success", "pdd_product_id": "123"}]},
             )
     update.assert_not_called()
+
+
+def test_on_queue_task_finished_revived_failed_pipeline_campaign():
+    row = SimpleNamespace(
+        pipeline_id="pipe_1",
+        status="failed",
+        current_step="waiting_activity",
+        campaign_run_id="camp_revived",
+        traffic_run_id="",
+        scheduled_activity_at=datetime.now(),
+        auto_promotion=True,
+        demo_mode=False,
+        activity_delay_hours=24,
+        activity_id="20981",
+        account_id="store_A",
+        pdd_product_ids=["111"],
+        mapping_ids=["m1"],
+        meta={
+            "batch_lt_retry_revived_activity": True,
+            "pipeline_batch_lt_retry_activity_defer": {"rescheduled": True},
+            "activity_ids": ["20981"],
+        },
+    )
+    with patch("pdd_agent.api.services.pipeline_service.get_integrated_pipeline", return_value=row):
+        with patch("pdd_agent.api.services.pipeline_service._on_campaign_finished") as on_campaign:
+            with patch("pdd_agent.api.services.pipeline_service.update_integrated_pipeline") as update:
+                on_queue_task_finished(
+                    agent=AgentKind.CAMPAIGN.value,
+                    pipeline_id="pipe_1",
+                    run_id="camp_revived",
+                    success=True,
+                    result={"results": []},
+                )
+    on_campaign.assert_called_once()
+    assert update.call_args.kwargs.get("status") == "running"
 
 
 def test_resolve_published_products_for_pipeline():

@@ -1176,6 +1176,7 @@ def nudge_due_scheduled_pipelines() -> int:
         return 0
     from pdd_agent.api.services.pipeline_service import (
         TERMINAL_PIPELINE_STATUSES,
+        _pipeline_has_revived_scheduled_activity,
         _reconcile_stuck_pipeline_row,
     )
     from pdd_agent.db.repositories import list_integrated_pipelines
@@ -1183,7 +1184,11 @@ def nudge_due_scheduled_pipelines() -> int:
     count = 0
     now = datetime.now()
     for row in list_integrated_pipelines(limit=200):
-        if str(row.status or "") in TERMINAL_PIPELINE_STATUSES:
+        revived_failed = (
+            str(row.status or "") == "failed"
+            and _pipeline_has_revived_scheduled_activity(row)
+        )
+        if str(row.status or "") in TERMINAL_PIPELINE_STATUSES and not revived_failed:
             try:
                 sync_lifecycle_from_integrated_pipeline(row)
             except Exception:

@@ -67,6 +67,36 @@ CAMPAIGN_SKIP_TRAFFIC_OUTCOMES = frozenset(
 )
 
 
+def _pipeline_has_revived_scheduled_activity(row) -> bool:
+    """分批限时重跑改期后：failed 链路仍应继续执行活动/推广队列任务。"""
+    if not row:
+        return False
+    meta = dict(row.meta or {}) if isinstance(getattr(row, "meta", None), dict) else {}
+    defer = dict(meta.get("pipeline_batch_lt_retry_activity_defer") or {})
+    return bool(
+        meta.get("batch_lt_retry_revived_activity")
+        or defer.get("rescheduled")
+        or defer.get("awaiting_reschedule")
+        or getattr(row, "scheduled_activity_at", None)
+    )
+
+
+def _should_process_queue_task_on_terminal_pipeline(row, *, agent: str, run_id: str) -> bool:
+    """终态链路中，仅允许「已改期活动/推广」的队列任务继续驱动编排。"""
+    if str(getattr(row, "status", "") or "") != "failed":
+        return False
+    if not _pipeline_has_revived_scheduled_activity(row):
+        return False
+    rid = str(run_id or "").strip()
+    if not rid:
+        return False
+    if str(agent or "") == AgentKind.CAMPAIGN.value:
+        return rid == str(row.campaign_run_id or "").strip()
+    if str(agent or "") == AgentKind.TRAFFIC.value:
+        return rid == str(row.traffic_run_id or "").strip()
+    return False
+
+
 def _try_wecom_pipeline_failed(row, *, error: str, current_step: str) -> None:
     try:
         from pdd_agent.integrations.wecom.notify import notify_pipeline_failed
@@ -2082,8 +2112,20 @@ def on_queue_task_finished(
     if batch_lt_retry_handled:
         return
 
-    if row.status in TERMINAL_PIPELINE_STATUSES:
+    if row.status in TERMINAL_PIPELINE_STATUSES and not _should_process_queue_task_on_terminal_pipeline(
+        row,
+        agent=agent,
+        run_id=run_id,
+    ):
         return
+
+    if _should_process_queue_task_on_terminal_pipeline(row, agent=agent, run_id=run_id):
+        update_integrated_pipeline(
+            row.pipeline_id,
+            status="running",
+            error="",
+        )
+        row = get_integrated_pipeline(row.pipeline_id) or row
 
     from pdd_agent.api.services.pipeline_late_retry_policy import dispatch_late_retry_queue_task_finished
 
