@@ -591,6 +591,10 @@ def maybe_handle_batch_limited_time_retry_finished(
 
     refreshed = get_integrated_pipeline(row.pipeline_id) or row
     if finalized:
+        from pdd_agent.api.services.pipeline_batch_limited_time_retry_activity_policy import (
+            build_activity_revive_meta_patch,
+        )
+
         _save_batch_lt_retry_state(
             refreshed,
             {
@@ -599,12 +603,20 @@ def maybe_handle_batch_limited_time_retry_finished(
                 "outcome_detail": detail,
             },
         )
+        defer_state = _meta(refreshed).get("pipeline_batch_lt_retry_activity_defer") or {}
+        reason = str(
+            defer_state.get("reschedule_reason")
+            if isinstance(defer_state, dict)
+            else ""
+        )
         update_integrated_pipeline(
             refreshed.pipeline_id,
             status="waiting_activity",
             current_step="waiting_activity",
             error="",
+            traffic_run_id="",
             meta_patch={
+                **build_activity_revive_meta_patch(reason=reason),
                 "limited_time_outcome": "partial_success" if failed_pdd or not success else "success",
             },
         )
@@ -656,7 +668,7 @@ def maybe_handle_batch_limited_time_retry_finished(
                 status="waiting_activity",
                 current_step="waiting_activity",
                 error="",
-                traffic_run_id=None,
+                traffic_run_id="",
                 meta_patch={
                     **build_activity_revive_meta_patch(reason=pending_reason),
                     "limited_time_outcome": "partial_success" if failed_pdd or not success else "success",

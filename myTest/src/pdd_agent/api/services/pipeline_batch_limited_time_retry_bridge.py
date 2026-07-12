@@ -88,3 +88,19 @@ def maybe_flush_batch_lt_retry_activity_reschedule(row) -> bool:
     if refreshed is None:
         return False
     return maybe_finalize_activity_after_batch_lt_retry(refreshed)
+
+
+def reconcile_revived_failed_pipeline(row):
+    from pdd_agent.api.services.pipeline_batch_limited_time_retry_activity_policy import (
+        reconcile_revived_failed_pipeline as _reconcile,
+    )
+
+    return _reconcile(row)
+
+
+def should_absorb_traffic_failure_after_batch_lt_revive(row, run_id: str) -> bool:
+    from pdd_agent.api.services.pipeline_batch_limited_time_retry_activity_policy import (
+        should_absorb_traffic_failure_after_batch_lt_revive as _should,
+    )
+
+    return _should(row, run_id)

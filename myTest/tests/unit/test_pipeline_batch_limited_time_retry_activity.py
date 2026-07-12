@@ -6,7 +6,9 @@ from unittest.mock import patch
 
 from pdd_agent.api.services.pipeline_batch_limited_time_retry_activity_policy import (
     maybe_finalize_activity_after_batch_lt_retry,
+    reconcile_revived_failed_pipeline,
     record_batch_lt_retry_success_finished_at,
+    should_absorb_traffic_failure_after_batch_lt_revive,
 )
 
 
@@ -86,3 +88,45 @@ def test_finalize_reschedules_existing_campaign(
     )
     assert maybe_finalize_activity_after_batch_lt_retry(row) is True
     mock_reschedule.assert_called_once()
+
+
+@patch("pdd_agent.api.services.pipeline_batch_limited_time_retry_activity_policy.get_integrated_pipeline")
+@patch("pdd_agent.api.services.pipeline_batch_limited_time_retry_activity_policy.update_integrated_pipeline")
+def test_reconcile_revived_failed_pipeline(mock_update, mock_get):
+    row = _row(
+        status="failed",
+        current_step="traffic_failed",
+        traffic_run_id="traffic_old",
+        scheduled_activity_at=datetime.now() + timedelta(hours=24),
+        meta={
+            "batch_lt_retry_revived_activity": True,
+            "pipeline_batch_lt_retry_activity_defer": {
+                "rescheduled": True,
+                "reschedule_reason": "分批限时重跑已完成",
+            },
+        },
+    )
+    mock_get.return_value = SimpleNamespace(
+        pipeline_id="pipe1",
+        status="waiting_activity",
+        current_step="waiting_activity",
+    )
+    result = reconcile_revived_failed_pipeline(row)
+    mock_update.assert_called_once()
+    assert mock_update.call_args.kwargs["status"] == "waiting_activity"
+    assert mock_update.call_args.kwargs["traffic_run_id"] == ""
+    assert result.status == "waiting_activity"
+
+
+def test_should_absorb_stale_traffic_after_revive():
+    row = _row(
+        status="failed",
+        current_step="traffic_failed",
+        traffic_run_id="traffic_old",
+        meta={
+            "batch_lt_retry_revived_activity": True,
+            "pipeline_batch_lt_retry_activity_defer": {"rescheduled": True},
+        },
+    )
+    assert should_absorb_traffic_failure_after_batch_lt_revive(row, "traffic_old") is True
+    assert should_absorb_traffic_failure_after_batch_lt_revive(row, "other") is False

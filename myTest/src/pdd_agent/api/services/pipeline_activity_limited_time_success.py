@@ -346,10 +346,10 @@ def reconcile_pipeline_waiting_activity(row):
     """
     if not row:
         return row
-    if str(row.current_step or "") != "waiting_activity":
+    if str(getattr(row, "current_step", "") or "") != "waiting_activity":
         return row
 
-    campaign_run_id = str(row.campaign_run_id or "").strip()
+    campaign_run_id = str(getattr(row, "campaign_run_id", "") or "").strip()
     if not campaign_run_id:
         return row
 

@@ -158,11 +158,76 @@ def build_activity_revive_meta_patch(*, reason: str = "") -> dict[str, Any]:
         "campaign_skip_reason": "",
         "campaign_results": [],
         "traffic_skip_reason": "",
+        "traffic_finish_handled": False,
         "listing_limited_time_phase_completed": True,
     }
     if reason:
         patch["batch_lt_retry_revive_reason"] = reason
     return patch
+
+
+def should_absorb_traffic_failure_after_batch_lt_revive(row, run_id: str) -> bool:
+    """
+    分批限时重跑已改期活动后，忽略改期前遗留的推广失败回调，避免链路再次 failed。
+    """
+    if row is None:
+        return False
+    meta = row.meta if isinstance(getattr(row, "meta", None), dict) else {}
+    if not meta.get("batch_lt_retry_revived_activity"):
+        return False
+    defer_state = _defer_meta(row)
+    if not defer_state.get("rescheduled") and not getattr(row, "scheduled_activity_at", None):
+        return False
+    rid = str(run_id or "").strip()
+    if not rid:
+        return False
+    if rid != str(getattr(row, "traffic_run_id", "") or "").strip():
+        return False
+    step = str(getattr(row, "current_step", "") or "")
+    status = str(getattr(row, "status", "") or "")
+    return status in {"failed", "running", "waiting_activity"} or step in {
+        "traffic_failed",
+        "waiting_activity",
+        "campaign_queued",
+    }
+
+
+def reconcile_revived_failed_pipeline(row):
+    """
+    failed 但分批限时重跑已成功改期活动时，恢复为 waiting_activity 并清除遗留推广 run。
+    """
+    if row is None or str(getattr(row, "status", "") or "") != "failed":
+        return row
+    meta = row.meta if isinstance(getattr(row, "meta", None), dict) else {}
+    if not meta.get("batch_lt_retry_revived_activity"):
+        return row
+    defer_state = _defer_meta(row)
+    if not defer_state.get("rescheduled") and not getattr(row, "scheduled_activity_at", None):
+        return row
+    step = str(getattr(row, "current_step", "") or "")
+    if step not in {
+        "traffic_failed",
+        "activity_failed",
+        "limited_time_failed",
+        "failed",
+        "limited_time_failed_continue",
+    }:
+        return row
+    reason = str(defer_state.get("reschedule_reason") or meta.get("batch_lt_retry_revive_reason") or "")
+    update_integrated_pipeline(
+        row.pipeline_id,
+        status="waiting_activity",
+        current_step="waiting_activity",
+        error="",
+        traffic_run_id="",
+        meta_patch=build_activity_revive_meta_patch(reason=reason),
+    )
+    logger.info(
+        "pipeline %s reconciled revived failed -> waiting_activity step_was=%s",
+        row.pipeline_id,
+        step,
+    )
+    return get_integrated_pipeline(row.pipeline_id) or row
 
 
 def maybe_finalize_activity_after_batch_lt_retry(row) -> bool:
@@ -249,7 +314,7 @@ def maybe_finalize_activity_after_batch_lt_retry(row) -> bool:
         )
         update_integrated_pipeline(
             row.pipeline_id,
-            traffic_run_id=None,
+            traffic_run_id="",
             error="",
         )
     else:
@@ -260,7 +325,7 @@ def maybe_finalize_activity_after_batch_lt_retry(row) -> bool:
             scheduled_activity_at=new_at,
             pdd_product_ids=pdd_ids,
             mapping_ids=mapping_ids,
-            traffic_run_id=None,
+            traffic_run_id="",
             error="",
             meta_patch=build_activity_revive_meta_patch(reason=reason),
         )

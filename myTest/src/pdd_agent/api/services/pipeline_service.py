@@ -3112,6 +3112,17 @@ def _on_traffic_finished(row, *, run_id: str, success: bool, error: str) -> None
         )
         return
     if not success:
+        from pdd_agent.api.services.pipeline_batch_limited_time_retry_bridge import (
+            should_absorb_traffic_failure_after_batch_lt_revive,
+        )
+
+        if should_absorb_traffic_failure_after_batch_lt_revive(row, run_id):
+            logger.info(
+                "pipeline %s absorb stale traffic failure after batch lt revive run_id=%s",
+                row.pipeline_id,
+                run_id,
+            )
+            return
         update_integrated_pipeline(
             row.pipeline_id,
             status="failed",
@@ -3220,7 +3231,17 @@ def _reconcile_limited_time_to_activity(row) -> Any:
 
 def _reconcile_stuck_pipeline_row(row) -> Any:
     """子任务已失败/取消但链路仍 running 时自动对齐（例如浏览器被关后回调未触发）。"""
-    if not row or row.status in TERMINAL_PIPELINE_STATUSES:
+    if not row:
+        return row
+
+    from pdd_agent.api.services.pipeline_batch_limited_time_retry_bridge import (
+        reconcile_revived_failed_pipeline,
+    )
+
+    if str(getattr(row, "status", "") or "") == "failed":
+        row = reconcile_revived_failed_pipeline(row)
+
+    if row.status in TERMINAL_PIPELINE_STATUSES:
         return row
 
     from pdd_agent.api.services.pipeline_per_batch_lt_aggregate.bridge import (
@@ -3381,6 +3402,21 @@ def _reconcile_stuck_pipeline_row(row) -> Any:
                 error=str(record.message or "").strip() or "活动报名失败",
             )
             continue
+        if (
+            failed_step == "traffic_failed"
+            and run_status == RunStatus.FAILED
+        ):
+            from pdd_agent.api.services.pipeline_batch_limited_time_retry_bridge import (
+                should_absorb_traffic_failure_after_batch_lt_revive,
+            )
+
+            if should_absorb_traffic_failure_after_batch_lt_revive(row, run_id):
+                logger.info(
+                    "pipeline %s reconcile skip stale traffic failure after batch lt revive run_id=%s",
+                    row.pipeline_id,
+                    run_id,
+                )
+                continue
         error = str(record.message or "").strip() or default_error
         if run_status == RunStatus.CANCELED:
             error = error or "子任务已取消"
@@ -3460,6 +3496,13 @@ def _ensure_pipeline_failed_after_task(
         and _pipeline_continue_after_activity_failure(row)
     ):
         return
+    if agent == AgentKind.TRAFFIC.value:
+        from pdd_agent.api.services.pipeline_batch_limited_time_retry_bridge import (
+            should_absorb_traffic_failure_after_batch_lt_revive,
+        )
+
+        if should_absorb_traffic_failure_after_batch_lt_revive(row, run_id):
+            return
     step_map = {
         AgentKind.LISTING.value: ("listing_failed", "上架失败"),
         AgentKind.CAMPAIGN.value: ("activity_failed", "活动报名失败"),
