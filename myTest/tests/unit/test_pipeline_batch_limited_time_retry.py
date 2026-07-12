@@ -2,7 +2,7 @@
 
 from datetime import datetime, timedelta
 from types import SimpleNamespace
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock, call, patch
 
 from pdd_agent.api.services.pipeline_batch_limited_time_retry_policy import (
     evaluate_batch_limited_time_retry_eligibility,
@@ -181,3 +181,58 @@ def test_handle_batch_retry_success_finalizes(
         error="",
     )
     assert handled is True
+
+
+@patch("pdd_agent.api.services.pipeline_batch_limited_time_retry_policy._start_next_pending_batch", return_value=False)
+@patch(
+    "pdd_agent.api.services.pipeline_batch_limited_time_retry_activity_policy.maybe_finalize_activity_after_batch_lt_retry",
+    return_value=False,
+)
+@patch("pdd_agent.api.services.pipeline_batch_limited_time_retry_policy._merge_limited_time_success_into_activity_pool")
+@patch("pdd_agent.api.services.pipeline_batch_product_stage_tracker.record_limited_time_batch")
+@patch("pdd_agent.api.services.pipeline_batch_limited_time_retry_policy._resolve_lt_success_for_batch")
+@patch("pdd_agent.api.services.pipeline_batch_limited_time_retry_policy.list_batch_limited_time_retry_targets")
+@patch("pdd_agent.api.services.pipeline_batch_limited_time_retry_policy.get_integrated_pipeline")
+@patch("pdd_agent.api.services.pipeline_batch_limited_time_retry_policy.update_integrated_pipeline")
+def test_handle_batch_retry_success_revives_when_finalize_deferred(
+    mock_update,
+    mock_get,
+    mock_targets,
+    mock_resolve,
+    _record,
+    mock_merge,
+    _finalize,
+    _next,
+):
+    row = _row(
+        status="failed",
+        current_step="traffic_failed",
+        meta={
+            "pipeline_batch_limited_time_retry": {
+                "limited_time_run_id": "lt1",
+                "active_batch_index": 0,
+            },
+            "batch_lt_retry_restore_status": "failed",
+            "batch_lt_retry_restore_step": "traffic_failed",
+        },
+    )
+    mock_get.return_value = row
+    mock_targets.return_value = [{"pdd_product_id": "111", "mapping_id": "m1"}]
+    mock_resolve.return_value = (["111"], ["m1"], [])
+    mock_merge.return_value = (["111"], ["m1"], ["111"], ["m1"])
+
+    handled = maybe_handle_batch_limited_time_retry_finished(
+        row,
+        run_id="lt1",
+        success=True,
+        result={"status": "success"},
+        error="",
+    )
+    assert handled is True
+    revive_calls = [
+        call
+        for call in mock_update.call_args_list
+        if call.kwargs.get("status") == "waiting_activity"
+        or (call.kwargs.get("meta_patch") or {}).get("batch_lt_retry_revived_activity")
+    ]
+    assert revive_calls

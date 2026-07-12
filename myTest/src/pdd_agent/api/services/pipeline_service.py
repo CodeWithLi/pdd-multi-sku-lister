@@ -971,6 +971,16 @@ def _step_infos(row) -> list[dict[str, Any]]:
     campaign_skip_reason = str(meta.get("campaign_skip_reason") or "")
     listing_outcome = str(meta.get("listing_outcome") or "")
     listing_skip_reason = str(meta.get("listing_skip_reason") or "")
+    from pdd_agent.api.services.pipeline_batch_limited_time_retry_activity_policy import (
+        build_batch_lt_retry_activity_defer_public_state,
+    )
+
+    batch_lt_activity_defer = build_batch_lt_retry_activity_defer_public_state(row)
+    revived_activity = bool(
+        meta.get("batch_lt_retry_revived_activity")
+        or batch_lt_activity_defer.get("awaiting_reschedule")
+        or batch_lt_activity_defer.get("rescheduled")
+    )
     listing_status = "pending"
     if listing_outcome == LISTING_SKIPPED_OUTCOME:
         listing_status = "skipped"
@@ -982,13 +992,17 @@ def _step_infos(row) -> list[dict[str, Any]]:
     campaign_status = "pending"
     activity_ids = _pipeline_activity_ids(row)
     campaign_results = _campaign_results(row)
-    if campaign_outcome in CAMPAIGN_SKIP_TRAFFIC_OUTCOMES and len(campaign_results) >= len(activity_ids):
+    if revived_activity and str(row.current_step or "") == "waiting_activity":
+        campaign_status = "scheduled" if row.scheduled_activity_at else "pending"
+    elif campaign_outcome in CAMPAIGN_SKIP_TRAFFIC_OUTCOMES and len(campaign_results) >= len(activity_ids):
         campaign_status = "skipped"
     else:
         campaign_status = _derive_campaign_status(row, campaign_results, activity_ids)
 
     traffic_status = "pending"
-    if row.traffic_run_id:
+    if revived_activity and str(row.current_step or "") == "waiting_activity":
+        traffic_status = "pending"
+    elif row.traffic_run_id:
         record = TaskRunStore().load(row.traffic_run_id)
         if record:
             traffic_status = str(record.status.value if hasattr(record.status, "value") else record.status)
@@ -1022,6 +1036,36 @@ def _step_infos(row) -> list[dict[str, Any]]:
             limited_time_outcome = str(agg_lt_display.get("outcome") or limited_time_outcome)
 
     activity_detail = "等待限时限量购完成后预约"
+    if batch_lt_activity_defer.get("rescheduled") and row.scheduled_activity_at:
+        activity_detail = (
+            f"计划于 {row.scheduled_activity_at:%Y-%m-%d %H:%M} 自动报名"
+            f"（{batch_lt_activity_defer.get('reschedule_reason') or '分批限时重跑后改期'}）"
+        )
+    elif batch_lt_activity_defer.get("awaiting_reschedule"):
+        anchor_raw = str(batch_lt_activity_defer.get("limited_time_finished_at") or "").strip()
+        delay_h = float(row.activity_delay_hours or 24.0)
+        if anchor_raw:
+            try:
+                anchor = datetime.fromisoformat(anchor_raw)
+                from pdd_agent.api.services.pipeline_late_retry_activity_defer_policy import (
+                    resolve_activity_scheduled_at_from_anchor,
+                )
+
+                planned_at = resolve_activity_scheduled_at_from_anchor(
+                    anchor=anchor,
+                    demo_mode=bool(row.demo_mode),
+                    activity_delay_hours=delay_h,
+                )
+                activity_detail = (
+                    f"分批限时重跑已成功，计划于 {planned_at:%Y-%m-%d %H:%M} 自动报名"
+                    f"（最后成功批次完成时刻 + {delay_h:g}h）"
+                )
+            except ValueError:
+                activity_detail = (
+                    f"分批限时重跑已成功，活动将按最后成功批次完成时刻 + {delay_h:g}h 预约"
+                )
+        else:
+            activity_detail = "分批限时重跑已成功，等待活动改期预约"
     if str(row.current_step or "") == "waiting_mq_phase2":
         from pdd_agent.api.services.pipeline_mq_auto_commerce import format_mq_phase2_wait_detail
 
@@ -1044,7 +1088,7 @@ def _step_infos(row) -> list[dict[str, Any]]:
     multi_detail = _build_multi_activity_detail(row, campaign_status=campaign_status)
     if multi_detail:
         activity_detail = multi_detail
-    elif campaign_outcome in CAMPAIGN_SKIP_TRAFFIC_OUTCOMES:
+    elif campaign_outcome in CAMPAIGN_SKIP_TRAFFIC_OUTCOMES and not revived_activity:
         activity_detail = campaign_skip_reason or "商品暂不可报名活动，已跳过活动报名"
     elif limited_time_outcome == "failed" and _pipeline_continue_after_limited_time_failure(row):
         activity_detail = "限时限量购失败，仍按设置继续活动报名"
@@ -3113,6 +3157,13 @@ def _reconcile_stuck_pipeline_row(row) -> Any:
                 summarize_run_message_fn=_summarize_run_message,
             )
         row = get_integrated_pipeline(row.pipeline_id) or refreshed
+
+    from pdd_agent.api.services.pipeline_batch_limited_time_retry_bridge import (
+        maybe_flush_batch_lt_retry_activity_reschedule,
+    )
+
+    if maybe_flush_batch_lt_retry_activity_reschedule(row):
+        row = get_integrated_pipeline(row.pipeline_id) or row
 
     from pdd_agent.api.services.pipeline_activity_limited_time_success import (
         reconcile_pipeline_waiting_activity,

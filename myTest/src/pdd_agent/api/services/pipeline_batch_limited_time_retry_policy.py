@@ -591,6 +591,27 @@ def maybe_handle_batch_limited_time_retry_finished(
                     current_step="waiting_activity",
                     error="",
                 )
+        else:
+            from pdd_agent.api.services.pipeline_batch_limited_time_retry_activity_policy import (
+                build_activity_revive_meta_patch,
+            )
+
+            pending_reason = (
+                "分批限时重跑已成功，活动将在首轮限时全部完成后按最后成功时刻改期预约"
+                if not finalized
+                else ""
+            )
+            update_integrated_pipeline(
+                refreshed.pipeline_id,
+                status="waiting_activity",
+                current_step="waiting_activity",
+                error="",
+                traffic_run_id=None,
+                meta_patch={
+                    **build_activity_revive_meta_patch(reason=pending_reason),
+                    "limited_time_outcome": "partial_success" if failed_pdd or not success else "success",
+                },
+            )
 
     logger.info(
         "pipeline %s batch lt retry finished batch=%s success_count=%s finalized=%s",

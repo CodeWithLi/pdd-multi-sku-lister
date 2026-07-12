@@ -57,6 +57,7 @@ def build_batch_lt_retry_activity_defer_public_state(row) -> dict[str, Any]:
     scheduled = getattr(row, "scheduled_activity_at", None)
     return {
         "enabled": is_defer_policy_enabled(row),
+        "awaiting_reschedule": bool(state.get("awaiting_reschedule")),
         "rescheduled": bool(state.get("rescheduled")),
         "reschedule_reason": str(state.get("reschedule_reason") or ""),
         "original_activity_at": str(state.get("original_activity_at") or ""),
@@ -149,6 +150,21 @@ def record_batch_lt_retry_success_finished_at(row, *, finished_at: datetime | No
     )
 
 
+def build_activity_revive_meta_patch(*, reason: str = "") -> dict[str, Any]:
+    """分批限时重跑后复活活动：清除此前跳过/失败的活动与推广展示状态。"""
+    patch: dict[str, Any] = {
+        "batch_lt_retry_revived_activity": True,
+        "campaign_outcome": "",
+        "campaign_skip_reason": "",
+        "campaign_results": [],
+        "traffic_skip_reason": "",
+        "listing_limited_time_phase_completed": True,
+    }
+    if reason:
+        patch["batch_lt_retry_revive_reason"] = reason
+    return patch
+
+
 def maybe_finalize_activity_after_batch_lt_retry(row) -> bool:
     """
     全部分批限时重跑队列结束后：若至少有一批成功，则按最后成功时刻 + delay 预约/改期活动。
@@ -221,16 +237,20 @@ def maybe_finalize_activity_after_batch_lt_retry(row) -> bool:
     if not campaign_run_id:
         from pdd_agent.api.services.pipeline_service import _schedule_pipeline_campaign
 
+        revive_patch = build_activity_revive_meta_patch(reason=reason)
+        revive_patch["limited_time_outcome"] = "partial_success"
         _schedule_pipeline_campaign(
             row,
             activity_index=0,
             scheduled_at=new_at,
             pdd_ids=pdd_ids,
             mapping_ids=mapping_ids,
-            meta_patch={
-                "limited_time_outcome": "partial_success",
-                "batch_lt_retry_revived_activity": True,
-            },
+            meta_patch=revive_patch,
+        )
+        update_integrated_pipeline(
+            row.pipeline_id,
+            traffic_run_id=None,
+            error="",
         )
     else:
         update_integrated_pipeline(
@@ -240,7 +260,9 @@ def maybe_finalize_activity_after_batch_lt_retry(row) -> bool:
             scheduled_activity_at=new_at,
             pdd_product_ids=pdd_ids,
             mapping_ids=mapping_ids,
+            traffic_run_id=None,
             error="",
+            meta_patch=build_activity_revive_meta_patch(reason=reason),
         )
 
     _save_defer_meta(
