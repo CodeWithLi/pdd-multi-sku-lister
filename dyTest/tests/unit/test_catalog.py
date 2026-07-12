@@ -1,0 +1,19 @@
+"""catalog 单元测试。"""
+
+from pathlib import Path
+
+from dy_agent.skills.listing.catalog import build_listing_unit
+
+
+def test_build_listing_unit_basic(tmp_path: Path):
+    product_dir = tmp_path / "BD046A"
+    product_dir.mkdir()
+    (product_dir / "1.png").write_bytes(b"x")
+    (product_dir / "2.png").write_bytes(b"x")
+    (product_dir / "BD046A+MODEL1.png").write_bytes(b"x")
+
+    unit = build_listing_unit("BD046A", "", product_dir, family_code="BD046")
+    assert unit.product_code == "BD046A"
+    assert len(unit.carousel_images) == 2
+    assert len(unit.skus) == 1
+    assert unit.skus[0].model_code == "MODEL1"

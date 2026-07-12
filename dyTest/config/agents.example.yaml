@@ -1,0 +1,11 @@
+orchestrator:
+  enabled: true
+  description: 自然语言规划 → 子任务列表
+
+listing:
+  enabled: true
+  description: 抖店多规格商品上架
+
+delist:
+  enabled: false
+  description: 批量下架（待实现）

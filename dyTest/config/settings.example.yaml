@@ -1,0 +1,47 @@
+# 复制为 config/settings.yaml 后本地使用
+# cp config/settings.example.yaml config/settings.yaml
+
+app:
+  log_level: INFO
+
+login:
+  sms_wait_seconds: 300
+  auto_send_sms: true
+
+paths:
+  assets_root: data/assets/商品上架规格文件
+  profiles_root: data/profiles
+  runs_root: data/runs
+
+browser:
+  headless: false
+  slow_mo: 0
+  default_timeout_ms: 30000
+  base_url: https://fxg.jinritemai.com
+  channel: ""
+
+multi_spec:
+  excel: data/assets/抖音所有商品.xls
+  defaults:
+    inventory: "10"
+    price: "199.9"
+    market_price: "299.9"
+
+listing:
+  category_keyword: 玩偶
+  title_mode: page_ai
+  slot_alignment_test: false
+  spec_fill_verify_test: false
+  primary_style_first_test: false
+  category_next_burst_demo: true
+  accessory_cost_pricing: false
+  accessory_tiered_float: false
+
+accounts:
+  - account_id: store_A
+    enabled: true
+    phone: "17708216145"
+    username: ""
+    password: ""
+    login_mode: sms
+    product_codes: []
