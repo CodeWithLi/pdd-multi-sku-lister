@@ -15,6 +15,7 @@ const DELIST_SPEC_CODE_SEARCH_KEY = 'pdd_agent.pipeline.delist_spec_code_search_
 const ACTIVITY_LIMITED_TIME_SUCCESS_ONLY_KEY = 'pdd_agent.pipeline.activity_limited_time_success_only'
 const ACTIVITY_TRAFFIC_BATCH_ENABLED_KEY = 'pdd_agent.pipeline.activity_traffic_batch_enabled'
 const ACTIVITY_TRAFFIC_BATCH_SIZE_KEY = 'pdd_agent.pipeline.activity_traffic_batch_size'
+const PER_BATCH_LIMITED_TIME_CHUNK_SIZE_KEY = 'pdd_agent.pipeline.per_batch_limited_time_chunk_size'
 const MINIO_MATERIAL_REFRESH_PAUSED_KEY = 'pdd_agent.minio_material_refresh_paused'
 
 const VALID_RELIST_STRATEGIES = new Set<RelistStrategy>([
@@ -248,6 +249,27 @@ export function saveActivityTrafficBatchSize(size: number): void {
   try {
     localStorage.setItem(
       ACTIVITY_TRAFFIC_BATCH_SIZE_KEY,
+      String(Math.max(1, Math.min(500, size))),
+    )
+  } catch {
+    // ignore
+  }
+}
+
+export function loadPerBatchLimitedTimeChunkSize(): number {
+  try {
+    const raw = Number(localStorage.getItem(PER_BATCH_LIMITED_TIME_CHUNK_SIZE_KEY))
+    if (Number.isFinite(raw) && raw >= 1) return Math.min(500, Math.floor(raw))
+  } catch {
+    // ignore
+  }
+  return 10
+}
+
+export function savePerBatchLimitedTimeChunkSize(size: number): void {
+  try {
+    localStorage.setItem(
+      PER_BATCH_LIMITED_TIME_CHUNK_SIZE_KEY,
       String(Math.max(1, Math.min(500, size))),
     )
   } catch {

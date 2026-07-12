@@ -189,6 +189,19 @@ def _enqueue_batch_limited_time_retry(
     pdd_ids: list[str],
     mapping_ids: list[str],
 ) -> str:
+    from pdd_agent.api.services.pipeline_per_batch_lt_chunks.bridge import (
+        maybe_start_chunked_batch_limited_time_retry,
+    )
+
+    chunked_run_id = maybe_start_chunked_batch_limited_time_retry(
+        row,
+        batch_index=int(batch_index),
+        pdd_ids=pdd_ids,
+        mapping_ids=mapping_ids,
+    )
+    if chunked_run_id:
+        return chunked_run_id
+
     limited_time_run_id = create_campaign_run(str(row.account_id or ""))
     enqueue_task(
         agent=AgentKind.CAMPAIGN.value,
@@ -453,42 +466,79 @@ def maybe_handle_batch_limited_time_retry_finished(
     if not is_batch_limited_time_retry_run(row, run_id):
         return False
 
+    from pdd_agent.api.services.pipeline_per_batch_lt_chunks.bridge import (
+        consume_chunk_retry_finish_context,
+        is_limited_time_chunk_sequence_active,
+        maybe_handle_limited_time_chunk_finished,
+        merge_chunk_retry_success_into_activity_pool,
+    )
+
+    if is_limited_time_chunk_sequence_active(row):
+        if maybe_handle_limited_time_chunk_finished(
+            row,
+            run_id=run_id,
+            success=success,
+            result=result,
+            error=error,
+        ):
+            return True
+
+    chunk_ctx = consume_chunk_retry_finish_context(row)
     result = result if isinstance(result, dict) else {}
     state = batch_lt_retry_state(row)
-    batch_index = int(state.get("active_batch_index") or 0)
+    batch_index = int(
+        (chunk_ctx.get("batch_index") if chunk_ctx else None)
+        or state.get("active_batch_index")
+        or 0
+    )
     targets = list_batch_limited_time_retry_targets(
         pipeline_id=row.pipeline_id,
         batch_index=batch_index,
     )
     batch_pdd_ids, batch_mapping_ids = _extract_targets_pdd_mapping(targets)
 
-    lt_success_pdd, lt_success_mapping, failed_pdd = _resolve_lt_success_for_batch(
-        row,
-        run_id=run_id,
-        result=result,
-        batch_pdd_ids=batch_pdd_ids,
-        batch_mapping_ids=batch_mapping_ids,
-    )
+    if chunk_ctx:
+        lt_success_pdd = list(chunk_ctx.get("chunk_success_pdd_ids") or [])
+        lt_success_mapping = list(chunk_ctx.get("chunk_success_mapping_ids") or [])
+        failed_pdd = [pid for pid in batch_pdd_ids if pid not in set(lt_success_pdd)]
+        success = bool(lt_success_pdd) or bool(chunk_ctx.get("last_chunk_success"))
+        if not str(error or "").strip():
+            error = str(chunk_ctx.get("error") or "")
+    else:
+        lt_success_pdd, lt_success_mapping, failed_pdd = _resolve_lt_success_for_batch(
+            row,
+            run_id=run_id,
+            result=result,
+            batch_pdd_ids=batch_pdd_ids,
+            batch_mapping_ids=batch_mapping_ids,
+        )
 
-    from pdd_agent.api.services.pipeline_batch_product_stage_tracker import record_limited_time_batch
+        from pdd_agent.api.services.pipeline_batch_product_stage_tracker import record_limited_time_batch
 
-    record_limited_time_batch(
-        pipeline_id=row.pipeline_id,
-        batch_index=batch_index,
-        success_pdd_ids=lt_success_pdd,
-        failed_pdd_ids=failed_pdd,
-        batch_failed=not success and not lt_success_pdd,
-        error=error or "限时限量购重跑失败",
-    )
+        record_limited_time_batch(
+            pipeline_id=row.pipeline_id,
+            batch_index=batch_index,
+            success_pdd_ids=lt_success_pdd,
+            failed_pdd_ids=failed_pdd,
+            batch_failed=not success and not lt_success_pdd,
+            error=error or "限时限量购重跑失败",
+        )
 
     merged_pdd: list[str] = []
     merged_map: list[str] = []
     if lt_success_pdd:
-        merged_pdd, merged_map, _, _ = _merge_limited_time_success_into_activity_pool(
-            row,
-            run_id=run_id,
-            result=result,
-        )
+        if chunk_ctx:
+            merged_pdd, merged_map, _, _ = merge_chunk_retry_success_into_activity_pool(
+                row,
+                lt_success_pdd=lt_success_pdd,
+                lt_success_mapping=lt_success_mapping,
+            )
+        else:
+            merged_pdd, merged_map, _, _ = _merge_limited_time_success_into_activity_pool(
+                row,
+                run_id=run_id,
+                result=result,
+            )
         from pdd_agent.api.services.pipeline_batch_limited_time_retry_activity_policy import (
             record_batch_lt_retry_success_finished_at,
         )

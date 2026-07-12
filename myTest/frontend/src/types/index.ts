@@ -1086,6 +1086,8 @@ export interface IntegratedPipeline {
   activity_traffic_batch_enabled?: boolean
   activity_traffic_batch_size?: number
   activity_traffic_batch_display?: string
+  per_batch_limited_time_chunk_size?: number
+  per_batch_limited_time_chunk_display?: string
   limited_time_outcome?: string
   limited_time_skip_reason?: string
   activity_pdd_product_ids?: string[]
@@ -1356,6 +1358,7 @@ export interface IntegratedPipelineStartPayload {
   delist_spec_code_search_enabled?: boolean
   activity_traffic_batch_enabled?: boolean
   activity_traffic_batch_size?: number
+  per_batch_limited_time_chunk_size?: number
 }
 
 export interface IntegratedPipelineBatchStartPayload {
@@ -1396,6 +1399,7 @@ export interface IntegratedPipelineBatchStartPayload {
   activity_limited_time_success_only?: boolean
   activity_traffic_batch_enabled?: boolean
   activity_traffic_batch_size?: number
+  per_batch_limited_time_chunk_size?: number
 }
 
 export interface IntegratedPipelineBatchRunItem {

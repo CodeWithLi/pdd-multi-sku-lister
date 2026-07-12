@@ -698,6 +698,7 @@ _PIPELINE_PAYLOAD_KEYS = frozenset(
         "activity_limited_time_success_only",
         "activity_traffic_batch_enabled",
         "activity_traffic_batch_size",
+        "per_batch_limited_time_chunk_size",
         "extra_meta",
     }
 )

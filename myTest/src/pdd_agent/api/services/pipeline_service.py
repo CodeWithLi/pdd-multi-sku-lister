@@ -1148,6 +1148,12 @@ def _step_infos(row) -> list[dict[str, Any]]:
         if row.auto_promotion:
             traffic_detail = f"{at_batch_hint}；本批活动完成后创建推广"
 
+    from pdd_agent.api.services.pipeline_per_batch_lt_chunks.bridge import (
+        resolve_limited_time_step_chunk_hint,
+    )
+
+    chunk_lt_hint = resolve_limited_time_step_chunk_hint(row)
+
     limited_time_detail = (
         "上架完成后立即执行（先于活动报名，取消惊喜优惠）"
         if _pipeline_auto_limited_time(row)
@@ -1161,6 +1167,8 @@ def _step_infos(row) -> list[dict[str, Any]]:
         limited_time_detail = limited_time_skip_reason or "限时限量购失败，仍将继续活动报名"
     elif agg_lt_display and agg_lt_display.get("detail"):
         limited_time_detail = str(agg_lt_display.get("detail") or limited_time_detail)
+    elif chunk_lt_hint:
+        limited_time_detail = chunk_lt_hint
     elif listing_lt_phase_done:
         limited_time_detail = "已完成（活动已预约，不阻塞下一家店铺）"
 
@@ -1300,6 +1308,12 @@ def pipeline_to_dict(row) -> dict[str, Any]:
         "activity_traffic_batch_enabled": bool((row.meta or {}).get("activity_traffic_batch_enabled")),
         "activity_traffic_batch_size": int((row.meta or {}).get("activity_traffic_batch_size") or 10),
         "activity_traffic_batch_display": str((row.meta or {}).get("activity_traffic_batch_display") or ""),
+        "per_batch_limited_time_chunk_size": int(
+            (row.meta or {}).get("per_batch_limited_time_chunk_size") or 10
+        ),
+        "per_batch_limited_time_chunk_display": str(
+            (row.meta or {}).get("per_batch_limited_time_chunk_display") or ""
+        ),
         "activity_pdd_product_ids": list(
             (row.meta or {}).get("activity_pdd_product_ids")
             or (row.meta or {}).get("limited_time_success_pdd_product_ids")
@@ -1409,6 +1423,7 @@ def start_integrated_pipeline(
     activity_limited_time_success_only: bool = False,
     activity_traffic_batch_enabled: bool = False,
     activity_traffic_batch_size: int = 10,
+    per_batch_limited_time_chunk_size: int = 10,
     extra_meta: dict[str, Any] | None = None,
     trigger_source: str = "manual",
     skip_commerce_gate: bool = False,
@@ -1508,6 +1523,7 @@ def start_integrated_pipeline(
                 "activity_limited_time_success_only": activity_limited_time_success_only,
                 "activity_traffic_batch_enabled": activity_traffic_batch_enabled,
                 "activity_traffic_batch_size": activity_traffic_batch_size,
+                "per_batch_limited_time_chunk_size": per_batch_limited_time_chunk_size,
                 "extra_meta": extra_meta,
                 "trigger_source": trigger_source,
             }
@@ -1568,10 +1584,20 @@ def start_integrated_pipeline(
             enabled=bool(listing_per_batch_lt_traffic_activity_enabled)
         )
     )
-    if listing_per_batch_lt_traffic_activity_enabled:
+    if listing_per_batch_limited_time_enabled:
         meta.update(
             per_batch_promote_lt_success_only_meta_patch(
                 enabled=bool(listing_per_batch_promote_lt_success_only_enabled)
+            )
+        )
+    from pdd_agent.api.services.pipeline_per_batch_lt_chunks.bridge import (
+        per_batch_lt_chunks_meta_patch,
+    )
+
+    if listing_per_batch_limited_time_enabled and not listing_per_batch_lt_traffic_activity_enabled:
+        meta.update(
+            per_batch_lt_chunks_meta_patch(
+                chunk_size=int(per_batch_limited_time_chunk_size or 10)
             )
         )
     from pdd_agent.api.services.pipeline_activity_traffic_batch.bridge import (
@@ -1887,6 +1913,7 @@ def start_integrated_pipeline_batch(
     activity_limited_time_success_only: bool = False,
     activity_traffic_batch_enabled: bool = False,
     activity_traffic_batch_size: int = 10,
+    per_batch_limited_time_chunk_size: int = 10,
     trigger_source: str = "manual",
 ) -> dict[str, Any]:
     """批量创建整合链路；默认各店按启动间隔错开并行入队；串行模式下一家跑完再跑下一家。"""
@@ -1939,6 +1966,7 @@ def start_integrated_pipeline_batch(
         activity_limited_time_success_only=activity_limited_time_success_only,
         activity_traffic_batch_enabled=activity_traffic_batch_enabled,
         activity_traffic_batch_size=activity_traffic_batch_size,
+        per_batch_limited_time_chunk_size=per_batch_limited_time_chunk_size,
         trigger_source=trigger_source,
     )
 
@@ -2037,6 +2065,7 @@ def start_integrated_pipeline_batch(
             activity_limited_time_success_only=activity_limited_time_success_only,
             activity_traffic_batch_enabled=activity_traffic_batch_enabled,
             activity_traffic_batch_size=activity_traffic_batch_size,
+            per_batch_limited_time_chunk_size=per_batch_limited_time_chunk_size,
         )
         pipelines.append(
             _batch_run_item_from_start(data, scheduled_at=scheduled_at)
@@ -2783,6 +2812,24 @@ def _on_limited_time_finished(row, *, run_id: str, success: bool, result: dict[s
     ):
         logger.info(
             "pipeline %s limited_time finished handled by per-batch campaign run_id=%s",
+            row.pipeline_id,
+            run_id,
+        )
+        return
+
+    from pdd_agent.api.services.pipeline_per_batch_lt_chunks.bridge import (
+        maybe_handle_limited_time_chunk_finished,
+    )
+
+    if maybe_handle_limited_time_chunk_finished(
+        row,
+        run_id=run_id,
+        success=success,
+        result=result,
+        error=error,
+    ):
+        logger.info(
+            "pipeline %s limited_time finished handled by per-batch LT chunk run_id=%s",
             row.pipeline_id,
             run_id,
         )

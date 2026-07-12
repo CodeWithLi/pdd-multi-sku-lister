@@ -326,25 +326,48 @@ def record_limited_time_batch_finished(
     batch_index = _current_batch_index(row)
     batch_pdd_ids = list(row.pdd_product_ids or [])
     batch_mapping_ids = list(row.mapping_ids or [])
-    lt_success_pdd_ids, lt_success_mapping_ids = _resolve_lt_success_products(
-        row,
-        run_id=run_id,
-        result=result,
-        batch_pdd_ids=batch_pdd_ids,
-        batch_mapping_ids=batch_mapping_ids,
-    )
-    failed_pdd = [pid for pid in batch_pdd_ids if pid not in set(lt_success_pdd_ids)]
 
-    record_limited_time_batch(
-        pipeline_id=row.pipeline_id,
-        batch_index=batch_index,
-        success_pdd_ids=lt_success_pdd_ids,
-        failed_pdd_ids=failed_pdd,
-        batch_failed=not success and not lt_success_pdd_ids,
-        error=error or "限时限量购设置失败",
+    from pdd_agent.api.services.pipeline_per_batch_lt_chunks.bridge import (
+        clear_lt_batch_tracker_aggregate_flag,
+        should_skip_lt_batch_tracker_for_aggregate,
     )
 
+    skip_tracker = should_skip_lt_batch_tracker_for_aggregate(row, run_id=run_id)
     meta = dict(row.meta or {})
+    if skip_tracker:
+        last_chunk_pdd, last_chunk_mapping = _resolve_lt_success_products(
+            row,
+            run_id=run_id,
+            result=result,
+            batch_pdd_ids=batch_pdd_ids,
+            batch_mapping_ids=batch_mapping_ids,
+        )
+        lt_success_pdd_ids = _merge_unique([*_accumulated_pdd_ids(meta), *last_chunk_pdd])
+        lt_success_mapping_ids = _merge_unique(
+            [*_accumulated_mapping_ids(meta), *last_chunk_mapping]
+        )
+        batch_success_count = int(meta.get("listing_per_batch_lt_chunks_batch_success_count") or 0)
+        batch_total_count = int(meta.get("listing_per_batch_lt_chunks_batch_total_count") or 0)
+        failed_pdd = max(0, batch_total_count - batch_success_count)
+    else:
+        lt_success_pdd_ids, lt_success_mapping_ids = _resolve_lt_success_products(
+            row,
+            run_id=run_id,
+            result=result,
+            batch_pdd_ids=batch_pdd_ids,
+            batch_mapping_ids=batch_mapping_ids,
+        )
+        failed_pdd = [pid for pid in batch_pdd_ids if pid not in set(lt_success_pdd_ids)]
+        batch_success_count = len(lt_success_pdd_ids)
+
+        record_limited_time_batch(
+            pipeline_id=row.pipeline_id,
+            batch_index=batch_index,
+            success_pdd_ids=lt_success_pdd_ids,
+            failed_pdd_ids=failed_pdd,
+            batch_failed=not success and not lt_success_pdd_ids,
+            error=error or "限时限量购设置失败",
+        )
     merged_pdd = _merge_unique([*_accumulated_pdd_ids(meta), *lt_success_pdd_ids])
     merged_mapping = _merge_unique([*_accumulated_mapping_ids(meta), *lt_success_mapping_ids])
     batch_count = int(meta.get(AGG_BATCH_COUNT_KEY) or 0) + 1
@@ -352,8 +375,8 @@ def record_limited_time_batch_finished(
         "batch_index": batch_index,
         "run_id": str(run_id or "").strip(),
         "success": bool(success),
-        "batch_success_count": len(lt_success_pdd_ids),
-        "batch_failed_count": len(failed_pdd),
+        "batch_success_count": batch_success_count if skip_tracker else len(lt_success_pdd_ids),
+        "batch_failed_count": failed_pdd if skip_tracker else len(failed_pdd),
         "error": str(error or "").strip(),
     }
     batch_log = [item for item in _batch_log(meta) if _entry_batch_index(item) != batch_index]
@@ -367,6 +390,8 @@ def record_limited_time_batch_finished(
         AGG_IN_PROGRESS_KEY: True,
     }
     update_integrated_pipeline(row.pipeline_id, meta_patch=meta_patch)
+    if skip_tracker:
+        clear_lt_batch_tracker_aggregate_flag(get_integrated_pipeline(row.pipeline_id) or row)
     logger.info(
         "pipeline %s std per-batch LT aggregate recorded batch=%s success_count=%s total=%s run_id=%s",
         row.pipeline_id,
@@ -545,6 +570,13 @@ def resolve_limited_time_step_display(row) -> dict[str, Any] | None:
         if accumulated:
             detail += f"，累计成功 {accumulated} 个商品"
         detail += "）"
+        from pdd_agent.api.services.pipeline_per_batch_lt_chunks.bridge import (
+            resolve_limited_time_step_chunk_hint,
+        )
+
+        chunk_hint = resolve_limited_time_step_chunk_hint(row)
+        if chunk_hint:
+            detail = chunk_hint
         return {
             "status": "running",
             "detail": detail,

@@ -180,6 +180,18 @@ def maybe_run_per_batch_limited_time_after_listing(
     if not _pipeline_auto_limited_time(row):
         return False
 
+    from pdd_agent.api.services.pipeline_per_batch_lt_chunks.bridge import (
+        maybe_start_chunked_limited_time_after_listing,
+    )
+
+    if maybe_start_chunked_limited_time_after_listing(
+        row,
+        pdd_ids=pdd_ids,
+        mapping_ids=mapping_ids,
+        listing_meta=listing_meta,
+    ):
+        return True
+
     throttle = _throttle_state(row)
     from pdd_agent.api.services.pipeline_listing_throttle import _throttle_base_from_meta
 

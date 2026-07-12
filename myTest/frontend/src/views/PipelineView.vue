@@ -25,6 +25,7 @@ import {
   loadActivityLimitedTimeSuccessOnly,
   loadActivityTrafficBatchEnabled,
   loadActivityTrafficBatchSize,
+  loadPerBatchLimitedTimeChunkSize,
   loadPipelineRelistStrategy,
   saveListingBatchIntervalMinutes,
   saveListingBatchSetCount,
@@ -38,6 +39,7 @@ import {
   saveActivityLimitedTimeSuccessOnly,
   saveActivityTrafficBatchEnabled,
   saveActivityTrafficBatchSize,
+  savePerBatchLimitedTimeChunkSize,
   savePipelineRelistStrategy,
 } from '@/utils/pipelinePreferences'
 import {
@@ -139,6 +141,7 @@ const delistSpecCodeSearchEnabled = ref(loadDelistSpecCodeSearchEnabled())
 const activityLimitedTimeSuccessOnly = ref(loadActivityLimitedTimeSuccessOnly())
 const activityTrafficBatchEnabled = ref(loadActivityTrafficBatchEnabled())
 const activityTrafficBatchSize = ref(loadActivityTrafficBatchSize())
+const perBatchLimitedTimeChunkSize = ref(loadPerBatchLimitedTimeChunkSize())
 const excelFallbackEnabled = ref(false)
 const excelFallbackSaving = ref(false)
 const logSpecSkuRowsEnabled = ref(true)
@@ -1814,6 +1817,7 @@ async function startPipeline() {
         activity_limited_time_success_only: activityLimitedTimeSuccessOnly.value,
         activity_traffic_batch_enabled: activityTrafficBatchEnabled.value,
         activity_traffic_batch_size: activityTrafficBatchSize.value,
+        per_batch_limited_time_chunk_size: perBatchLimitedTimeChunkSize.value,
       })
       success.value = `批量整合链路已提交：${result.total} 家店铺${
         result.store_sequential_enabled
@@ -1863,6 +1867,7 @@ async function startPipeline() {
         activity_limited_time_success_only: activityLimitedTimeSuccessOnly.value,
         activity_traffic_batch_enabled: activityTrafficBatchEnabled.value,
         activity_traffic_batch_size: activityTrafficBatchSize.value,
+        per_batch_limited_time_chunk_size: perBatchLimitedTimeChunkSize.value,
       })
       pipelinePage.value = 1
       if (result.commerce_queued) {
@@ -2008,6 +2013,10 @@ watch(activityTrafficBatchEnabled, (value) => {
 
 watch(activityTrafficBatchSize, (value) => {
   saveActivityTrafficBatchSize(Number(value) || 10)
+})
+
+watch(perBatchLimitedTimeChunkSize, (value) => {
+  savePerBatchLimitedTimeChunkSize(Number(value) || 10)
 })
 
 watch(autoPromotion, (value) => {
@@ -2578,6 +2587,32 @@ onUnmounted(() => {
                     <span class="switch-label">每批完成后跑限时限量购</span>
                     <el-switch v-model="listingPerBatchLimitedTimeEnabled" />
                   </div>
+                  <template
+                    v-if="
+                      listingPerBatchLimitedTimeEnabled &&
+                      !listingPerBatchLtTrafficActivityEnabled
+                    "
+                  >
+                    <span class="throttle-inline-label">每趟最多</span>
+                    <el-input-number
+                      v-model="perBatchLimitedTimeChunkSize"
+                      :min="1"
+                      :max="500"
+                      controls-position="right"
+                      size="small"
+                    />
+                    <span class="throttle-inline-label">个商品</span>
+                  </template>
+                </div>
+                <div
+                  v-if="
+                    listingThrottleEnabled &&
+                    listingPerBatchLimitedTimeEnabled &&
+                    !listingPerBatchLtTrafficActivityEnabled
+                  "
+                  class="form-tip"
+                >
+                  每批上架成功后，限时限量购按商品数再拆成多趟（默认紧接着跑）；某一趟失败记失败并继续下一趟。
                 </div>
                 <div v-if="listingThrottleEnabled" class="option-row listing-throttle-row per-batch-lt-row">
                   <div class="switch-row">
