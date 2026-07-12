@@ -38,6 +38,7 @@ def test_is_invalid_shipping_header():
     assert lps._is_invalid_shipping_header("请输入品牌名称搜索") is True
     assert lps._is_invalid_shipping_header("最新全国") is False
     assert lps._is_invalid_shipping_header("最新全网") is False
+    assert lps._is_invalid_shipping_header("全国最新") is False
 
 
 def test_apply_listing_publish_settings_all_ok():

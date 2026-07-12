@@ -7,14 +7,16 @@ import time
 from typing import Any
 
 from pdd_agent.browser.dp_compat_sync import DpPage
+from pdd_agent.skills.listing.listing_shipping_template_priority import (
+    DEFAULT_SHIPPING_TEMPLATE,
+    flatten_shipping_template_candidates,
+    iter_shipping_template_selection_attempts,
+    resolve_matched_template_name,
+    shipping_state_matches_acceptable,
+)
 from pdd_agent.skills.listing.multi_spec_page import _safe_exc
 
 DEFAULT_BULK_DISCOUNT = "9.9"
-DEFAULT_SHIPPING_TEMPLATE = "最新全国"
-SHIPPING_TEMPLATE_ALIASES: dict[str, tuple[str, ...]] = {
-    "最新全国": ("最新全国", "最新全网"),
-    "最新全网": ("最新全网", "最新全国"),
-}
 
 _NATIVE_INPUT_SETTER_JS = """
 const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
@@ -567,14 +569,6 @@ def _detect_service_section(page: DpPage) -> dict[str, Any]:
         return {}
 
 
-def _shipping_template_candidates(template_name: str) -> tuple[str, ...]:
-    name = str(template_name or DEFAULT_SHIPPING_TEMPLATE).strip() or DEFAULT_SHIPPING_TEMPLATE
-    aliases = SHIPPING_TEMPLATE_ALIASES.get(name)
-    if aliases:
-        return aliases
-    return (name,)
-
-
 def _is_shipping_form_ready(page: DpPage) -> bool:
     state = _detect_service_section(page)
     if "found" not in state and state.get("formReady") is not None:
@@ -600,17 +594,6 @@ def _read_shipping_template_state(page: DpPage) -> dict[str, Any]:
         return _normalize_js_result(page.run_js(_READ_SHIPPING_TEMPLATE_JS))
     except Exception:
         return {"found": False, "current": "", "otherChecked": False}
-
-
-def _shipping_template_matches(state: dict[str, Any], template_name: str) -> bool:
-    current = str(state.get("current") or "").replace(" ", "")
-    if not current:
-        return False
-    for candidate in _shipping_template_candidates(template_name):
-        target = str(candidate or "").replace(" ", "")
-        if target and target in current:
-            return True
-    return False
 
 
 def _fill_discount_via_playwright(page: DpPage, discount: str) -> dict[str, Any]:
@@ -897,11 +880,10 @@ def _ensure_service_section_ready(page: DpPage, account_id: str, label: str) -> 
 
 def _pick_shipping_template_dropdown_playwright(
     page: DpPage,
-    template_name: str,
 ) -> dict[str, Any]:
     """Playwright 打开运费模板下拉并选中目标项（Beast UI 需 evaluate 点击才生效）。"""
     raw = page._page
-    candidates = list(_shipping_template_candidates(template_name))
+    candidates = list(flatten_shipping_template_candidates())
 
     service = raw.locator(".goods-service-v2, .goods-service").first
     if service.count() == 0:
@@ -1000,16 +982,16 @@ def _pick_shipping_template_dropdown_playwright(
     }
 
 
-def _select_shipping_template_playwright(page: DpPage, template_name: str) -> dict[str, Any]:
+def _select_shipping_template_playwright(page: DpPage) -> dict[str, Any]:
     page.run_js(_SCROLL_SERVICE_SECTION_JS)
     time.sleep(0.2)
     page._page.evaluate("window.scrollTo(0, document.documentElement.scrollHeight)")
     time.sleep(0.2)
-    result = _pick_shipping_template_dropdown_playwright(page, template_name)
+    result = _pick_shipping_template_dropdown_playwright(page)
     if not result.get("ok"):
         return result
     state = _read_shipping_template_state(page)
-    if _shipping_template_matches(state, template_name):
+    if shipping_state_matches_acceptable(str(state.get("current") or "")):
         return {**result, "state": state}
     return {"ok": False, "method": "playwright", "reason": "verify_failed", "state": state}
 
@@ -1055,12 +1037,14 @@ def _select_shipping_template(
                 flush=True,
             )
             return {"ok": False, "reason": "shipping_form_not_ready", "state": state}
-        if _shipping_template_matches(state, template_name) and state.get("otherChecked"):
+        matched_name = resolve_matched_template_name(str(state.get("current") or ""))
+        if shipping_state_matches_acceptable(str(state.get("current") or "")) and state.get("otherChecked"):
+            display = matched_name or str(state.get("current") or template_name)
             print(
-                f"[{account_id}] [{label}] 运费模板已是「{template_name}」",
+                f"[{account_id}] [{label}] 运费模板已是「{display}」",
                 flush=True,
             )
-            return {"ok": True, "method": "already_set", "template": template_name, "state": state}
+            return {"ok": True, "method": "already_set", "template": display, "state": state}
 
         time.sleep(0.3)
         try:
@@ -1070,31 +1054,37 @@ def _select_shipping_template(
             pass
 
         try:
-            pw_result = _pick_shipping_template_dropdown_playwright(page, template_name)
+            pw_result = _pick_shipping_template_dropdown_playwright(page)
         except Exception as exc:
             pw_result = {"ok": False, "reason": "playwright_error", "error": _safe_exc(exc)}
         if pw_result.get("ok"):
             state = _read_shipping_template_state(page)
+            selected = (
+                resolve_matched_template_name(str(state.get("current") or ""))
+                or str(state.get("current") or pw_result.get("template") or template_name)
+            )
             print(
-                f"[{account_id}] [{label}] 运费模板已选「其他模板」→「{state.get('current') or template_name}」"
+                f"[{account_id}] [{label}] 运费模板已选「其他模板」→「{selected}」"
                 f"（Playwright）",
                 flush=True,
             )
-            return {**pw_result, "state": state}
+            return {**pw_result, "template": selected, "state": state}
 
-        aliases = [c for c in _shipping_template_candidates(template_name) if c != template_name]
         result: dict[str, Any] = {**pw_result, "ok": False, "reason": "template_not_selected"}
-        for candidate in _shipping_template_candidates(template_name):
-            raw = page.run_js(_SELECT_SHIPPING_TEMPLATE_JS, candidate, aliases)
+        for primary, aliases in iter_shipping_template_selection_attempts():
+            raw = page.run_js(_SELECT_SHIPPING_TEMPLATE_JS, primary, list(aliases))
             candidate_result = _normalize_js_result(raw)
             time.sleep(0.5)
             state = _read_shipping_template_state(page)
-            if candidate_result.get("ok") and _shipping_template_matches(state, template_name):
+            if candidate_result.get("ok") and shipping_state_matches_acceptable(
+                str(state.get("current") or "")
+            ):
+                selected = resolve_matched_template_name(str(state.get("current") or "")) or primary
                 print(
-                    f"[{account_id}] [{label}] 运费模板已选「其他模板」→「{state.get('current') or candidate}」",
+                    f"[{account_id}] [{label}] 运费模板已选「其他模板」→「{selected}」",
                     flush=True,
                 )
-                return {**candidate_result, "template": candidate, "state": state}
+                return {**candidate_result, "template": selected, "state": state}
             result = {**result, **candidate_result}
 
         state = _read_shipping_template_state(page)
