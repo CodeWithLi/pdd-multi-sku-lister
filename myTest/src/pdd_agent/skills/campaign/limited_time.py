@@ -966,6 +966,22 @@ def _wait_activity_settings(page: DpPage, account_id: str, timeout: int = 30) ->
     return False
 
 
+def _click_create_entering_activity_settings(page: DpPage, account_id: str) -> bool:
+    """点击「立即创建」进入活动设置页（含新号 NoCurrentActivity 落地页兜底）。"""
+    from pdd_agent.skills.campaign.limited_time_click_create_bridge import (
+        click_create_entering_activity_settings,
+    )
+
+    return click_create_entering_activity_settings(
+        page,
+        account_id,
+        legacy_click_create=_click_create,
+        wait_activity_settings=_wait_activity_settings,
+        dismiss_popup=_dismiss_message_popup,
+        switch_to_latest_tab=_switch_to_latest_tab,
+    )
+
+
 def _chunked(values: list[str], size: int) -> list[list[str]]:
     return [values[index : index + size] for index in range(0, len(values), size)]
 
@@ -4462,7 +4478,7 @@ def setup_limited_time_campaign(
                 "selected_pdd_product_ids": selected_pdd_product_ids,
                 "published_mapping_ids": selected_mapping_ids,
             }
-        if not _click_create(page, account_id):
+        if not _click_create_entering_activity_settings(page, account_id):
             _lt_log(account_id, "流程", "失败", flow_step="click_create")
             return {
                 "status": "failed",
