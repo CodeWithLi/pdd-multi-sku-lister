@@ -17,6 +17,7 @@ from pdd_agent.api.services.pipeline_per_batch_lt_chunks.constants import (
     MAX_CHUNK_SIZE,
     META_AGGREGATE_RUN_ID_KEY,
     META_BATCH_SIZE_KEY,
+    META_CHUNK_ENABLED_KEY,
     META_BATCH_SUCCESS_COUNT_KEY,
     META_BATCH_TOTAL_COUNT_KEY,
     META_DISPLAY_KEY,
@@ -74,9 +75,58 @@ def resolve_chunk_size(row) -> int:
     return max(1, min(MAX_CHUNK_SIZE, size))
 
 
-def per_batch_lt_chunks_meta_patch(*, chunk_size: int = DEFAULT_CHUNK_SIZE) -> dict[str, Any]:
+def is_per_batch_lt_chunk_enabled(row) -> bool:
+    if not is_standard_per_batch_lt_chunk_pipeline(row):
+        return False
+    meta = _meta(row)
+    if META_CHUNK_ENABLED_KEY in meta:
+        return bool(meta.get(META_CHUNK_ENABLED_KEY))
+    return True
+
+
+def per_batch_lt_chunks_meta_patch(
+    *,
+    chunk_size: int = DEFAULT_CHUNK_SIZE,
+    enabled: bool = True,
+) -> dict[str, Any]:
     size = max(1, min(MAX_CHUNK_SIZE, int(chunk_size or DEFAULT_CHUNK_SIZE)))
-    return {META_BATCH_SIZE_KEY: size}
+    return {
+        META_BATCH_SIZE_KEY: size,
+        META_CHUNK_ENABLED_KEY: bool(enabled),
+    }
+
+
+def build_per_batch_lt_chunk_public_state(row) -> dict[str, Any]:
+    supported = is_standard_per_batch_lt_chunk_pipeline(row)
+    return {
+        "supported": supported,
+        "enabled": is_per_batch_lt_chunk_enabled(row) if supported else False,
+        "chunk_size": resolve_chunk_size(row) if supported else DEFAULT_CHUNK_SIZE,
+        "display": build_chunk_display_from_row(row) if supported else "",
+        "sequence_active": is_limited_time_chunk_sequence_active(row),
+    }
+
+
+def update_per_batch_lt_chunk_settings(
+    row,
+    *,
+    enabled: bool | None = None,
+    chunk_size: int | None = None,
+) -> dict[str, Any]:
+    if not is_standard_per_batch_lt_chunk_pipeline(row):
+        raise ValueError("not_standard_per_batch_lt_pipeline")
+    if is_limited_time_chunk_sequence_active(row):
+        raise ValueError("chunk_sequence_in_progress")
+    patch: dict[str, Any] = {}
+    if enabled is not None:
+        patch[META_CHUNK_ENABLED_KEY] = bool(enabled)
+    if chunk_size is not None:
+        patch[META_BATCH_SIZE_KEY] = max(1, min(MAX_CHUNK_SIZE, int(chunk_size)))
+    if not patch:
+        return build_per_batch_lt_chunk_public_state(row)
+    update_integrated_pipeline(row.pipeline_id, meta_patch=patch)
+    refreshed = get_integrated_pipeline(row.pipeline_id) or row
+    return build_per_batch_lt_chunk_public_state(refreshed)
 
 
 def is_limited_time_chunk_sequence_active(row) -> bool:
@@ -374,6 +424,8 @@ def maybe_start_chunked_limited_time_after_listing(
     """
     if not is_standard_per_batch_lt_chunk_pipeline(row):
         return False
+    if not is_per_batch_lt_chunk_enabled(row):
+        return False
     if not bool(_meta(row).get("auto_limited_time_setup")):
         return False
 
@@ -471,6 +523,8 @@ def maybe_start_chunked_batch_limited_time_retry(
 ) -> str | None:
     """分批限时重跑：目标商品超过每趟上限时拆成多趟。返回 run_id 或 None。"""
     if not is_standard_per_batch_lt_chunk_pipeline(row):
+        return None
+    if not is_per_batch_lt_chunk_enabled(row):
         return None
 
     batch_size = resolve_chunk_size(row)

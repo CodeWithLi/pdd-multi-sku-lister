@@ -68,6 +68,23 @@ def test_resolve_chunk_size_default():
     assert resolve_chunk_size(row) == 15
 
 
+def test_is_per_batch_lt_chunk_enabled_respects_flag():
+    row = _row(
+        meta={
+            "listing_per_batch_limited_time_enabled": True,
+            "listing_throttle": {"enabled": True, "total_batches": 3},
+            "per_batch_limited_time_chunk_enabled": False,
+        }
+    )
+    from pdd_agent.api.services.pipeline_per_batch_lt_chunks.orchestrator import (
+        is_per_batch_lt_chunk_enabled,
+    )
+
+    assert is_per_batch_lt_chunk_enabled(row) is False
+    row.meta["per_batch_limited_time_chunk_enabled"] = True
+    assert is_per_batch_lt_chunk_enabled(row) is True
+
+
 @patch("pdd_agent.api.services.pipeline_per_batch_lt_chunks.orchestrator._enqueue_limited_time_chunk")
 @patch("pdd_agent.api.services.pipeline_per_batch_lt_chunks.orchestrator.update_integrated_pipeline")
 def test_maybe_start_chunked_skips_single_chunk(mock_update, mock_enqueue):

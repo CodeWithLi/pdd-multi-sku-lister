@@ -5,6 +5,7 @@ from __future__ import annotations
 DEFAULT_CHUNK_SIZE = 10
 MAX_CHUNK_SIZE = 500
 
+META_CHUNK_ENABLED_KEY = "per_batch_limited_time_chunk_enabled"
 META_BATCH_SIZE_KEY = "per_batch_limited_time_chunk_size"
 META_STATE_KEY = "listing_per_batch_lt_chunks"
 META_DISPLAY_KEY = "per_batch_limited_time_chunk_display"

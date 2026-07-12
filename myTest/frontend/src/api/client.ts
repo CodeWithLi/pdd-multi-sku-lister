@@ -731,6 +731,20 @@ export const api = {
       )
       .then((r) => r.data),
 
+  updatePerBatchLtChunkSettings: (
+    pipelineId: string,
+    body: { enabled?: boolean; chunk_size?: number },
+  ) =>
+    http
+      .put<{
+        supported: boolean
+        enabled: boolean
+        chunk_size: number
+        display: string
+        sequence_active: boolean
+      }>(`/pipelines/integrated/${pipelineId}/per-batch-lt-chunks`, body)
+      .then((r) => r.data),
+
   getPipelineExcelFallback: () =>
     http.get<{ enabled: boolean }>('/pipelines/integrated/excel-fallback').then((r) => r.data),
 

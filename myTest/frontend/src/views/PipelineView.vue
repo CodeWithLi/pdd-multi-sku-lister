@@ -369,6 +369,58 @@ const batchStageItems = ref<IntegratedPipelineBatchProductStageItem[]>([])
 const batchStagePipelineId = ref('')
 const batchStageExpandedNames = ref<number[]>([])
 const batchStageContextPipeline = ref<IntegratedPipeline | null>(null)
+const batchLtChunkEnabled = ref(true)
+const batchLtChunkSize = ref(10)
+const batchLtChunkSaving = ref(false)
+
+const showBatchLtChunkSettings = computed(
+  () => Boolean(batchStageContextPipeline.value?.per_batch_lt_chunk_supported),
+)
+
+const batchLtChunkSettingsDisabled = computed(
+  () =>
+    Boolean(batchStageContextPipeline.value?.per_batch_lt_chunk_sequence_active)
+    || batchLtChunkSaving.value,
+)
+
+function syncBatchLtChunkSettingsFromPipeline(pipeline: IntegratedPipeline | null | undefined) {
+  batchLtChunkEnabled.value = pipeline?.per_batch_limited_time_chunk_enabled !== false
+  batchLtChunkSize.value = Number(pipeline?.per_batch_limited_time_chunk_size || 10)
+}
+
+async function saveBatchLtChunkSettings() {
+  const pipeline = batchStageContextPipeline.value
+  if (!pipeline?.pipeline_id || !showBatchLtChunkSettings.value) return
+  batchLtChunkSaving.value = true
+  try {
+    const result = await api.updatePerBatchLtChunkSettings(pipeline.pipeline_id, {
+      enabled: batchLtChunkEnabled.value,
+      chunk_size: Number(batchLtChunkSize.value) || 10,
+    })
+    batchStageContextPipeline.value = {
+      ...pipeline,
+      per_batch_limited_time_chunk_enabled: result.enabled,
+      per_batch_limited_time_chunk_size: result.chunk_size,
+      per_batch_limited_time_chunk_display: result.display,
+      per_batch_lt_chunk_sequence_active: result.sequence_active,
+    }
+    if (activePipeline.value?.pipeline_id === pipeline.pipeline_id) {
+      activePipeline.value = {
+        ...activePipeline.value,
+        per_batch_limited_time_chunk_enabled: result.enabled,
+        per_batch_limited_time_chunk_size: result.chunk_size,
+        per_batch_limited_time_chunk_display: result.display,
+        per_batch_lt_chunk_sequence_active: result.sequence_active,
+      }
+    }
+    ElMessage.success(result.enabled ? '已开启限时按趟拆分' : '已关闭限时按趟拆分')
+  } catch (error: any) {
+    syncBatchLtChunkSettingsFromPipeline(pipeline)
+    ElMessage.error(error?.response?.data?.detail || error?.message || '保存限时拆分设置失败')
+  } finally {
+    batchLtChunkSaving.value = false
+  }
+}
 
 const BATCH_STAGE_STATUS_LABELS: Record<string, string> = {
   pending: '待处理',
@@ -514,9 +566,14 @@ async function startBatchLimitedTimeRetry(batchIndex: number, products: Integrat
   if (!pipeline?.pipeline_id) return
   const count = countBatchLtRetryTargets(products)
   if (count <= 0) return
+  const chunkEnabled = pipeline.per_batch_limited_time_chunk_enabled !== false
+  const chunkSize = Number(pipeline.per_batch_limited_time_chunk_size || 10)
+  const chunkHint = chunkEnabled && count > chunkSize
+    ? `\n已开启按趟拆分：将按每趟最多 ${chunkSize} 个依次重跑（共约 ${Math.ceil(count / chunkSize)} 趟）。`
+    : ''
   try {
     await ElMessageBox.confirm(
-      `将重跑第 ${batchIndex + 1} 批中 ${count} 个「上架成功、限时失败」商品的限时限量购。\n`
+      `将重跑第 ${batchIndex + 1} 批中 ${count} 个「上架成功、限时失败」商品的限时限量购。${chunkHint}\n`
         + '若有成功，商品会追加进活动池；活动改期需等全部批次首轮限时跑完后，按最后一批重跑成功时刻 + 24h 执行。',
       '分批限时重跑',
       { type: 'warning', confirmButtonText: '开始重跑', cancelButtonText: '取消' },
@@ -571,6 +628,7 @@ async function openBatchStageDialog(pipeline?: IntegratedPipeline | null) {
     ])
     batchStageItems.value = stageData.items || []
     batchStageContextPipeline.value = pipelineData
+    syncBatchLtChunkSettingsFromPipeline(pipelineData)
     batchStageExpandedNames.value = [
       ...new Set(batchStageItems.value.map((item) => Number(item.batch_index) || 0)),
     ].sort((a, b) => a - b)
@@ -595,6 +653,7 @@ async function refreshBatchStageDialog() {
     ])
     batchStageItems.value = stageData.items || []
     batchStageContextPipeline.value = pipelineData
+    syncBatchLtChunkSettingsFromPipeline(pipelineData)
     if (!batchStageExpandedNames.value.length) {
       batchStageExpandedNames.value = [
         ...new Set(batchStageItems.value.map((item) => Number(item.batch_index) || 0)),
@@ -3593,6 +3652,46 @@ onUnmounted(() => {
           按<strong>每一批</strong>展示商品的上架 / 限时限量购 / 活动 / 推广状态；活动与推广在全部批次完成后统一执行。
         </p>
 
+        <div
+          v-if="showBatchLtChunkSettings"
+          class="batch-lt-chunk-settings"
+        >
+          <div class="batch-lt-chunk-settings-row">
+            <span class="batch-lt-chunk-label">限时按趟拆分</span>
+            <el-switch
+              v-model="batchLtChunkEnabled"
+              :disabled="batchLtChunkSettingsDisabled"
+              :loading="batchLtChunkSaving"
+              @change="saveBatchLtChunkSettings"
+            />
+            <template v-if="batchLtChunkEnabled">
+              <span class="throttle-inline-label">每趟最多</span>
+              <el-input-number
+                v-model="batchLtChunkSize"
+                :min="1"
+                :max="500"
+                :disabled="batchLtChunkSettingsDisabled"
+                controls-position="right"
+                size="small"
+                @change="saveBatchLtChunkSettings"
+              />
+              <span class="throttle-inline-label">个商品</span>
+            </template>
+          </div>
+          <p v-if="batchStageContextPipeline?.per_batch_limited_time_chunk_display" class="form-tip">
+            当前进度：{{ batchStageContextPipeline.per_batch_limited_time_chunk_display }}
+          </p>
+          <p v-else-if="batchLtChunkEnabled" class="form-tip">
+            开启后，每批限时限量购与「重跑限时失败」都会按每趟上限拆分；某一趟失败记失败并继续下一趟。
+          </p>
+          <p v-else class="form-tip muted">
+            关闭后，每批限时限量购一次跑完全部商品；重跑也同样一次跑完。
+          </p>
+          <p v-if="batchStageContextPipeline?.per_batch_lt_chunk_sequence_active" class="warn-text">
+            限时子趟进行中，暂不可修改拆分设置。
+          </p>
+        </div>
+
         <el-empty v-if="!batchStageLoading && !batchStageGroups.length" description="暂无分批记录" />
 
         <el-collapse v-else v-model="batchStageExpandedNames" class="batch-stage-collapse">
@@ -4564,6 +4663,26 @@ onUnmounted(() => {
   margin: 0 0 10px;
   color: var(--el-text-color-secondary);
   font-size: 13px;
+}
+
+.batch-lt-chunk-settings {
+  margin: 0 0 12px;
+  padding: 10px 12px;
+  border: 1px solid var(--el-border-color-light);
+  border-radius: 8px;
+  background: var(--el-fill-color-blank);
+}
+
+.batch-lt-chunk-settings-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.batch-lt-chunk-label {
+  font-size: 13px;
+  font-weight: 500;
 }
 
 .batch-stage-collapse {

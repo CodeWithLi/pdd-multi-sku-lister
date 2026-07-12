@@ -29,6 +29,8 @@ from pdd_agent.api.schemas.pipelines import (
     PipelineSubmitAiTitleTestIn,
     PipelineSubmitAiTitleTestOut,
     PipelineSubmitAiTitleUpdateIn,
+    PerBatchLtChunkSettingsOut,
+    PerBatchLtChunkSettingsUpdateIn,
 )
 from pdd_agent.api.services.config_service import get_account_or_none
 from pdd_agent.api.services.pipeline_service import (
@@ -40,6 +42,7 @@ from pdd_agent.api.services.pipeline_service import (
 )
 from pdd_agent.core.config import load_yaml_settings
 from pdd_agent.db.session import is_database_available
+from pdd_agent.db.repositories import get_integrated_pipeline
 from pdd_agent.api.schemas.pipeline_batch_limited_time_retry import (
     PipelineBatchLimitedTimeRetryEligibilityOut,
     PipelineBatchLimitedTimeRetryStartRequest,
@@ -645,6 +648,39 @@ def start_batch_limited_time_retry_integrated(
             raise HTTPException(status_code=404, detail=detail) from exc
         raise HTTPException(status_code=400, detail=detail) from exc
     return PipelineBatchLimitedTimeRetryStartResponse(**result)
+
+
+@router.put(
+    "/integrated/{pipeline_id}/per-batch-lt-chunks",
+    response_model=PerBatchLtChunkSettingsOut,
+)
+def update_per_batch_lt_chunk_settings_integrated(
+    pipeline_id: str,
+    body: PerBatchLtChunkSettingsUpdateIn,
+):
+    if not is_database_available():
+        raise HTTPException(status_code=503, detail="数据库不可用")
+    row = get_integrated_pipeline(str(pipeline_id or "").strip())
+    if not row:
+        raise HTTPException(status_code=404, detail="pipeline not found")
+    from pdd_agent.api.services.pipeline_per_batch_lt_chunks.bridge import (
+        update_per_batch_lt_chunk_settings,
+    )
+
+    try:
+        result = update_per_batch_lt_chunk_settings(
+            row,
+            enabled=body.enabled,
+            chunk_size=body.chunk_size,
+        )
+    except ValueError as exc:
+        detail = str(exc)
+        if detail == "not_standard_per_batch_lt_pipeline":
+            raise HTTPException(status_code=400, detail=detail) from exc
+        if detail == "chunk_sequence_in_progress":
+            raise HTTPException(status_code=409, detail=detail) from exc
+        raise HTTPException(status_code=400, detail=detail) from exc
+    return PerBatchLtChunkSettingsOut(**result)
 
 
 @router.post("/integrated/{pipeline_id}/cancel", response_model=IntegratedPipelineResponse)

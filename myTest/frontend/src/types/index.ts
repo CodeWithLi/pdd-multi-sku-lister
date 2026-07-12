@@ -1087,7 +1087,10 @@ export interface IntegratedPipeline {
   activity_traffic_batch_size?: number
   activity_traffic_batch_display?: string
   per_batch_limited_time_chunk_size?: number
+  per_batch_limited_time_chunk_enabled?: boolean
   per_batch_limited_time_chunk_display?: string
+  per_batch_lt_chunk_supported?: boolean
+  per_batch_lt_chunk_sequence_active?: boolean
   limited_time_outcome?: string
   limited_time_skip_reason?: string
   activity_pdd_product_ids?: string[]

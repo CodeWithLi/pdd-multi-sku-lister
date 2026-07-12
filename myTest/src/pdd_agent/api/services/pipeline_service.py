@@ -1290,6 +1290,11 @@ def pipeline_to_dict(row) -> dict[str, Any]:
         is_pipeline_initial_limited_time_phase_complete,
         is_pipeline_listing_batches_complete,
     )
+    from pdd_agent.api.services.pipeline_per_batch_lt_chunks.bridge import (
+        build_per_batch_lt_chunk_public_state,
+    )
+
+    per_batch_lt_chunk = build_per_batch_lt_chunk_public_state(row)
 
     return {
         "pipeline_id": row.pipeline_id,
@@ -1308,12 +1313,11 @@ def pipeline_to_dict(row) -> dict[str, Any]:
         "activity_traffic_batch_enabled": bool((row.meta or {}).get("activity_traffic_batch_enabled")),
         "activity_traffic_batch_size": int((row.meta or {}).get("activity_traffic_batch_size") or 10),
         "activity_traffic_batch_display": str((row.meta or {}).get("activity_traffic_batch_display") or ""),
-        "per_batch_limited_time_chunk_size": int(
-            (row.meta or {}).get("per_batch_limited_time_chunk_size") or 10
-        ),
-        "per_batch_limited_time_chunk_display": str(
-            (row.meta or {}).get("per_batch_limited_time_chunk_display") or ""
-        ),
+        "per_batch_limited_time_chunk_size": int(per_batch_lt_chunk.get("chunk_size") or 10),
+        "per_batch_limited_time_chunk_enabled": bool(per_batch_lt_chunk.get("enabled")),
+        "per_batch_limited_time_chunk_display": str(per_batch_lt_chunk.get("display") or ""),
+        "per_batch_lt_chunk_supported": bool(per_batch_lt_chunk.get("supported")),
+        "per_batch_lt_chunk_sequence_active": bool(per_batch_lt_chunk.get("sequence_active")),
         "activity_pdd_product_ids": list(
             (row.meta or {}).get("activity_pdd_product_ids")
             or (row.meta or {}).get("limited_time_success_pdd_product_ids")
@@ -1597,7 +1601,8 @@ def start_integrated_pipeline(
     if listing_per_batch_limited_time_enabled and not listing_per_batch_lt_traffic_activity_enabled:
         meta.update(
             per_batch_lt_chunks_meta_patch(
-                chunk_size=int(per_batch_limited_time_chunk_size or 10)
+                chunk_size=int(per_batch_limited_time_chunk_size or 10),
+                enabled=True,
             )
         )
     from pdd_agent.api.services.pipeline_activity_traffic_batch.bridge import (

@@ -231,6 +231,24 @@ class IntegratedPipelineResponse(BaseModel):
     batch_limited_time_retry: dict[str, Any] = Field(default_factory=dict)
     listing_batches_complete: bool = False
     initial_limited_time_phase_complete: bool = False
+    per_batch_limited_time_chunk_size: int = 10
+    per_batch_limited_time_chunk_enabled: bool = True
+    per_batch_limited_time_chunk_display: str = ""
+    per_batch_lt_chunk_supported: bool = False
+    per_batch_lt_chunk_sequence_active: bool = False
+
+
+class PerBatchLtChunkSettingsUpdateIn(BaseModel):
+    enabled: bool | None = None
+    chunk_size: int | None = Field(default=None, ge=1, le=500)
+
+
+class PerBatchLtChunkSettingsOut(BaseModel):
+    supported: bool = False
+    enabled: bool = False
+    chunk_size: int = 10
+    display: str = ""
+    sequence_active: bool = False
 
 
 class IntegratedPipelineBatchRunItem(BaseModel):
