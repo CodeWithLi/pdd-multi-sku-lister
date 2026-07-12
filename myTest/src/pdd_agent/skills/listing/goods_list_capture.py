@@ -155,57 +155,183 @@ def _truncated_merchant_prefix(code: str) -> str:
     return re.sub(r"[.…]+$", "", str(code or "").strip())
 
 
-def read_merchant_code_from_row_hover(row: Any) -> str:
-    """悬停商品编码单元格，从 tooltip / title 读取完整编码。"""
+_TOOLTIP_SELECTORS = (
+    '[data-testid="beast-core-tooltip"]',
+    '[class*="Tooltip"]',
+    '[class*="tooltip"]',
+    '[role="tooltip"]',
+    '[class*="popover"]',
+    '[class*="Popover"]',
+)
+
+_READ_MERCHANT_CODE_FROM_ELLIPSIS_JS = """
+function extractCode(text) {
+    const raw = String(text || '');
+    const m = raw.match(/商品编码[：:\\s]*([^\\s\\n\\r]+)/);
+    if (!m) return '';
+    const code = m[1].trim();
+    if (!code || code.endsWith('...') || code.endsWith('…')) return '';
+    return code;
+}
+function pickFromRow(row) {
+    if (!row) return '';
+    for (const node of row.querySelectorAll('[title]')) {
+        const title = node.getAttribute('title') || '';
+        if (!title.includes('商品编码')) continue;
+        const code = extractCode(title);
+        if (code) return code;
+    }
+    for (const box of row.querySelectorAll('[class*="beast-core-ellipsis"], [class*="ellipsis"]')) {
+        const visible = box.innerText || box.textContent || '';
+        if (!visible.includes('商品编码')) continue;
+        for (const child of box.querySelectorAll('span, div')) {
+            const style = window.getComputedStyle(child);
+            const t = (child.innerText || child.textContent || '').trim();
+            if (!t.includes('商品编码')) continue;
+            const code = extractCode(t);
+            if (!code) continue;
+            const hidden = style.visibility === 'hidden'
+                || style.display === 'none'
+                || parseFloat(style.opacity || '1') === 0;
+            if (hidden || !visible.includes('...')) return code;
+        }
+    }
+    return '';
+}
+return pickFromRow(this);
+"""
+
+
+def _full_merchant_code_from_text(text: str) -> str:
+    code = extract_merchant_code_from_row_text(text)
+    if code and not is_truncated_merchant_code(code):
+        return code
+    return ""
+
+
+def _find_merchant_code_hover_target(row_loc: Any) -> Any | None:
+    for factory in (
+        lambda: row_loc.locator('[class*="beast-core-ellipsis"]').filter(has_text="商品编码"),
+        lambda: row_loc.locator('[class*="ellipsis"]').filter(has_text="商品编码"),
+        lambda: row_loc.get_by_text("商品编码", exact=False),
+        lambda: row_loc.locator("text=商品编码"),
+    ):
+        try:
+            cand = factory()
+            if cand.count() > 0:
+                return cand.first
+        except Exception:
+            continue
+    return None
+
+
+def _read_merchant_code_from_title_attrs(*targets: Any) -> str:
+    for target in targets:
+        if target is None:
+            continue
+        try:
+            title = str(target.get_attribute("title") or "").strip()
+            code = _full_merchant_code_from_text(title)
+            if code:
+                return code
+        except Exception:
+            pass
+        try:
+            child = target.locator('[title*="商品编码"]').first
+            if child.count():
+                title = str(child.get_attribute("title") or "").strip()
+                code = _full_merchant_code_from_text(title)
+                if code:
+                    return code
+        except Exception:
+            pass
+    return ""
+
+
+def _read_merchant_code_from_ellipsis_dom(row_loc: Any) -> str:
     try:
-        loc = getattr(row, "_loc", None)
-        if loc is None:
-            return ""
-        hover_target = None
-        for factory in (
-            lambda: loc.get_by_text("商品编码", exact=False),
-            lambda: loc.locator("text=商品编码"),
-        ):
-            try:
-                cand = factory()
-                if cand.count() > 0:
-                    hover_target = cand.first
-                    break
-            except Exception:
-                continue
-        if hover_target is None:
-            return ""
+        result = row_loc.evaluate(_READ_MERCHANT_CODE_FROM_ELLIPSIS_JS)
+        code = _full_merchant_code_from_text(str(result or ""))
+        if code:
+            return code
+    except Exception:
+        pass
+    return ""
 
-        hover_target.scroll_into_view_if_needed(timeout=2000)
-        hover_target.hover(timeout=3000)
-        time.sleep(0.35)
 
-        page = getattr(row, "_page", None)
-        if page is not None:
-            tooltip_roots = page.locator(
-                '[role="tooltip"], [class*="tooltip"], [class*="Tooltip"], '
-                '[class*="popover"], [class*="Popover"]'
-            )
-            for idx in range(min(tooltip_roots.count(), 10)):
-                tip = tooltip_roots.nth(idx)
+def _read_merchant_code_from_tooltips(raw_page: Any) -> str:
+    for selector in _TOOLTIP_SELECTORS:
+        try:
+            tips = raw_page.locator(selector)
+            for index in range(tips.count() - 1, -1, -1):
+                tip = tips.nth(index)
                 try:
-                    if not tip.is_visible(timeout=200):
+                    if not tip.is_visible(timeout=400):
                         continue
-                    tip_text = (tip.inner_text(timeout=500) or "").strip()
-                    code = extract_merchant_code_from_row_text(tip_text)
-                    if code and not is_truncated_merchant_code(code):
+                    tip_text = (tip.inner_text(timeout=800) or "").strip()
+                    if "商品编码" not in tip_text:
+                        continue
+                    code = _full_merchant_code_from_text(tip_text)
+                    if code:
                         return code
                 except Exception:
                     continue
+        except Exception:
+            continue
 
-        for target in (hover_target, hover_target.locator("xpath=..")):
+    try:
+        portal = raw_page.locator('[data-testid="beast-core-portal-main"]').filter(has_text="商品编码")
+        if portal.count():
+            tip_text = (portal.last.inner_text(timeout=800) or "").strip()
+            code = _full_merchant_code_from_text(tip_text)
+            if code:
+                return code
+    except Exception:
+        pass
+    return ""
+
+
+def read_merchant_code_from_row_hover(row: Any) -> str:
+    """悬停商品编码单元格，从 tooltip / title / ellipsis 隐藏节点读取完整编码。"""
+    try:
+        row_loc = getattr(row, "_loc", None)
+        if row_loc is None:
+            return ""
+
+        code = _read_merchant_code_from_ellipsis_dom(row_loc)
+        if code:
+            return code
+
+        hover_target = _find_merchant_code_hover_target(row_loc)
+        if hover_target is None:
+            return ""
+
+        code = _read_merchant_code_from_title_attrs(
+            hover_target,
+            hover_target.locator("xpath=.."),
+        )
+        if code:
+            return code
+
+        raw_page = getattr(row, "_page", None)
+        if raw_page is None:
+            return ""
+
+        hover_target.scroll_into_view_if_needed(timeout=2000)
+        try:
+            box = hover_target.bounding_box()
+            if box:
+                raw_page.mouse.move(box["x"] + box["width"] / 2, box["y"] + box["height"] / 2)
+            else:
+                hover_target.hover(timeout=3000)
+        except Exception:
             try:
-                title = str(target.get_attribute("title") or "").strip()
-                code = extract_merchant_code_from_row_text(title)
-                if code and not is_truncated_merchant_code(code):
-                    return code
+                hover_target.hover(timeout=3000)
             except Exception:
-                continue
+                return ""
+        time.sleep(0.45)
+
+        return _read_merchant_code_from_tooltips(raw_page)
     except Exception:
         pass
     return ""
@@ -594,7 +720,7 @@ def enrich_capture_from_goods_list(
             text = row.text or ""
             if product_id and product_id not in text:
                 continue
-            if merchant_code and merchant_code not in text:
+            if merchant_code and not merchant_code_matches_query(row, text, merchant_code):
                 continue
             row_text = text.strip()
             break
