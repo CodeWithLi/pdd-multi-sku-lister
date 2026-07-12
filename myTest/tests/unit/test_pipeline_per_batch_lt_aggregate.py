@@ -6,9 +6,11 @@ from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 from pdd_agent.api.services.pipeline_per_batch_lt_aggregate.orchestrator import (
+    backfill_missing_limited_time_batches,
     is_standard_per_batch_lt_pipeline,
     maybe_finalize_after_all_batches,
     record_limited_time_batch_finished,
+    record_skipped_limited_time_batch_for_empty_listing,
     restore_intermediate_lt_progress_meta,
     should_absorb_limited_time_task_failure,
 )
@@ -180,6 +182,48 @@ def test_should_absorb_middle_batch_failure():
         }
     )
     assert should_absorb_limited_time_task_failure(row, run_id="lt_mid") is True
+
+
+@patch("pdd_agent.api.services.pipeline_per_batch_lt_aggregate.orchestrator.get_integrated_pipeline")
+@patch("pdd_agent.api.services.pipeline_per_batch_lt_aggregate.orchestrator.update_integrated_pipeline")
+def test_record_skipped_limited_time_batch_for_empty_listing(mock_update, mock_get):
+    meta = _throttle_meta(batch_index=12, total_batches=19, awaiting_final=False)
+    meta["listing_per_batch_limited_time"] = {
+        "enabled": True,
+        "last_batch_index": 11,
+        "awaiting_final_activity": False,
+    }
+    row = _row(meta=meta)
+    mock_get.return_value = row
+
+    handled = record_skipped_limited_time_batch_for_empty_listing(
+        row,
+        skip_reason="本批无成功上架商品",
+    )
+
+    assert handled is True
+    mock_update.assert_called_once()
+    patch_meta = mock_update.call_args.kwargs["meta_patch"]
+    batch_log = patch_meta["std_per_batch_lt_agg_batch_log"]
+    assert batch_log[-1]["batch_index"] == 12
+    assert batch_log[-1]["skipped"] is True
+
+
+@patch("pdd_agent.api.services.pipeline_per_batch_lt_aggregate.orchestrator.get_integrated_pipeline")
+@patch("pdd_agent.api.services.pipeline_per_batch_lt_aggregate.orchestrator.update_integrated_pipeline")
+def test_backfill_missing_limited_time_batches(mock_update, mock_get):
+    meta = _throttle_meta(batch_index=18, total_batches=19, awaiting_final=True)
+    meta["listing_throttle"]["completed"] = True
+    meta["std_per_batch_lt_agg_batch_log"] = [
+        {"batch_index": index, "batch_success_count": 1} for index in range(12)
+    ]
+    row = _row(meta=meta)
+    mock_get.side_effect = lambda _pid: row
+
+    changed = backfill_missing_limited_time_batches(row)
+
+    assert changed is True
+    assert mock_update.call_count == 7
 
 
 @patch("pdd_agent.api.services.pipeline_batch_product_stage_tracker.record_activity_for_pipeline")

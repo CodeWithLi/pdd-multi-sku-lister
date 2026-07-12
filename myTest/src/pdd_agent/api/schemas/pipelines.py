@@ -226,6 +226,9 @@ class IntegratedPipelineResponse(BaseModel):
     block_reason_label: str = ""
     wake_at: str = ""
     late_retry: dict[str, Any] = Field(default_factory=dict)
+    batch_limited_time_retry: dict[str, Any] = Field(default_factory=dict)
+    listing_batches_complete: bool = False
+    initial_limited_time_phase_complete: bool = False
 
 
 class IntegratedPipelineBatchRunItem(BaseModel):

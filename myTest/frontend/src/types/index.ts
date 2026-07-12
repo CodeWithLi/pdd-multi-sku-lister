@@ -1123,6 +1123,44 @@ export interface IntegratedPipeline {
   wake_at?: string
   is_merged?: boolean
   late_retry?: PipelineLateRetryState
+  batch_limited_time_retry?: PipelineBatchLimitedTimeRetryState
+  listing_batches_complete?: boolean
+  initial_limited_time_phase_complete?: boolean
+}
+
+export interface PipelineBatchLimitedTimeRetryActivityDefer {
+  enabled?: boolean
+  rescheduled?: boolean
+  reschedule_reason?: string
+  original_activity_at?: string
+  limited_time_finished_at?: string
+  last_deferred_at?: string
+  defer_count?: number
+  scheduled_activity_at?: string
+}
+
+export interface PipelineBatchLimitedTimeRetryState {
+  enabled?: boolean
+  phase?: string
+  outcome?: string
+  outcome_detail?: string
+  active_batch_index?: number | null
+  pending_batch_indices?: number[]
+  completed_batch_indices?: number[]
+  limited_time_run_id?: string
+  last_success_finished_at?: string
+  merged_pdd_count?: number
+  activity_defer?: PipelineBatchLimitedTimeRetryActivityDefer
+}
+
+export interface PipelineBatchLimitedTimeRetryStartResponse {
+  pipeline_id: string
+  batch_index: number
+  limited_time_run_id: string
+  retry_count: number
+  pdd_product_ids: string[]
+  queued: boolean
+  batch_limited_time_retry: PipelineBatchLimitedTimeRetryState
 }
 
 export interface PipelineLateRetryEligibility {

@@ -40,6 +40,11 @@ from pdd_agent.api.services.pipeline_service import (
 )
 from pdd_agent.core.config import load_yaml_settings
 from pdd_agent.db.session import is_database_available
+from pdd_agent.api.schemas.pipeline_batch_limited_time_retry import (
+    PipelineBatchLimitedTimeRetryEligibilityOut,
+    PipelineBatchLimitedTimeRetryStartRequest,
+    PipelineBatchLimitedTimeRetryStartResponse,
+)
 from pdd_agent.api.schemas.pipeline_late_retry import (
     PipelineLateRetryStartRequest,
     PipelineLateRetryStartResponse,
@@ -589,6 +594,55 @@ def late_retry_failed_integrated(pipeline_id: str, body: PipelineLateRetryStartR
             raise HTTPException(status_code=404, detail=detail) from exc
         raise HTTPException(status_code=400, detail=detail) from exc
     return PipelineLateRetryStartResponse(**data)
+
+
+@router.get(
+    "/integrated/{pipeline_id}/batch-limited-time-retry/eligibility",
+    response_model=PipelineBatchLimitedTimeRetryEligibilityOut,
+)
+def batch_limited_time_retry_eligibility(pipeline_id: str, batch_index: int):
+    if not is_database_available():
+        raise HTTPException(status_code=503, detail="数据库不可用")
+    data = get_pipeline(pipeline_id)
+    if not data:
+        raise HTTPException(status_code=404, detail="pipeline not found")
+    from pdd_agent.db.repositories import get_integrated_pipeline
+    from pdd_agent.api.services.pipeline_batch_limited_time_retry_bridge import (
+        evaluate_batch_limited_time_retry_eligibility,
+    )
+
+    row = get_integrated_pipeline(pipeline_id)
+    if not row:
+        raise HTTPException(status_code=404, detail="pipeline not found")
+    result = evaluate_batch_limited_time_retry_eligibility(row, int(batch_index))
+    return PipelineBatchLimitedTimeRetryEligibilityOut(**result)
+
+
+@router.post(
+    "/integrated/{pipeline_id}/batch-limited-time-retry",
+    response_model=PipelineBatchLimitedTimeRetryStartResponse,
+)
+def start_batch_limited_time_retry_integrated(
+    pipeline_id: str,
+    body: PipelineBatchLimitedTimeRetryStartRequest,
+):
+    if not is_database_available():
+        raise HTTPException(status_code=503, detail="数据库不可用")
+    data = get_pipeline(pipeline_id)
+    if not data:
+        raise HTTPException(status_code=404, detail="pipeline not found")
+    from pdd_agent.api.services.pipeline_batch_limited_time_retry_bridge import (
+        start_batch_limited_time_retry,
+    )
+
+    try:
+        result = start_batch_limited_time_retry(pipeline_id, batch_index=int(body.batch_index))
+    except ValueError as exc:
+        detail = str(exc)
+        if detail == "pipeline_not_found":
+            raise HTTPException(status_code=404, detail=detail) from exc
+        raise HTTPException(status_code=400, detail=detail) from exc
+    return PipelineBatchLimitedTimeRetryStartResponse(**result)
 
 
 @router.post("/integrated/{pipeline_id}/cancel", response_model=IntegratedPipelineResponse)

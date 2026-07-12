@@ -41,6 +41,21 @@ def record_limited_time_batch_finished(
     )
 
 
+def record_skipped_limited_time_batch_for_empty_listing(
+    row,
+    *,
+    skip_reason: str = "本批无成功上架商品",
+) -> bool:
+    return orchestrator.record_skipped_limited_time_batch_for_empty_listing(
+        row,
+        skip_reason=skip_reason,
+    )
+
+
+def backfill_missing_limited_time_batches(row) -> bool:
+    return orchestrator.backfill_missing_limited_time_batches(row)
+
+
 def restore_intermediate_lt_progress_meta(row) -> None:
     orchestrator.restore_intermediate_lt_progress_meta(row)
 

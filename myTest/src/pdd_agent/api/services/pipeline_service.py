@@ -1201,6 +1201,13 @@ def pipeline_to_dict(row) -> dict[str, Any]:
         build_late_retry_public_state,
         merge_late_retry_listing_statuses,
     )
+    from pdd_agent.api.services.pipeline_batch_limited_time_retry_bridge import (
+        build_batch_limited_time_retry_public_state,
+    )
+    from pdd_agent.api.services.pipeline_batch_limited_time_retry_eligibility import (
+        is_pipeline_initial_limited_time_phase_complete,
+        is_pipeline_listing_batches_complete,
+    )
 
     return {
         "pipeline_id": row.pipeline_id,
@@ -1256,6 +1263,9 @@ def pipeline_to_dict(row) -> dict[str, Any]:
             build_listing_unit_statuses(row),
         ),
         "late_retry": build_late_retry_public_state(row),
+        "batch_limited_time_retry": build_batch_limited_time_retry_public_state(row),
+        "listing_batches_complete": is_pipeline_listing_batches_complete(row),
+        "initial_limited_time_phase_complete": is_pipeline_initial_limited_time_phase_complete(row),
         "campaign_results": _campaign_results(row),
         "steps": _step_infos(row),
         "feishu_inspect_at": str((row.meta or {}).get("feishu_price_inspect_at") or ""),
@@ -2011,10 +2021,26 @@ def on_queue_task_finished(
     row = get_integrated_pipeline(pipeline_id)
     if not row:
         return
+
+    result = result if isinstance(result, dict) else {}
+    from pdd_agent.api.services.pipeline_batch_limited_time_retry_bridge import (
+        dispatch_batch_limited_time_retry_queue_task_finished,
+    )
+
+    batch_lt_retry_handled = dispatch_batch_limited_time_retry_queue_task_finished(
+        row,
+        agent=agent,
+        run_id=run_id,
+        success=success,
+        result=result,
+        error=error,
+    )
+    if batch_lt_retry_handled:
+        return
+
     if row.status in TERMINAL_PIPELINE_STATUSES:
         return
 
-    result = result if isinstance(result, dict) else {}
     from pdd_agent.api.services.pipeline_late_retry_policy import dispatch_late_retry_queue_task_finished
 
     late_retry_handled = dispatch_late_retry_queue_task_finished(
@@ -3058,6 +3084,35 @@ def _reconcile_stuck_pipeline_row(row) -> Any:
     """子任务已失败/取消但链路仍 running 时自动对齐（例如浏览器被关后回调未触发）。"""
     if not row or row.status in TERMINAL_PIPELINE_STATUSES:
         return row
+
+    from pdd_agent.api.services.pipeline_per_batch_lt_aggregate.bridge import (
+        backfill_missing_limited_time_batches,
+        maybe_finalize_after_all_batches as maybe_finalize_std_agg_limited_time,
+    )
+
+    if backfill_missing_limited_time_batches(row):
+        refreshed = get_integrated_pipeline(row.pipeline_id) or row
+        meta = dict(refreshed.meta or {})
+        batch_log = meta.get("std_per_batch_lt_agg_batch_log") or []
+        total = int((meta.get("listing_throttle") or {}).get("total_batches") or 0)
+        if (
+            not meta.get("std_per_batch_lt_agg_finalized")
+            and total > 0
+            and isinstance(batch_log, list)
+            and len(batch_log) >= total
+            and meta.get("std_per_batch_lt_agg_pdd_ids")
+        ):
+            maybe_finalize_std_agg_limited_time(
+                refreshed,
+                run_id=str(meta.get("limited_time_run_id") or ""),
+                success=True,
+                result={},
+                error="",
+                schedule_activity_fn=_schedule_pipeline_activity_after_limited_time,
+                advance_store_sequential_fn=_try_advance_store_sequential_after_listing_limited_time,
+                summarize_run_message_fn=_summarize_run_message,
+            )
+        row = get_integrated_pipeline(row.pipeline_id) or refreshed
 
     from pdd_agent.api.services.pipeline_activity_limited_time_success import (
         reconcile_pipeline_waiting_activity,

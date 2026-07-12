@@ -69,6 +69,13 @@ def _batch_log(meta: dict[str, Any]) -> list[dict[str, Any]]:
     return [item for item in raw if isinstance(item, dict)]
 
 
+def _entry_batch_index(item: dict[str, Any]) -> int:
+    raw = item.get("batch_index")
+    if raw is None:
+        return -1
+    return int(raw)
+
+
 def _pipeline_activity_ids(row) -> list[str]:
     meta = dict(row.meta or {})
     ids = [str(item).strip() for item in (meta.get("activity_ids") or []) if str(item).strip()]
@@ -174,6 +181,129 @@ def record_listing_batch(
     )
 
 
+def _append_skipped_limited_time_batch_log(
+    row,
+    *,
+    batch_index: int,
+    skip_reason: str,
+) -> dict[str, Any] | None:
+    """空批跳过分批限时时写入 batch_log；已存在同批记录则返回 None。"""
+    if not is_standard_per_batch_lt_pipeline(row):
+        return None
+
+    meta = dict(row.meta or {})
+    batch_log = _batch_log(meta)
+    if any(_entry_batch_index(item) == batch_index for item in batch_log):
+        return None
+
+    batch_count = int(meta.get(AGG_BATCH_COUNT_KEY) or 0) + 1
+    batch_entry = {
+        "batch_index": batch_index,
+        "run_id": "",
+        "success": True,
+        "skipped": True,
+        "batch_success_count": 0,
+        "batch_failed_count": 0,
+        "error": "",
+        "skip_reason": str(skip_reason or "").strip() or "本批无成功上架商品",
+    }
+    batch_log = [item for item in batch_log if _entry_batch_index(item) != batch_index]
+    batch_log.append(batch_entry)
+
+    throttle = _throttle_state(row)
+    total_batches = int(throttle.get("total_batches") or 0)
+    more_batches = total_batches > 0 and batch_index + 1 < total_batches
+    lt_state = _lt_state(row)
+    per_batch_patch: dict[str, Any] = {
+        "enabled": True,
+        "last_batch_index": batch_index,
+        "pending": None,
+        "awaiting_final_activity": not more_batches,
+    }
+
+    meta_patch: dict[str, Any] = {
+        AGG_BATCH_COUNT_KEY: batch_count,
+        AGG_BATCH_LOG_KEY: batch_log,
+        AGG_IN_PROGRESS_KEY: True,
+        "listing_per_batch_limited_time": {
+            **lt_state,
+            **per_batch_patch,
+        },
+    }
+    update_integrated_pipeline(row.pipeline_id, meta_patch=meta_patch)
+    logger.info(
+        "pipeline %s std per-batch LT aggregate recorded skipped batch=%s reason=%s",
+        row.pipeline_id,
+        batch_index + 1,
+        batch_entry["skip_reason"],
+    )
+    return meta_patch
+
+
+def record_skipped_limited_time_batch_for_empty_listing(
+    row,
+    *,
+    skip_reason: str = "本批无成功上架商品",
+) -> bool:
+    """
+    分批上架本批无成功商品、跳过分批限时限量购时仍计入 batch_log。
+    返回 True 表示已处理（含幂等跳过）。
+    """
+    if not is_standard_per_batch_lt_pipeline(row):
+        return False
+
+    throttle = _throttle_state(row)
+    batch_index = int(throttle.get("batch_index") or 0)
+    patch = _append_skipped_limited_time_batch_log(
+        row,
+        batch_index=batch_index,
+        skip_reason=skip_reason,
+    )
+    return patch is not None or any(
+        _entry_batch_index(item) == batch_index for item in _batch_log(dict(row.meta or {}))
+    )
+
+
+def backfill_missing_limited_time_batches(row) -> bool:
+    """
+    上架已全部完成但 batch_log 缺批时，将缺失批补记为 skipped。
+    用于修复空批跳过限时导致进度卡在 N/M 的链路。
+    """
+    if not is_standard_per_batch_lt_pipeline(row):
+        return False
+
+    meta = dict(row.meta or {})
+    if meta.get(AGG_FINALIZED_KEY):
+        return False
+
+    throttle = _throttle_state(row)
+    if not throttle.get("completed"):
+        return False
+
+    total = int(throttle.get("total_batches") or 0)
+    if total <= 0:
+        return False
+
+    batch_log = _batch_log(meta)
+    recorded = {_entry_batch_index(item) for item in batch_log if _entry_batch_index(item) >= 0}
+    missing = [index for index in range(total) if index not in recorded]
+    if not missing:
+        return False
+
+    changed = False
+    current = row
+    for batch_index in missing:
+        patch = _append_skipped_limited_time_batch_log(
+            current,
+            batch_index=batch_index,
+            skip_reason="本批无成功上架商品（补记）",
+        )
+        if patch is not None:
+            changed = True
+            current = get_integrated_pipeline(row.pipeline_id) or current
+    return changed
+
+
 def record_limited_time_batch_finished(
     row,
     *,
@@ -226,7 +356,7 @@ def record_limited_time_batch_finished(
         "batch_failed_count": len(failed_pdd),
         "error": str(error or "").strip(),
     }
-    batch_log = [item for item in _batch_log(meta) if int(item.get("batch_index") or -1) != batch_index]
+    batch_log = [item for item in _batch_log(meta) if _entry_batch_index(item) != batch_index]
     batch_log.append(batch_entry)
 
     meta_patch: dict[str, Any] = {
@@ -352,6 +482,11 @@ def maybe_finalize_after_all_batches(
     )
     refreshed = get_integrated_pipeline(row.pipeline_id) or row
     advance_store_sequential_fn(refreshed)
+    from pdd_agent.api.services.pipeline_batch_limited_time_retry_bridge import (
+        maybe_flush_batch_lt_retry_activity_reschedule,
+    )
+
+    maybe_flush_batch_lt_retry_activity_reschedule(refreshed)
     return True
 
 

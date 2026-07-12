@@ -27,6 +27,7 @@ import type {
   PipelineSubmitAiTitleTestPayload,
   PipelineSubmitAiTitleTestResult,
   PipelineLateRetryStartResponse,
+  PipelineBatchLimitedTimeRetryStartResponse,
   PipelineIssueListResponse,
   PipelineIssueReport,
   PipelineIssueSummaryResponse,
@@ -720,6 +721,14 @@ export const api = {
   ) =>
     http
       .post<PipelineLateRetryStartResponse>(`/pipelines/integrated/${pipelineId}/late-retry-failed`, body)
+      .then((r) => r.data),
+
+  startBatchLimitedTimeRetry: (pipelineId: string, batchIndex: number) =>
+    http
+      .post<PipelineBatchLimitedTimeRetryStartResponse>(
+        `/pipelines/integrated/${pipelineId}/batch-limited-time-retry`,
+        { batch_index: batchIndex },
+      )
       .then((r) => r.data),
 
   getPipelineExcelFallback: () =>

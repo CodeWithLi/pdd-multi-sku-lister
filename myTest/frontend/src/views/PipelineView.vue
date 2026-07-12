@@ -361,6 +361,7 @@ const feishuInspectPipelineId = ref('')
 
 const batchStageVisible = ref(false)
 const batchStageLoading = ref(false)
+const batchLtRetryLoadingBatch = ref<number | null>(null)
 const batchStageItems = ref<IntegratedPipelineBatchProductStageItem[]>([])
 const batchStagePipelineId = ref('')
 const batchStageExpandedNames = ref<number[]>([])
@@ -445,6 +446,113 @@ const batchStageHasActivity2 = computed(() => {
   return batchStageItems.value.some((item) => Boolean(item.activity_2_id || item.activity_2_status !== 'pending'))
 })
 
+function countBatchLtRetryTargets(products: IntegratedPipelineBatchProductStageItem[]) {
+  return products.filter(
+    (row) =>
+      row.listing_status === 'success'
+      && row.limited_time_status === 'failed'
+      && Boolean(String(row.pdd_product_id || '').trim()),
+  ).length
+}
+
+function isPipelineListingBatchesComplete(pipeline: IntegratedPipeline | null | undefined) {
+  if (!pipeline) return false
+  if (pipeline.listing_batches_complete) return true
+  const step = String(pipeline.current_step || '')
+  if (step.startsWith('waiting_listing_batch_')) return false
+  const listingStep = pipeline.steps?.find((item) => item.key === 'listing')
+  const detail = String(listingStep?.detail || '')
+  const batchProgress = detail.match(/分批上架\s*(\d+)\s*\/\s*(\d+)/)
+  if (batchProgress && batchProgress[1] === batchProgress[2]) return true
+  if (listingStep?.status === 'success' || listingStep?.status === 'skipped') return true
+  return false
+}
+
+function isBatchInitialLimitedTimeRecorded(products: IntegratedPipelineBatchProductStageItem[]) {
+  return products.some(
+    (row) =>
+      row.listing_status === 'success'
+      && row.limited_time_status
+      && row.limited_time_status !== 'pending',
+  )
+}
+
+function batchLtRetryDisabledReason(batchIndex: number, products: IntegratedPipelineBatchProductStageItem[]) {
+  const pipeline = batchStageContextPipeline.value
+  if (!pipeline) return '链路信息未加载'
+  if (!isPipelineListingBatchesComplete(pipeline)) return '全部分批上架完成后才可重跑限时'
+  if (!isBatchInitialLimitedTimeRecorded(products)) return '本批首轮限时限量购尚未跑完'
+  if (countBatchLtRetryTargets(products) <= 0) return '本批无可重跑商品'
+  const retryState = pipeline.batch_limited_time_retry
+  if (retryState?.phase === 'limited_time') {
+    if (retryState.active_batch_index === batchIndex) return '本批限时重跑进行中'
+    if ((retryState.pending_batch_indices || []).includes(batchIndex)) return '本批已加入重跑队列'
+  }
+  return ''
+}
+
+function canBatchLtRetryForGroup(batchIndex: number, products: IntegratedPipelineBatchProductStageItem[]) {
+  return countBatchLtRetryTargets(products) > 0 && !batchLtRetryDisabledReason(batchIndex, products)
+}
+
+function shouldShowBatchLtRetryAction(batchIndex: number, products: IntegratedPipelineBatchProductStageItem[]) {
+  return countBatchLtRetryTargets(products) > 0
+}
+
+const batchLtRetryPhaseLabel = (phase?: string) => {
+  if (phase === 'limited_time') return '限时重跑中'
+  if (phase === 'done') return '已完成'
+  if (phase === 'partial_done') return '部分完成'
+  return phase || ''
+}
+
+async function startBatchLimitedTimeRetry(batchIndex: number, products: IntegratedPipelineBatchProductStageItem[]) {
+  const pipeline = batchStageContextPipeline.value
+  if (!pipeline?.pipeline_id) return
+  const count = countBatchLtRetryTargets(products)
+  if (count <= 0) return
+  try {
+    await ElMessageBox.confirm(
+      `将重跑第 ${batchIndex + 1} 批中 ${count} 个「上架成功、限时失败」商品的限时限量购。\n`
+        + '若有成功，商品会追加进活动池；活动改期需等全部批次首轮限时跑完后，按最后一批重跑成功时刻 + 24h 执行。',
+      '分批限时重跑',
+      { type: 'warning', confirmButtonText: '开始重跑', cancelButtonText: '取消' },
+    )
+  } catch {
+    return
+  }
+  batchLtRetryLoadingBatch.value = batchIndex
+  try {
+    const result = await api.startBatchLimitedTimeRetry(pipeline.pipeline_id, batchIndex)
+    if (batchStageContextPipeline.value) {
+      batchStageContextPipeline.value = {
+        ...batchStageContextPipeline.value,
+        batch_limited_time_retry: result.batch_limited_time_retry,
+        status: result.queued ? batchStageContextPipeline.value.status : 'running',
+        current_step: result.queued
+          ? batchStageContextPipeline.value.current_step
+          : 'batch_limited_time_retry',
+      }
+    }
+    if (activePipeline.value?.pipeline_id === pipeline.pipeline_id) {
+      activePipeline.value = await api.getIntegratedPipeline(pipeline.pipeline_id)
+    }
+    if (batchStageContextPipeline.value?.pipeline_id === pipeline.pipeline_id) {
+      batchStageContextPipeline.value = await api.getIntegratedPipeline(pipeline.pipeline_id)
+    }
+    await refreshBatchStageDialog()
+    ElMessage.success(
+      result.queued
+        ? `第 ${batchIndex + 1} 批已加入限时重跑队列`
+        : `第 ${batchIndex + 1} 批限时重跑已启动（${result.retry_count} 个商品）`,
+    )
+  } catch (err: any) {
+    ElMessage.error(err?.response?.data?.detail || err?.message || '分批限时重跑启动失败')
+  } finally {
+    batchLtRetryLoadingBatch.value = null
+  }
+}
+
 async function openBatchStageDialog(pipeline?: IntegratedPipeline | null) {
   const target = pipeline || activePipeline.value
   if (!target?.pipeline_id) return
@@ -454,8 +562,12 @@ async function openBatchStageDialog(pipeline?: IntegratedPipeline | null) {
   batchStageLoading.value = true
   batchStageItems.value = []
   try {
-    const data = await api.getIntegratedPipelineBatchProductStages(target.pipeline_id)
-    batchStageItems.value = data.items || []
+    const [stageData, pipelineData] = await Promise.all([
+      api.getIntegratedPipelineBatchProductStages(target.pipeline_id),
+      api.getIntegratedPipeline(target.pipeline_id),
+    ])
+    batchStageItems.value = stageData.items || []
+    batchStageContextPipeline.value = pipelineData
     batchStageExpandedNames.value = [
       ...new Set(batchStageItems.value.map((item) => Number(item.batch_index) || 0)),
     ].sort((a, b) => a - b)
@@ -474,8 +586,12 @@ async function refreshBatchStageDialog() {
   if (!batchStagePipelineId.value) return
   batchStageLoading.value = true
   try {
-    const data = await api.getIntegratedPipelineBatchProductStages(batchStagePipelineId.value)
-    batchStageItems.value = data.items || []
+    const [stageData, pipelineData] = await Promise.all([
+      api.getIntegratedPipelineBatchProductStages(batchStagePipelineId.value),
+      api.getIntegratedPipeline(batchStagePipelineId.value),
+    ])
+    batchStageItems.value = stageData.items || []
+    batchStageContextPipeline.value = pipelineData
     if (!batchStageExpandedNames.value.length) {
       batchStageExpandedNames.value = [
         ...new Set(batchStageItems.value.map((item) => Number(item.batch_index) || 0)),
@@ -590,6 +706,7 @@ const listingUnitStatusSummary = computed(() => {
 })
 
 const lateRetryState = computed(() => activePipeline.value?.late_retry)
+const batchLtRetryState = computed(() => activePipeline.value?.batch_limited_time_retry)
 const lateRetryFailedCount = computed(() => listingUnitStatusSummary.value?.failed || 0)
 const canLateRetryFailed = computed(() => {
   const pipeline = activePipeline.value
@@ -2934,16 +3051,26 @@ onUnmounted(() => {
           </p>
           <p v-if="activePipeline.scheduled_activity_at" class="meta">
             活动计划时间：{{ formatTime(activePipeline.scheduled_activity_at) }}
-            <template v-if="lateRetryState?.activity_defer?.rescheduled">
-              （已因补跑延期）
+            <template v-if="lateRetryState?.activity_defer?.rescheduled || batchLtRetryState?.activity_defer?.rescheduled">
+              （已因补跑/限时重跑延期）
             </template>
           </p>
           <p v-if="lateRetryState?.activity_defer?.reschedule_reason" class="warn-text">
             {{ lateRetryState.activity_defer.reschedule_reason }}
           </p>
+          <p v-if="batchLtRetryState?.activity_defer?.reschedule_reason" class="warn-text">
+            {{ batchLtRetryState.activity_defer.reschedule_reason }}
+          </p>
           <p v-if="lateRetryState?.phase && lateRetryState.phase !== 'idle'" class="warn-text">
             补跑：{{ lateRetryPhaseLabel(lateRetryState.phase) }}
             <template v-if="lateRetryState.outcome_detail"> — {{ lateRetryState.outcome_detail }}</template>
+          </p>
+          <p
+            v-if="batchLtRetryState?.phase && batchLtRetryState.phase !== 'idle'"
+            class="warn-text"
+          >
+            分批限时重跑：{{ batchLtRetryPhaseLabel(batchLtRetryState.phase) }}
+            <template v-if="batchLtRetryState.outcome_detail"> — {{ batchLtRetryState.outcome_detail }}</template>
           </p>
           <p v-else-if="lateRetryFailedCount > 0 && activePipeline.current_step === 'waiting_activity'" class="meta">
             等活动期间可补跑失败套图（{{ lateRetryFailedCount }} 个）
@@ -3418,6 +3545,15 @@ onUnmounted(() => {
             · 分批进行中
           </template>
         </p>
+        <p v-if="batchStageContextPipeline?.batch_limited_time_retry?.phase && batchStageContextPipeline.batch_limited_time_retry.phase !== 'idle'" class="warn-text">
+          分批限时重跑：{{ batchLtRetryPhaseLabel(batchStageContextPipeline.batch_limited_time_retry.phase) }}
+          <template v-if="batchStageContextPipeline.batch_limited_time_retry.outcome_detail">
+            — {{ batchStageContextPipeline.batch_limited_time_retry.outcome_detail }}
+          </template>
+          <template v-if="batchStageContextPipeline.batch_limited_time_retry.activity_defer?.reschedule_reason">
+            · {{ batchStageContextPipeline.batch_limited_time_retry.activity_defer.reschedule_reason }}
+          </template>
+        </p>
         <p class="batch-stage-meta">
           按<strong>每一批</strong>展示商品的上架 / 限时限量购 / 活动 / 推广状态；活动与推广在全部批次完成后统一执行。
         </p>
@@ -3432,7 +3568,26 @@ onUnmounted(() => {
           >
             <template #title>
               <div class="batch-stage-collapse-title">
-                <span class="batch-stage-collapse-label">{{ group.batch_label }}</span>
+                <div class="batch-stage-collapse-head">
+                  <span class="batch-stage-collapse-label">{{ group.batch_label }}</span>
+                  <el-tooltip
+                    v-if="shouldShowBatchLtRetryAction(group.batch_index, group.products)"
+                    :content="batchLtRetryDisabledReason(group.batch_index, group.products) || '重跑本批上架成功但限时失败的商品'"
+                    placement="top"
+                  >
+                    <el-button
+                      type="warning"
+                      size="small"
+                      plain
+                      class="batch-stage-retry-btn"
+                      :disabled="!canBatchLtRetryForGroup(group.batch_index, group.products)"
+                      :loading="batchLtRetryLoadingBatch === group.batch_index"
+                      @click.stop="startBatchLimitedTimeRetry(group.batch_index, group.products)"
+                    >
+                      重跑限时失败 ({{ countBatchLtRetryTargets(group.products) }})
+                    </el-button>
+                  </el-tooltip>
+                </div>
                 <span class="batch-stage-collapse-summary">
                   上架 {{ group.listing_summary }}
                   · 限时 {{ group.limited_time_summary }}
@@ -4382,21 +4537,49 @@ onUnmounted(() => {
 
 .batch-stage-collapse-title {
   display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 8px 12px;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 6px;
   width: 100%;
   padding-right: 12px;
+}
+
+.batch-stage-collapse-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  width: 100%;
 }
 
 .batch-stage-collapse-label {
   font-weight: 600;
   color: var(--el-text-color-primary);
+  flex-shrink: 0;
 }
 
 .batch-stage-collapse-summary {
   font-size: 12px;
   color: var(--el-text-color-secondary);
+  line-height: 1.5;
+  word-break: break-word;
+}
+
+.batch-stage-retry-btn {
+  flex-shrink: 0;
+}
+
+:deep(.batch-stage-collapse .el-collapse-item__header) {
+  height: auto;
+  min-height: 48px;
+  line-height: 1.4;
+  padding-top: 8px;
+  padding-bottom: 8px;
+}
+
+:deep(.batch-stage-collapse .el-collapse-item__arrow) {
+  align-self: flex-start;
+  margin-top: 10px;
 }
 
 .batch-stage-product-table {

@@ -23,7 +23,7 @@ def _row(*, batch_index: int = 0, total_batches: int = 2, current_step: str = "l
                 "enabled": True,
                 "batch_index": batch_index,
                 "total_batches": total_batches,
-                "batches": [["A1", "A2"], ["B1", "B2"]],
+                "batches": [[f"B{i}"] for i in range(total_batches)],
                 "interval_minutes": 5,
                 "listing_payload_base": {},
                 "accumulated_pdd_ids": [],
@@ -90,6 +90,35 @@ def test_maybe_continue_after_empty_success_batch_schedules_next(
     )
 
     assert handled is True
+    mock_schedule.assert_called_once()
+
+
+@patch("pdd_agent.api.services.pipeline_listing_batch_continue.update_integrated_pipeline")
+@patch("pdd_agent.api.services.pipeline_listing_batch_continue.schedule_next_listing_batch_after_finish")
+@patch(
+    "pdd_agent.api.services.pipeline_per_batch_lt_aggregate.bridge.record_skipped_limited_time_batch_for_empty_listing"
+)
+@patch("pdd_agent.api.services.pipeline_listing_batch_continue.get_integrated_pipeline")
+def test_maybe_continue_empty_batch_records_skipped_lt_before_next(
+    mock_get,
+    mock_record_skipped,
+    mock_schedule,
+    mock_update,
+):
+    row = _row(batch_index=12, total_batches=19)
+    mock_get.return_value = row
+    mock_record_skipped.return_value = True
+    mock_schedule.return_value = True
+
+    handled = maybe_continue_listing_batch_after_failure(
+        row,
+        run_id="run_empty",
+        result={"results": []},
+        error="本批无成功上架商品",
+    )
+
+    assert handled is True
+    mock_record_skipped.assert_called_once()
     mock_schedule.assert_called_once()
 
 

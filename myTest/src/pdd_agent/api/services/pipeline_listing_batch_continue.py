@@ -104,6 +104,16 @@ def _schedule_throttled_batch_followup(
                 meta_patch=meta_patch,
             )
             return True
+    else:
+        from pdd_agent.api.services.pipeline_per_batch_lt_aggregate.bridge import (
+            record_skipped_limited_time_batch_for_empty_listing,
+        )
+
+        record_skipped_limited_time_batch_for_empty_listing(
+            refreshed,
+            skip_reason=batch_error or "本批无成功上架商品",
+        )
+        refreshed = get_integrated_pipeline(refreshed.pipeline_id) or refreshed
 
     if schedule_next_listing_batch_after_finish(
         refreshed,

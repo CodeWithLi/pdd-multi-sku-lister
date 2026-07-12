@@ -219,7 +219,7 @@ class TaskQueueWorker:
                     )
                 else:
                     if pipeline_id:
-                        from pdd_agent.api.services.pipeline_late_retry_activity_defer_policy import (
+                        from pdd_agent.api.services.pipeline_batch_limited_time_retry_bridge import (
                             maybe_defer_activity_task_execution,
                         )
                         from pdd_agent.db.repositories import get_integrated_pipeline
