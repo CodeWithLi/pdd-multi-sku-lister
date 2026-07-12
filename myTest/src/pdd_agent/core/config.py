@@ -9,9 +9,20 @@ from typing import Any
 
 import yaml
 from pydantic import BaseModel, Field, model_validator
-from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic_settings import BaseSettings, PydanticBaseSettingsSource, SettingsConfigDict
+from pydantic_settings.sources import DotEnvSettingsSource
 
 from pdd_agent.paths import DEFAULT_SETTINGS_PATH, PROJECT_ROOT
+
+_RUNTIME_PROFILES = frozenset({"prod", "test"})
+
+
+def resolve_env_file() -> str:
+    """优先 PDD_ENV_FILE，否则 myTest/.env。"""
+    override = (os.getenv("PDD_ENV_FILE") or "").strip()
+    if override:
+        return override
+    return str(PROJECT_ROOT / ".env")
 
 
 class AccountConfig(BaseModel):
@@ -127,8 +138,6 @@ class EnvSettings(BaseSettings):
     """从 .env 读取的环境变量（API Key、Playwright 开关等）。"""
 
     model_config = SettingsConfigDict(
-        # 固定读 myTest/.env，避免从其他工作目录启动时找不到配置
-        env_file=str(PROJECT_ROOT / ".env"),
         env_file_encoding="utf-8",
         extra="ignore",
     )
@@ -148,6 +157,27 @@ class EnvSettings(BaseSettings):
     database_pool_size: int = 5
     database_max_overflow: int = 5
     database_pool_timeout: int = 30
+    # prod=正式实例；test=本地 8011 测试实例（与正式库隔离）
+    pdd_runtime_profile: str = "prod"
+    # false 时仅保留 API + 任务队列 worker，不启动定时任务 / RabbitMQ 消费者
+    pdd_background_jobs: bool = True
+
+    @classmethod
+    def settings_customise_sources(
+        cls,
+        settings_cls: type[BaseSettings],
+        init_settings: PydanticBaseSettingsSource,
+        env_settings: PydanticBaseSettingsSource,
+        dotenv_settings: PydanticBaseSettingsSource,
+        file_secret_settings: PydanticBaseSettingsSource,
+    ) -> tuple[PydanticBaseSettingsSource, ...]:
+        # 每次实例化时解析 env 文件，支持 PDD_ENV_FILE 指向 .env.test
+        return (
+            init_settings,
+            env_settings,
+            DotEnvSettingsSource(settings_cls, env_file=resolve_env_file()),
+            file_secret_settings,
+        )
 
 
 def load_yaml_settings(path: Path | None = None) -> YamlSettings:
@@ -164,6 +194,30 @@ def load_yaml_settings(path: Path | None = None) -> YamlSettings:
 def get_env_settings() -> EnvSettings:
     """缓存环境配置，避免重复读 .env。"""
     return EnvSettings()
+
+
+def get_runtime_profile() -> str:
+    """运行环境标识：prod 或 test。"""
+    profile = (get_env_settings().pdd_runtime_profile or "prod").strip().lower()
+    return profile if profile in _RUNTIME_PROFILES else "prod"
+
+
+def background_jobs_enabled() -> bool:
+    """是否启动后台定时任务与 RabbitMQ 消费者。"""
+    return bool(get_env_settings().pdd_background_jobs)
+
+
+def get_database_name() -> str:
+    """从 DATABASE_URL 解析库名，便于日志与健康检查展示。"""
+    url = (get_env_settings().database_url or "").strip()
+    if not url:
+        return ""
+    try:
+        from sqlalchemy.engine import make_url
+
+        return str(make_url(url).database or "")
+    except Exception:
+        return ""
 
 
 def get_account(settings: YamlSettings, account_id: str) -> AccountConfig | None:

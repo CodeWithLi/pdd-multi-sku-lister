@@ -34,7 +34,12 @@ from pdd_agent.api.routes.runs import router as runs_router
 from pdd_agent.api.routes.tasks import router as tasks_router
 from pdd_agent.api.routes.traffic_report_schedule import router as traffic_report_schedule_router
 from pdd_agent.api.routes.wecom import router as wecom_router
-from pdd_agent.core.config import load_yaml_settings
+from pdd_agent.core.config import (
+    background_jobs_enabled,
+    get_database_name,
+    get_runtime_profile,
+    load_yaml_settings,
+)
 from pdd_agent.core.logging import get_logger, setup_logging
 from pdd_agent.db import database_status, init_database
 from pdd_agent.api.services.failure_cycle_relist_scheduler import (
@@ -52,6 +57,7 @@ from pdd_agent.inventory_delist.bootstrap import (
     start_inventory_delist_scheduler,
     stop_inventory_delist_scheduler,
 )
+from pdd_agent.integrations.minio.rabbitmq_consumer import get_minio_rabbitmq_consumer
 
 logger = get_logger(__name__)
 worker = TaskQueueWorker()
@@ -72,62 +78,89 @@ async def lifespan(app: FastAPI):
     db = database_status()
     if db["configured"] and not db["available"]:
         logger.warning("Database unavailable: %s", db["error"])
+
+    runtime_profile = get_runtime_profile()
+    run_background_jobs = background_jobs_enabled()
+    database_name = get_database_name()
+    logger.info(
+        "runtime profile=%s background_jobs=%s database=%s",
+        runtime_profile,
+        run_background_jobs,
+        database_name or "(none)",
+    )
+    print(
+        f"[runtime] profile={runtime_profile} background_jobs={str(run_background_jobs).lower()} "
+        f"database={database_name or '(none)'}",
+        flush=True,
+    )
+
     worker.start()
-    try:
-        from pdd_agent.api.services.commerce_overview_sync import refresh_commerce_overview_state
-        from pdd_agent.db.session import is_database_available
-
-        if is_database_available():
-            refresh_commerce_overview_state(dispatch_pending=False)
-    except Exception:
-        logger.exception("commerce overview sync on startup failed")
-    traffic_report_scheduler.start()
-    wecom_daily_report_scheduler.start()
-    failure_cycle_relist_watch_scheduler.start()
-    failure_sequential_scheduler.start()
-    platform_skip_dedupe_scheduler.start()
-    commerce_dispatch_scheduler.start()
-    mq_auto_phase2_scheduler.start()
-    start_inventory_delist_scheduler()
-
-    from pdd_agent.integrations.minio.broadcast import bind_event_loop
-    from pdd_agent.integrations.minio.rabbitmq_consumer import get_minio_rabbitmq_consumer
-
-    bind_event_loop(asyncio.get_running_loop())
-    try:
-        from pdd_agent.integrations.minio.config import minio_configured, minio_refresh_mode
-        from pdd_agent.integrations.minio.rabbitmq_admin import (
-            check_rabbitmq_amqp,
-            ensure_rabbitmq_binding,
-            ensure_rabbitmq_queue,
-        )
-
-        if minio_configured():
-            amqp = await asyncio.to_thread(check_rabbitmq_amqp)
-            if amqp.get("available"):
-                queue_info = await asyncio.to_thread(ensure_rabbitmq_queue)
-                logger.info("PDD RabbitMQ queue ready: %s", queue_info.get("queue"))
-                if minio_refresh_mode() == "rabbitmq":
-                    binding_info = await asyncio.to_thread(ensure_rabbitmq_binding)
-                    logger.info(
-                        "PDD RabbitMQ binding ready: %s -> %s (%s)",
-                        binding_info.get("exchange"),
-                        binding_info.get("queue"),
-                        binding_info.get("routing_key"),
-                    )
-    except Exception:
-        logger.exception("ensure PDD rabbitmq queue failed")
-
+    background_started = False
     minio_consumer = get_minio_rabbitmq_consumer()
-    minio_consumer.start()
-    try:
-        from pdd_agent.integrations.minio.catalog import list_minio_listing_targets
-        from pdd_agent.integrations.minio.config import minio_configured, minio_refresh_mode
 
-        if minio_configured() and minio_refresh_mode() == "rabbitmq":
-            await asyncio.to_thread(list_minio_listing_targets, force_refresh=True)
-    except Exception:
-        logger.exception("minio initial index warmup failed")
+    if run_background_jobs:
+        background_started = True
+        try:
+            from pdd_agent.api.services.commerce_overview_sync import refresh_commerce_overview_state
+            from pdd_agent.db.session import is_database_available
+
+            if is_database_available():
+                refresh_commerce_overview_state(dispatch_pending=False)
+        except Exception:
+            logger.exception("commerce overview sync on startup failed")
+        traffic_report_scheduler.start()
+        wecom_daily_report_scheduler.start()
+        failure_cycle_relist_watch_scheduler.start()
+        failure_sequential_scheduler.start()
+        platform_skip_dedupe_scheduler.start()
+        commerce_dispatch_scheduler.start()
+        mq_auto_phase2_scheduler.start()
+        start_inventory_delist_scheduler()
+
+        from pdd_agent.integrations.minio.broadcast import bind_event_loop
+
+        bind_event_loop(asyncio.get_running_loop())
+        try:
+            from pdd_agent.integrations.minio.config import minio_configured, minio_refresh_mode
+            from pdd_agent.integrations.minio.rabbitmq_admin import (
+                check_rabbitmq_amqp,
+                ensure_rabbitmq_binding,
+                ensure_rabbitmq_queue,
+            )
+
+            if minio_configured():
+                amqp = await asyncio.to_thread(check_rabbitmq_amqp)
+                if amqp.get("available"):
+                    queue_info = await asyncio.to_thread(ensure_rabbitmq_queue)
+                    logger.info("PDD RabbitMQ queue ready: %s", queue_info.get("queue"))
+                    if minio_refresh_mode() == "rabbitmq":
+                        binding_info = await asyncio.to_thread(ensure_rabbitmq_binding)
+                        logger.info(
+                            "PDD RabbitMQ binding ready: %s -> %s (%s)",
+                            binding_info.get("exchange"),
+                            binding_info.get("queue"),
+                            binding_info.get("routing_key"),
+                        )
+        except Exception:
+            logger.exception("ensure PDD rabbitmq queue failed")
+
+        minio_consumer.start()
+        try:
+            from pdd_agent.integrations.minio.catalog import list_minio_listing_targets
+            from pdd_agent.integrations.minio.config import minio_configured, minio_refresh_mode
+
+            if minio_configured() and minio_refresh_mode() == "rabbitmq":
+                await asyncio.to_thread(list_minio_listing_targets, force_refresh=True)
+        except Exception:
+            logger.exception("minio initial index warmup failed")
+    else:
+        logger.info(
+            "background jobs skipped (PDD_BACKGROUND_JOBS=false); API and manual task queue only"
+        )
+        print(
+            "[runtime] 后台定时任务已关闭：仅 API + 手动触发任务队列（可与正式 8010 并行）",
+            flush=True,
+        )
 
     async def _ensure_feishu_table(label: str, fn):
         try:
@@ -258,15 +291,16 @@ async def lifespan(app: FastAPI):
         logger.exception("ensure pdd feishu tables on startup failed")
     logger.info("PDD Agent API started")
     yield
-    minio_consumer.stop()
-    await failure_sequential_scheduler.stop()
-    await failure_cycle_relist_watch_scheduler.stop()
-    await platform_skip_dedupe_scheduler.stop()
-    await commerce_dispatch_scheduler.stop()
-    await mq_auto_phase2_scheduler.stop()
-    await traffic_report_scheduler.stop()
-    await wecom_daily_report_scheduler.stop()
-    await stop_inventory_delist_scheduler()
+    if background_started:
+        minio_consumer.stop()
+        await failure_sequential_scheduler.stop()
+        await failure_cycle_relist_watch_scheduler.stop()
+        await platform_skip_dedupe_scheduler.stop()
+        await commerce_dispatch_scheduler.stop()
+        await mq_auto_phase2_scheduler.stop()
+        await traffic_report_scheduler.stop()
+        await wecom_daily_report_scheduler.stop()
+        await stop_inventory_delist_scheduler()
     await worker.stop()
     logger.info("PDD Agent API stopped")
 
