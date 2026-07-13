@@ -18,3 +18,8 @@ def create_chat_model(*, model: str | None = None, temperature: float = 0) -> Ch
 def create_orchestrator_model() -> ChatOpenAI:
     env = get_env_settings()
     return create_chat_model(model=env.orchestrator_model or env.llm_model)
+
+
+def create_vision_model() -> ChatOpenAI:
+    env = get_env_settings()
+    return create_chat_model(model=getattr(env, "vision_model", None) or "glm-4v-flash")

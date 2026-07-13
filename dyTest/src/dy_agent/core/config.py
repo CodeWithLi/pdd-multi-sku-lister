@@ -82,11 +82,11 @@ class ListingConfig(BaseModel):
     category_keyword: str = "玩偶"
     title_mode: str = "page_ai"
     slot_alignment_test: bool = False
-    spec_fill_verify_test: bool = False
-    primary_style_first_test: bool = False
+    spec_fill_verify_test: bool = True
+    primary_style_first_test: bool = True
     category_next_burst_demo: bool = True
-    accessory_cost_pricing: bool = False
-    accessory_tiered_float: bool = False
+    accessory_cost_pricing: bool = True
+    accessory_tiered_float: bool = True
 
 
 class YamlSettings(BaseModel):
@@ -116,6 +116,11 @@ class EnvSettings(BaseSettings):
     dy_data_dir: str = "data"
     dy_config_path: str = str(DEFAULT_SETTINGS_PATH)
     dy_runtime_profile: str = "prod"
+    database_url: str = ""
+    database_echo: bool = False
+    database_pool_size: int = 5
+    database_max_overflow: int = 5
+    database_pool_timeout: int = 30
 
     @classmethod
     def settings_customise_sources(
@@ -153,8 +158,28 @@ def get_runtime_profile() -> str:
     return profile if profile in _RUNTIME_PROFILES else "prod"
 
 
+def get_database_name() -> str:
+    url = (get_env_settings().database_url or "").strip()
+    if not url:
+        return ""
+    try:
+        from sqlalchemy.engine import make_url
+
+        return str(make_url(url).database or "")
+    except Exception:
+        return ""
+
+
+def save_yaml_settings(settings: YamlSettings, path: Path | None = None) -> None:
+    cfg_path = path or Path(os.getenv("DY_CONFIG_PATH", DEFAULT_SETTINGS_PATH))
+    cfg_path.parent.mkdir(parents=True, exist_ok=True)
+    data = settings.model_dump(mode="python")
+    with open(cfg_path, "w", encoding="utf-8") as f:
+        yaml.dump(data, f, allow_unicode=True, default_flow_style=False, sort_keys=False)
+
+
 def get_account(settings: YamlSettings, account_id: str) -> AccountConfig | None:
-    for acc in settings.accounts:
-        if acc.account_id == account_id:
-            return acc
-    return None
+    """兼容旧调用；优先走 repositories.get_account_config。"""
+    from dy_agent.db.repositories import get_account_config
+
+    return get_account_config(settings, account_id)

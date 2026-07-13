@@ -268,6 +268,9 @@ def perform_sms_login_sync(account: AccountConfig, page: Page) -> DpPage:
     ensure_agreement_checked(page, account_id)
     click_submit_login(page, account_id)
     wait_login_success(page, account_id)
+    from dy_agent.browser.shop_display_name import maybe_refresh_shop_display_name
+
+    maybe_refresh_shop_display_name(account_id, dp, login_phone=phone)
     return DpPage(page, page.context)
 
 
@@ -282,6 +285,9 @@ def ensure_login_sync(account: AccountConfig, page: Page) -> DpPage:
 
     if is_likely_logged_in(dp.url):
         _log(account_id, "读取本地 Session 成功，已登录")
+        from dy_agent.browser.shop_display_name import maybe_refresh_shop_display_name
+
+        maybe_refresh_shop_display_name(account_id, dp, login_phone=resolve_account_phone(account))
         return dp
 
     login_links = page.get_by_role("link", name="登录抖店")

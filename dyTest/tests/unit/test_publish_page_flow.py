@@ -2,7 +2,7 @@
 
 from dy_agent.core.config import ListingConfig, YamlSettings
 from dy_agent.skills.listing.listing_options import listing_options_from_settings
-from dy_agent.skills.listing.publish_page_flow import detect_publish_page_variant
+from dy_agent.skills.listing.publish_page_flow import detect_publish_page_step2, detect_publish_page_variant
 
 
 class _FakeBody:
@@ -49,3 +49,13 @@ def test_detect_publish_page_variant_unknown():
             return _FakeLocator("hello")
 
     assert detect_publish_page_variant(UnknownPage()) == "unknown"
+
+
+def test_detect_publish_page_step2():
+    class Step2Page:
+        url = "https://fxg.jinritemai.com/ffa/mcreate/index"
+
+        def locator(self, selector: str):
+            return _FakeLocator("商品发布 白底图 上传白底图 商品详情 上传图片")
+
+    assert detect_publish_page_step2(Step2Page()) is True

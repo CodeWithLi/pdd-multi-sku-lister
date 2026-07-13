@@ -5,15 +5,139 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
-from dy_agent.core.config import YamlSettings
+from dy_agent.core.config import YamlSettings, load_yaml_settings
 from dy_agent.domain.models import ListingUnit, SkuCombo
+from dy_agent.skills.listing.pdd_product_catalog import PddProductEntry, load_pdd_product_catalog
 
+IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".webp"}
 _IMAGE_NUM_RE = re.compile(r"^(\d+)\.(png|jpg|jpeg|webp)$", re.I)
 _COMBO_RE = re.compile(r"^(.+)\+(.+)\.(png|jpg|jpeg|webp)$", re.I)
+IMAGE_SET_PATTERN = re.compile(
+    r"^(?:第?\s*[一二三四五六七八九十\d]+\s*套(?:图)?|套图\s*[一二三四五六七八九十\d]+)(?:[\s\-_（(].*)?$"
+)
+
+
+def is_image_set_dir(name: str) -> bool:
+    return bool(IMAGE_SET_PATTERN.match(str(name or "").strip()))
+
+
+def parse_listing_target_selector(selector: str) -> tuple[str, str] | None:
+    """Parse family/image_set selector, e.g. BD046/第一套."""
+    raw = str(selector or "").strip()
+    if "/" not in raw:
+        return None
+    parts = [part.strip() for part in raw.split("/") if part.strip()]
+    if len(parts) != 2:
+        return None
+    family_code, image_set = parts
+    if not family_code or not image_set or not is_image_set_dir(image_set):
+        return None
+    return family_code, image_set
+
+
+def parse_listing_target_product_selector(selector: str) -> tuple[str, str, str] | None:
+    """Parse family/image_set/product_code selector."""
+    raw = str(selector or "").strip()
+    if "/" not in raw:
+        return None
+    parts = [part.strip() for part in raw.split("/") if part.strip()]
+    if len(parts) != 3:
+        return None
+    family_code, image_set, product_code = parts
+    if not family_code or not image_set or not product_code or not is_image_set_dir(image_set):
+        return None
+    return family_code, image_set, product_code
+
+
+def _code_dir_has_numbered_images(code_dir: Path) -> bool:
+    if not code_dir.is_dir():
+        return False
+    for path in code_dir.iterdir():
+        if path.is_file() and _IMAGE_NUM_RE.match(path.name):
+            return True
+    return False
+
+
+def list_local_listing_targets(assets_root: Path) -> list[dict]:
+    """Scan local assets root and return listing target options."""
+    result: list[dict] = []
+    if not assets_root.is_dir():
+        return result
+    for family_dir in sorted((p for p in assets_root.iterdir() if p.is_dir()), key=lambda p: p.name):
+        for set_dir in sorted(
+            (p for p in family_dir.iterdir() if p.is_dir() and is_image_set_dir(p.name)),
+            key=lambda p: p.name,
+        ):
+            codes = sorted(
+                code_dir.name
+                for code_dir in set_dir.iterdir()
+                if _code_dir_has_numbered_images(code_dir)
+            )
+            if not codes:
+                continue
+            result.append(
+                {
+                    "selector": f"{family_dir.name}/{set_dir.name}",
+                    "family_code": family_dir.name,
+                    "image_set": set_dir.name,
+                    "product_codes": codes,
+                    "product_count": len(codes),
+                }
+            )
+    return result
 
 
 def resolve_assets_root(settings: YamlSettings, assets_root: Path | None = None) -> Path:
     return assets_root or settings.paths.resolve("assets_root")
+
+
+def _split_combo_stem_parts(stem: str, default_style_code: str = "") -> list[str]:
+    text = Path(stem).stem.strip() if stem else ""
+    if not text:
+        return []
+    if "+" not in text:
+        return [text]
+    parts = [part.strip() for part in text.split("+") if part.strip()]
+    default_style = str(default_style_code or "").strip()
+    if default_style and parts:
+        first = parts[0]
+        if first.casefold() != default_style.casefold():
+            if default_style.casefold().startswith(first.casefold()) and len(first) < len(default_style):
+                parts[0] = default_style
+    return parts
+
+
+def _parse_combo_component_codes(name: str, default_style_code: str = "") -> list[str]:
+    stem = Path(name).stem.strip()
+    if not stem:
+        return []
+    if "+" in stem:
+        return list(dict.fromkeys(_split_combo_stem_parts(stem, default_style_code)))
+    return [stem]
+
+
+def load_product_catalog(settings: YamlSettings | None = None) -> dict[str, PddProductEntry]:
+    """上架商品数据源：优先飞书快照，否则本地 Excel。"""
+    from dy_agent.integrations.feishu.config import load_feishu_config
+    from dy_agent.integrations.feishu.listing_feishu_snapshot import get_listing_feishu_snapshot
+    from dy_agent.integrations.feishu.pdd_product_catalog_sync import load_unified_pdd_product_catalog
+
+    snapshot = get_listing_feishu_snapshot()
+    if snapshot is not None:
+        cfg = load_feishu_config()
+        catalog = snapshot.product_catalog(cfg)
+        if catalog:
+            return catalog
+
+    catalog = load_unified_pdd_product_catalog(settings=settings)
+    if catalog:
+        return catalog
+
+    settings = settings or load_yaml_settings()
+    path = settings.multi_spec.excel_path
+    if path.is_file():
+        return load_pdd_product_catalog(path)
+    return {}
 
 
 def discover_product_dirs(assets_root: Path, product_codes: list[str]) -> list[tuple[str, str, Path]]:
@@ -55,16 +179,16 @@ def _collect_images(product_dir: Path) -> tuple[list[Path], list[Path], Path | N
         if not path.is_file():
             continue
         m = _IMAGE_NUM_RE.match(path.name)
-        if m:
-            num = int(m.group(1))
-            if num == 6:
-                continue
-            if 1 <= num <= 5:
-                carousel.append(path)
-            elif num >= 7:
-                detail.append(path)
-            if num == 9:
-                material = path
+        if not m:
+            continue
+        num = int(m.group(1))
+        if 1 <= num <= 5:
+            carousel.append(path)
+        elif num in (6, 7, 8):
+            detail.append(path)
+        elif num == 9:
+            material = path
+
     carousel.sort(key=lambda p: int(_IMAGE_NUM_RE.match(p.name).group(1)))  # type: ignore[union-attr]
     detail.sort(key=lambda p: int(_IMAGE_NUM_RE.match(p.name).group(1)))  # type: ignore[union-attr]
     return carousel, detail, material
@@ -111,6 +235,10 @@ def build_listing_unit(
         warnings.append("缺少主图 (1-5.png)")
     if not skus:
         warnings.append("缺少 SKU 预览图 (款式+型号.png)")
+    if not detail:
+        warnings.append("缺少详情图 (6-8.png)")
+    if material is None:
+        warnings.append("缺少白底图 (9.png)")
 
     style_codes = list(dict.fromkeys(s.style_code for s in skus))
     model_codes = list(dict.fromkeys(s.model_code for s in skus))
@@ -139,15 +267,60 @@ def resolve_listing_units(
     root = resolve_assets_root(settings, assets_root)
     defaults = settings.multi_spec.defaults
     units: list[ListingUnit] = []
-    for product_code, image_set, product_dir in discover_product_dirs(root, product_codes):
-        family = product_dir.parent.parent.name if image_set else product_dir.parent.name
-        units.append(
-            build_listing_unit(
+    seen_labels: set[str] = set()
+
+    for target in product_codes:
+        raw = str(target or "").strip()
+        if not raw:
+            continue
+
+        product_selector = parse_listing_target_product_selector(raw)
+        if product_selector:
+            family_code, image_set, product_code = product_selector
+            product_dir = root / family_code / image_set / product_code
+            if product_dir.is_dir():
+                unit = build_listing_unit(
+                    product_code,
+                    image_set,
+                    product_dir,
+                    family_code=family_code,
+                    defaults=defaults,
+                )
+                if unit.listing_label not in seen_labels:
+                    seen_labels.add(unit.listing_label)
+                    units.append(unit)
+            continue
+
+        selector = parse_listing_target_selector(raw)
+        if selector:
+            family_code, image_set = selector
+            set_dir = root / family_code / image_set
+            if set_dir.is_dir():
+                for product_dir in sorted((p for p in set_dir.iterdir() if p.is_dir()), key=lambda p: p.name):
+                    if not _code_dir_has_numbered_images(product_dir):
+                        continue
+                    unit = build_listing_unit(
+                        product_dir.name,
+                        image_set,
+                        product_dir,
+                        family_code=family_code,
+                        defaults=defaults,
+                    )
+                    if unit.listing_label not in seen_labels:
+                        seen_labels.add(unit.listing_label)
+                        units.append(unit)
+            continue
+
+        for product_code, image_set, product_dir in discover_product_dirs(root, [raw]):
+            unit = build_listing_unit(
                 product_code,
                 image_set,
                 product_dir,
-                family_code=family,
+                family_code=product_dir.parent.parent.name if image_set else product_dir.parent.name,
                 defaults=defaults,
             )
-        )
+            if unit.listing_label not in seen_labels:
+                seen_labels.add(unit.listing_label)
+                units.append(unit)
+
     return units

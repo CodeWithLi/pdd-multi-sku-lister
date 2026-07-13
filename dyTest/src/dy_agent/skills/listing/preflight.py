@@ -6,7 +6,33 @@ from pathlib import Path
 
 from dy_agent.core.config import YamlSettings, load_yaml_settings
 from dy_agent.domain.models import PreflightIssue, PreflightReport
-from dy_agent.skills.listing.catalog import resolve_assets_root, resolve_listing_units
+from dy_agent.skills.listing.catalog import (
+    parse_listing_target_product_selector,
+    parse_listing_target_selector,
+    resolve_assets_root,
+    resolve_listing_units,
+)
+
+
+def _target_resolved(target: str, units) -> bool:
+    raw = str(target or "").strip()
+    if not raw:
+        return False
+
+    product_selector = parse_listing_target_product_selector(raw)
+    if product_selector:
+        family_code, image_set, product_code = product_selector
+        return any(
+            u.family_code == family_code and u.image_set == image_set and u.product_code == product_code
+            for u in units
+        )
+
+    selector = parse_listing_target_selector(raw)
+    if selector:
+        family_code, image_set = selector
+        return any(u.family_code == family_code and u.image_set == image_set for u in units)
+
+    return any(u.product_code.upper() == raw.upper() for u in units)
 
 
 def run_preflight(
@@ -30,9 +56,8 @@ def run_preflight(
         return PreflightReport(units=[], issues=issues)
 
     units = resolve_listing_units(product_codes, settings, assets_root=root)
-    found_codes = {u.product_code.upper() for u in units}
     for code in product_codes:
-        if code.upper() not in found_codes:
+        if not _target_resolved(code, units):
             issues.append(
                 PreflightIssue(
                     level="error",

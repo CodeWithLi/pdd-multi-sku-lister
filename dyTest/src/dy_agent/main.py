@@ -16,7 +16,8 @@ import sys
 from dy_agent.agents.listing import build_listing_graph
 from dy_agent.agents.orchestrator import build_orchestrator_graph
 from dy_agent.api.services.listing_state import listing_flags_from_settings
-from dy_agent.core.config import get_account, load_yaml_settings
+from dy_agent.core.config import load_yaml_settings
+from dy_agent.db.repositories import get_account_config
 from dy_agent.core.logging import setup_logging
 from dy_agent.domain.enums import AgentKind, RunStatus
 from dy_agent.storage import TaskRunStore
@@ -87,6 +88,17 @@ def _summarize_listing_message(result: dict) -> str:
         return str(first["summary"])
     if first.get("message"):
         return str(first["message"])
+    if first.get("status") == "success":
+        pid = first.get("dy_product_id") or (first.get("goods_list_capture") or {}).get("dy_product_id")
+        return f"{first.get('listing_label', '')} 发布成功 ID={pid or '-'}"
+    if first.get("status") == "step5_done":
+        return f"{first.get('listing_label', '')} step5 完成（价格/库存/商家编码）"
+    if first.get("status") == "step4_done":
+        return f"{first.get('listing_label', '')} step4 完成（颜色分类/尺寸大小）"
+    if first.get("status") == "step3_done":
+        return f"{first.get('listing_label', '')} step3 完成（价格库存/手动填写）"
+    if first.get("status") == "step2_done":
+        return f"{first.get('listing_label', '')} step2 完成（白底图/详情图）"
     if first.get("status") == "step1_done":
         return f"{first.get('listing_label', '')} step1 完成"
     return "listing finished"
@@ -94,7 +106,7 @@ def _summarize_listing_message(result: dict) -> str:
 
 async def _cmd_run(args) -> None:
     settings = load_yaml_settings()
-    account = get_account(settings, args.account)
+    account = get_account_config(settings, args.account)
     if not account:
         print(f"unknown account: {args.account}")
         sys.exit(1)

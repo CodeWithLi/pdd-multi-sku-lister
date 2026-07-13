@@ -1,6 +1,6 @@
 """运行记录查询。"""
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Query
 
 from dy_agent.storage import TaskRunStore
 
@@ -8,9 +8,20 @@ router = APIRouter(prefix="/runs", tags=["runs"])
 
 
 @router.get("")
-def list_runs(limit: int = 50):
-    records = TaskRunStore().list_runs(limit=limit)
-    return [r.model_dump(mode="json") for r in records]
+def list_runs(
+    limit: int = Query(50, ge=1, le=200),
+    account_id: str = "",
+    status: str = "",
+):
+    records = TaskRunStore().list_runs(limit=200)
+    if account_id:
+        records = [r for r in records if r.account_id == account_id]
+    if status:
+        records = [r for r in records if r.status.value == status]
+    return {
+        "items": [r.model_dump(mode="json") for r in records[:limit]],
+        "total": len(records),
+    }
 
 
 @router.get("/{run_id}")

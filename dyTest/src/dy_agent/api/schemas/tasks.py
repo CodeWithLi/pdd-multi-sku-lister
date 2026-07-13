@@ -17,6 +17,7 @@ class ListingTaskRequest(BaseModel):
     product_codes: list[str] = Field(default_factory=list)
     dry_run: bool = False
     category_keyword: str = ""
+    material_source: str = ""
     slot_alignment_test: bool | None = None
     spec_fill_verify_test: bool | None = None
     primary_style_first_test: bool | None = None

@@ -10,6 +10,8 @@ __pycache__/
 .env
 config/settings.yaml
 config/agents.yaml
+config/minio.yaml
+config/feishu.yaml
 
 data/profiles/
 data/runs/
@@ -17,6 +19,7 @@ data/runs/
 
 playwright-report/
 test-results/
+.playwright-browsers/
 
 .DS_Store
 Thumbs.db

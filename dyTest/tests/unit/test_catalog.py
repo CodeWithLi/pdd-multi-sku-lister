@@ -17,3 +17,15 @@ def test_build_listing_unit_basic(tmp_path: Path):
     assert len(unit.carousel_images) == 2
     assert len(unit.skus) == 1
     assert unit.skus[0].model_code == "MODEL1"
+
+
+def test_build_listing_unit_detail_and_material(tmp_path: Path):
+    product_dir = tmp_path / "BD046A"
+    product_dir.mkdir()
+    for name in ("1.png", "6.png", "7.png", "8.png", "9.png"):
+        (product_dir / name).write_bytes(b"x")
+
+    unit = build_listing_unit("BD046A", "", product_dir, family_code="BD046")
+    assert [p.name for p in unit.detail_images] == ["6.png", "7.png", "8.png"]
+    assert unit.material_image is not None
+    assert unit.material_image.name == "9.png"

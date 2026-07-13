@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import asyncio
+import os
 import sys
 from collections.abc import Callable
+from pathlib import Path
 from typing import Any, TypeVar
 
 from playwright.sync_api import sync_playwright
@@ -13,6 +15,7 @@ from dy_agent.browser.profile_lock import account_profile_lock
 from dy_agent.browser.stealth import STEALTH_INIT_SCRIPT, STEALTH_LAUNCH_ARGS
 from dy_agent.browser.sync_login import DpPage, ensure_login_sync
 from dy_agent.core.config import AccountConfig, YamlSettings, get_env_settings
+from dy_agent.paths import PROJECT_ROOT
 
 T = TypeVar("T")
 
@@ -25,8 +28,23 @@ def _init_playwright_thread() -> None:
     asyncio.set_event_loop(loop)
 
 
+def _ensure_playwright_browsers_path() -> None:
+    """优先使用项目内 .playwright-browsers，避免 AppData 目录 EPERM。"""
+    raw = (os.getenv("PLAYWRIGHT_BROWSERS_PATH") or "").strip()
+    if raw:
+        path = Path(raw)
+        if not path.is_absolute():
+            path = (PROJECT_ROOT / path).resolve()
+        os.environ["PLAYWRIGHT_BROWSERS_PATH"] = str(path)
+        return
+    local = PROJECT_ROOT / ".playwright-browsers"
+    if local.is_dir():
+        os.environ["PLAYWRIGHT_BROWSERS_PATH"] = str(local)
+
+
 def _launch_persistent(settings: YamlSettings, account_id: str, *, headless: bool | None = None):
     _init_playwright_thread()
+    _ensure_playwright_browsers_path()
     env = get_env_settings()
     user_data_dir = settings.paths.resolve("profiles_root") / account_id / "user_data"
     user_data_dir.mkdir(parents=True, exist_ok=True)
@@ -51,6 +69,13 @@ def _launch_persistent(settings: YamlSettings, account_id: str, *, headless: boo
     pw = sync_playwright().start()
     context = pw.chromium.launch_persistent_context(str(user_data_dir), **launch_kwargs)
     context.add_init_script(STEALTH_INIT_SCRIPT)
+    try:
+        context.grant_permissions(
+            ["clipboard-read", "clipboard-write"],
+            origin="https://fxg.jinritemai.com",
+        )
+    except Exception:
+        pass
     context.set_default_timeout(settings.browser.default_timeout_ms)
     page = context.pages[0] if context.pages else context.new_page()
     return pw, context, page

@@ -12,6 +12,8 @@
 | LLM | LangChain ChatOpenAI（兼容 OpenAI API） |
 | 浏览器 | Playwright (async 包装 + sync 线程执行) |
 | API | FastAPI |
+| 前端 | Vue 3 + Element Plus + Vite |
+| 数据库 | MySQL（可选，店铺账号持久化） |
 | 配置 | YAML + 环境变量 |
 
 ## 目录结构
@@ -20,7 +22,9 @@
 dyTest/
 ├── README.md
 ├── STRUCTURE.md
+├── requirements.txt
 ├── pyproject.toml
+├── frontend/            # Vue 管理界面（端口 5175 → API 8020）
 ├── config/              # 店铺、浏览器、多规格默认值
 ├── skills/              # Markdown 业务知识（给 Agent / 人读）
 ├── data/                # 素材、浏览器 Profile、任务记录
@@ -63,6 +67,7 @@ playwright install chromium
 # 3. 配置
 copy .env.example .env
 copy config\settings.example.yaml config\settings.yaml
+# 可选：在 .env 中设置 DATABASE_URL=mysql+pymysql://user:pass@127.0.0.1:3306/dy_agent
 
 # 4. Dry-run（只跑 preflight，不打开浏览器）
 python -m dy_agent.main plan --message "店铺A上架商品BD046A"
@@ -71,7 +76,13 @@ python -m dy_agent.main run listing --account store_A --product-code BD046A --dr
 # 5. 启动 API
 python -m dy_agent.main api --port 8020
 
-# 6. 首次登录（手机验证码，验证码需手动输入）
+# 6. 启动前端（另开终端）
+cd frontend
+npm install
+npm run dev
+# 浏览器打开 http://localhost:5175
+
+# 7. 首次登录（手机验证码，验证码需手动输入）
 python scripts/manual_login.py store_A
 ```
 
@@ -90,4 +101,4 @@ python scripts/manual_login.py store_A
 
 1. 完善 `skills/listing/upload.py` 抖店发布页填表
 2. 按需增加 `delist`、`campaign` 子 Agent
-3. 对接飞书 / 任务队列 / Vue 前端（可参考 myTest）
+3. 完善 Step2+ 规格填表、配件定价等能力

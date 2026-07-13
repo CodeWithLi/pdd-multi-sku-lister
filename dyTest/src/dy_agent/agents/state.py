@@ -22,6 +22,7 @@ class ListingState(TypedDict, total=False):
     category_keyword: str
     run_id: str
     assets_root: str
+    material_source: str
     # 试验开关（与 settings.listing / 拼多多 pipeline 对齐）
     slot_alignment_test: bool
     spec_fill_verify_test: bool

@@ -10,11 +10,11 @@ from dy_agent.core.config import YamlSettings
 @dataclass(frozen=True)
 class ListingOptions:
     slot_alignment_test: bool = False
-    spec_fill_verify_test: bool = False
-    primary_style_first_test: bool = False
+    spec_fill_verify_test: bool = True
+    primary_style_first_test: bool = True
     category_next_burst_demo: bool = True
-    accessory_cost_pricing: bool = False
-    accessory_tiered_float: bool = False
+    accessory_cost_pricing: bool = True
+    accessory_tiered_float: bool = True
     title_mode: str = "page_ai"
     category_keyword: str = ""
 

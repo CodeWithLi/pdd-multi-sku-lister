@@ -31,11 +31,11 @@ listing:
   category_keyword: 玩偶
   title_mode: page_ai
   slot_alignment_test: false
-  spec_fill_verify_test: false
-  primary_style_first_test: false
+  spec_fill_verify_test: true
+  primary_style_first_test: true
   category_next_burst_demo: true
-  accessory_cost_pricing: false
-  accessory_tiered_float: false
+  accessory_cost_pricing: true
+  accessory_tiered_float: true
 
 accounts:
   - account_id: store_A

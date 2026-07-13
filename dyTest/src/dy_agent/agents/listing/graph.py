@@ -14,8 +14,11 @@ from langgraph.graph import END, StateGraph
 
 from dy_agent.agents.state import ListingState
 from dy_agent.browser.sync_job import run_browser_job_async
-from dy_agent.core.config import get_account, load_yaml_settings
+from dy_agent.core.config import load_yaml_settings
+from dy_agent.db.repositories import get_account_config
 from dy_agent.core.logging import get_logger
+from dy_agent.domain.listing_errors import ListingErrorCode, ListingErrors
+from dy_agent.domain.models import PreflightIssue
 from dy_agent.skills.listing.preflight import run_preflight
 from dy_agent.skills.listing.upload import run_listing_uploads
 
@@ -30,7 +33,83 @@ async def preflight_node(state: ListingState) -> dict:
     if raw_root:
         assets_root = Path(raw_root)
 
+    try:
+        from dy_agent.integrations.feishu.listing_feishu_catalog import collect_merchant_codes_from_selectors
+        from dy_agent.integrations.feishu.listing_feishu_snapshot import warm_listing_feishu_snapshot
+
+        warm_codes = list(dict.fromkeys(collect_merchant_codes_from_selectors(codes)))
+        if warm_codes:
+            warm_listing_feishu_snapshot(warm_codes)
+    except Exception:
+        logger.exception("warm listing feishu snapshot before preflight failed")
+
     report = run_preflight(codes, settings, assets_root=assets_root)
+
+    try:
+        from dy_agent.integrations.feishu.listing_feishu_catalog import collect_merchant_codes_from_selectors
+        from dy_agent.integrations.feishu.listing_feishu_snapshot import warm_listing_feishu_snapshot
+        from dy_agent.integrations.feishu.pdd_product_catalog_sync import _collect_catalog_codes
+
+        warm_listing_feishu_snapshot(
+            _collect_catalog_codes(
+                units=report.units,
+                extra_codes=collect_merchant_codes_from_selectors(codes),
+            )
+        )
+    except Exception:
+        logger.exception("warm listing feishu snapshot after preflight failed")
+
+    account_id = str(state.get("account_id") or "")
+    if account_id:
+        try:
+            from dy_agent.integrations.feishu.config import load_feishu_config
+            from dy_agent.integrations.feishu.pdd_product_catalog_sync import diagnose_feishu_listing_catalog_issues
+
+            feishu_cfg = load_feishu_config()
+            catalog_issues = diagnose_feishu_listing_catalog_issues(
+                units=report.units,
+                product_codes=codes,
+                config=feishu_cfg,
+            )
+            for catalog_issue in catalog_issues:
+                detail_rows = list(catalog_issue.details)
+                if not detail_rows:
+                    report.issues.append(
+                        PreflightIssue(
+                            level="error",
+                            message=catalog_issue.listing_label,
+                            listing_label=catalog_issue.listing_label,
+                            reason_code="feishu_product_catalog_missing",
+                        )
+                    )
+                    continue
+                lines: list[str] = []
+                seen_lines: set[str] = set()
+                for detail in detail_rows:
+                    brief = ListingErrors.compact_feishu_line(
+                        detail.message,
+                        reason_code=detail.reason_code,
+                        merchant_code=detail.code or catalog_issue.merchant_code,
+                    )
+                    if brief and brief not in seen_lines:
+                        seen_lines.add(brief)
+                        lines.append(brief)
+                combined = ListingErrors.format_numbered(lines)
+                report.issues.append(
+                    PreflightIssue(
+                        level="error",
+                        message=combined or detail_rows[0].message,
+                        listing_label=catalog_issue.listing_label,
+                        reason_code=(
+                            detail_rows[0].reason_code
+                            if len(detail_rows) == 1
+                            else ListingErrorCode.FEISHU_PRODUCT_CATALOG_MISSING
+                        ),
+                    )
+                )
+        except Exception:
+            logger.exception("check feishu product catalog missing failed")
+
     logger.info(
         "preflight: units=%s valid=%s errors=%s",
         len(report.units),
@@ -50,7 +129,7 @@ async def browser_listing_node(state: ListingState) -> dict:
 
     settings = load_yaml_settings()
     account_id = state["account_id"]
-    account = get_account(settings, account_id)
+    account = get_account_config(settings, account_id)
     if not account:
         return {"errors": [f"unknown account: {account_id}"], "finished": True}
 
@@ -91,7 +170,9 @@ async def browser_listing_node(state: ListingState) -> dict:
     try:
         results = await run_browser_job_async(settings, account, _job)
         listed = sum(
-            1 for r in results if r.get("status") in {"success", "listed", "step1_done"}
+            1 for r in results if r.get("status") in {
+                "success", "listed", "step1_done", "step2_done", "step3_done", "step4_done", "step5_done"
+            }
         )
         failed = [r for r in results if r.get("status") == "failed"]
         logger.info("[%s] listing done: %s/%s", account_id, listed, len(results))

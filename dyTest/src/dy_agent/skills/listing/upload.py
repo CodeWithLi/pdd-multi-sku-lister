@@ -9,8 +9,17 @@ from dy_agent.browser.sync_login import DpPage
 from dy_agent.core.logging import get_logger
 from dy_agent.domain.models import ListingUnit
 from dy_agent.skills.listing.listing_options import ListingOptions, listing_options_from_settings
+from dy_agent.skills.listing.listing_published_product import persist_listed_product_item
+from dy_agent.skills.listing.listing_unit_prep import prepare_listing_unit
 from dy_agent.skills.listing.publish_navigate import open_publish_page
-from dy_agent.skills.listing.publish_page_flow import run_publish_page_step1
+from dy_agent.skills.listing.publish_page_flow import (
+    run_publish_page_step1,
+    run_publish_page_step2,
+    run_publish_page_step3,
+    run_publish_page_step4,
+    run_publish_page_step5,
+    run_publish_page_step6,
+)
 from dy_agent.core.config import load_yaml_settings
 
 logger = get_logger(__name__)
@@ -21,6 +30,8 @@ def upload_one_listing(
     account_id: str,
     unit: ListingUnit,
     options: ListingOptions,
+    *,
+    defaults: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     label = unit.listing_label
     raw = page.raw
@@ -31,7 +42,28 @@ def upload_one_listing(
     publish_page = open_publish_page(raw, context, account_id, label)
     page._page = publish_page  # noqa: SLF001 — 切换到发布标签页
 
+    settings = load_yaml_settings()
+    fill_defaults = defaults if defaults is not None else dict(settings.multi_spec.defaults or {})
+
+    prep = prepare_listing_unit(unit, options, account_id=account_id)
+
     result = run_publish_page_step1(publish_page, account_id, unit, options)
+    step2 = run_publish_page_step2(publish_page, account_id, unit, options)
+    step3 = run_publish_page_step3(publish_page, account_id, unit, options)
+    step4 = run_publish_page_step4(publish_page, account_id, unit, options)
+    step5 = run_publish_page_step5(
+        publish_page, account_id, unit, options, defaults=fill_defaults
+    )
+    step6 = run_publish_page_step6(publish_page, account_id, unit, options)
+    result.update(step2)
+    result.update(step3)
+    result.update(step4)
+    result.update(step5)
+    result.update(step6)
+    result["product_code"] = unit.product_code
+    result["family_code"] = unit.family_code
+    result["image_set"] = unit.image_set
+    result["unit_prep"] = prep
     result["sku_count"] = len(unit.skus)
     return result
 
@@ -46,17 +78,18 @@ def run_listing_uploads(
     defaults: dict[str, str] | None = None,
     run_id: str = "",
     slot_alignment_test: bool = False,
-    spec_fill_verify_test: bool = False,
-    primary_style_first_test: bool = False,
+    spec_fill_verify_test: bool = True,
+    primary_style_first_test: bool = True,
     category_next_burst_demo: bool = True,
-    accessory_cost_pricing: bool = False,
-    accessory_tiered_float: bool = False,
+    accessory_cost_pricing: bool = True,
+    accessory_tiered_float: bool = True,
 ) -> list[dict[str, Any]]:
     if slot_alignment_test and spec_fill_verify_test:
         raise ValueError("spec_fill_verify_test 与 slot_alignment_test 不能同时开启")
 
     settings = load_yaml_settings()
     base_options = listing_options_from_settings(settings, category_keyword=category_keyword)
+    fill_defaults = defaults if defaults is not None else dict(settings.multi_spec.defaults or {})
     options = ListingOptions(
         slot_alignment_test=slot_alignment_test,
         spec_fill_verify_test=spec_fill_verify_test,
@@ -75,8 +108,14 @@ def run_listing_uploads(
             time.sleep(5)
         try:
             logger.info("[%s] listing start: %s", account_id, unit.listing_label)
-            item = upload_one_listing(page, account_id, unit, options)
+            item = upload_one_listing(
+                page, account_id, unit, options, defaults=fill_defaults
+            )
             item["run_id"] = run_id
+            saved = persist_listed_product_item(run_id, account_id, unit, item)
+            if saved:
+                item["db_saved"] = True
+                item["published_product"] = saved
             results.append(item)
         except Exception as exc:
             logger.exception("[%s] listing failed: %s", account_id, unit.listing_label)

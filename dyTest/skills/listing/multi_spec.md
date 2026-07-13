@@ -8,6 +8,29 @@
 4. 等待商品类目 → 选择第一个推荐
 5. 点击「下一步」（支持 category_next_burst_demo 连点）
 
+## 发布页第四步（已实现）
+
+1. 价格库存 → 切换手动填写（Step3）
+2. **颜色分类**：点下拉箭头 → 点「创建类型」→ 在「请输入规格值」填款式名 → 点右侧勾 → 点「确定」
+3. **尺寸大小**：同上流程，输入尺寸名
+4. 等待 SKU 价格表格行出现
+
+> 抖店与拼多多差异：不能直接输入，必须先点下拉 →「创建类型」→ 填「请输入规格值」→ 点勾 → 点「确定」。
+
+## 发布页第五步（已实现）
+
+按「颜色分类 + 尺寸大小」逐行填写 SKU 表格（对齐拼多多逻辑）：
+
+| 抖店列 | 拼多多对应 |
+|--------|------------|
+| 价格 | 拼单价 |
+| 现货库存 | 库存 |
+| 商家编码 | 规格编码 |
+
+- 默认模式：逐 SKU 填写，单行失败即报错
+- **spec_fill_verify_test**：逐行填写 → 正向校验 → 商家编码反查对齐（与拼多多规格填表校验一致）
+- 预览图列暂不填（抖店该页不支持上传）
+
 ## 页面变体
 
 - `publish_page_flow.py` 识别变体并路由
@@ -18,12 +41,25 @@
 
 | 开关 | 用途 |
 |------|------|
-| slot_alignment_test | 规格槽位对齐（step2） |
-| spec_fill_verify_test | 规格校验填表（step2） |
-| primary_style_first_test | 主款款式优先（step2） |
-| category_next_burst_demo | 类目/下一步连点 workaround |
-| accessory_cost_pricing | 配件成本定价（step2+） |
-| accessory_tiered_float | 子商品档位浮动（step2+） |
+| category_next_burst_demo | 类目/下一步连点 workaround | **已实现**（Step1） |
+| primary_style_first_test | 主款款式优先 | **已实现**（上架前重排款式顺序） |
+| spec_fill_verify_test | 规格校验填表 | **已实现**（Step5 价格/库存/商家编码逐行校验） |
+| accessory_cost_pricing | 配件成本定价 | **已实现**（飞书算价 → Step5 填表） |
+| accessory_tiered_float | 子商品档位浮动 | **已实现**（同配件成本定价，需开启定价） |
+| slot_alignment_test | 规格槽位对齐 | **待开发** |
+
+## 发布页第六步（已实现）
+
+1. 点击底部「发布商品」，等待加载完成
+2. 出现「商品提交成功」页后 **等待 20 秒**（与拼多多一致）
+3. 点击「返回商品列表」
+4. 在商品管理搜索框输入 **商家编码**（默认 `product_code`，如 `BD071A`）
+5. 点击「查询」，抓取：
+   - 商品 ID（`ID: 3830912963376709924`）
+   - 状态（如 `售卖中`）
+   - 上架时间（如 `2026/07/13 10:27:44`）
+6. 点击「复制链接」，读取剪贴板链接
+7. 写入 MySQL 表 `published_products`（按 account + product_code + image_set 去重 upsert）
 
 ## 素材目录
 
