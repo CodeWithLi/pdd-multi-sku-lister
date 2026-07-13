@@ -22,17 +22,85 @@ def _read_title_from_input(page: Page) -> str:
         'input[placeholder*="标题"]',
         'textarea[placeholder*="商品标题"]',
         'textarea[placeholder*="标题"]',
+        'input[maxlength="60"]',
+        'textarea[maxlength="60"]',
     ]
     for selector in selectors:
         locator = page.locator(selector).first
         if locator.count() == 0:
             continue
-        try:
-            value = str(locator.input_value(timeout=1_000)).strip()
-            if value:
-                return value
-        except Exception:
-            continue
+        for reader in ("input_value", "get_attribute"):
+            try:
+                if reader == "input_value":
+                    value = str(locator.input_value(timeout=1_000)).strip()
+                else:
+                    value = str(locator.get_attribute("value") or "").strip()
+                if value:
+                    return value
+            except Exception:
+                continue
+
+    try:
+        title = str(
+            page.evaluate(
+                """
+                () => {
+                  function visible(el) {
+                    if (!el) return false;
+                    const r = el.getBoundingClientRect();
+                    const s = getComputedStyle(el);
+                    return r.width > 30 && r.height > 8
+                      && s.display !== 'none' && s.visibility !== 'hidden';
+                  }
+                  function readValue(el) {
+                    if (!el) return '';
+                    return String(el.value ?? el.innerText ?? el.textContent ?? '').trim();
+                  }
+                  function looksLikeTitle(val) {
+                    return val.length >= 4 && val.length <= 60 && !/^[0-9/\\s]+$/.test(val);
+                  }
+
+                  for (const el of document.querySelectorAll('label, span, div, p')) {
+                    const t = (el.innerText || el.textContent || '').replace(/\\s+/g, ' ').trim();
+                    if (!t.includes('商品标题')) continue;
+                    let root = el;
+                    for (let i = 0; i < 10 && root; i++) {
+                      for (const inp of root.querySelectorAll(
+                        'input, textarea, [contenteditable="true"]'
+                      )) {
+                        if (!visible(inp)) continue;
+                        const val = readValue(inp);
+                        if (looksLikeTitle(val)) return val;
+                      }
+                      root = root.parentElement;
+                    }
+                  }
+
+                  for (const inp of document.querySelectorAll(
+                    'input[maxlength="60"], textarea[maxlength="60"]'
+                  )) {
+                    if (!visible(inp)) continue;
+                    const val = readValue(inp);
+                    if (looksLikeTitle(val)) return val;
+                  }
+
+                  for (const inp of document.querySelectorAll('input, textarea')) {
+                    const ph = inp.getAttribute('placeholder') || '';
+                    if (!ph.includes('标题')) continue;
+                    if (!visible(inp)) continue;
+                    const val = readValue(inp);
+                    if (looksLikeTitle(val)) return val;
+                  }
+                  return '';
+                }
+                """
+            )
+        ).strip()
+        if title:
+            return title
+    except Exception:
+        pass
+
     return ""
 
 
@@ -134,6 +202,11 @@ def wait_and_apply_page_ai_title(
         _log(account_id, label, f"标题模式={title_mode}，跳过页面 AI 标题")
         return _read_title_from_input(page)
 
+    title = _read_title_from_input(page)
+    if title:
+        _log(account_id, label, f"标题已就绪（主图后自动填充，跳过 AI 等待）：{title}")
+        return title
+
     _log(account_id, label, f"标题模式：页面 AI（先等待 {initial_wait}s）")
     time.sleep(initial_wait)
 
@@ -181,5 +254,10 @@ def wait_and_apply_page_ai_title(
         title = _read_title_from_input(page)
         if title:
             return title
+
+    title = _read_title_from_input(page)
+    if title:
+        _log(account_id, label, f"超时轮询结束但标题已存在，继续：{title}")
+        return title
 
     raise RuntimeError(f"[{account_id}] [{label}] 超时未获取 AI 标题")

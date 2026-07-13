@@ -77,6 +77,14 @@ def run_spec_fill_pipeline(
     if not style_names:
         raise RuntimeError(f"[{account_id}] [{unit.listing_label}] 无款式（颜色分类）可填")
 
+    from dy_agent.skills.listing.publish_spec_dimensions import _log as spec_log
+
+    spec_log(
+        account_id,
+        unit.listing_label,
+        f"规格预处理完成：颜色分类={style_names}；尺寸大小={size_names}",
+    )
+
     fill_result = fill_spec_dimensions_via_create_type(
         page,
         account_id,

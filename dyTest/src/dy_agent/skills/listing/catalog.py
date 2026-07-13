@@ -7,7 +7,11 @@ from pathlib import Path
 
 from dy_agent.core.config import YamlSettings, load_yaml_settings
 from dy_agent.domain.models import ListingUnit, SkuCombo
-from dy_agent.skills.listing.pdd_product_catalog import PddProductEntry, load_pdd_product_catalog
+from dy_agent.skills.listing.pdd_product_catalog import (
+    BUNDLE_MODEL_CODE,
+    PddProductEntry,
+    load_pdd_product_catalog,
+)
 
 IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".webp"}
 _IMAGE_NUM_RE = re.compile(r"^(\d+)\.(png|jpg|jpeg|webp)$", re.I)
@@ -194,21 +198,95 @@ def _collect_images(product_dir: Path) -> tuple[list[Path], list[Path], Path | N
     return carousel, detail, material
 
 
+def _split_combo_stem_parts(stem: str, default_style_code: str = "") -> list[str]:
+    """按 + 切段；首段若为文件夹短编码前缀则还原为完整主商品名（对齐拼多多）。"""
+    text = Path(stem).stem.strip() if stem else ""
+    if not text:
+        return []
+    if "+" not in text:
+        return [text]
+    parts = [part.strip() for part in text.split("+") if part.strip()]
+    default_style = str(default_style_code or "").strip()
+    if default_style and parts:
+        first = parts[0]
+        if first.casefold() != default_style.casefold():
+            if default_style.casefold().startswith(first.casefold()) and len(first) < len(default_style):
+                parts[0] = default_style
+    return parts
+
+
+def _parse_combo_code(name: str, default_style_code: str = "") -> tuple[str, str] | None:
+    """解析规格图文件名 → (款式编码, 子配件编码)。逻辑与拼多多 catalog 一致。"""
+    stem = Path(name).stem.strip()
+    if not stem:
+        return None
+    default_style = str(default_style_code or "").strip()
+    if "+" in stem:
+        parts = _split_combo_stem_parts(stem, default_style)
+        if not parts:
+            return None
+        if len(parts) == 1:
+            return parts[0], parts[0]
+        accessory_count = len(parts) - 1
+        if accessory_count >= 2:
+            return parts[0], BUNDLE_MODEL_CODE
+        return parts[0], parts[1]
+    if default_style:
+        if stem.casefold() == default_style.casefold():
+            return default_style, default_style
+        if default_style.casefold().startswith(stem.casefold()) and len(stem) < len(default_style):
+            return default_style, default_style
+        return default_style, stem
+    return stem, stem
+
+
+def _preview_sort_key(path: Path, product_code: str) -> tuple:
+    parsed = _parse_combo_code(path.stem, product_code)
+    if not parsed:
+        return (9, "", path.name.casefold())
+    style, model = parsed
+    if model.strip().upper() == style.strip().upper():
+        tier = 0
+        tie = ""
+    elif model.strip().upper() == BUNDLE_MODEL_CODE:
+        tier = 2
+        tie = path.stem.casefold()
+    else:
+        tier = 1
+        tie = model.strip().upper()
+    return (tier, tie, path.name.casefold())
+
+
 def _collect_skus(product_dir: Path, defaults: dict[str, str]) -> list[SkuCombo]:
+    """从商品目录规格图解析 SKU（款式 + 子配件），展示名由 enrich_listing_unit_specs 填充。"""
+    default_style_code = product_dir.name
     skus: list[SkuCombo] = []
-    for path in sorted(product_dir.iterdir()):
-        if not path.is_file():
+    seen: set[tuple[str, str]] = set()
+    previews = [
+        path
+        for path in product_dir.iterdir()
+        if path.is_file() and path.suffix.lower() in IMAGE_EXTS and _COMBO_RE.match(path.name)
+    ]
+    previews.sort(key=lambda p: _preview_sort_key(p, default_style_code))
+
+    for path in previews:
+        parsed = _parse_combo_code(path.stem, default_style_code)
+        if not parsed:
             continue
-        m = _COMBO_RE.match(path.name)
-        if not m:
+        style_code, model_code = parsed
+        combo_key = (style_code, model_code)
+        if combo_key in seen:
             continue
-        style_code, model_code = m.group(1), m.group(2)
+        seen.add(combo_key)
+
+        is_bundle = model_code.strip().upper() == BUNDLE_MODEL_CODE
+        model_name = BUNDLE_MODEL_CODE if is_bundle else ""
         skus.append(
             SkuCombo(
                 style_code=style_code,
-                style_name=style_code,
+                style_name="",
                 model_code=model_code,
-                model_name=model_code,
+                model_name=model_name,
                 combo_folder=path.stem,
                 preview_image=path,
                 inventory=defaults.get("inventory", "10"),

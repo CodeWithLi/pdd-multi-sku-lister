@@ -63,8 +63,11 @@ def open_publish_page(
     except PlaywrightTimeoutError:
         publish_page = context.pages[-1] if len(context.pages) > 1 else page
 
-    publish_page.wait_for_load_state("domcontentloaded")
-    time.sleep(1.5)
+    try:
+        publish_page.wait_for_load_state("load", timeout=20_000)
+    except PlaywrightTimeoutError:
+        publish_page.wait_for_load_state("domcontentloaded")
+    time.sleep(2.5)
 
     if publish_page != page:
         try:
