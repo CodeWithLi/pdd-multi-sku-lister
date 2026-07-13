@@ -52,6 +52,30 @@ async def lifespan(app: FastAPI):
         logger.info("dy-agent API started db=%s", get_database_name() or "json-fallback")
 
     try:
+        from dy_agent.integrations.feishu.config import load_feishu_config, resolve_feishu_config_path
+        from dy_agent.integrations.feishu.client import FeishuAPIError, FeishuClient
+
+        cfg_path = resolve_feishu_config_path()
+        logger.info("feishu config path=%s exists=%s", cfg_path, cfg_path.is_file())
+        print(f"[feishu] 配置文件: {cfg_path}", flush=True)
+
+        cfg = load_feishu_config()
+        if cfg.use_user_access_token and cfg.app_id and cfg.app_secret:
+            try:
+                client = FeishuClient(cfg)
+                await asyncio.to_thread(client.get_user_access_token)
+                logger.info("feishu user_access_token ready (auto-refresh enabled)")
+                print("[feishu] user_access_token 已就绪（过期时自动刷新）", flush=True)
+            except FeishuAPIError as exc:
+                logger.warning("feishu token probe failed: %s", exc)
+                print(
+                    f"[feishu] 授权未就绪：{exc}；请打开侧边栏「飞书授权」完成 OAuth",
+                    flush=True,
+                )
+    except Exception:
+        logger.exception("feishu auth probe on startup failed")
+
+    try:
         from dy_agent.integrations.feishu.pdd_price_compare_sync import ensure_pdd_price_compare_table_ready
         from dy_agent.integrations.feishu.pdd_product_catalog_sync import ensure_pdd_product_catalog_table_ready
 

@@ -11,6 +11,7 @@ def test_is_login_url():
 
 def test_is_likely_logged_in():
     assert is_likely_logged_in("https://fxg.jinritemai.com/ffa/mshop/homepage")
+    assert is_likely_logged_in("https://fxg.jinritemai.com/ffa/gov/settle/choose-role")
     assert not is_likely_logged_in("https://fxg.jinritemai.com/login/common")
     assert not is_likely_logged_in("https://fxg.jinritemai.com/")
 

@@ -20,6 +20,7 @@ from dy_agent.core.config import load_yaml_settings
 from dy_agent.db.repositories import get_account_config
 from dy_agent.core.logging import setup_logging
 from dy_agent.domain.enums import AgentKind, RunStatus
+from dy_agent.integrations.feishu.listing_bootstrap import bootstrap_listing_feishu
 from dy_agent.storage import TaskRunStore
 
 
@@ -129,6 +130,11 @@ async def _cmd_run(args) -> None:
         listing_flags["accessory_cost_pricing"] = True
     if args.accessory_tiered_float:
         listing_flags["accessory_tiered_float"] = True
+
+    bootstrap_listing_feishu(
+        accessory_cost_pricing=bool(listing_flags.get("accessory_cost_pricing")),
+        accessory_tiered_float=bool(listing_flags.get("accessory_tiered_float")),
+    )
 
     result = await graph.ainvoke(
         {
