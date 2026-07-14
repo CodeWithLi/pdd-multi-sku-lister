@@ -11,6 +11,13 @@ def listing_flags_from_request(body: ListingTaskRequest, listing_cfg: ListingCon
         value = getattr(body, name, None)
         return default if value is None else bool(value)
 
+    brand = body.brand_name
+    if brand is None:
+        brand = listing_cfg.brand_name
+    manufacturer = body.manufacturer_name
+    if manufacturer is None:
+        manufacturer = listing_cfg.manufacturer_name
+
     return {
         "slot_alignment_test": _pick("slot_alignment_test", listing_cfg.slot_alignment_test),
         "spec_fill_verify_test": _pick("spec_fill_verify_test", listing_cfg.spec_fill_verify_test),
@@ -22,6 +29,8 @@ def listing_flags_from_request(body: ListingTaskRequest, listing_cfg: ListingCon
         ),
         "accessory_cost_pricing": _pick("accessory_cost_pricing", listing_cfg.accessory_cost_pricing),
         "accessory_tiered_float": _pick("accessory_tiered_float", listing_cfg.accessory_tiered_float),
+        "brand_name": str(brand or "无品牌"),
+        "manufacturer_name": str(manufacturer or ""),
     }
 
 
@@ -34,4 +43,6 @@ def listing_flags_from_settings(settings: YamlSettings) -> dict:
         "category_next_burst_demo": cfg.category_next_burst_demo,
         "accessory_cost_pricing": cfg.accessory_cost_pricing,
         "accessory_tiered_float": cfg.accessory_tiered_float,
+        "brand_name": str(cfg.brand_name or "无品牌"),
+        "manufacturer_name": str(cfg.manufacturer_name or ""),
     }

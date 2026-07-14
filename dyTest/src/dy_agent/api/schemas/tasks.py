@@ -18,6 +18,8 @@ class ListingTaskRequest(BaseModel):
     dry_run: bool = False
     category_keyword: str = ""
     material_source: str = ""
+    brand_name: str | None = None
+    manufacturer_name: str | None = None
     slot_alignment_test: bool | None = None
     spec_fill_verify_test: bool | None = None
     primary_style_first_test: bool | None = None

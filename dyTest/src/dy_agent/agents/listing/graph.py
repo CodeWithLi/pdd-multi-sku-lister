@@ -165,6 +165,12 @@ async def browser_listing_node(state: ListingState) -> dict:
             accessory_tiered_float=bool(
                 state.get("accessory_tiered_float", listing_cfg.accessory_tiered_float)
             ),
+            brand_name=str(state.get("brand_name") or listing_cfg.brand_name or "无品牌"),
+            manufacturer_name=str(
+                state.get("manufacturer_name")
+                if state.get("manufacturer_name") is not None
+                else (listing_cfg.manufacturer_name or "")
+            ),
         )
 
     try:

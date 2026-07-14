@@ -14,6 +14,7 @@ from dy_agent.api.schemas.tasks import (
 )
 from dy_agent.api.services.listing_state import listing_flags_from_request
 from dy_agent.core.config import load_yaml_settings
+from dy_agent.core.json_safe import json_safe
 from dy_agent.db.repositories import get_account_config
 from dy_agent.domain.enums import AgentKind, RunStatus
 from dy_agent.integrations.feishu.listing_bootstrap import bootstrap_listing_feishu
@@ -21,16 +22,6 @@ from dy_agent.integrations.minio.material import prepare_listing_assets
 from dy_agent.storage import TaskRunStore
 
 router = APIRouter(prefix="/tasks", tags=["tasks"])
-
-
-def _json_safe(value):
-    if hasattr(value, "model_dump"):
-        return value.model_dump(mode="json")
-    if isinstance(value, list):
-        return [_json_safe(v) for v in value]
-    if isinstance(value, dict):
-        return {k: _json_safe(v) for k, v in value.items()}
-    return value
 
 
 def _summarize_listing_message(result: dict) -> str:
@@ -64,7 +55,7 @@ def _summarize_listing_message(result: dict) -> str:
 def plan_tasks(body: PlanRequest):
     graph = build_orchestrator_graph()
     result = graph.invoke({"user_message": body.message})
-    tasks = [_json_safe(t) for t in result.get("planned_tasks") or []]
+    tasks = [json_safe(t) for t in result.get("planned_tasks") or []]
     return PlanResponse(
         plan_summary=result.get("plan_summary") or "",
         planned_tasks=tasks,
@@ -108,7 +99,9 @@ async def _execute_listing(run_id: str, body: ListingTaskRequest) -> None:
         invoke_state["assets_root"] = str(assets_root)
 
     result = await graph.ainvoke(invoke_state)
-    result = _json_safe(result)
+    result = json_safe(result)
+    if not isinstance(result, dict):
+        result = {"raw": result}
     status = RunStatus.SUCCESS if not result.get("errors") else RunStatus.FAILED
     labels = [
         str(item.get("listing_label") or "")

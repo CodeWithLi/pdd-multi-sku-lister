@@ -17,6 +17,7 @@ from dy_agent.agents.listing import build_listing_graph
 from dy_agent.agents.orchestrator import build_orchestrator_graph
 from dy_agent.api.services.listing_state import listing_flags_from_settings
 from dy_agent.core.config import load_yaml_settings
+from dy_agent.core.json_safe import json_safe
 from dy_agent.db.repositories import get_account_config
 from dy_agent.core.logging import setup_logging
 from dy_agent.domain.enums import AgentKind, RunStatus
@@ -66,16 +67,6 @@ def _cmd_plan(message: str) -> None:
     print("Plan:", result.get("plan_summary"))
     for task in result.get("planned_tasks", []):
         print(" ", task.model_dump())
-
-
-def _json_safe(value):
-    if hasattr(value, "model_dump"):
-        return value.model_dump(mode="json")
-    if isinstance(value, list):
-        return [_json_safe(v) for v in value]
-    if isinstance(value, dict):
-        return {k: _json_safe(v) for k, v in value.items()}
-    return value
 
 
 def _summarize_listing_message(result: dict) -> str:
@@ -146,7 +137,9 @@ async def _cmd_run(args) -> None:
             **listing_flags,
         }
     )
-    result = _json_safe(result)
+    result = json_safe(result)
+    if not isinstance(result, dict):
+        result = {"raw": result}
     status = RunStatus.SUCCESS if not result.get("errors") else RunStatus.FAILED
     store.finish(run.run_id, status, _summarize_listing_message(result), result=result)
     print(result)

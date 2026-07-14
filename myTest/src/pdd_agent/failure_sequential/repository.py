@@ -19,6 +19,8 @@ from pdd_agent.failure_sequential.constants import (
     PHASE_COMPLETED,
     PHASE_LISTING,
     STAGE_PENDING,
+    STAGE_SKIPPED,
+    STAGE_SUCCESS,
     TERMINAL_STAGES,
 )
 

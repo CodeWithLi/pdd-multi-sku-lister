@@ -30,6 +30,8 @@ class ListingState(TypedDict, total=False):
     category_next_burst_demo: bool
     accessory_cost_pricing: bool
     accessory_tiered_float: bool
+    brand_name: str
+    manufacturer_name: str
     preflight: PreflightReport
     units: list[ListingUnit]
     results: Annotated[list[dict[str, Any]], operator.add]

@@ -83,6 +83,8 @@ def run_listing_uploads(
     category_next_burst_demo: bool = True,
     accessory_cost_pricing: bool = True,
     accessory_tiered_float: bool = True,
+    brand_name: str = "无品牌",
+    manufacturer_name: str = "",
 ) -> list[dict[str, Any]]:
     if slot_alignment_test and spec_fill_verify_test:
         raise ValueError("spec_fill_verify_test 与 slot_alignment_test 不能同时开启")
@@ -99,6 +101,8 @@ def run_listing_uploads(
         accessory_tiered_float=accessory_tiered_float,
         title_mode=title_mode or base_options.title_mode,
         category_keyword=category_keyword or base_options.category_keyword,
+        brand_name=brand_name or base_options.brand_name or "无品牌",
+        manufacturer_name=manufacturer_name if manufacturer_name is not None else base_options.manufacturer_name,
     )
 
     results: list[dict[str, Any]] = []
@@ -112,10 +116,38 @@ def run_listing_uploads(
                 page, account_id, unit, options, defaults=fill_defaults
             )
             item["run_id"] = run_id
+            # 写飞书前强制按当前页刷新店铺名，避免误用旧缓存「精选联盟」
+            try:
+                from dy_agent.browser.shop_display_name import refresh_shop_display_name
+                from dy_agent.browser.sync_login import resolve_account_phone
+                from dy_agent.core.config import load_yaml_settings as _load_cfg
+                from dy_agent.db.repositories import get_account_config
+
+                _acc = get_account_config(_load_cfg(), account_id)
+                shop_name = refresh_shop_display_name(
+                    account_id,
+                    page,
+                    login_phone=resolve_account_phone(_acc) if _acc else "",
+                )
+                if shop_name:
+                    item["shop_display_name"] = shop_name
+            except Exception as shop_exc:
+                logger.warning("[%s] refresh shop name before feishu failed: %s", account_id, shop_exc)
+
             saved = persist_listed_product_item(run_id, account_id, unit, item)
             if saved:
                 item["db_saved"] = True
                 item["published_product"] = saved
+            if str(item.get("status") or "") in {"success", "listed"}:
+                from dy_agent.integrations.feishu.dy_upload_sync import (
+                    schedule_feishu_dy_upload_log_from_listing,
+                )
+
+                schedule_feishu_dy_upload_log_from_listing(
+                    account_id=account_id,
+                    unit=unit,
+                    item=item,
+                )
             results.append(item)
         except Exception as exc:
             logger.exception("[%s] listing failed: %s", account_id, unit.listing_label)

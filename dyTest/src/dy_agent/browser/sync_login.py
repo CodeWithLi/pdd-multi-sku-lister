@@ -675,6 +675,9 @@ def ensure_login_sync(account: AccountConfig, page: Page) -> DpPage:
     login_links = page.get_by_role("link", name="登录抖店")
     if login_links.count() == 0 and not is_login_url(dp.url):
         _log(account_id, "未检测到登录入口，判定为已登录")
+        from dy_agent.browser.shop_display_name import maybe_refresh_shop_display_name
+
+        maybe_refresh_shop_display_name(account_id, dp, login_phone=resolve_account_phone(account))
         return dp
 
     _log(account_id, "检测到未登录，开始手机验证码登录…")

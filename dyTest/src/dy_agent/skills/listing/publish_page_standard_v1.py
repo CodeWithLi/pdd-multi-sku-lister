@@ -61,14 +61,27 @@ def run_standard_v1_step1(
         reason = next_err or "next_step_failed"
         raise RuntimeError(f"[{account_id}] [{label}] 发布页「下一步」失败: {reason}")
 
+    # 「类目属性」在点下一步之后才出现（基础信息 Tab），不要在下一步前等待
+    from dy_agent.skills.listing.publish_category_attrs import fill_category_attributes
+
+    time.sleep(1)
+    category_attrs = fill_category_attributes(
+        page,
+        account_id,
+        label,
+        brand=options.brand_name or "无品牌",
+        manufacturer_name=options.manufacturer_name or "",
+    )
+
     return {
         "listing_label": label,
         "status": "step1_done",
-        "message": "发布页第一步完成（主图/AI标题/类目/下一步）",
+        "message": "发布页第一步完成（主图/AI标题/类目/下一步/类目属性）",
         "merchant_code": unit.merchant_code,
         "main_images_uploaded": uploaded,
         "title": title,
         "category": category,
+        "category_attrs": category_attrs,
         "publish_variant": "standard_v1",
         "spec_flags": spec_flags,
         "pricing_flags": pricing_flags,

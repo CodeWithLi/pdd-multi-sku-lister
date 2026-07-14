@@ -108,10 +108,21 @@ def run_spec_price_fill_pipeline(
     defaults: dict[str, str] | None = None,
 ) -> dict:
     """Step5：价格 / 现货库存 / 商家编码填表（可选规格填表校验）。"""
+    from dy_agent.skills.listing.publish_spec_price_table import ensure_price_table_rows_ready
+
     style_names = ordered_style_names(unit)
     size_names = list(unit.model_codes)
     if not unit.skus:
         raise RuntimeError(f"[{account_id}] [{unit.listing_label}] 无 SKU 可填价格表")
+
+    ensure_price_table_rows_ready(
+        page,
+        account_id,
+        unit.listing_label,
+        expected=len(unit.skus),
+        style_names=style_names,
+        size_names=size_names,
+    )
 
     stats = fill_unit_price_table(
         page,

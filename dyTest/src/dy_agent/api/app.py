@@ -76,6 +76,7 @@ async def lifespan(app: FastAPI):
         logger.exception("feishu auth probe on startup failed")
 
     try:
+        from dy_agent.integrations.feishu.dy_upload_sync import ensure_dy_upload_log_table_ready
         from dy_agent.integrations.feishu.pdd_price_compare_sync import ensure_pdd_price_compare_table_ready
         from dy_agent.integrations.feishu.pdd_product_catalog_sync import ensure_pdd_product_catalog_table_ready
 
@@ -86,6 +87,10 @@ async def lifespan(app: FastAPI):
         product_catalog_ready = await _ensure_feishu_table(
             "拼多多所有商品",
             ensure_pdd_product_catalog_table_ready,
+        )
+        dy_upload_ready = await _ensure_feishu_table(
+            "DY发布日志表",
+            ensure_dy_upload_log_table_ready,
         )
         if price_compare_ready.get("ready"):
             logger.info(
@@ -105,6 +110,21 @@ async def lifespan(app: FastAPI):
             )
             print(
                 f"[feishu] 拼多多所有商品表已就绪：{product_catalog_ready.get('table_id')}",
+                flush=True,
+            )
+        if dy_upload_ready.get("ready"):
+            logger.info(
+                "feishu dy upload log table ready table=%s(%s)",
+                dy_upload_ready.get("table_id"),
+                dy_upload_ready.get("resolve_method"),
+            )
+            print(
+                f"[feishu] DY发布日志表已就绪：{dy_upload_ready.get('table_id')}",
+                flush=True,
+            )
+        elif dy_upload_ready.get("reason") and dy_upload_ready.get("reason") != "dy_upload_log_disabled":
+            print(
+                f"[feishu] DY发布日志表跳过：{dy_upload_ready.get('reason')}",
                 flush=True,
             )
     except Exception:

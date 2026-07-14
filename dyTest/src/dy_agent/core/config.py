@@ -81,6 +81,8 @@ class ListingConfig(BaseModel):
 
     category_keyword: str = "玩偶"
     title_mode: str = "page_ai"
+    brand_name: str = "无品牌"
+    manufacturer_name: str = ""
     slot_alignment_test: bool = False
     spec_fill_verify_test: bool = True
     primary_style_first_test: bool = True

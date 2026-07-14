@@ -17,6 +17,8 @@ class ListingOptions:
     accessory_tiered_float: bool = True
     title_mode: str = "page_ai"
     category_keyword: str = ""
+    brand_name: str = "无品牌"
+    manufacturer_name: str = ""
 
 
 def listing_options_from_settings(settings: YamlSettings, *, category_keyword: str = "") -> ListingOptions:
@@ -30,4 +32,6 @@ def listing_options_from_settings(settings: YamlSettings, *, category_keyword: s
         accessory_tiered_float=listing.accessory_tiered_float,
         title_mode=str(listing.title_mode or "page_ai"),
         category_keyword=category_keyword or str(listing.category_keyword or ""),
+        brand_name=str(listing.brand_name or "无品牌"),
+        manufacturer_name=str(listing.manufacturer_name or ""),
     )

@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any
 
 from dy_agent.core.config import load_yaml_settings
+from dy_agent.core.json_safe import json_safe
 from dy_agent.db.models import RunRecordORM
 from dy_agent.db.session import is_database_available, session_scope
 from dy_agent.domain.enums import AgentKind, RunStatus, TaskPhase
@@ -46,6 +47,12 @@ class TaskRunStore:
         return self._root / f"{run_id}.json"
 
     def save(self, record: RunRecord) -> None:
+        record.artifacts = json_safe(dict(record.artifacts or {})) or {}
+        record.result = json_safe(dict(record.result or {})) or {}
+        if not isinstance(record.artifacts, dict):
+            record.artifacts = {}
+        if not isinstance(record.result, dict):
+            record.result = {"raw": record.result}
         if is_database_available():
             with session_scope() as session:
                 row = session.get(RunRecordORM, record.run_id)
@@ -112,6 +119,8 @@ class TaskRunStore:
 
 
 def _record_to_orm_data(record: RunRecord) -> dict[str, Any]:
+    artifacts = json_safe(dict(record.artifacts or {}))
+    result = json_safe(dict(record.result or {}))
     return {
         "run_id": record.run_id,
         "agent": record.agent.value,
@@ -122,8 +131,8 @@ def _record_to_orm_data(record: RunRecord) -> dict[str, Any]:
         "finished_at": record.finished_at,
         "message": record.message,
         "listing_labels": list(record.listing_labels),
-        "artifacts": dict(record.artifacts),
-        "result": dict(record.result),
+        "artifacts": artifacts if isinstance(artifacts, dict) else {},
+        "result": result if isinstance(result, dict) else {"raw": result},
     }
 
 
