@@ -1,3 +1,8 @@
+dyTest/frontend/node_modules
+dyTest/.venv
+dyTest/frontend/dist
+dyTest/data
+
 .venv/
 venv/
 __pycache__/
