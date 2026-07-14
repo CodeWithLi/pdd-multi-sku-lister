@@ -78,6 +78,15 @@ def start_batch_limited_time_retry(pipeline_id: str, *, batch_index: int) -> dic
     return _start(pipeline_id, batch_index=batch_index)
 
 
+def start_all_batch_limited_time_retries(pipeline_id: str) -> dict[str, Any]:
+    """一键全部重跑：薄转发到独立封装模块。"""
+    from pdd_agent.api.services.pipeline_batch_limited_time_retry_all.bridge import (
+        start_all_batch_limited_time_retries as _start_all,
+    )
+
+    return _start_all(pipeline_id)
+
+
 def maybe_flush_batch_lt_retry_activity_reschedule(row) -> bool:
     """首轮限时全部结束后，补执行此前分批重跑积压的活动改期。"""
     from pdd_agent.api.services.pipeline_batch_limited_time_retry_activity_policy import (

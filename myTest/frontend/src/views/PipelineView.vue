@@ -26,6 +26,8 @@ import {
   loadActivityTrafficBatchEnabled,
   loadActivityTrafficBatchSize,
   loadPerBatchLimitedTimeChunkSize,
+  loadBatchLimitedTimeAutoRetryEnabled,
+  loadBatchLimitedTimeAutoRetryMaxAttempts,
   loadPipelineRelistStrategy,
   saveListingBatchIntervalMinutes,
   saveListingBatchSetCount,
@@ -40,6 +42,8 @@ import {
   saveActivityTrafficBatchEnabled,
   saveActivityTrafficBatchSize,
   savePerBatchLimitedTimeChunkSize,
+  saveBatchLimitedTimeAutoRetryEnabled,
+  saveBatchLimitedTimeAutoRetryMaxAttempts,
   savePipelineRelistStrategy,
 } from '@/utils/pipelinePreferences'
 import {
@@ -142,6 +146,8 @@ const activityLimitedTimeSuccessOnly = ref(loadActivityLimitedTimeSuccessOnly())
 const activityTrafficBatchEnabled = ref(loadActivityTrafficBatchEnabled())
 const activityTrafficBatchSize = ref(loadActivityTrafficBatchSize())
 const perBatchLimitedTimeChunkSize = ref(loadPerBatchLimitedTimeChunkSize())
+const batchLimitedTimeAutoRetryEnabled = ref(loadBatchLimitedTimeAutoRetryEnabled())
+const batchLimitedTimeAutoRetryMaxAttempts = ref(loadBatchLimitedTimeAutoRetryMaxAttempts())
 const excelFallbackEnabled = ref(false)
 const excelFallbackSaving = ref(false)
 const logSpecSkuRowsEnabled = ref(true)
@@ -365,6 +371,7 @@ const feishuInspectPipelineId = ref('')
 const batchStageVisible = ref(false)
 const batchStageLoading = ref(false)
 const batchLtRetryLoadingBatch = ref<number | null>(null)
+const batchLtRetryAllLoading = ref(false)
 const batchStageItems = ref<IntegratedPipelineBatchProductStageItem[]>([])
 const batchStagePipelineId = ref('')
 const batchStageExpandedNames = ref<number[]>([])
@@ -554,6 +561,38 @@ function shouldShowBatchLtRetryAction(batchIndex: number, products: IntegratedPi
   return countBatchLtRetryTargets(products) > 0
 }
 
+const batchLtRetryAllTargetStats = computed(() => {
+  let batchCount = 0
+  let productCount = 0
+  for (const group of batchStageGroups.value) {
+    if (!shouldShowBatchLtRetryAction(group.batch_index, group.products)) continue
+    if (!canBatchLtRetryForGroup(group.batch_index, group.products)) continue
+    const n = countBatchLtRetryTargets(group.products)
+    if (n <= 0) continue
+    batchCount += 1
+    productCount += n
+  }
+  return { batchCount, productCount }
+})
+
+const canStartAllBatchLtRetry = computed(() => {
+  if (batchLtRetryAllLoading.value || batchLtRetryLoadingBatch.value !== null) return false
+  return batchLtRetryAllTargetStats.value.batchCount > 0
+})
+
+const batchLtRetryAllDisabledReason = computed(() => {
+  if (!isPipelineListingBatchesComplete(batchStageContextPipeline.value)) {
+    return '全部分批上架完成后才可一键重跑限时'
+  }
+  if (batchLtRetryAllTargetStats.value.batchCount <= 0) {
+    return '当前没有可重跑的批次'
+  }
+  if (batchLtRetryLoadingBatch.value !== null || batchLtRetryAllLoading.value) {
+    return '重跑进行中'
+  }
+  return ''
+})
+
 const batchLtRetryPhaseLabel = (phase?: string) => {
   if (phase === 'limited_time') return '限时重跑中'
   if (phase === 'done') return '已完成'
@@ -610,6 +649,57 @@ async function startBatchLimitedTimeRetry(batchIndex: number, products: Integrat
     ElMessage.error(err?.response?.data?.detail || err?.message || '分批限时重跑启动失败')
   } finally {
     batchLtRetryLoadingBatch.value = null
+  }
+}
+
+async function startAllBatchLimitedTimeRetry() {
+  const pipeline = batchStageContextPipeline.value
+  if (!pipeline?.pipeline_id) return
+  const { batchCount, productCount } = batchLtRetryAllTargetStats.value
+  if (batchCount <= 0) return
+  const disabled = batchLtRetryAllDisabledReason.value
+  if (disabled && !canStartAllBatchLtRetry.value) {
+    ElMessage.warning(disabled)
+    return
+  }
+  try {
+    await ElMessageBox.confirm(
+      `将对全部 ${batchCount} 批共 ${productCount} 个「上架成功、限时失败」商品，按批次串行重跑限时限量购（第 1 批先跑，其余自动排队）。\n`
+        + '流程与逐批点击「重跑限时失败」相同；若有成功会追加进活动池，活动改期规则不变。',
+      '一键全部重跑限时失败',
+      { type: 'warning', confirmButtonText: '开始全部重跑', cancelButtonText: '取消' },
+    )
+  } catch {
+    return
+  }
+  batchLtRetryAllLoading.value = true
+  try {
+    const result = await api.startAllBatchLimitedTimeRetry(pipeline.pipeline_id)
+    if (batchStageContextPipeline.value) {
+      batchStageContextPipeline.value = {
+        ...batchStageContextPipeline.value,
+        batch_limited_time_retry: result.batch_limited_time_retry,
+        status: 'running',
+        current_step: 'batch_limited_time_retry',
+      }
+    }
+    if (activePipeline.value?.pipeline_id === pipeline.pipeline_id) {
+      activePipeline.value = await api.getIntegratedPipeline(pipeline.pipeline_id)
+    }
+    if (batchStageContextPipeline.value?.pipeline_id === pipeline.pipeline_id) {
+      batchStageContextPipeline.value = await api.getIntegratedPipeline(pipeline.pipeline_id)
+    }
+    await refreshBatchStageDialog()
+    const queuedN = result.queued_batches?.length || 0
+    ElMessage.success(
+      queuedN > 0
+        ? `已启动全部重跑：${result.batch_count} 批 / ${result.retry_count} 个商品（含 ${queuedN} 批排队）`
+        : `已启动全部重跑：${result.batch_count} 批 / ${result.retry_count} 个商品`,
+    )
+  } catch (err: any) {
+    ElMessage.error(err?.response?.data?.detail || err?.message || '一键全部重跑启动失败')
+  } finally {
+    batchLtRetryAllLoading.value = false
   }
 }
 
@@ -769,6 +859,7 @@ const listingUnitStatusSummary = computed(() => {
 
 const lateRetryState = computed(() => activePipeline.value?.late_retry)
 const batchLtRetryState = computed(() => activePipeline.value?.batch_limited_time_retry)
+const batchLtAutoRetryState = computed(() => activePipeline.value?.batch_limited_time_auto_retry)
 const lateRetryFailedCount = computed(() => listingUnitStatusSummary.value?.failed || 0)
 const canLateRetryFailed = computed(() => {
   const pipeline = activePipeline.value
@@ -1877,6 +1968,8 @@ async function startPipeline() {
         activity_traffic_batch_enabled: activityTrafficBatchEnabled.value,
         activity_traffic_batch_size: activityTrafficBatchSize.value,
         per_batch_limited_time_chunk_size: perBatchLimitedTimeChunkSize.value,
+        batch_limited_time_auto_retry_enabled: batchLimitedTimeAutoRetryEnabled.value,
+        batch_limited_time_auto_retry_max_attempts: batchLimitedTimeAutoRetryMaxAttempts.value,
       })
       success.value = `批量整合链路已提交：${result.total} 家店铺${
         result.store_sequential_enabled
@@ -1927,6 +2020,8 @@ async function startPipeline() {
         activity_traffic_batch_enabled: activityTrafficBatchEnabled.value,
         activity_traffic_batch_size: activityTrafficBatchSize.value,
         per_batch_limited_time_chunk_size: perBatchLimitedTimeChunkSize.value,
+        batch_limited_time_auto_retry_enabled: batchLimitedTimeAutoRetryEnabled.value,
+        batch_limited_time_auto_retry_max_attempts: batchLimitedTimeAutoRetryMaxAttempts.value,
       })
       pipelinePage.value = 1
       if (result.commerce_queued) {
@@ -2031,6 +2126,9 @@ watch(listingBatchIntervalMinutes, (value) => {
 
 watch(listingPerBatchLimitedTimeEnabled, (value) => {
   saveListingPerBatchLimitedTimeEnabled(value)
+  if (!value) {
+    batchLimitedTimeAutoRetryEnabled.value = false
+  }
 })
 
 watch(listingPerBatchCampaignEnabled, (value) => {
@@ -2038,6 +2136,7 @@ watch(listingPerBatchCampaignEnabled, (value) => {
   if (value) {
     listingPerBatchLtTrafficActivityEnabled.value = false
     activityTrafficBatchEnabled.value = false
+    batchLimitedTimeAutoRetryEnabled.value = false
   }
 })
 
@@ -2048,6 +2147,7 @@ watch(listingPerBatchLtTrafficActivityEnabled, (value) => {
     activityTrafficBatchEnabled.value = false
     listingPerBatchLimitedTimeEnabled.value = true
     listingThrottleEnabled.value = true
+    batchLimitedTimeAutoRetryEnabled.value = false
   }
 })
 
@@ -2076,6 +2176,14 @@ watch(activityTrafficBatchSize, (value) => {
 
 watch(perBatchLimitedTimeChunkSize, (value) => {
   savePerBatchLimitedTimeChunkSize(Number(value) || 10)
+})
+
+watch(batchLimitedTimeAutoRetryEnabled, (value) => {
+  saveBatchLimitedTimeAutoRetryEnabled(value)
+})
+
+watch(batchLimitedTimeAutoRetryMaxAttempts, (value) => {
+  saveBatchLimitedTimeAutoRetryMaxAttempts(Number(value) || 1)
 })
 
 watch(autoPromotion, (value) => {
@@ -2673,6 +2781,43 @@ onUnmounted(() => {
                 >
                   每批上架成功后，限时限量购按商品数再拆成多趟（默认紧接着跑）；某一趟失败记失败并继续下一趟。
                 </div>
+                <div
+                  v-if="
+                    listingThrottleEnabled &&
+                    listingPerBatchLimitedTimeEnabled &&
+                    !listingPerBatchLtTrafficActivityEnabled &&
+                    !listingPerBatchCampaignEnabled
+                  "
+                  class="option-row listing-throttle-row per-batch-lt-row"
+                >
+                  <div class="switch-row">
+                    <span class="switch-label">限时失败自动重跑</span>
+                    <el-switch v-model="batchLimitedTimeAutoRetryEnabled" />
+                  </div>
+                  <template v-if="batchLimitedTimeAutoRetryEnabled">
+                    <span class="throttle-inline-label">最多</span>
+                    <el-input-number
+                      v-model="batchLimitedTimeAutoRetryMaxAttempts"
+                      :min="1"
+                      :max="10"
+                      controls-position="right"
+                      size="small"
+                    />
+                    <span class="throttle-inline-label">次</span>
+                  </template>
+                </div>
+                <div
+                  v-if="
+                    listingThrottleEnabled &&
+                    listingPerBatchLimitedTimeEnabled &&
+                    !listingPerBatchLtTrafficActivityEnabled &&
+                    !listingPerBatchCampaignEnabled &&
+                    batchLimitedTimeAutoRetryEnabled
+                  "
+                  class="form-tip"
+                >
+                  全部分批上架完成后，自动对「上架成功、限时失败」商品按现有分批限时重跑流程执行；仍失败时按配置次数继续自动重跑。活动改期规则与手动重跑一致。
+                </div>
                 <div v-if="listingThrottleEnabled" class="option-row listing-throttle-row per-batch-lt-row">
                   <div class="switch-row">
                     <span class="switch-label">每批完成后跑活动{{ autoPromotion ? '/推广' : '' }}</span>
@@ -3166,6 +3311,14 @@ onUnmounted(() => {
             分批限时重跑：{{ batchLtRetryPhaseLabel(batchLtRetryState.phase) }}
             <template v-if="batchLtRetryState.outcome_detail"> — {{ batchLtRetryState.outcome_detail }}</template>
           </p>
+          <p v-if="batchLtAutoRetryState?.enabled" class="meta">
+            限时失败自动重跑已开启（最多 {{ batchLtAutoRetryState.max_attempts || 1 }} 次）
+            <template v-if="batchLtAutoRetryState.last_started_batches?.length">
+              · 最近自动启动批次：{{
+                batchLtAutoRetryState.last_started_batches.map((i: number) => i + 1).join('、')
+              }}
+            </template>
+          </p>
           <p v-else-if="lateRetryFailedCount > 0 && activePipeline.current_step === 'waiting_activity'" class="meta">
             等活动期间可补跑失败套图（{{ lateRetryFailedCount }} 个）
             <template v-if="!canLateRetryFailed && lateRetryEligibilityHint()">
@@ -3648,6 +3801,38 @@ onUnmounted(() => {
             · {{ batchStageContextPipeline.batch_limited_time_retry.activity_defer.reschedule_reason }}
           </template>
         </p>
+        <p v-if="batchStageContextPipeline?.batch_limited_time_auto_retry?.enabled" class="batch-stage-meta">
+          限时失败自动重跑已开启（最多 {{ batchStageContextPipeline.batch_limited_time_auto_retry.max_attempts || 1 }} 次）
+          <template v-if="batchStageContextPipeline.batch_limited_time_auto_retry.last_started_batches?.length">
+            · 最近自动启动批次：{{
+              batchStageContextPipeline.batch_limited_time_auto_retry.last_started_batches
+                .map((i: number) => i + 1)
+                .join('、')
+            }}
+          </template>
+        </p>
+        <div
+          v-if="batchStageGroups.some((g) => shouldShowBatchLtRetryAction(g.batch_index, g.products))"
+          class="batch-lt-retry-all-bar"
+        >
+          <el-tooltip
+            :content="batchLtRetryAllDisabledReason || '对所有可重跑批次串行执行限时重跑'"
+            placement="top"
+          >
+            <el-button
+              type="warning"
+              :disabled="!canStartAllBatchLtRetry"
+              :loading="batchLtRetryAllLoading"
+              @click="startAllBatchLimitedTimeRetry"
+            >
+              全部重跑限时失败
+              <template v-if="batchLtRetryAllTargetStats.batchCount">
+                （{{ batchLtRetryAllTargetStats.batchCount }} 批 / {{ batchLtRetryAllTargetStats.productCount }} 个）
+              </template>
+            </el-button>
+          </el-tooltip>
+          <span class="form-tip muted">点一次后按批排队执行，无需再逐批点击</span>
+        </div>
         <p class="batch-stage-meta">
           按<strong>每一批</strong>展示商品的上架 / 限时限量购 / 活动 / 推广状态；活动与推广在全部批次完成后统一执行。
         </p>
@@ -4671,6 +4856,18 @@ onUnmounted(() => {
   border: 1px solid var(--el-border-color-light);
   border-radius: 8px;
   background: var(--el-fill-color-blank);
+}
+
+.batch-lt-retry-all-bar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin: 0 0 12px;
+  padding: 10px 12px;
+  border: 1px dashed var(--el-color-warning-light-5);
+  border-radius: 8px;
+  background: var(--el-color-warning-light-9);
 }
 
 .batch-lt-chunk-settings-row {

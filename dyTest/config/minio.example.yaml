@@ -1,0 +1,44 @@
+# MinIO material storage (same bucket layout as PDD project)
+# Copy: cp config/minio.example.yaml config/minio.yaml
+
+enabled: true
+endpoint: 192.168.1.129:9000
+secure: false
+access_key: ""
+secret_key: ""
+bucket: beilemei-images
+
+# poll = frontend polls MinIO listing targets every listing_poll_seconds
+refresh_mode: poll
+
+alist_url: http://192.168.1.129
+alist:
+  enabled: true
+  url: https://192.168.1.129
+  username: admin
+  password: "123456"
+  root_path: /公司电商主图库
+  verify_ssl: false
+console_url: http://192.168.1.129:9001
+
+categories:
+  - 笔袋
+  - 公仔
+  - 视频
+
+prefix: ""
+cache_root: data/minio_cache/商品上架规格文件
+listing_poll_seconds: 30
+default_material_source: minio
+
+rabbitmq:
+  enabled: false
+  host: 192.168.1.129
+  port: 5672
+  management_port: 15672
+  username: admin
+  password: "123456"
+  queue: beilemei.dy.image.ingest
+  exchange: minio.events
+  routing_key: beilemei.images
+  settle_seconds: 5

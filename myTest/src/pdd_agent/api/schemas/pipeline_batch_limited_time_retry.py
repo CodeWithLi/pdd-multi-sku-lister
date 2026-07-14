@@ -40,3 +40,25 @@ class PipelineBatchLimitedTimeRetryStartResponse(BaseModel):
     batch_limited_time_retry: PipelineBatchLimitedTimeRetryStateOut = Field(
         default_factory=PipelineBatchLimitedTimeRetryStateOut
     )
+
+
+class PipelineBatchLimitedTimeRetryAllBatchItem(BaseModel):
+    batch_index: int = 0
+    retry_count: int = 0
+    pdd_product_ids: list[str] = Field(default_factory=list)
+    limited_time_run_id: str = ""
+    queued: bool = False
+    reason: str = ""
+
+
+class PipelineBatchLimitedTimeRetryAllStartResponse(BaseModel):
+    pipeline_id: str = ""
+    batch_count: int = 0
+    retry_count: int = 0
+    limited_time_run_id: str = ""
+    started_batches: list[PipelineBatchLimitedTimeRetryAllBatchItem] = Field(default_factory=list)
+    queued_batches: list[PipelineBatchLimitedTimeRetryAllBatchItem] = Field(default_factory=list)
+    skipped_batches: list[PipelineBatchLimitedTimeRetryAllBatchItem] = Field(default_factory=list)
+    batch_limited_time_retry: PipelineBatchLimitedTimeRetryStateOut = Field(
+        default_factory=PipelineBatchLimitedTimeRetryStateOut
+    )

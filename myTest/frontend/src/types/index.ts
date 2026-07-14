@@ -1129,8 +1129,19 @@ export interface IntegratedPipeline {
   is_merged?: boolean
   late_retry?: PipelineLateRetryState
   batch_limited_time_retry?: PipelineBatchLimitedTimeRetryState
+  batch_limited_time_auto_retry?: PipelineBatchLimitedTimeAutoRetryState
   listing_batches_complete?: boolean
   initial_limited_time_phase_complete?: boolean
+}
+
+export interface PipelineBatchLimitedTimeAutoRetryState {
+  enabled?: boolean
+  max_attempts?: number
+  batch_attempts?: Record<string, number>
+  started_batch_indices?: number[]
+  last_scan_at?: string
+  last_reason?: string
+  last_started_batches?: number[]
 }
 
 export interface PipelineBatchLimitedTimeRetryActivityDefer {
@@ -1165,6 +1176,26 @@ export interface PipelineBatchLimitedTimeRetryStartResponse {
   retry_count: number
   pdd_product_ids: string[]
   queued: boolean
+  batch_limited_time_retry: PipelineBatchLimitedTimeRetryState
+}
+
+export interface PipelineBatchLimitedTimeRetryAllBatchItem {
+  batch_index: number
+  retry_count?: number
+  pdd_product_ids?: string[]
+  limited_time_run_id?: string
+  queued?: boolean
+  reason?: string
+}
+
+export interface PipelineBatchLimitedTimeRetryAllStartResponse {
+  pipeline_id: string
+  batch_count: number
+  retry_count: number
+  limited_time_run_id: string
+  started_batches: PipelineBatchLimitedTimeRetryAllBatchItem[]
+  queued_batches: PipelineBatchLimitedTimeRetryAllBatchItem[]
+  skipped_batches: PipelineBatchLimitedTimeRetryAllBatchItem[]
   batch_limited_time_retry: PipelineBatchLimitedTimeRetryState
 }
 
@@ -1362,6 +1393,8 @@ export interface IntegratedPipelineStartPayload {
   activity_traffic_batch_enabled?: boolean
   activity_traffic_batch_size?: number
   per_batch_limited_time_chunk_size?: number
+  batch_limited_time_auto_retry_enabled?: boolean
+  batch_limited_time_auto_retry_max_attempts?: number
 }
 
 export interface IntegratedPipelineBatchStartPayload {
@@ -1403,6 +1436,8 @@ export interface IntegratedPipelineBatchStartPayload {
   activity_traffic_batch_enabled?: boolean
   activity_traffic_batch_size?: number
   per_batch_limited_time_chunk_size?: number
+  batch_limited_time_auto_retry_enabled?: boolean
+  batch_limited_time_auto_retry_max_attempts?: number
 }
 
 export interface IntegratedPipelineBatchRunItem {

@@ -44,6 +44,7 @@ from pdd_agent.core.config import load_yaml_settings
 from pdd_agent.db.session import is_database_available
 from pdd_agent.db.repositories import get_integrated_pipeline
 from pdd_agent.api.schemas.pipeline_batch_limited_time_retry import (
+    PipelineBatchLimitedTimeRetryAllStartResponse,
     PipelineBatchLimitedTimeRetryEligibilityOut,
     PipelineBatchLimitedTimeRetryStartRequest,
     PipelineBatchLimitedTimeRetryStartResponse,
@@ -420,6 +421,8 @@ def start_integrated(body: IntegratedPipelineStartRequest):
             activity_traffic_batch_enabled=body.activity_traffic_batch_enabled,
             activity_traffic_batch_size=body.activity_traffic_batch_size,
             per_batch_limited_time_chunk_size=body.per_batch_limited_time_chunk_size,
+            batch_limited_time_auto_retry_enabled=body.batch_limited_time_auto_retry_enabled,
+            batch_limited_time_auto_retry_max_attempts=body.batch_limited_time_auto_retry_max_attempts,
             trigger_source="manual",
         )
     except ValueError as exc:
@@ -499,6 +502,8 @@ def start_integrated_batch(body: IntegratedPipelineBatchStartRequest):
             activity_traffic_batch_enabled=body.activity_traffic_batch_enabled,
             activity_traffic_batch_size=body.activity_traffic_batch_size,
             per_batch_limited_time_chunk_size=body.per_batch_limited_time_chunk_size,
+            batch_limited_time_auto_retry_enabled=body.batch_limited_time_auto_retry_enabled,
+            batch_limited_time_auto_retry_max_attempts=body.batch_limited_time_auto_retry_max_attempts,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -648,6 +653,31 @@ def start_batch_limited_time_retry_integrated(
             raise HTTPException(status_code=404, detail=detail) from exc
         raise HTTPException(status_code=400, detail=detail) from exc
     return PipelineBatchLimitedTimeRetryStartResponse(**result)
+
+
+@router.post(
+    "/integrated/{pipeline_id}/batch-limited-time-retry/all",
+    response_model=PipelineBatchLimitedTimeRetryAllStartResponse,
+)
+def start_all_batch_limited_time_retry_integrated(pipeline_id: str):
+    """一键重跑当前链路全部「上架成功 + 限时失败」批次（串行排队）。"""
+    if not is_database_available():
+        raise HTTPException(status_code=503, detail="数据库不可用")
+    data = get_pipeline(pipeline_id)
+    if not data:
+        raise HTTPException(status_code=404, detail="pipeline not found")
+    from pdd_agent.api.services.pipeline_batch_limited_time_retry_bridge import (
+        start_all_batch_limited_time_retries,
+    )
+
+    try:
+        result = start_all_batch_limited_time_retries(pipeline_id)
+    except ValueError as exc:
+        detail = str(exc)
+        if detail == "pipeline_not_found":
+            raise HTTPException(status_code=404, detail=detail) from exc
+        raise HTTPException(status_code=400, detail=detail) from exc
+    return PipelineBatchLimitedTimeRetryAllStartResponse(**result)
 
 
 @router.put(

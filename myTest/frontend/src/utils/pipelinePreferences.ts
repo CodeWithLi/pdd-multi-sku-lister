@@ -16,6 +16,10 @@ const ACTIVITY_LIMITED_TIME_SUCCESS_ONLY_KEY = 'pdd_agent.pipeline.activity_limi
 const ACTIVITY_TRAFFIC_BATCH_ENABLED_KEY = 'pdd_agent.pipeline.activity_traffic_batch_enabled'
 const ACTIVITY_TRAFFIC_BATCH_SIZE_KEY = 'pdd_agent.pipeline.activity_traffic_batch_size'
 const PER_BATCH_LIMITED_TIME_CHUNK_SIZE_KEY = 'pdd_agent.pipeline.per_batch_limited_time_chunk_size'
+const BATCH_LIMITED_TIME_AUTO_RETRY_ENABLED_KEY =
+  'pdd_agent.pipeline.batch_limited_time_auto_retry_enabled'
+const BATCH_LIMITED_TIME_AUTO_RETRY_MAX_ATTEMPTS_KEY =
+  'pdd_agent.pipeline.batch_limited_time_auto_retry_max_attempts'
 const MINIO_MATERIAL_REFRESH_PAUSED_KEY = 'pdd_agent.minio_material_refresh_paused'
 
 const VALID_RELIST_STRATEGIES = new Set<RelistStrategy>([
@@ -271,6 +275,43 @@ export function savePerBatchLimitedTimeChunkSize(size: number): void {
     localStorage.setItem(
       PER_BATCH_LIMITED_TIME_CHUNK_SIZE_KEY,
       String(Math.max(1, Math.min(500, size))),
+    )
+  } catch {
+    // ignore
+  }
+}
+
+export function loadBatchLimitedTimeAutoRetryEnabled(): boolean {
+  try {
+    return localStorage.getItem(BATCH_LIMITED_TIME_AUTO_RETRY_ENABLED_KEY) === '1'
+  } catch {
+    return false
+  }
+}
+
+export function saveBatchLimitedTimeAutoRetryEnabled(enabled: boolean): void {
+  try {
+    localStorage.setItem(BATCH_LIMITED_TIME_AUTO_RETRY_ENABLED_KEY, enabled ? '1' : '0')
+  } catch {
+    // ignore
+  }
+}
+
+export function loadBatchLimitedTimeAutoRetryMaxAttempts(): number {
+  try {
+    const raw = Number(localStorage.getItem(BATCH_LIMITED_TIME_AUTO_RETRY_MAX_ATTEMPTS_KEY))
+    if (Number.isFinite(raw) && raw >= 1) return Math.min(10, Math.floor(raw))
+  } catch {
+    // ignore
+  }
+  return 1
+}
+
+export function saveBatchLimitedTimeAutoRetryMaxAttempts(attempts: number): void {
+  try {
+    localStorage.setItem(
+      BATCH_LIMITED_TIME_AUTO_RETRY_MAX_ATTEMPTS_KEY,
+      String(Math.max(1, Math.min(10, attempts))),
     )
   } catch {
     // ignore

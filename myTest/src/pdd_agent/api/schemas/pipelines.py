@@ -59,6 +59,8 @@ class IntegratedPipelineStartRequest(BaseModel):
     activity_traffic_batch_enabled: bool = False
     activity_traffic_batch_size: int = Field(default=10, ge=1, le=500)
     per_batch_limited_time_chunk_size: int = Field(default=10, ge=1, le=500)
+    batch_limited_time_auto_retry_enabled: bool = False
+    batch_limited_time_auto_retry_max_attempts: int = Field(default=1, ge=1, le=10)
 
     @model_validator(mode="after")
     def validate_activity_ids(self) -> "IntegratedPipelineStartRequest":
@@ -111,6 +113,8 @@ class IntegratedPipelineBatchStartRequest(BaseModel):
     activity_traffic_batch_enabled: bool = False
     activity_traffic_batch_size: int = Field(default=10, ge=1, le=500)
     per_batch_limited_time_chunk_size: int = Field(default=10, ge=1, le=500)
+    batch_limited_time_auto_retry_enabled: bool = False
+    batch_limited_time_auto_retry_max_attempts: int = Field(default=1, ge=1, le=10)
     account_ids: list[str] = Field(default_factory=list)
     product_codes: list[str] = Field(default_factory=list)
     items: list[IntegratedPipelineBatchItem] = Field(default_factory=list)
@@ -229,6 +233,7 @@ class IntegratedPipelineResponse(BaseModel):
     wake_at: str = ""
     late_retry: dict[str, Any] = Field(default_factory=dict)
     batch_limited_time_retry: dict[str, Any] = Field(default_factory=dict)
+    batch_limited_time_auto_retry: dict[str, Any] = Field(default_factory=dict)
     listing_batches_complete: bool = False
     initial_limited_time_phase_complete: bool = False
     per_batch_limited_time_chunk_size: int = 10

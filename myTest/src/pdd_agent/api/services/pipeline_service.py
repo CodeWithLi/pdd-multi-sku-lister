@@ -1286,6 +1286,9 @@ def pipeline_to_dict(row) -> dict[str, Any]:
     from pdd_agent.api.services.pipeline_batch_limited_time_retry_bridge import (
         build_batch_limited_time_retry_public_state,
     )
+    from pdd_agent.api.services.pipeline_batch_limited_time_auto_retry.bridge import (
+        build_auto_retry_public_state,
+    )
     from pdd_agent.api.services.pipeline_batch_limited_time_retry_eligibility import (
         is_pipeline_initial_limited_time_phase_complete,
         is_pipeline_listing_batches_complete,
@@ -1356,6 +1359,7 @@ def pipeline_to_dict(row) -> dict[str, Any]:
         ),
         "late_retry": build_late_retry_public_state(row),
         "batch_limited_time_retry": build_batch_limited_time_retry_public_state(row),
+        "batch_limited_time_auto_retry": build_auto_retry_public_state(row),
         "listing_batches_complete": is_pipeline_listing_batches_complete(row),
         "initial_limited_time_phase_complete": is_pipeline_initial_limited_time_phase_complete(row),
         "campaign_results": _campaign_results(row),
@@ -1428,6 +1432,8 @@ def start_integrated_pipeline(
     activity_traffic_batch_enabled: bool = False,
     activity_traffic_batch_size: int = 10,
     per_batch_limited_time_chunk_size: int = 10,
+    batch_limited_time_auto_retry_enabled: bool = False,
+    batch_limited_time_auto_retry_max_attempts: int = 1,
     extra_meta: dict[str, Any] | None = None,
     trigger_source: str = "manual",
     skip_commerce_gate: bool = False,
@@ -1528,6 +1534,8 @@ def start_integrated_pipeline(
                 "activity_traffic_batch_enabled": activity_traffic_batch_enabled,
                 "activity_traffic_batch_size": activity_traffic_batch_size,
                 "per_batch_limited_time_chunk_size": per_batch_limited_time_chunk_size,
+                "batch_limited_time_auto_retry_enabled": batch_limited_time_auto_retry_enabled,
+                "batch_limited_time_auto_retry_max_attempts": batch_limited_time_auto_retry_max_attempts,
                 "extra_meta": extra_meta,
                 "trigger_source": trigger_source,
             }
@@ -1603,6 +1611,22 @@ def start_integrated_pipeline(
             per_batch_lt_chunks_meta_patch(
                 chunk_size=int(per_batch_limited_time_chunk_size or 10),
                 enabled=True,
+            )
+        )
+    from pdd_agent.api.services.pipeline_batch_limited_time_auto_retry.bridge import (
+        auto_retry_meta_patch,
+    )
+
+    if (
+        listing_per_batch_limited_time_enabled
+        and not listing_per_batch_lt_traffic_activity_enabled
+        and not listing_per_batch_campaign_enabled
+        and bool(batch_limited_time_auto_retry_enabled)
+    ):
+        meta.update(
+            auto_retry_meta_patch(
+                enabled=True,
+                max_attempts=int(batch_limited_time_auto_retry_max_attempts or 1),
             )
         )
     from pdd_agent.api.services.pipeline_activity_traffic_batch.bridge import (
@@ -1919,6 +1943,8 @@ def start_integrated_pipeline_batch(
     activity_traffic_batch_enabled: bool = False,
     activity_traffic_batch_size: int = 10,
     per_batch_limited_time_chunk_size: int = 10,
+    batch_limited_time_auto_retry_enabled: bool = False,
+    batch_limited_time_auto_retry_max_attempts: int = 1,
     trigger_source: str = "manual",
 ) -> dict[str, Any]:
     """批量创建整合链路；默认各店按启动间隔错开并行入队；串行模式下一家跑完再跑下一家。"""
@@ -1972,6 +1998,8 @@ def start_integrated_pipeline_batch(
         activity_traffic_batch_enabled=activity_traffic_batch_enabled,
         activity_traffic_batch_size=activity_traffic_batch_size,
         per_batch_limited_time_chunk_size=per_batch_limited_time_chunk_size,
+        batch_limited_time_auto_retry_enabled=batch_limited_time_auto_retry_enabled,
+        batch_limited_time_auto_retry_max_attempts=batch_limited_time_auto_retry_max_attempts,
         trigger_source=trigger_source,
     )
 
@@ -2071,6 +2099,8 @@ def start_integrated_pipeline_batch(
             activity_traffic_batch_enabled=activity_traffic_batch_enabled,
             activity_traffic_batch_size=activity_traffic_batch_size,
             per_batch_limited_time_chunk_size=per_batch_limited_time_chunk_size,
+            batch_limited_time_auto_retry_enabled=batch_limited_time_auto_retry_enabled,
+            batch_limited_time_auto_retry_max_attempts=batch_limited_time_auto_retry_max_attempts,
         )
         pipelines.append(
             _batch_run_item_from_start(data, scheduled_at=scheduled_at)
@@ -2144,6 +2174,14 @@ def on_queue_task_finished(
         error=error,
     )
     if batch_lt_retry_handled:
+        from pdd_agent.api.services.pipeline_batch_limited_time_auto_retry.bridge import (
+            maybe_auto_start_for_pipeline_id,
+        )
+
+        maybe_auto_start_for_pipeline_id(
+            pipeline_id,
+            reason="after_batch_limited_time_retry_finished",
+        )
         return
 
     if row.status in TERMINAL_PIPELINE_STATUSES and not _should_process_queue_task_on_terminal_pipeline(
@@ -2357,6 +2395,14 @@ def _continue_pipeline_after_listing(
             pdd_ids=pdd_ids,
             mapping_ids=mapping_ids,
             listing_result=result,
+        )
+        from pdd_agent.api.services.pipeline_batch_limited_time_auto_retry.bridge import (
+            maybe_auto_start_batch_limited_time_retries,
+        )
+
+        maybe_auto_start_batch_limited_time_retries(
+            get_integrated_pipeline(refreshed.pipeline_id) or record_row,
+            reason="after_listing_triggered_per_batch_limited_time",
         )
         return True
 
@@ -2872,6 +2918,14 @@ def _on_limited_time_finished(row, *, run_id: str, success: bool, result: dict[s
             run_id,
             _per_batch_batch_log_context(get_integrated_pipeline(row.pipeline_id) or row),
         )
+        from pdd_agent.api.services.pipeline_batch_limited_time_auto_retry.bridge import (
+            maybe_auto_start_batch_limited_time_retries,
+        )
+
+        maybe_auto_start_batch_limited_time_retries(
+            get_integrated_pipeline(row.pipeline_id) or row,
+            reason="after_per_batch_limited_time_continue",
+        )
         return
 
     from pdd_agent.api.services.pipeline_mq_auto_phase2 import handle_mq_auto_limited_time_finished
@@ -2921,6 +2975,14 @@ def _on_limited_time_finished(row, *, run_id: str, success: bool, result: dict[s
             "pipeline %s limited_time finished handled by std per-batch LT aggregate run_id=%s",
             row.pipeline_id,
             run_id,
+        )
+        from pdd_agent.api.services.pipeline_batch_limited_time_auto_retry.bridge import (
+            maybe_auto_start_batch_limited_time_retries,
+        )
+
+        maybe_auto_start_batch_limited_time_retries(
+            get_integrated_pipeline(row.pipeline_id) or row,
+            reason="after_std_per_batch_lt_aggregate_finalize",
         )
         return
 

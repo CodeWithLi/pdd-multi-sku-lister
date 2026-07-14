@@ -1,0 +1,281 @@
+# 飞书多维表格集成配置
+# 复制：cp config/feishu.example.yaml config/feishu.yaml
+# 或与拼多多共用：在 .env 设置 FEISHU_CONFIG_PATH=../myTest/config/feishu.yaml
+
+app_id: ""
+app_secret: ""
+oauth_redirect_uri: "http://127.0.0.1:8020/api/feishu/oauth/callback"
+oauth_scope: "offline_access bitable:app"
+use_user_access_token: true
+user_access_token: ""
+user_access_token_expires_at: 0
+refresh_token: ""
+refresh_token_expires_at: 0
+
+# 浏览器地址 https://xxx.feishu.cn/base/{app_token}?table={table_id}
+bitable_app_token: ""
+table_id: ""
+
+# 新建表时使用；若已有表（如截图 tblan7b1NAj8MFFN）直接填 table_id 即可
+table_name: "拼多多每日上架商品日志"
+
+# 列名与「技术支持」Base 保持一致（截图里是「宝贝标签」不是「宝贝标题」）
+field_names:
+  date: "日期"
+  link: "商品链接"
+  title: "宝贝标签"
+  price: "一口价"
+  merchant_code: "商家编码"
+  sku_count: "规格数"
+  published_at: "发布时间"
+  status: "状态"
+  mapping_id: "映射ID"
+  account_id: "店铺"
+  pdd_product_id: "拼多多商品ID"
+  product_code: "商品编码"
+  image_set: "套图"
+
+merchant_goods_url_template: "https://mms.pinduoduo.com/goods/goods_detail?goods_id={pdd_product_id}"
+product_link_template: "https://mobile.yangkeduo.com/goods.html?goods_id={pdd_product_id}"
+
+# 已有表没有「映射ID」列时留空 ""，测试阶段可关闭去重
+dedupe_field: ""
+
+status_options:
+  - 在售
+  - 已下架
+  - 未知
+
+# 上架核验成功（20s 后在售）后异步写入「PDD发布日志表」；失败写入「淘宝+拼多多发布日志表（失败）」
+pdd_upload_log:
+  enabled: true
+  table_id: ""
+  table_name: PDD发布日志表
+  failure_table_id: ""
+  failure_table_name: 淘宝+拼多多发布日志表（失败）
+  # true=失败/跳过会写入飞书「全平台发布日志表（失败）」；false=不写该表（其它飞书表不受影响）
+  failure_log_enabled: true
+  dedupe_field: 商品链接ID
+  log_spec_sku_rows_enabled: false
+  failure_record_type_options:
+    - 失败
+    - 跳过
+  failure_report_platform_options:
+    - 拼多多
+    - 淘宝
+  failure_default_report_platform: 拼多多
+  field_names:
+    date: 日期
+    merchant_code: 商品编码
+    combo_barcode: 组合商品条码
+    title: 标题
+    account_name: 店铺名称
+    product_id: 商品ID
+    link_product_id: 商品链接ID
+    group_price: 拼单价
+    single_price: 单独买价
+    single_sell_price: 单买价
+    link: 商品链接
+    publish_start: 发布开始时间
+    publish_end: 发布结束时间
+    duration_seconds: 耗时秒
+  failure_field_names:
+    date: 日期
+    merchant_code: 商品编码
+    report_platform: 报错平台
+    account_name: 店铺名称
+    record_type: 记录类型
+    failure_reason: 失败原因
+    publish_start: 发布开始时间
+    publish_end: 发布结束时间
+    duration_seconds: 耗时秒
+    process_completed: 是否处理完成
+    # 与飞书表列名完全一致；若列名含前缀也会自动按「处理状态镜像」匹配
+    process_status_mirror: （不要动）处理状态镜像
+    # 单选列；占位/完成文案须与飞书该列选项名完全一致
+    cycle_relist: 是否已循环上架
+    processor: 人员
+    processed_at: 处理时间
+  failure_cycle_relist_watch:
+    enabled: false
+    poll_seconds: 60
+    completed_statuses:
+    - 已结束
+    - 已处理完成
+    exclude_failure_reason_contains: ""
+    fetch_limit: 200
+    ignore_existing_on_start: true
+    claim_on_discover: false
+    claim_placeholder: 循环上架中
+    claim_completed_value: 是
+    claim_redis_ttl_seconds: 7200
+
+# 抖店上架核验成功后写入「DY发布日志表」（按商品链接ID去重）
+dy_upload_log:
+  enabled: true
+  table_id: ""
+  table_name: DY发布日志表
+  dedupe_field: 商品链接ID
+  log_spec_sku_rows_enabled: true
+  sync_on_listing: true
+  field_names:
+    date: 日期
+    merchant_code: 商品编码
+    combo_barcode: 组合商品条码
+    link_product_id: 商品链接ID
+    title: 标题
+    price: 价格
+    link: 商品链接
+    publish_start: 发布开始时间
+    publish_end: 发布结束时间
+    duration_seconds: 耗时秒
+    account_name: 店铺名称
+
+# 整合链路活动步骤（PDD营销-活动日志表）
+pdd_activity_log:
+  enabled: true
+  table_id: ""
+  table_name: PDD营销-活动日志表
+  dedupe_field: 参加商品链接ID
+  activity_618_id: "20981"
+  activity_discount_id: "21365"
+  marketing_tool_name: 限时限量购
+  activity_plan: 商品原价立减5元
+  marketing_activity_618_label: "618"
+  marketing_activity_discount_label: 7折
+  seed_on_listing: true
+  immediate_find_retries: 2
+  limited_time_status_options:
+  - 成功
+  - 进行中
+  - 失败
+  - 未执行
+  - 程序异常
+  activity_register_status_options:
+  - 报名成功
+  - 活动下线
+  - 失败
+  - 未执行
+  - 程序异常
+  activity_register_failure_reason_options:
+  - 新商品需等24h后才可报
+  - 活动价格低于成本价
+  - 程序异常
+  field_names:
+    date: 日期
+    account_name: 店铺名称
+    product_id: 参加商品链接ID
+    marketing_tool_name: 营销工具名称
+    activity_plan: 活动方案
+    limited_time_status: 参加状态
+    limited_time_failure_reason: 具体原因
+    marketing_activity_618: 营销活动ID
+    activity_618_status: 618活动状态
+    activity_618_failure_reason: 618活动失败原因
+    marketing_activity_discount: 营销活动ID~
+    activity_discount_status: 七折状态
+    activity_discount_failure_reason: 7折失败原因
+    marketing_tool_published_at: 营销工具发布时间
+    activity_618_published_at: 618活动发布时间
+    activity_discount_published_at: 七折活动发布时间
+
+# 推广创建步骤：成功/失败写入同一张飞书表
+pdd_promotion_log:
+  enabled: true
+  table_id: ""
+  table_name: PDD推广日志表
+  result_options:
+  - 成功
+  - 失败
+  field_names:
+    date: 日期
+    account_name: 店铺名称
+    product_id: 商品ID
+    result: 推广结果
+    message: 备注
+    failure_reason: 失败原因
+    run_id: 运行ID
+
+# 负库存自动下架完成后写入「PDD商品下架表」
+pdd_delist_log:
+  enabled: true
+  table_id: ""
+  table_name: PDD商品下架表
+  status_options:
+  - 已下架
+  - 下架失败
+  - 模拟下架
+  - 跳过
+  - 未找到
+  relist_options:
+  - 否
+  - 是
+  field_names:
+    date: 日期
+    delisted_at: 下架时间
+    account_name: 店铺名
+    product_code: 商品编码
+    available_qty: 当前可用数
+    status: 状态
+    is_relisted: 是否重新上架
+    record_id: 记录ID
+
+# 拼多多所有商品.xls → 飞书「拼多多比价定价」（商品编码/颜色规格/商品类型/可用库存/拼多多定价）
+pdd_product_catalog:
+  enabled: true
+  table_id: ""
+  table_name: 拼多多比价定价
+  excel_relpath: data/assets/拼多多所有商品.xls
+  prefer_feishu: true
+  fallback_excel: false
+  cache_seconds: 300
+  price_float_enabled: true
+  price_float_min: 5
+  price_float_max: 10
+  single_price_float_min: 1.01
+  single_price_float_max: 2
+  field_names:
+    product_code: 商品编码
+    color_spec: 颜色规格
+    product_type: 商品类型
+    product_status: 产品状态
+    available_inventory: 可用库存
+    pricing: 拼多多定价+5元
+
+# 上架库存：聚水潭 ERP 可用数（按商品编码匹配）
+jushuitan_erp_inventory:
+  enabled: true
+  table_id: tblQCVKFhXF8TdfQ
+  table_name: 聚水潭ERP商品列表
+  cache_seconds: 300
+  field_names:
+    product_code: 商品编码
+    available_qty: 可用数
+    cost: 成本
+
+# pdd.xls 控价区间 → 飞书「拼多多比价定价」
+pdd_price_compare:
+  enabled: true
+  table_id: ""
+  table_name: 拼多多比价定价
+  excel_relpath: data/assets/pdd.xls
+  pricing_excel_relpath: data/assets/拼多多定价.xls
+  control_excel_relpath: data/assets/拼多多控价.xls
+  prefer_feishu: true
+  fallback_excel: false
+  cache_seconds: 300
+  field_names:
+    merchant_code: 商品编码
+    retail_cost: 零售综合成本
+    pdd_pricing: 拼多多定价
+    pdd_control_price: PDD控价
+pipeline:
+  excel_fallback_enabled: false
+  platform_skip_dedupe_enabled: false
+  platform_skip_dedupe_sync_seconds: 300
+  platform_skip_dedupe_fetch_limit: 2000
+  accessory_cost_pricing_enabled: false
+  accessory_cost_float_min: 0
+  accessory_cost_float_max: 5
+  accessory_cost_tiered_float_enabled: true
+  limited_time_first_spec_price_enabled: true

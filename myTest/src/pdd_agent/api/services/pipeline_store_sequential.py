@@ -56,6 +56,8 @@ def build_store_sequential_common_params(
     activity_traffic_batch_enabled: bool = False,
     activity_traffic_batch_size: int = 10,
     per_batch_limited_time_chunk_size: int = 10,
+    batch_limited_time_auto_retry_enabled: bool = False,
+    batch_limited_time_auto_retry_max_attempts: int = 1,
     trigger_source: str = "manual",
 ) -> dict[str, Any]:
     return {
@@ -72,6 +74,10 @@ def build_store_sequential_common_params(
         "activity_traffic_batch_size": max(1, min(500, int(activity_traffic_batch_size or 10))),
         "per_batch_limited_time_chunk_size": max(
             1, min(500, int(per_batch_limited_time_chunk_size or 10))
+        ),
+        "batch_limited_time_auto_retry_enabled": bool(batch_limited_time_auto_retry_enabled),
+        "batch_limited_time_auto_retry_max_attempts": max(
+            1, min(10, int(batch_limited_time_auto_retry_max_attempts or 1))
         ),
         "activity_delay_hours": activity_delay_hours,
         "demo_mode": demo_mode,

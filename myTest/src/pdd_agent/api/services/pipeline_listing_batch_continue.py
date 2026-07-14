@@ -90,6 +90,14 @@ def _schedule_throttled_batch_followup(
                 error="",
                 meta_patch=meta_patch,
             )
+            from pdd_agent.api.services.pipeline_batch_limited_time_auto_retry.bridge import (
+                maybe_auto_start_batch_limited_time_retries,
+            )
+
+            maybe_auto_start_batch_limited_time_retries(
+                get_integrated_pipeline(refreshed.pipeline_id) or refreshed,
+                reason="after_listing_batch_failure_continue_lt",
+            )
             return True
         if maybe_run_per_batch_campaign_after_listing(
             refreshed,
@@ -114,6 +122,14 @@ def _schedule_throttled_batch_followup(
             skip_reason=batch_error or "本批无成功上架商品",
         )
         refreshed = get_integrated_pipeline(refreshed.pipeline_id) or refreshed
+        from pdd_agent.api.services.pipeline_batch_limited_time_auto_retry.bridge import (
+            maybe_auto_start_batch_limited_time_retries,
+        )
+
+        maybe_auto_start_batch_limited_time_retries(
+            refreshed,
+            reason="after_empty_listing_batch_skip_lt",
+        )
 
     if schedule_next_listing_batch_after_finish(
         refreshed,
