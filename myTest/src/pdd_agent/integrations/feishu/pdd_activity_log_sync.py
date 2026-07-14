@@ -27,6 +27,7 @@ from pdd_agent.integrations.feishu.bitable import (
     search_records_by_field,
 )
 from pdd_agent.integrations.feishu.client import FeishuAPIError, FeishuClient
+from pdd_agent.integrations.feishu.feishu_async_dispatch import schedule_feishu_push_in_background
 from pdd_agent.integrations.feishu.config import (
     FeishuConfig,
     load_feishu_config,
@@ -932,22 +933,15 @@ def schedule_pdd_activity_log_limited_time(**kwargs: Any) -> None:
         return
     if not cfg.pdd_activity_log.enabled:
         return
-    push_kwargs = {
-        "log_label": "PDD活动日志(限时限量购)",
-        "push_fn": push_pdd_activity_log_limited_time,
-        **kwargs,
-    }
-    # 失败同步写入，确保任何报错都落表（与 PDD 发布失败日志一致）
-    if not bool(kwargs.get("success")):
-        _push_pdd_activity_log_safe(**push_kwargs)
-        return
-    thread = threading.Thread(
-        target=_push_pdd_activity_log_safe,
-        kwargs=push_kwargs,
-        name="feishu-pdd-activity-log-limited-time",
-        daemon=True,
+    schedule_feishu_push_in_background(
+        _push_pdd_activity_log_safe,
+        thread_name="feishu-pdd-activity-log-limited-time",
+        kwargs={
+            "log_label": "PDD活动日志(限时限量购)",
+            "push_fn": push_pdd_activity_log_limited_time,
+            **kwargs,
+        },
     )
-    thread.start()
 
 
 def schedule_pdd_activity_log_activity_register(**kwargs: Any) -> None:
@@ -961,18 +955,12 @@ def schedule_pdd_activity_log_activity_register(**kwargs: Any) -> None:
     activity_id = str(kwargs.get("activity_id") or "").strip()
     if resolve_activity_log_phase(activity_id, cfg) == "unknown":
         return
-    push_kwargs = {
-        "log_label": f"PDD活动日志(活动{activity_id})",
-        "push_fn": push_pdd_activity_log_activity_register,
-        **kwargs,
-    }
-    if not bool(kwargs.get("success")):
-        _push_pdd_activity_log_safe(**push_kwargs)
-        return
-    thread = threading.Thread(
-        target=_push_pdd_activity_log_safe,
-        kwargs=push_kwargs,
-        name="feishu-pdd-activity-log-register",
-        daemon=True,
+    schedule_feishu_push_in_background(
+        _push_pdd_activity_log_safe,
+        thread_name="feishu-pdd-activity-log-register",
+        kwargs={
+            "log_label": f"PDD活动日志(活动{activity_id})",
+            "push_fn": push_pdd_activity_log_activity_register,
+            **kwargs,
+        },
     )
-    thread.start()

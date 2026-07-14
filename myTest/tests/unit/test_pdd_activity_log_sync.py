@@ -358,16 +358,16 @@ def test_safe_load_activity_log_product_context_falls_back(monkeypatch, activity
     assert ctx["968599179476"]["account_name"] == "多多跨境2601"
 
 
-def test_schedule_pdd_activity_log_limited_time_failure_is_sync(monkeypatch, activity_cfg):
+def test_schedule_pdd_activity_log_limited_time_failure_runs_in_background(monkeypatch, activity_cfg):
     from pdd_agent.integrations.feishu import pdd_activity_log_sync
 
-    calls: list[dict] = []
+    dispatched: list[dict] = []
 
-    def fake_safe(**kwargs):
-        calls.append(kwargs)
+    def fake_dispatch(target, *, thread_name, kwargs=None):
+        dispatched.append({"target": target, "thread_name": thread_name, "kwargs": kwargs})
 
     monkeypatch.setattr(pdd_activity_log_sync, "load_feishu_config", lambda: activity_cfg)
-    monkeypatch.setattr(pdd_activity_log_sync, "_push_pdd_activity_log_safe", fake_safe)
+    monkeypatch.setattr(pdd_activity_log_sync, "schedule_feishu_push_in_background", fake_dispatch)
 
     pdd_activity_log_sync.schedule_pdd_activity_log_limited_time(
         account_id="store_A",
@@ -376,8 +376,11 @@ def test_schedule_pdd_activity_log_limited_time_failure_is_sync(monkeypatch, act
         error="browser timeout",
     )
 
-    assert len(calls) == 1
-    assert calls[0]["push_fn"] is pdd_activity_log_sync.push_pdd_activity_log_limited_time
+    assert len(dispatched) == 1
+    assert dispatched[0]["target"] is pdd_activity_log_sync._push_pdd_activity_log_safe
+    assert dispatched[0]["thread_name"] == "feishu-pdd-activity-log-limited-time"
+    assert dispatched[0]["kwargs"]["push_fn"] is pdd_activity_log_sync.push_pdd_activity_log_limited_time
+    assert dispatched[0]["kwargs"]["success"] is False
 
 
 

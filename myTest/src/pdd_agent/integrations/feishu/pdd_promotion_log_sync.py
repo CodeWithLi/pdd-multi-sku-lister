@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-import threading
+from pdd_agent.integrations.feishu.feishu_async_dispatch import schedule_feishu_push_in_background
 from datetime import date, datetime
 from datetime import time as dt_time
 from typing import Any
@@ -314,7 +314,7 @@ def _push_pdd_promotion_log_safe(**kwargs: Any) -> None:
 
 
 def schedule_pdd_promotion_log(**kwargs: Any) -> None:
-    """推广任务完成后写入 PDD推广日志表；失败同步写入确保落表。"""
+    """推广任务完成后写入 PDD推广日志表（后台异步，不阻塞页面）。"""
     try:
         cfg = load_feishu_config()
     except Exception as exc:
@@ -323,17 +323,11 @@ def schedule_pdd_promotion_log(**kwargs: Any) -> None:
     if not cfg.pdd_promotion_log.enabled:
         return
 
-    if not bool(kwargs.get("success")):
-        _push_pdd_promotion_log_safe(**kwargs)
-        return
-
-    thread = threading.Thread(
-        target=_push_pdd_promotion_log_safe,
+    schedule_feishu_push_in_background(
+        _push_pdd_promotion_log_safe,
+        thread_name="feishu-pdd-promotion-log",
         kwargs=kwargs,
-        name="feishu-pdd-promotion-log",
-        daemon=True,
     )
-    thread.start()
 
 
 __all__ = [

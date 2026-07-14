@@ -32,6 +32,7 @@ from pdd_agent.integrations.feishu.bitable import (
     search_records_by_field,
 )
 from pdd_agent.integrations.feishu.client import FeishuAPIError, FeishuClient
+from pdd_agent.integrations.feishu.feishu_async_dispatch import schedule_feishu_push_in_background
 from pdd_agent.integrations.feishu.config import (
     FeishuConfig,
     load_feishu_config,
@@ -1140,7 +1141,7 @@ def _push_pdd_upload_promotion_status_safe(**kwargs: Any) -> None:
 
 
 def schedule_pdd_upload_limited_time_status(**kwargs: Any) -> None:
-    """限时限量购完成后回写飞书状态；失败同步写入确保落表。"""
+    """限时限量购完成后回写飞书状态（后台异步，不阻塞页面）。"""
     try:
         cfg = load_feishu_config()
     except Exception as exc:
@@ -1149,21 +1150,15 @@ def schedule_pdd_upload_limited_time_status(**kwargs: Any) -> None:
     if not cfg.pdd_upload_log.enabled or not cfg.pdd_upload_log.update_limited_time_status:
         return
 
-    if not bool(kwargs.get("success")):
-        _push_pdd_upload_limited_time_status_safe(**kwargs)
-        return
-
-    thread = threading.Thread(
-        target=_push_pdd_upload_limited_time_status_safe,
+    schedule_feishu_push_in_background(
+        _push_pdd_upload_limited_time_status_safe,
+        thread_name="feishu-pdd-limited-time-status",
         kwargs=kwargs,
-        name="feishu-pdd-limited-time-status",
-        daemon=True,
     )
-    thread.start()
 
 
 def schedule_pdd_upload_activity_register_status(**kwargs: Any) -> None:
-    """活动报名完成后回写飞书对应活动列；失败同步写入确保落表。"""
+    """活动报名完成后回写飞书对应活动列（后台异步，不阻塞页面）。"""
     try:
         cfg = load_feishu_config()
     except Exception as exc:
@@ -1175,21 +1170,15 @@ def schedule_pdd_upload_activity_register_status(**kwargs: Any) -> None:
     if not resolve_activity_register_field_name(activity_id, cfg):
         return
 
-    if not bool(kwargs.get("success")):
-        _push_pdd_upload_activity_register_status_safe(**kwargs)
-        return
-
-    thread = threading.Thread(
-        target=_push_pdd_upload_activity_register_status_safe,
+    schedule_feishu_push_in_background(
+        _push_pdd_upload_activity_register_status_safe,
+        thread_name="feishu-pdd-activity-register-status",
         kwargs=kwargs,
-        name="feishu-pdd-activity-register-status",
-        daemon=True,
     )
-    thread.start()
 
 
 def schedule_pdd_upload_promotion_status(**kwargs: Any) -> None:
-    """推广任务完成后回写飞书「推广状态」；失败同步写入确保落表。"""
+    """推广任务完成后回写飞书「推广状态」（后台异步，不阻塞页面）。"""
     try:
         cfg = load_feishu_config()
     except Exception as exc:
@@ -1198,17 +1187,11 @@ def schedule_pdd_upload_promotion_status(**kwargs: Any) -> None:
     if not cfg.pdd_upload_log.enabled or not cfg.pdd_upload_log.update_promotion_status:
         return
 
-    if not bool(kwargs.get("success")):
-        _push_pdd_upload_promotion_status_safe(**kwargs)
-        return
-
-    thread = threading.Thread(
-        target=_push_pdd_upload_promotion_status_safe,
+    schedule_feishu_push_in_background(
+        _push_pdd_upload_promotion_status_safe,
+        thread_name="feishu-pdd-promotion-status",
         kwargs=kwargs,
-        name="feishu-pdd-promotion-status",
-        daemon=True,
     )
-    thread.start()
 
 
 def map_pdd_upload_status_to_feishu(list_status: str) -> str:
