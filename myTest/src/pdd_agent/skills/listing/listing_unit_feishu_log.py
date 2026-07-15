@@ -19,6 +19,7 @@ def schedule_listing_unit_failure_to_feishu(
     item_result: dict[str, Any],
     *,
     run_id: str = "",
+    pipeline_id: str = "",
 ) -> bool:
     """单元上架失败/跳过后立即写入飞书失败表；返回是否已调度。"""
     status = str(item_result.get("status") or "").strip().lower()
@@ -85,7 +86,8 @@ def schedule_listing_unit_failure_to_feishu(
             error=error,
             message=brief or error or unit.listing_label,
             failure_reason=brief or error or unit.listing_label,
-            system_reason=error[:2000],
+            pipeline_id=str(pipeline_id or "").strip(),
+            run_id=str(run_id or "").strip(),
             publish_start=publish_start,
             publish_end=publish_end or datetime.now(),
             duration_seconds=duration_seconds,

@@ -205,6 +205,11 @@ def schedule_zero_inventory_skip_feishu_log(
     account_name: str,
     unit: ListingUnit,
     guard: ZeroInventoryGuardResult,
+    publish_start=None,
+    publish_end=None,
+    duration_seconds: float | None = None,
+    pipeline_id: str = "",
+    run_id: str = "",
 ) -> None:
     from pdd_agent.integrations.feishu.pdd_upload_sync import schedule_pdd_upload_failure_log
 
@@ -216,6 +221,10 @@ def schedule_zero_inventory_skip_feishu_log(
         record_type="跳过",
         reason_code=ListingErrorCode.ZERO_INVENTORY_SKIP,
         failure_reason=guard.failure_message,
-        system_reason=guard.system_reason,
+        pipeline_id=str(pipeline_id or "").strip(),
+        run_id=str(run_id or "").strip(),
         report_platform="拼多多",
+        publish_start=publish_start,
+        publish_end=publish_end,
+        duration_seconds=duration_seconds,
     )

@@ -203,6 +203,8 @@ def schedule_platform_skip_feishu_failure_logs(
     publish_end: datetime | None = None,
     duration_seconds: float | None = None,
     report_platform: str = "拼多多",
+    pipeline_id: str = "",
+    run_id: str = "",
 ) -> int:
     """
     平台跳过写飞书失败日志。
@@ -216,6 +218,8 @@ def schedule_platform_skip_feishu_failure_logs(
     mode = str(write_mode or "").strip()
     status_map = dict(status_by_code or {})
     written = 0
+    pipeline_id = str(pipeline_id or "").strip()
+    run_id = str(run_id or "").strip()
     for raw in entries or []:
         if not isinstance(raw, dict):
             continue
@@ -235,12 +239,8 @@ def schedule_platform_skip_feishu_failure_logs(
         if mode == "dedupe":
             if not is_delisted:
                 continue
-            system_reason = f"产品状态为下架：{merchant_code}"
         elif mode == "bag_view":
-            if is_delisted:
-                system_reason = f"产品状态为下架：{merchant_code}"
-            else:
-                system_reason = str(raw.get("system_reason") or f"笔袋视图未找到：{merchant_code}").strip()
+            pass
         else:
             logger.warning("unknown platform skip feishu log mode=%s merchant_code=%s", mode, merchant_code)
             continue
@@ -252,7 +252,8 @@ def schedule_platform_skip_feishu_failure_logs(
             merchant_code=merchant_code,
             record_type="跳过",
             failure_reason=failure_reason,
-            system_reason=system_reason,
+            pipeline_id=pipeline_id,
+            run_id=run_id,
             report_platform=report_platform,
             publish_start=publish_start,
             publish_end=publish_end,

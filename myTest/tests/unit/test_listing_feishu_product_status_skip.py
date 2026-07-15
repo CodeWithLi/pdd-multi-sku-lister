@@ -88,10 +88,15 @@ def test_schedule_platform_skip_feishu_failure_logs_dedupe_only_delisted(monkeyp
         ],
         status_by_code={"BD051D": "下架", "BD751A": "现货"},
         write_mode="dedupe",
+        pipeline_id="pipe_dedupe",
+        run_id="run_dedupe",
     )
     assert written == 1
     assert scheduled[0]["failure_reason"] == mod.DELISTED_PRODUCT_SKIP_REASON
     assert scheduled[0]["record_type"] == "跳过"
+    assert scheduled[0]["pipeline_id"] == "pipe_dedupe"
+    assert scheduled[0]["run_id"] == "run_dedupe"
+    assert "system_reason" not in scheduled[0] or scheduled[0].get("system_reason") in ("", None)
 
 
 def test_schedule_platform_skip_feishu_failure_logs_bag_view_always(monkeypatch):
@@ -124,12 +129,13 @@ def test_schedule_platform_skip_feishu_failure_logs_bag_view_always(monkeypatch)
         ],
         status_by_code={"BD051D": "下架", "BD751A": "现货"},
         write_mode="bag_view",
+        pipeline_id="pipe_bag",
     )
     assert written == 2
     assert scheduled[0]["failure_reason"] == mod.DELISTED_PRODUCT_SKIP_REASON
-    assert scheduled[0]["system_reason"] == "产品状态为下架：BD051D"
+    assert scheduled[0]["pipeline_id"] == "pipe_bag"
     assert scheduled[1]["failure_reason"] == PLATFORM_SKIP_REASON
-    assert scheduled[1]["system_reason"] == "笔袋视图未找到：BD751A"
+    assert scheduled[1]["pipeline_id"] == "pipe_bag"
 
 
 def test_lookup_product_status_by_merchant_codes(monkeypatch):

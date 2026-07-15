@@ -172,6 +172,8 @@ def schedule_negative_inventory_skip_feishu_log(
     publish_start=None,
     publish_end=None,
     duration_seconds: float | None = None,
+    pipeline_id: str = "",
+    run_id: str = "",
 ) -> None:
     """写入飞书 PDD 发布失败/跳过日志。"""
     from pdd_agent.integrations.feishu.pdd_upload_sync import schedule_pdd_upload_failure_log
@@ -183,7 +185,8 @@ def schedule_negative_inventory_skip_feishu_log(
         merchant_code=unit.merchant_code,
         record_type="跳过",
         failure_reason=guard.failure_message,
-        system_reason=guard.system_reason,
+        pipeline_id=str(pipeline_id or "").strip(),
+        run_id=str(run_id or "").strip(),
         report_platform="拼多多",
         publish_start=publish_start,
         publish_end=publish_end,

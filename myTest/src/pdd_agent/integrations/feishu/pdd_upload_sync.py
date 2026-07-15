@@ -602,10 +602,16 @@ def push_pdd_upload_failure_log(
     duration_seconds: float | None = None,
     report_platform: str = "",
     fallback_product_code: str = "",
+    pipeline_id: str = "",
+    run_id: str = "",
     config: FeishuConfig | None = None,
     client: FeishuClient | None = None,
     **_ignored: Any,
 ) -> dict[str, Any]:
+    from pdd_agent.integrations.feishu.failure_log_pipeline_system_reason import (
+        build_failure_log_system_reason,
+    )
+
     cfg = config or load_feishu_config()
     pdd_cfg = cfg.pdd_upload_log
     if not pdd_cfg.failure_log_enabled:
@@ -641,10 +647,11 @@ def push_pdd_upload_failure_log(
         record_type=record_type_value,
         merchant_code=code,
     )
-    system_reason_text = str(system_reason or "").strip() or _format_system_failure_reason(
-        reason_code=reason_code,
-        error=error,
-        message=message,
+    # 「系统原因」仅承载 `[pipeline:id]`；无链路时留空（不再写技术诊断）。
+    system_reason_text = build_failure_log_system_reason(
+        pipeline_id=pipeline_id,
+        run_id=run_id,
+        system_reason=system_reason,
     )
 
     fields = build_pdd_upload_failure_log_fields(
@@ -1895,6 +1902,9 @@ def _push_pdd_upload_failure_log_safe(**kwargs: Any) -> None:
 
 def schedule_pdd_upload_failure_log(**kwargs: Any) -> None:
     """写入 PDD 发布失败/跳过日志（同步写入，确保每条失败都落表）。"""
+    from pdd_agent.integrations.feishu.failure_log_pipeline_system_reason import (
+        prepare_failure_log_system_reason_kwargs,
+    )
     from pdd_agent.integrations.feishu.listing_feishu_platform_guard import PLATFORM_SKIP_REASON
 
     try:
@@ -1904,6 +1914,8 @@ def schedule_pdd_upload_failure_log(**kwargs: Any) -> None:
         return
     if not cfg.pdd_upload_log.failure_log_enabled:
         return
+
+    kwargs = prepare_failure_log_system_reason_kwargs(kwargs)
 
     failure_reason = str(kwargs.get("failure_reason") or "").strip()
     merchant_code = str(kwargs.get("merchant_code") or "").strip()

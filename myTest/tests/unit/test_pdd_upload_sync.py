@@ -748,7 +748,7 @@ def test_schedule_feishu_listing_result_log_skips_preflight_bridge_inventory_rea
     assert captured == []
 
 
-def test_schedule_feishu_listing_result_log_expands_no_skus_system_reason(monkeypatch):
+def test_schedule_feishu_listing_result_log_system_reason_carries_pipeline_id(monkeypatch):
     from pdd_agent.api.services import task_runner
     from pdd_agent.integrations.feishu import pdd_upload_sync
 
@@ -763,6 +763,8 @@ def test_schedule_feishu_listing_result_log_expands_no_skus_system_reason(monkey
     task_runner._schedule_feishu_listing_result_log(
         account_id="store_A",
         product_codes=["BD023"],
+        pipeline_id="20260715_130000_ab12cd34",
+        run_id="run_x",
         result={
             "preflight": {
                 "units": [
@@ -788,11 +790,9 @@ def test_schedule_feishu_listing_result_log_expands_no_skus_system_reason(monkey
 
     assert len(captured) == 1
     assert captured[0]["reason_code"] == "preflight_no_skus"
-    sr = captured[0]["system_reason"]
-    assert "YKL001飞书无此行" in sr
-    assert "规格图文件名无法解析组合编码" in sr
-    assert "商品表无子编码" in sr
-    assert "主图" in sr
+    assert captured[0]["pipeline_id"] == "20260715_130000_ab12cd34"
+    assert captured[0]["run_id"] == "run_x"
+    assert "system_reason" not in captured[0] or not captured[0].get("system_reason")
 
 
 def test_schedule_feishu_listing_result_log_dedupes_one_failure(monkeypatch):
@@ -1001,6 +1001,10 @@ def test_push_pdd_upload_failure_log_without_merchant_code(monkeypatch):
         "map_fields_to_table_names",
         lambda client, app_token, table_id, fields: fields,
     )
+    monkeypatch.setattr(
+        "pdd_agent.integrations.feishu.failure_log_pipeline_system_reason.lookup_pipeline_id_for_listing_run",
+        lambda run_id="": "",
+    )
 
     result = push_pdd_upload_failure_log(
         account_id="store_A",
@@ -1018,7 +1022,22 @@ def test_push_pdd_upload_failure_log_without_merchant_code(monkeypatch):
     assert result["fields"]["商品编码"] == "BD722B"
     assert result["fields"]["报错平台"] == "拼多多"
     assert result["fields"]["失败原因"] == "BD722B缺YKL001"
-    assert "兄弟款规格不齐" in result["fields"]["系统原因"]
+    assert result["fields"]["系统原因"] == ""
+
+    with_pipeline = push_pdd_upload_failure_log(
+        account_id="store_A",
+        account_name="测试店",
+        merchant_code="BD722B",
+        failure_reason="BD722B缺YKL001",
+        pipeline_id="20260715_130000_ab12cd34",
+        config=FeishuConfig(
+            app_id="x",
+            app_secret="y",
+            bitable_app_token="z",
+            pdd_upload_log=PddUploadLogConfig(enabled=True, failure_table_id="tbl_fail"),
+        ),
+    )
+    assert with_pipeline["fields"]["系统原因"] == "[pipeline:20260715_130000_ab12cd34]"
 
 
 def test_push_pdd_upload_failure_log_skipped_when_failure_log_disabled():

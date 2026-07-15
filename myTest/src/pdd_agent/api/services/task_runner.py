@@ -575,11 +575,17 @@ def ensure_feishu_logged_for_terminal_run(
             codes = list(task_payload.get("product_codes") or [])
             if pipeline_row is not None:
                 codes = codes or list(getattr(pipeline_row, "product_codes", None) or [])
+            terminal_pipeline_id = str(
+                task_payload.get("pipeline_id")
+                or getattr(pipeline_row, "pipeline_id", "")
+                or ""
+            ).strip()
             _schedule_feishu_listing_result_log(
                 account_id=account,
                 run_id=run_id,
                 result=result_payload,
                 product_codes=codes,
+                pipeline_id=terminal_pipeline_id,
             )
             mark_feishu_terminal_logged(run_id)
             return
@@ -730,6 +736,7 @@ def _schedule_feishu_listing_result_log(
     result: dict[str, Any],
     run_id: str = "",
     product_codes: list[str] | None = None,
+    pipeline_id: str = "",
 ) -> None:
     from pdd_agent.domain.listing_errors import ListingErrorCode, ListingErrors
     from pdd_agent.integrations.feishu.pdd_upload_sync import (
@@ -740,6 +747,7 @@ def _schedule_feishu_listing_result_log(
 
     account_name = _account_display_name(account_id)
     publish_start, publish_end = _listing_run_timing(run_id)
+    pipeline_id = str(pipeline_id or "").strip()
     duration_seconds: float | None = None
     if publish_start and publish_end:
         duration_seconds = max(0.0, (publish_end - publish_start).total_seconds())
@@ -949,13 +957,6 @@ def _schedule_feishu_listing_result_log(
                 or "槽位对齐" in message
             ),
             priority=3,
-            system_reason=(
-                ListingErrors.build_preflight_no_skus_system_reason(
-                    preflight, listing_label, message
-                )
-                if reason_code == "preflight_no_skus"
-                else ""
-            ),
         )
 
     for err in result.get("errors") or []:
@@ -1018,12 +1019,6 @@ def _schedule_feishu_listing_result_log(
                 lines.append(brief)
         combined = ListingErrors.format_numbered(lines)
         row_label = str(primary.get("listing_label") or "")
-        system_parts: list[str] = []
-        for row in group:
-            sr = str(row.get("system_reason") or "").strip()
-            if sr and sr not in system_parts:
-                system_parts.append(sr)
-        combined_system = "；".join(system_parts)[:2000]
         schedule_pdd_upload_failure_log(
             account_id=account_id,
             account_name=account_name,
@@ -1039,7 +1034,8 @@ def _schedule_feishu_listing_result_log(
             error=str(primary.get("error") or ""),
             message=combined or str(primary.get("message") or row_label),
             failure_reason=combined,
-            system_reason=combined_system,
+            pipeline_id=pipeline_id,
+            run_id=run_id,
             publish_start=publish_start,
             publish_end=publish_end,
             duration_seconds=duration_seconds,
@@ -1279,6 +1275,7 @@ async def execute_listing(
             account_id=account_id,
             run_id=run_id,
             result={"errors": [f"unknown account: {account_id}"]},
+            pipeline_id=str(pipeline_id or "").strip(),
         )
         return {"error": f"unknown account: {account_id}"}
 
@@ -1373,6 +1370,8 @@ async def execute_listing(
                     entries=dedupe_skipped_results,
                     status_by_code=dedupe_status_map,
                     write_mode="dedupe",
+                    pipeline_id=pipeline_id,
+                    run_id=run_id,
                 )
             codes = list(dedupe.get("passed_selectors") or [])
             if pipeline_id and dedupe_skipped_results:
@@ -1542,6 +1541,8 @@ async def execute_listing(
                 publish_start=publish_start,
                 publish_end=publish_end or now,
                 duration_seconds=duration_seconds,
+                pipeline_id=pipeline_id,
+                run_id=run_id,
             )
 
             passed_codes = [
@@ -1627,6 +1628,7 @@ async def execute_listing(
                 run_id=run_id,
                 result=result,
                 product_codes=codes,
+                pipeline_id=pipeline_id,
             )
             return {"canceled": True, "results": result.get("results") or []}
         labels = []
@@ -1644,6 +1646,7 @@ async def execute_listing(
             run_id=run_id,
             result=result,
             product_codes=codes,
+            pipeline_id=pipeline_id,
         )
         try:
             from pdd_agent.api.services.listing_failure_log import persist_listing_run_failures
@@ -1677,6 +1680,7 @@ async def execute_listing(
             run_id=run_id,
             result={"errors": [str(exc)], "results": [{"status": "failed", "reason": "unexpected_error", "error": str(exc)}]},
             product_codes=codes,
+            pipeline_id=pipeline_id,
         )
         return {"error": str(exc)}
     finally:

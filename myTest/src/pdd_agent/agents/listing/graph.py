@@ -161,6 +161,7 @@ async def preflight_node(state: ListingState) -> dict:
         sync_preflight_failures_to_feishu(
             account_id=account_id,
             report=report,
+            run_id=run_id,
         )
         try:
             from pdd_agent.storage import TaskRunStore

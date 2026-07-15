@@ -84,6 +84,8 @@ def sync_preflight_failures_to_feishu(
     *,
     account_id: str,
     report: PreflightReport,
+    pipeline_id: str = "",
+    run_id: str = "",
 ) -> int:
     """将预检失败同步到飞书失败表。
 
@@ -94,6 +96,8 @@ def sync_preflight_failures_to_feishu(
         return 0
 
     shop_name = resolve_account_display_name(account_id)
+    pipeline_id = str(pipeline_id or "").strip()
+    run_id = str(run_id or "").strip()
 
     synced = 0
     for issue in _iter_issues(report):
@@ -129,6 +133,8 @@ def sync_preflight_failures_to_feishu(
                     account_name=shop_name,
                     unit=unit,
                     guard=guard,
+                    pipeline_id=pipeline_id,
+                    run_id=run_id,
                 )
             else:
                 schedule_zero_inventory_skip_feishu_log(
@@ -136,6 +142,8 @@ def sync_preflight_failures_to_feishu(
                     account_name=shop_name,
                     unit=unit,
                     guard=guard,
+                    pipeline_id=pipeline_id,
+                    run_id=run_id,
                 )
             synced += 1
         except Exception:

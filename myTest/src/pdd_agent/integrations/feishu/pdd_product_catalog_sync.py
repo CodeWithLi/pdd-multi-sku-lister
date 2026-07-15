@@ -682,6 +682,8 @@ def schedule_feishu_product_catalog_missing_logs(
     units: list[Any] | None = None,
     product_codes: list[str] | None = None,
     config: FeishuConfig | None = None,
+    pipeline_id: str = "",
+    run_id: str = "",
 ) -> int:
     """飞书商品表缺数据时写入淘宝+拼多多发布日志表（失败）（每条分项一行）。"""
     cfg = config or load_feishu_config()
@@ -711,6 +713,8 @@ def schedule_feishu_product_catalog_missing_logs(
 
     grouped: dict[str, list[str]] = defaultdict(list)
     meta: dict[str, dict[str, str]] = {}
+    pipeline_id = str(pipeline_id or "").strip()
+    run_id = str(run_id or "").strip()
 
     for issue in issues:
         detail_rows = list(issue.details)
@@ -745,6 +749,8 @@ def schedule_feishu_product_catalog_missing_logs(
             reason_code=info.get("reason_code", FEISHU_PRODUCT_CATALOG_MISSING_REASON),
             message=brief,
             failure_reason=brief,
+            pipeline_id=pipeline_id,
+            run_id=run_id,
         )
         written += 1
     return written
