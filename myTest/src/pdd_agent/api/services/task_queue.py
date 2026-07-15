@@ -194,6 +194,7 @@ class TaskQueueWorker:
                     slot_alignment_test=bool(payload.get("slot_alignment_test")),
                     spec_fill_verify_test=bool(payload.get("spec_fill_verify_test")),
                     primary_style_first_test=bool(payload.get("primary_style_first_test")),
+                    paren_size_as_product_type=bool(payload.get("paren_size_as_product_type")),
                     category_next_burst_demo=bool(payload.get("category_next_burst_demo", True)),
                     material_source=str(payload.get("material_source") or ""),
                     pipeline_id=str(payload.get("pipeline_id") or ""),
@@ -374,6 +375,7 @@ def enqueue_listing_task(
     slot_alignment_test: bool = False,
     spec_fill_verify_test: bool = False,
     primary_style_first_test: bool = False,
+    paren_size_as_product_type: bool = False,
     pipeline_id: str = "",
     material_source: str = "",
 ):
@@ -386,6 +388,7 @@ def enqueue_listing_task(
         "slot_alignment_test": bool(slot_alignment_test),
         "spec_fill_verify_test": bool(spec_fill_verify_test),
         "primary_style_first_test": bool(primary_style_first_test),
+        "paren_size_as_product_type": bool(paren_size_as_product_type),
         "material_source": str(material_source or ""),
     }
     if pipeline_id:

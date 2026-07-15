@@ -236,6 +236,7 @@ async def browser_listing_node(state: ListingState) -> dict:
     slot_alignment_test = bool(state.get("slot_alignment_test"))
     spec_fill_verify_test = bool(state.get("spec_fill_verify_test"))
     primary_style_first_test = bool(state.get("primary_style_first_test"))
+    paren_size_as_product_type = bool(state.get("paren_size_as_product_type"))
     category_next_burst_demo = bool(state.get("category_next_burst_demo", True))
 
     def _job(dp):
@@ -251,6 +252,7 @@ async def browser_listing_node(state: ListingState) -> dict:
             slot_alignment_test=slot_alignment_test,
             spec_fill_verify_test=spec_fill_verify_test,
             primary_style_first_test=primary_style_first_test,
+            paren_size_as_product_type=paren_size_as_product_type,
             category_next_burst_demo=category_next_burst_demo,
         )
 

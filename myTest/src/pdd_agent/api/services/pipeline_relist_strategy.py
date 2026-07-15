@@ -400,6 +400,7 @@ def enqueue_pending_listing_after_relist_prep(row) -> None:
                 "slot_alignment_test": bool(listing_payload_base.get("slot_alignment_test")),
                 "spec_fill_verify_test": bool(listing_payload_base.get("spec_fill_verify_test")),
                 "primary_style_first_test": bool(listing_payload_base.get("primary_style_first_test")),
+                "paren_size_as_product_type": bool(listing_payload_base.get("paren_size_as_product_type")),
                 "category_next_burst_demo": bool(
                     listing_payload_base.get("category_next_burst_demo", True)
                 ),

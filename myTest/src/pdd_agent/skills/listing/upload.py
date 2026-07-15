@@ -3926,6 +3926,7 @@ def upload_one_listing(
     slot_alignment_test: bool = False,
     spec_fill_verify_test: bool = False,
     primary_style_first_test: bool = False,
+    paren_size_as_product_type: bool = False,
     category_next_burst_demo: bool = True,
 ) -> dict[str, Any]:
     """对单个上架单元执行完整发布流程。"""
@@ -3952,6 +3953,21 @@ def upload_one_listing(
         )
         preflight_step = "slot_alignment"
         preflight_reason = "slot_alignment_failed"
+    if not spec_errors and paren_size_as_product_type:
+        from pdd_agent.skills.listing.listing_size_label_paren_rewrite import (
+            apply_paren_size_as_product_type_to_unit,
+        )
+
+        rewrite_result = apply_paren_size_as_product_type_to_unit(
+            unit,
+            account_id=account_id,
+            enabled=True,
+        )
+        if rewrite_result and rewrite_result.changes and catalog_by_combo:
+            for change in rewrite_result.changes:
+                combo = str(change.combo_folder or "").strip()
+                if combo and combo in catalog_by_combo:
+                    catalog_by_combo[combo] = change.after
     if spec_errors:
         return _finish_listing(
             run_id,
@@ -4859,6 +4875,7 @@ def run_listing_uploads(
     slot_alignment_test: bool = False,
     spec_fill_verify_test: bool = False,
     primary_style_first_test: bool = False,
+    paren_size_as_product_type: bool = False,
     category_next_burst_demo: bool = True,
 ) -> list[dict[str, Any]]:
     """顺序上架多个单元；单套失败记日志并继续，手动取消时停止。"""
@@ -4891,6 +4908,7 @@ def run_listing_uploads(
                 slot_alignment_test=slot_alignment_test,
                 spec_fill_verify_test=spec_fill_verify_test,
                 primary_style_first_test=primary_style_first_test,
+                paren_size_as_product_type=paren_size_as_product_type,
                 category_next_burst_demo=category_next_burst_demo,
             )
             results.append(item_result)

@@ -679,6 +679,7 @@ _PIPELINE_PAYLOAD_KEYS = frozenset(
         "slot_alignment_test",
         "spec_fill_verify_test",
         "primary_style_first_test",
+        "paren_size_as_product_type",
         "category_next_burst_demo",
         "listing_scheduled_at",
         "batch_id",

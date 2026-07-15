@@ -34,6 +34,7 @@ class ListingState(TypedDict, total=False):
     slot_alignment_test: bool  # 试验：主款槽位对齐，默认应由 API 传 False
     spec_fill_verify_test: bool  # 试验：槽位对齐+逐格填写+校验后再传预览图
     primary_style_first_test: bool  # 试验：本套主上架编码款式列排第一
+    paren_size_as_product_type: bool  # 试验：笔袋+挂件(公仔) → 笔袋+公仔
     category_next_burst_demo: bool  # 分类页下一步随机连点 workaround
     material_source: str
     assets_root: str

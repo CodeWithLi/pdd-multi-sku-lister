@@ -124,6 +124,7 @@ const activityDelayHours = ref(24)
 const slotAlignmentTest = ref(false)
 const specFillVerifyTest = ref(true)
 const primaryStyleFirstTest = ref(true)
+const parenSizeAsProductType = ref(false)
 const categoryNextBurstDemo = ref(true)
 
 watch(specFillVerifyTest, (enabled) => {
@@ -1948,6 +1949,7 @@ async function startPipeline() {
         slot_alignment_test: slotAlignmentTest.value,
         spec_fill_verify_test: specFillVerifyTest.value,
         primary_style_first_test: primaryStyleFirstTest.value,
+        paren_size_as_product_type: parenSizeAsProductType.value,
         category_next_burst_demo: categoryNextBurstDemo.value,
         store_start_delay_min_seconds: startDelayMin.value,
         store_start_delay_max_seconds: startDelayMax.value,
@@ -2003,6 +2005,7 @@ async function startPipeline() {
         slot_alignment_test: slotAlignmentTest.value,
         spec_fill_verify_test: specFillVerifyTest.value,
         primary_style_first_test: primaryStyleFirstTest.value,
+        paren_size_as_product_type: parenSizeAsProductType.value,
         category_next_burst_demo: categoryNextBurstDemo.value,
         skip_listing: skipListing,
         listing_skip_selectors: listingSkipSelectors,
@@ -2953,6 +2956,9 @@ onUnmounted(() => {
                   <el-checkbox v-model="primaryStyleFirstTest" class="primary-style-first-test">
                     主款款式优先（试验）
                   </el-checkbox>
+                  <el-checkbox v-model="parenSizeAsProductType" class="paren-size-as-type">
+                    挂件(公仔)→公仔（试验）
+                  </el-checkbox>
                   <el-checkbox v-model="categoryNextBurstDemo" class="category-burst-demo">
                     分类页下一步连点（演示）
                   </el-checkbox>
@@ -3077,6 +3083,9 @@ onUnmounted(() => {
                 </div>
                 <div v-if="primaryStyleFirstTest" class="form-tip">
                   开启后：本套图主上架编码（如 BD068Q）对应的款式颜色排在拼多多「款式」列第 1 位，不再按兄弟款文件夹 A-Z 顺序。可与槽位对齐 / 规格校验填表叠加。
+                </div>
+                <div v-if="parenSizeAsProductType" class="form-tip">
+                  开启后：现有识别不变；定稿后再把撞名的「笔袋+挂件(公仔)」简写为「笔袋+公仔」（仅改带括号的那一个）。
                 </div>
                 <div v-if="demoMode" class="form-tip">
                   演示模式：限时限量购上架后立即执行，活动约 2 分钟后执行，便于测试整条链路。

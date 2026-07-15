@@ -1112,6 +1112,7 @@ export interface IntegratedPipeline {
   slot_alignment_test?: boolean
   spec_fill_verify_test?: boolean
   primary_style_first_test?: boolean
+  paren_size_as_product_type?: boolean
   category_next_burst_demo?: boolean
   batch_id?: string
   listing_run_id: string
@@ -1389,6 +1390,7 @@ export interface IntegratedPipelineStartPayload {
   slot_alignment_test?: boolean
   spec_fill_verify_test?: boolean
   primary_style_first_test?: boolean
+  paren_size_as_product_type?: boolean
   category_next_burst_demo?: boolean
   skip_listing?: boolean
   listing_skip_selectors?: string[]
@@ -1427,6 +1429,7 @@ export interface IntegratedPipelineBatchStartPayload {
   slot_alignment_test?: boolean
   spec_fill_verify_test?: boolean
   primary_style_first_test?: boolean
+  paren_size_as_product_type?: boolean
   category_next_burst_demo?: boolean
   store_start_delay_min_seconds?: number
   store_start_delay_max_seconds?: number

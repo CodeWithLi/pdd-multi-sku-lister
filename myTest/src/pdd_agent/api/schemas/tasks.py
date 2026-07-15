@@ -27,6 +27,7 @@ class ListingTaskRequest(BaseModel):
     background: bool = True  # False 时同步等待（仅建议 dry_run 使用）
     slot_alignment_test: bool = True  # 试验：主款槽位对齐尺寸名（默认开启）
     primary_style_first_test: bool = False  # 试验：主上架编码款式列排第一
+    paren_size_as_product_type: bool = False  # 试验：挂件(公仔)→公仔
     material_source: str = ""  # local | minio；空则读 minio.yaml default_material_source
 
 
@@ -56,6 +57,7 @@ class ListingBatchTaskRequest(BaseModel):
     store_start_delay_max_seconds: int | None = Field(default=None, ge=0, le=3600)
     slot_alignment_test: bool = True
     primary_style_first_test: bool = False
+    paren_size_as_product_type: bool = False
     material_source: str = ""
 
 

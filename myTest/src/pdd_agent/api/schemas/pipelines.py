@@ -43,6 +43,7 @@ class IntegratedPipelineStartRequest(BaseModel):
     slot_alignment_test: bool = True
     spec_fill_verify_test: bool = False
     primary_style_first_test: bool = False
+    paren_size_as_product_type: bool = False
     category_next_burst_demo: bool = True
     skip_listing: bool = False
     listing_skip_selectors: list[str] = Field(default_factory=list)
@@ -97,6 +98,7 @@ class IntegratedPipelineBatchStartRequest(BaseModel):
     slot_alignment_test: bool = True
     spec_fill_verify_test: bool = False
     primary_style_first_test: bool = False
+    paren_size_as_product_type: bool = False
     category_next_burst_demo: bool = True
     skip_listing: bool = False
     listing_skip_selectors: list[str] = Field(default_factory=list)
@@ -200,6 +202,7 @@ class IntegratedPipelineResponse(BaseModel):
     slot_alignment_test: bool = False
     spec_fill_verify_test: bool = False
     primary_style_first_test: bool = False
+    paren_size_as_product_type: bool = False
     category_next_burst_demo: bool = True
     batch_id: str = ""
     activity_jitter_seconds: int = 0

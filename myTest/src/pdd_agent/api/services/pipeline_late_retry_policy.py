@@ -321,6 +321,7 @@ def _listing_payload_base(row) -> dict[str, Any]:
         "slot_alignment_test": bool(meta.get("slot_alignment_test")),
         "spec_fill_verify_test": bool(meta.get("spec_fill_verify_test")),
         "primary_style_first_test": bool(meta.get("primary_style_first_test")),
+        "paren_size_as_product_type": bool(meta.get("paren_size_as_product_type")),
         "category_next_burst_demo": bool(meta.get("category_next_burst_demo", True)),
         "material_source": str(meta.get("material_source") or ""),
     }
@@ -429,6 +430,7 @@ def start_late_retry_failed(
             "slot_alignment_test": bool(payload_base.get("slot_alignment_test")),
             "spec_fill_verify_test": bool(payload_base.get("spec_fill_verify_test")),
             "primary_style_first_test": bool(payload_base.get("primary_style_first_test")),
+            "paren_size_as_product_type": bool(payload_base.get("paren_size_as_product_type")),
             "category_next_burst_demo": bool(payload_base.get("category_next_burst_demo", True)),
             "material_source": str(payload_base.get("material_source") or ""),
         },
