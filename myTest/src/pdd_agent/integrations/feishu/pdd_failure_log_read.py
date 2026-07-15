@@ -275,10 +275,10 @@ def build_cycle_relist_candidate_search_filter(
     completed_status: str,
     fetch_after_date: str = "",
 ) -> dict[str, Any]:
-    """飞书 search filter：处理状态镜像 + 循环上架未选。
+    """飞书 search filter：仅处理状态镜像。
 
-    日期筛选不放进飞书 search（Date 字段算子易触发 InvalidFilter 1254018），
-    统一在本地按「日期」字段过滤。
+    「是否已循环上架」在表内常为「否」（非空），isEmpty 会漏掉；日期算子易
+    InvalidFilter。二者都在本地过滤（空/否 + 抓取时间）。
     """
     del fetch_after_date  # 保留参数兼容调用方，故意不写入飞书 filter
     status = str(completed_status or "").strip()
@@ -299,7 +299,6 @@ def build_cycle_relist_candidate_search_filter(
                 "operator": "is",
                 "value": [status],
             },
-            build_cycle_relist_empty_condition(api, ctx),
         ],
     }
 

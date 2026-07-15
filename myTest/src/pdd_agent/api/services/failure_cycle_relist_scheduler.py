@@ -211,7 +211,18 @@ class FailureCycleRelistWatchScheduler:
     def _poll_sync(self, force: bool = False) -> dict[str, Any]:
         cfg = load_feishu_config()
         watch = cfg.pdd_upload_log.failure_cycle_relist_watch
+        logger.info(
+            "cycle relist poll tick force=%s enabled=%s poll_seconds=%s fetch_after=%s "
+            "attach=%s capture_pipeline=%s",
+            force,
+            bool(watch.enabled),
+            int(watch.poll_seconds or 0),
+            str(getattr(watch, "fetch_after_date", "") or "") or "(none)",
+            bool(getattr(watch, "attach_source_pipeline_enabled", False)),
+            bool(getattr(watch, "capture_pipeline_id_enabled", False)),
+        )
         if not watch.enabled and not force:
+            logger.info("cycle relist poll skipped: watch_disabled")
             return {
                 "ok": True,
                 "skipped": True,
@@ -224,6 +235,7 @@ class FailureCycleRelistWatchScheduler:
         self._last_poll_at = utc_now_iso()
         if not result.get("ok"):
             self._last_error = str(result.get("error") or "poll failed")
+            logger.warning("cycle relist poll failed: %s", self._last_error)
             return {
                 "ok": False,
                 "error": self._last_error,
@@ -447,6 +459,14 @@ class FailureCycleRelistWatchScheduler:
                 len(new_items),
                 ", ".join(str(x.get("merchant_code") or x.get("record_id")) for x in new_items[:5]),
             )
+        else:
+            logger.info(
+                "cycle relist poll summary polled_at=%s candidates=%s new=0 mode=%s auto_process=%s",
+                self._last_poll_at,
+                self._candidate_total,
+                result.get("fetch_mode"),
+                auto_process,
+            )
         return {
             "ok": True,
             "polled_at": self._last_poll_at,
@@ -663,13 +683,24 @@ class FailureCycleRelistWatchScheduler:
         return ""
 
     async def _loop(self) -> None:
+        logger.info("cycle relist watch loop entered")
         while not self._stop.is_set():
             try:
                 cfg = load_feishu_config()
                 watch = cfg.pdd_upload_log.failure_cycle_relist_watch
-                if watch.enabled:
-                    await self.poll_once()
                 interval = max(10, int(watch.poll_seconds or 60))
+                if watch.enabled:
+                    logger.info(
+                        "cycle relist watch loop firing poll (interval=%ss fetch_after=%s)",
+                        interval,
+                        str(getattr(watch, "fetch_after_date", "") or "") or "(none)",
+                    )
+                    await self.poll_once()
+                else:
+                    logger.info(
+                        "cycle relist watch loop idle (disabled), next check in %ss",
+                        interval,
+                    )
             except Exception:
                 logger.exception("failure cycle relist watch tick failed")
                 interval = 60

@@ -69,7 +69,25 @@ def is_cycle_relist_candidate(
     watch: PddFailureCycleRelistWatchConfig,
     record_date: str = "",
 ) -> bool:
-    """处理状态已完成 + 循环上架为空 + 失败原因不含排除短语 + 可选日期筛选。"""
+    """处理状态已完成 + 循环上架为空/否 + 失败原因不含排除短语 + 可选日期筛选。"""
+    return cycle_relist_reject_reason(
+        process_status=process_status,
+        cycle_relist=cycle_relist,
+        failure_reason=failure_reason,
+        watch=watch,
+        record_date=record_date,
+    ) is None
+
+
+def cycle_relist_reject_reason(
+    *,
+    process_status: str,
+    cycle_relist: str,
+    failure_reason: str,
+    watch: PddFailureCycleRelistWatchConfig,
+    record_date: str = "",
+) -> str | None:
+    """返回未入选原因；通过则 None。"""
     from pdd_agent.integrations.feishu.failure_cycle_relist_exclude import (
         failure_reason_matches_exclude_phrases,
     )
@@ -80,20 +98,20 @@ def is_cycle_relist_candidate(
     status = str(process_status or "").strip()
     completed = {str(x).strip() for x in watch.completed_statuses if str(x).strip()}
     if status not in completed:
-        return False
+        return f"process_status={status!r}"
     if not is_cycle_relist_unselected(cycle_relist):
-        return False
+        return f"cycle_relist={str(cycle_relist or '')!r}"
     if failure_reason_matches_exclude_phrases(
         failure_reason,
         watch.exclude_failure_reason_contains,
     ):
-        return False
+        return "exclude_failure_reason"
     if not record_date_meets_fetch_after(
         record_date=record_date,
         fetch_after_date=getattr(watch, "fetch_after_date", "") or "",
     ):
-        return False
-    return True
+        return f"date={str(record_date or '')!r}<fetch_after={getattr(watch, 'fetch_after_date', '')!r}"
+    return None
 
 
 def _item_to_candidate(item: dict[str, Any]) -> CycleRelistCandidate:
@@ -163,6 +181,11 @@ def _collect_cycle_relist_rows_via_search(
     watch: PddFailureCycleRelistWatchConfig,
     page_size: int,
 ) -> list[dict[str, Any]]:
+    from pdd_agent.integrations.feishu.failure_cycle_relist_date_filter import (
+        record_date_meets_fetch_after,
+    )
+
+    fetch_after = str(getattr(watch, "fetch_after_date", "") or "")
     rows: list[dict[str, Any]] = []
     seen_ids: set[str] = set()
     for status in _completed_statuses(watch):
@@ -170,7 +193,7 @@ def _collect_cycle_relist_rows_via_search(
             ctx,
             api,
             completed_status=status,
-            fetch_after_date=str(getattr(watch, "fetch_after_date", "") or ""),
+            fetch_after_date=fetch_after,
         )
         for batch in iter_search_record_pages(
             api,
@@ -185,7 +208,14 @@ def _collect_cycle_relist_rows_via_search(
                     continue
                 if rid:
                     seen_ids.add(rid)
-                rows.append(parse_failure_log_record(record, ctx))
+                parsed = parse_failure_log_record(record, ctx)
+                if not record_date_meets_fetch_after(
+                    record_date=parsed.get("date") or "",
+                    fetch_after_date=fetch_after,
+                ):
+                    continue
+                rows.append(parsed)
+    rows.sort(key=lambda r: str(r.get("date") or ""), reverse=True)
     return rows
 
 
@@ -235,6 +265,54 @@ def _collect_cycle_relist_rows_via_list_all(
     return rows
 
 
+def _log_candidate_filter_diagnostics(
+    rows: list[dict[str, Any]],
+    *,
+    watch: PddFailureCycleRelistWatchConfig,
+    candidates: list[CycleRelistCandidate],
+) -> None:
+    """候选为 0 或命中调试编码时，打印筛掉原因。"""
+    fetch_after = str(getattr(watch, "fetch_after_date", "") or "")
+    reason_counts: dict[str, int] = {}
+    interesting: list[str] = []
+    for row in rows:
+        cand = _item_to_candidate(row)
+        reason = cycle_relist_reject_reason(
+            process_status=cand.process_status,
+            cycle_relist=cand.cycle_relist,
+            failure_reason=cand.failure_reason,
+            watch=watch,
+            record_date=cand.date,
+        )
+        key = reason or "ok"
+        # 聚合：日期类合并前缀，避免爆炸
+        if key.startswith("date="):
+            bucket = "date_mismatch"
+        elif key.startswith("process_status="):
+            bucket = "process_status"
+        elif key.startswith("cycle_relist="):
+            bucket = f"cycle_relist:{cand.cycle_relist or '∅'}"
+        else:
+            bucket = key
+        reason_counts[bucket] = reason_counts.get(bucket, 0) + 1
+        code = str(cand.merchant_code or "").strip().upper()
+        if code == "BD103A" or (reason is None and len(interesting) < 5):
+            interesting.append(
+                f"{cand.merchant_code}|{cand.account_name}|date={cand.date}|"
+                f"status={cand.process_status}|cycle={cand.cycle_relist!r}|"
+                f"pipeline={cand.source_pipeline_id or '-'}|reject={reason or 'ok'}"
+            )
+
+    logger.info(
+        "cycle relist filter diagnostics fetch_after=%s raw=%s candidates=%s reject_buckets=%s samples=%s",
+        fetch_after or "(none)",
+        len(rows),
+        len(candidates),
+        reason_counts,
+        interesting[:8],
+    )
+
+
 def list_cycle_relist_candidates(
     config: FeishuConfig | None = None,
     client: FeishuClient | None = None,
@@ -246,9 +324,23 @@ def list_cycle_relist_candidates(
     watch_cfg = watch or cfg.pdd_upload_log.failure_cycle_relist_watch
     max_candidates = max(1, min(int(watch_cfg.fetch_limit), 500))
     page_size = max(1, min(int(watch_cfg.fetch_page_size or 50), 200))
+    fetch_after = str(getattr(watch_cfg, "fetch_after_date", "") or "")
+
+    logger.info(
+        "cycle relist fetch begin table_scan fetch_after=%s completed=%s limit=%s page_size=%s exclude=%s",
+        fetch_after or "(none)",
+        list(_completed_statuses(watch_cfg)),
+        max_candidates,
+        page_size,
+        list(watch_cfg.exclude_failure_reason_contains or [])[:3],
+    )
 
     resolved = resolve_failure_log_table_context(cfg, api)
     if isinstance(resolved, dict):
+        logger.warning(
+            "cycle relist fetch resolve table failed: %s",
+            resolved.get("error") or resolved,
+        )
         return {
             "ok": False,
             "error": str(resolved.get("error") or "读取失败日志失败"),
@@ -284,6 +376,21 @@ def list_cycle_relist_candidates(
         )
 
     candidates = _rows_to_candidates(rows, watch=watch_cfg, max_candidates=max_candidates)
+    logger.info(
+        "cycle relist fetch done mode=%s table=%s raw_rows=%s candidates=%s codes=%s",
+        fetch_mode,
+        ctx.table_name or ctx.table_id,
+        len(rows),
+        len(candidates),
+        [c.merchant_code for c in candidates[:8]],
+    )
+    if not candidates or any(
+        str(c.merchant_code or "").strip().upper() == "BD103A" for c in candidates
+    ) or any(str(r.get("merchant_code") or "").strip().upper() == "BD103A" for r in rows):
+        _log_candidate_filter_diagnostics(rows, watch=watch_cfg, candidates=candidates)
+    elif rows:
+        # 有拉取行但筛空：始终打诊断
+        _log_candidate_filter_diagnostics(rows, watch=watch_cfg, candidates=candidates)
 
     return {
         "ok": True,

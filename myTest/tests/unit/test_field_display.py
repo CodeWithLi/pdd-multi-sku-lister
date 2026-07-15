@@ -25,3 +25,14 @@ def test_format_plain_text_from_rich_text():
 
 def test_format_user_names():
     assert format_user_names([{"name": "于跃"}, {"name": "刘一江"}]) == "于跃、刘一江"
+
+
+def test_is_cycle_relist_unselected_accepts_fou():
+    from pdd_agent.integrations.feishu.field_display import is_cycle_relist_unselected
+
+    assert is_cycle_relist_unselected("") is True
+    assert is_cycle_relist_unselected(None) is True
+    assert is_cycle_relist_unselected(False) is True
+    assert is_cycle_relist_unselected("否") is True
+    assert is_cycle_relist_unselected("是") is False
+    assert is_cycle_relist_unselected("循环上架中") is False

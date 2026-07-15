@@ -47,12 +47,13 @@ def test_build_filter_single_status_and_cycle_relist_empty():
                 )
     assert body["conjunction"] == "and"
     assert "children" not in body
-    assert body["conditions"][0] == {
-        "field_name": "（不要动）处理状态镜像",
-        "operator": "is",
-        "value": ["已结束"],
-    }
-    assert body["conditions"][1]["operator"] == "isEmpty"
+    assert body["conditions"] == [
+        {
+            "field_name": "（不要动）处理状态镜像",
+            "operator": "is",
+            "value": ["已结束"],
+        },
+    ]
 
 
 def test_build_empty_condition_for_checkbox_field():

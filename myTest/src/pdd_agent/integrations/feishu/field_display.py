@@ -126,13 +126,16 @@ def format_single_select(value: Any) -> str:
 
 
 def is_cycle_relist_unselected(value: Any) -> bool:
-    """是否已循环上架：未勾选 / 未选任何选项。"""
+    """是否已循环上架：未勾选 / 未选 / 显式「否」（表内常填否表示尚未循环）。"""
     if isinstance(value, bool):
         return not value
     text = str(value or "").strip()
     if not text:
         return True
     if text.lower() in ("false", "0", "no"):
+        return True
+    # 飞书单选常见：是 / 否；「否」表示未循环，应视为待处理候选
+    if text in ("否", "未循环", "未上架", "无"):
         return True
     return False
 
