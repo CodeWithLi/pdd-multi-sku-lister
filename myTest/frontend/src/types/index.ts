@@ -502,6 +502,7 @@ export interface PddFailureCycleRelistWatch {
   poll_seconds: number
   completed_statuses: string[]
   exclude_failure_reason_contains: string[]
+  fetch_after_date: string
   scheduler_running: boolean
   last_poll_at: string
   last_error: string
@@ -536,6 +537,7 @@ export interface PddFailureCycleRelistWatchUpdate {
   poll_seconds: number
   completed_statuses: string[]
   exclude_failure_reason_contains: string[]
+  fetch_after_date?: string
   sequential_staged_enabled: boolean
   sequential_activity_delay_minutes: number
   attach_source_pipeline_enabled: boolean

@@ -26,6 +26,30 @@ const showDebug = ref(false)
 const selected = ref<PddFailureLogRecord | null>(null)
 const limit = ref(100)
 
+const FAILURE_LOG_READ_TABLE_KEY = 'pdd_agent.failure_log.read_table_enabled'
+
+function loadReadFailureTablePref(): boolean {
+  try {
+    const raw = localStorage.getItem(FAILURE_LOG_READ_TABLE_KEY)
+    if (raw === '0' || raw === 'false') return false
+    if (raw === '1' || raw === 'true') return true
+  } catch {
+    // ignore
+  }
+  return true
+}
+
+function saveReadFailureTablePref(enabled: boolean) {
+  try {
+    localStorage.setItem(FAILURE_LOG_READ_TABLE_KEY, enabled ? '1' : '0')
+  } catch {
+    // ignore
+  }
+}
+
+/** 是否读取下方「全平台发布日志表（失败）」；关闭后不请求飞书表 */
+const readFailureTableEnabled = ref(loadReadFailureTablePref())
+
 const watchConfig = ref<PddFailureCycleRelistWatch | null>(null)
 const candidates = ref<PddFailureCycleRelistCandidate[]>([])
 const pollLogs = ref<PddFailureCycleRelistPollLog[]>([])
@@ -58,6 +82,7 @@ const watchForm = reactive({
   poll_seconds: 60,
   completed_statuses: ['已结束', '已处理完成'] as string[],
   exclude_failure_reason_contains: [] as string[],
+  fetch_after_date: '',
   sequential_staged_enabled: false,
   sequential_activity_delay_minutes: 5,
   attach_source_pipeline_enabled: false,
@@ -90,6 +115,47 @@ function removeExcludeFailureReason(index: number) {
 
 const items = computed(() => data.value?.items ?? [])
 const recentActions = computed(() => watchConfig.value?.recent_actions ?? [])
+
+const attachPathReady = computed(
+  () =>
+    Boolean(watchForm.attach_source_pipeline_enabled) &&
+    Boolean(watchForm.capture_pipeline_id_enabled),
+)
+
+const statusSummaryTitle = computed(() => {
+  const cfg = watchConfig.value
+  if (!cfg) return '加载配置中…'
+  if (!cfg.enabled) return '未启用：仅可查看候选，不会自动处理'
+  if (cfg.sequential_staged_enabled) {
+    return cfg.sequential_scheduler_running
+      ? `分阶段运行中 · 每 ${cfg.poll_seconds}s 一条`
+      : '分阶段已启用，但调度未运行（请保存或重启服务）'
+  }
+  if (!cfg.scheduler_running) return '已启用，但调度未运行（请保存或重启服务）'
+  if (attachPathReady.value) {
+    return `挂回原链路运行中 · 每 ${cfg.poll_seconds}s 轮询 · 仅处理含链路 ID 的记录`
+  }
+  return `循环上架运行中 · 每 ${cfg.poll_seconds}s 轮询（新建整合链路）`
+})
+
+const candidatesEmptyText = computed(() => {
+  if (!watchForm.enabled) {
+    return '尚未启用自动处理。打开上方「启用」并保存后，符合条件的失败项会出现在这里。'
+  }
+  if (attachPathReady.value) {
+    return '暂无待处理候选。请检查：抓取时间、排除原因、处理状态筛选，以及系统原因是否含 [pipeline:…]。'
+  }
+  return '暂无符合条件的候选。可点「手动拉取」，或检查抓取时间、排除失败原因与处理状态。'
+})
+
+function candidateRowClassName({ row }: { row: PddFailureCycleRelistCandidate }) {
+  if (attachPathReady.value && !String(row.source_pipeline_id || '').trim()) {
+    return 'row-missing-pipeline'
+  }
+  return ''
+}
+
+const morePanels = ref<string[]>([])
 
 const watchStatusType = computed(() => {
   if (!watchConfig.value?.enabled) return 'info'
@@ -246,6 +312,7 @@ function applyWatch(data: PddFailureCycleRelistWatch) {
   watchForm.poll_seconds = data.poll_seconds
   watchForm.completed_statuses = [...data.completed_statuses]
   watchForm.exclude_failure_reason_contains = [...(data.exclude_failure_reason_contains || [])]
+  watchForm.fetch_after_date = String(data.fetch_after_date || '')
   watchForm.sequential_staged_enabled = Boolean(data.sequential_staged_enabled)
   watchForm.sequential_activity_delay_minutes = Number(data.sequential_activity_delay_minutes ?? 5)
   watchForm.attach_source_pipeline_enabled = Boolean(data.attach_source_pipeline_enabled)
@@ -472,6 +539,7 @@ async function saveWatch(options?: { successMessage?: string }) {
       poll_seconds: watchForm.poll_seconds,
       completed_statuses: [...watchForm.completed_statuses],
       exclude_failure_reason_contains: [...watchForm.exclude_failure_reason_contains],
+      fetch_after_date: watchForm.fetch_after_date || '',
       sequential_staged_enabled: watchForm.sequential_staged_enabled,
       sequential_activity_delay_minutes: watchForm.sequential_activity_delay_minutes,
       attach_source_pipeline_enabled: watchForm.attach_source_pipeline_enabled,
@@ -504,6 +572,12 @@ function onEnabledSwitchChange() {
   void saveWatch()
 }
 
+function onFetchAfterDateChange(value: string | null) {
+  watchForm.fetch_after_date = value ? String(value) : ''
+  if (watchLoading.value || watchSaving.value) return
+  void saveWatch({ successMessage: '抓取时间已保存' })
+}
+
 function onAttachSourcePipelineChange(value: boolean | string | number) {
   if (!value) {
     watchForm.capture_pipeline_id_enabled = false
@@ -530,6 +604,12 @@ function setupWatchRefresh() {
 }
 
 async function load() {
+  if (!readFailureTableEnabled.value) {
+    data.value = null
+    error.value = ''
+    ElMessage.info('已关闭读取失败表，不请求飞书数据')
+    return
+  }
   loading.value = true
   error.value = ''
   try {
@@ -549,13 +629,30 @@ async function load() {
   }
 }
 
+function onReadFailureTableChange(value: boolean | string | number) {
+  const enabled = Boolean(value)
+  readFailureTableEnabled.value = enabled
+  saveReadFailureTablePref(enabled)
+  if (!enabled) {
+    data.value = null
+    error.value = ''
+    ElMessage.success('已关闭读取失败表')
+    return
+  }
+  void load()
+}
+
 function openDebug(row: PddFailureLogRecord) {
   selected.value = row
   showDebug.value = true
 }
 
 onMounted(async () => {
-  await Promise.all([load(), loadWatch(), loadCandidates(), loadPollLogs(), loadSequentialJobs()])
+  const boot = [loadWatch(), loadCandidates(), loadPollLogs(), loadSequentialJobs()]
+  if (readFailureTableEnabled.value) {
+    boot.unshift(load())
+  }
+  await Promise.all(boot)
   setupWatchRefresh()
 })
 
@@ -568,7 +665,7 @@ onUnmounted(() => {
   <div class="page">
     <PageHeader
       title="发布失败日志"
-      subtitle="从飞书多维表格读取失败记录，处理状态以「处理状态镜像」列为准"
+      subtitle="按规则自动/手动处理失败项；挂回原链路需同时开启「抓取链路 ID」"
     />
 
     <el-alert
@@ -580,10 +677,11 @@ onUnmounted(() => {
       class="mb-16"
     />
 
+    <!-- 1. 顶部状态 + 精简规则 -->
     <el-card shadow="never" class="mb-16" v-loading="watchLoading">
       <template #header>
         <div class="card-header">
-          <span>自动循环上架</span>
+          <span>处理规则</span>
           <div class="card-actions">
             <el-button :loading="manualPolling" @click="manualPoll">手动拉取</el-button>
             <el-button type="primary" :loading="watchSaving" @click="saveWatch">保存</el-button>
@@ -598,108 +696,108 @@ onUnmounted(() => {
         :closable="false"
         class="mb-12"
       >
-        <template #title>
-          {{
-            watchConfig.enabled
-              ? watchConfig.sequential_staged_enabled
-                ? watchConfig.sequential_scheduler_running
-                  ? `分阶段运行中：每 ${watchConfig.poll_seconds} 秒处理一条（上架→限时限量购→618→七折→推广）`
-                  : '分阶段已启用但调度未运行，请点保存或重启服务'
-                : watchConfig.scheduler_running
-                  ? `运行中：每 ${watchConfig.poll_seconds} 秒轮询，新候选自动 Redis 占用并跑整合链路`
-                  : '已启用但调度未运行，请点保存或重启服务'
-              : '未启用：仅展示候选，不会自动跑链路'
-          }}
-        </template>
-        <template v-if="watchConfig.last_poll_at || watchConfig.last_error" #default>
+        <template #title>{{ statusSummaryTitle }}</template>
+        <template #default>
           <span v-if="watchConfig.last_poll_at">
-            上次轮询 {{ watchConfig.last_poll_at }} · 候选 {{ watchConfig.candidate_total }} 条 · 本轮新发现 {{ watchConfig.new_count }} 条
+            上次轮询 {{ watchConfig.last_poll_at }} · 候选 {{ watchConfig.candidate_total }} · 新发现
+            {{ watchConfig.new_count }}
           </span>
-          <span v-if="watchConfig.sequential_staged_enabled && watchConfig.sequential_last_tick_at">
-            · 分阶段上次执行 {{ watchConfig.sequential_last_tick_at }}
-            <template v-if="watchConfig.sequential_batch_active"> · 批次进行中</template>
+          <span v-else>尚未轮询</span>
+          <span v-if="attachPathReady" class="mode-chip"> · 挂回原链路已齐</span>
+          <span
+            v-else-if="watchForm.attach_source_pipeline_enabled && !watchForm.capture_pipeline_id_enabled"
+            class="warn-text"
+          >
+            · 已开挂回，请再开「抓取链路 ID」
           </span>
           <span v-if="watchConfig.last_error" class="error-text"> · {{ watchConfig.last_error }}</span>
-          <span v-if="watchConfig.sequential_last_error" class="error-text">
-            · 分阶段 {{ watchConfig.sequential_last_error }}
+          <span>
+            · <router-link to="/daily-stats">日报统计 →</router-link>
           </span>
-          <span> · <router-link to="/daily-stats">按日期查看上架/循环统计 →</router-link></span>
         </template>
       </el-alert>
 
-      <el-form label-width="140px" class="watch-form">
+      <el-alert
+        v-if="hasCycleRelistBlocker"
+        :type="watchConfig?.cycle_relist_blocker_stale ? 'warning' : 'error'"
+        show-icon
+        :closable="false"
+        class="mb-12"
+      >
+        <template #title>
+          {{
+            watchConfig?.cycle_relist_blocker_stale
+              ? `僵尸链路阻塞：${watchConfig?.cycle_relist_blocker_pipeline_id}（${watchConfig?.cycle_relist_blocker_age_hours}h）`
+              : `链路阻塞中：${watchConfig?.cycle_relist_blocker_pipeline_id}`
+          }}
+        </template>
+        <template #default>
+          <span>候选会卡在「等待中」。确认没在跑时可解除阻塞。</span>
+          <el-button
+            class="ml-12"
+            type="danger"
+            size="small"
+            :loading="dismissBlockerLoading"
+            @click="dismissCycleRelistBlocker"
+          >
+            解除阻塞
+          </el-button>
+        </template>
+      </el-alert>
+
+      <el-form label-width="120px" class="watch-form rules-compact">
         <el-form-item label="启用">
           <el-switch v-model="watchForm.enabled" @change="onEnabledSwitchChange" />
         </el-form-item>
-        <el-form-item label="分阶段流水线">
-          <el-switch
-            v-model="watchForm.sequential_staged_enabled"
-            :disabled="!watchForm.enabled"
-            active-text="上架→限时限量购→活动→推广（不走整合链路）"
-            inactive-text="整合链路"
-            @change="onEnabledSwitchChange"
-          />
-        </el-form-item>
+
         <el-form-item label="挂回原链路">
-          <el-switch
-            v-model="watchForm.attach_source_pipeline_enabled"
-            :disabled="!watchForm.enabled || watchForm.sequential_staged_enabled"
-            active-text="挂回原链路重跑（上架→限时→活动改期）"
-            inactive-text="关闭"
-            @change="onAttachSourcePipelineChange"
-          />
+          <div class="switch-pair">
+            <el-switch
+              v-model="watchForm.attach_source_pipeline_enabled"
+              :disabled="!watchForm.enabled || watchForm.sequential_staged_enabled"
+              active-text="开"
+              inactive-text="关"
+              @change="onAttachSourcePipelineChange"
+            />
+            <el-switch
+              v-model="watchForm.capture_pipeline_id_enabled"
+              :disabled="
+                !watchForm.enabled ||
+                watchForm.sequential_staged_enabled ||
+                !watchForm.attach_source_pipeline_enabled
+              "
+              active-text="抓取链路 ID"
+              inactive-text="不抓取"
+              @change="onEnabledSwitchChange"
+            />
+          </div>
           <div class="form-hint">
-            开启后须同时开启「抓取链路 ID」才会走新路径；不再新建整条整合链路。
+            两开关都开才挂回原链路重跑（上架→限时→活动改期）；无 [pipeline:…] 的条目会跳过。
           </div>
         </el-form-item>
-        <el-form-item label="抓取链路 ID">
-          <el-switch
-            v-model="watchForm.capture_pipeline_id_enabled"
-            :disabled="
-              !watchForm.enabled ||
-              watchForm.sequential_staged_enabled ||
-              !watchForm.attach_source_pipeline_enabled
-            "
-            active-text="仅处理系统原因含 [pipeline:…] 的记录"
-            inactive-text="关闭"
-            @change="onEnabledSwitchChange"
+
+        <el-form-item label="抓取时间">
+          <el-date-picker
+            v-model="watchForm.fetch_after_date"
+            type="date"
+            value-format="YYYY-MM-DD"
+            placeholder="仅抓取该日及之后（飞书「日期」）"
+            clearable
+            style="width: 260px"
+            @change="onFetchAfterDateChange"
           />
           <div class="form-hint">
-            与「挂回原链路」同时开启后生效：系统原因没有链路 ID 的条目直接跳过、不处理。
+            按飞书失败表「日期」字段筛选：只处理 >= 该日的记录；清空则不过滤日期。
           </div>
         </el-form-item>
-        <el-form-item v-if="watchForm.sequential_staged_enabled" label="活动延迟（分钟）">
-          <el-input-number
-            v-model="watchForm.sequential_activity_delay_minutes"
-            :min="0"
-            :max="10080"
-            :step="1"
-          />
-          <div class="form-hint">
-            每条限时限量购完成（成功或失败）后，等待该分钟数再跑 618/七折；超时未跑也会补跑，整批最后一条推广完成才结束
-          </div>
-        </el-form-item>
-        <el-form-item label="轮询间隔（秒）">
-          <el-input-number v-model="watchForm.poll_seconds" :min="10" :max="3600" :step="10" />
-        </el-form-item>
-        <el-form-item label="已完成处理状态">
-          <el-select
-            v-model="watchForm.completed_statuses"
-            multiple
-            filterable
-            allow-create
-            default-first-option
-            placeholder="已结束、已处理完成"
-            style="width: 100%"
-          />
-        </el-form-item>
+
         <el-form-item label="排除失败原因">
           <div class="exclude-reason-editor">
             <div class="exclude-reason-input-row">
               <el-input
                 v-model="excludeReasonDraft"
                 clearable
-                placeholder="输入失败原因短语后点添加或按回车"
+                placeholder="短语：包含即不进候选，回车或点添加"
                 @keydown.enter.prevent="addExcludeFailureReason()"
               />
               <el-button type="primary" @click="addExcludeFailureReason()">添加</el-button>
@@ -715,290 +813,91 @@ onUnmounted(() => {
                 {{ phrase }}
               </el-tag>
             </div>
-            <div v-else class="form-hint">暂无排除短语</div>
-          </div>
-          <div class="form-hint">
-            可添加多条；失败原因包含其中任意一条即不进入循环上架候选。添加/删除后会自动保存。
+            <div v-else class="form-hint">暂无排除短语（添加/删除后自动保存）</div>
           </div>
         </el-form-item>
-      </el-form>
 
-      <template v-if="watchForm.sequential_staged_enabled">
-        <el-divider content-position="left">分阶段任务进度</el-divider>
-        <div v-loading="stuckJobsLoading" class="stuck-reset-panel mb-12">
-          <el-button
-            type="warning"
-            :loading="resetStuckLoading"
-            :disabled="!stuckJobs.length"
-            @click="resetStuckSequentialJobs"
-          >
-            重置卡死的运行中任务
-          </el-button>
-          <div v-if="stuckJobs.length" class="stuck-reset-hint">
-            <p class="stuck-reset-count">
-              当前 {{ stuckJobs.length }} 条任务卡死（状态为运行中，但无活跃执行）：
-            </p>
-            <ul class="stuck-reset-list">
-              <li v-for="row in stuckJobs" :key="row.job_id">
-                <strong>{{ row.merchant_code || '—' }}</strong>
-                · {{ row.account_name || '—' }}
-                · 卡死阶段：{{ stuckStageSummary(row) || '—' }}
-                · 更新于 {{ row.updated_at || '—' }}
-              </li>
-            </ul>
-          </div>
-          <p v-else class="stuck-reset-empty">当前无卡死任务</p>
+        <el-collapse class="more-settings">
+          <el-collapse-item title="更多设置（轮询 / 处理状态 / 分阶段）" name="more-settings">
+            <el-form-item label="分阶段流水线">
+              <el-switch
+                v-model="watchForm.sequential_staged_enabled"
+                :disabled="!watchForm.enabled"
+                active-text="分阶段（不走整合链路）"
+                inactive-text="关闭"
+                @change="onEnabledSwitchChange"
+              />
+            </el-form-item>
+            <el-form-item v-if="watchForm.sequential_staged_enabled" label="活动延迟(分)">
+              <el-input-number
+                v-model="watchForm.sequential_activity_delay_minutes"
+                :min="0"
+                :max="10080"
+                :step="1"
+              />
+            </el-form-item>
+            <el-form-item label="轮询间隔(秒)">
+              <el-input-number v-model="watchForm.poll_seconds" :min="10" :max="3600" :step="10" />
+            </el-form-item>
+            <el-form-item label="已完成状态">
+              <el-select
+                v-model="watchForm.completed_statuses"
+                multiple
+                filterable
+                allow-create
+                default-first-option
+                placeholder="已结束、已处理完成"
+                style="width: 100%"
+              />
+            </el-form-item>
+          </el-collapse-item>
+        </el-collapse>
+      </el-form>
+    </el-card>
+
+    <!-- 2. 主工作区：当前待处理候选 -->
+    <el-card shadow="never" class="mb-16 primary-work">
+      <template #header>
+        <div class="card-header">
+          <span>当前待处理候选（{{ candidates.length }}）</span>
+          <el-button size="small" :loading="manualPolling" @click="manualPoll">刷新候选</el-button>
         </div>
-        <el-table
-          v-loading="sequentialJobsLoading"
-          :data="sequentialJobs"
-          stripe
-          border
-          size="small"
-          empty-text="暂无分阶段任务（启用并保存后会自动创建批次）"
-          class="mb-16"
-        >
-          <el-table-column prop="merchant_code" label="商品编码" width="120" show-overflow-tooltip />
-          <el-table-column prop="account_name" label="店铺" width="100" show-overflow-tooltip />
-          <el-table-column prop="pdd_product_id" label="商品ID" width="120" show-overflow-tooltip />
-          <el-table-column label="上架" width="80">
-            <template #default="{ row }: { row: FailureSequentialJob }">
-              <el-tag :type="stageStatusType(row.listing_status)" size="small">
-                {{ stageStatusLabel(row.listing_status) }}
-              </el-tag>
-            </template>
-          </el-table-column>
-          <el-table-column label="限时限量购" width="100">
-            <template #default="{ row }: { row: FailureSequentialJob }">
-              <el-tag :type="stageStatusType(row.limited_time_status)" size="small">
-                {{ stageStatusLabel(row.limited_time_status) }}
-              </el-tag>
-            </template>
-          </el-table-column>
-          <el-table-column prop="limited_time_completed_at" label="限量购完成" width="155" />
-          <el-table-column label="618" width="80">
-            <template #default="{ row }: { row: FailureSequentialJob }">
-              <el-tag :type="stageStatusType(row.activity_618_status)" size="small">
-                {{ stageStatusLabel(row.activity_618_status) }}
-              </el-tag>
-            </template>
-          </el-table-column>
-          <el-table-column label="七折" width="80">
-            <template #default="{ row }: { row: FailureSequentialJob }">
-              <el-tag :type="stageStatusType(row.activity_discount_status)" size="small">
-                {{ stageStatusLabel(row.activity_discount_status) }}
-              </el-tag>
-            </template>
-          </el-table-column>
-          <el-table-column label="推广" width="80">
-            <template #default="{ row }: { row: FailureSequentialJob }">
-              <el-tag :type="stageStatusType(row.promotion_status)" size="small">
-                {{ stageStatusLabel(row.promotion_status) }}
-              </el-tag>
-            </template>
-          </el-table-column>
-          <el-table-column label="最近错误" min-width="160" show-overflow-tooltip>
-            <template #default="{ row }: { row: FailureSequentialJob }">
-              {{
-                row.listing_error ||
-                  row.limited_time_error ||
-                  row.activity_618_error ||
-                  row.activity_discount_error ||
-                  row.promotion_error ||
-                  '—'
-              }}
-            </template>
-          </el-table-column>
-          <el-table-column prop="updated_at" label="更新时间" width="160" />
-        </el-table>
       </template>
 
-      <el-alert
-        v-if="hasCycleRelistBlocker"
-        :type="watchConfig?.cycle_relist_blocker_stale ? 'warning' : 'error'"
-        show-icon
-        :closable="false"
-        class="mb-12"
-      >
-        <template #title>
-          {{
-            watchConfig?.cycle_relist_blocker_stale
-              ? `检测到僵尸整合链路（${watchConfig?.cycle_relist_blocker_pipeline_id}，已 ${watchConfig?.cycle_relist_blocker_age_hours} 小时未更新）`
-              : `整合链路阻塞中：${watchConfig?.cycle_relist_blocker_pipeline_id}`
-          }}
-        </template>
-        <template #default>
-          <span>
-            轮询时会把候选标为「等待中」。若实际没在跑，可点解除阻塞：终止该链路、相关记录标为失败，下一轮重新处理。
-          </span>
-          <el-button
-            class="ml-12"
-            type="danger"
-            size="small"
-            :loading="dismissBlockerLoading"
-            @click="dismissCycleRelistBlocker"
-          >
-            解除阻塞
-          </el-button>
-        </template>
-      </el-alert>
-
-      <div class="section-title-row mb-8">
-        <el-divider content-position="left" class="section-title-divider">最近处理记录</el-divider>
-        <el-button
-          type="danger"
-          plain
-          size="small"
-          :loading="clearRecentActionsLoading"
-          :disabled="!recentActions.length"
-          @click="clearRecentActions"
-        >
-          清除记录
-        </el-button>
-      </div>
       <el-table
-        :data="recentActions"
+        :data="candidates"
         stripe
         border
         size="small"
-        empty-text="暂无处理记录（启用并保存后会自动轮询）"
-        class="mb-16"
+        :empty-text="candidatesEmptyText"
+        :row-class-name="candidateRowClassName"
       >
-        <el-table-column prop="at" label="时间" width="170" />
-        <el-table-column prop="merchant_code" label="商品编码" width="130" show-overflow-tooltip />
-        <el-table-column prop="account_name" label="店铺" width="110" show-overflow-tooltip />
-        <el-table-column prop="failure_reason" label="失败原因" min-width="160" show-overflow-tooltip />
-        <el-table-column prop="record_id" label="record_id" width="150" show-overflow-tooltip />
-        <el-table-column label="结果" width="100">
-          <template #default="{ row }: { row: PddFailureCycleRelistAction }">
-            <el-tag :type="actionStatusType(row.status)" size="small">
-              {{ actionStatusLabel(row.status) }}
-            </el-tag>
-          </template>
-        </el-table-column>
-        <el-table-column label="来源" width="90">
-          <template #default="{ row }: { row: PddFailureCycleRelistAction }">
-            {{ triggerSourceLabel(row.trigger_source || '') }}
-          </template>
-        </el-table-column>
-        <el-table-column prop="message" label="说明" min-width="200" show-overflow-tooltip />
-        <el-table-column prop="pipeline_id" label="链路 ID" width="140" show-overflow-tooltip />
-      </el-table>
-
-      <el-divider content-position="left">最近拉取记录</el-divider>
-      <el-table
-        v-loading="pollLogsLoading"
-        :data="pollLogs"
-        stripe
-        border
-        size="small"
-        empty-text="暂无拉取记录"
-        class="mb-16"
-      >
-        <el-table-column prop="polled_at" label="轮询时间" width="170" />
-        <el-table-column label="候选/新发现" width="110">
-          <template #default="{ row }">
-            {{ row.candidate_total }} / {{ row.new_count }}
-          </template>
-        </el-table-column>
-        <el-table-column label="拉取方式" width="100">
-          <template #default="{ row }">
-            {{ fetchModeLabel(row.fetch_mode) }}
-          </template>
-        </el-table-column>
-        <el-table-column prop="table_name" label="表" min-width="140" show-overflow-tooltip />
-        <el-table-column label="详情" width="90">
-          <template #default="{ row }">
-            <el-button link type="primary" @click="togglePollExpand(row.poll_log_id)">
-              {{ expandedPollId === row.poll_log_id ? '收起' : '展开' }}
-            </el-button>
-          </template>
-        </el-table-column>
-      </el-table>
-      <div v-if="expandedPollId" class="poll-detail mb-16">
-        <template v-for="log in pollLogs" :key="log.poll_log_id">
-          <div v-if="log.poll_log_id === expandedPollId">
-            <h4 v-if="log.new_candidates.length">本轮新发现（{{ log.new_candidates.length }}）</h4>
-            <el-table
-              v-if="log.new_candidates.length"
-              :data="log.new_candidates"
-              stripe
-              border
-              size="small"
-              class="mb-12"
-            >
-              <el-table-column prop="merchant_code" label="商品编码" width="130" />
-              <el-table-column prop="account_name" label="店铺" width="110" />
-              <el-table-column prop="failure_reason" label="失败原因" min-width="180" show-overflow-tooltip />
-              <el-table-column prop="source_pipeline_id" label="原链路 ID" width="150" show-overflow-tooltip />
-              <el-table-column prop="process_status" label="处理状态" width="110" />
-              <el-table-column prop="record_id" label="record_id" width="150" show-overflow-tooltip />
-              <el-table-column label="操作" width="90" fixed="right">
-                <template #default="{ row }: { row: PddFailureCycleRelistPollCandidate }">
-                  <el-button
-                    link
-                    type="primary"
-                    :loading="isTriggering(row.record_id)"
-                    :disabled="isManualTriggerBlocked(row) || (!!triggeringRecordId && !isTriggering(row.record_id))"
-                    :title="manualTriggerDisabledReason(row)"
-                    @click="manualTrigger(row)"
-                  >
-                    {{ isManualTriggerBlocked(row) ? '已跑成功' : '手动跑' }}
-                  </el-button>
-                </template>
-              </el-table-column>
-            </el-table>
-            <h4>全部候选（{{ log.candidates.length }}）</h4>
-            <el-table :data="log.candidates" stripe border size="small">
-              <el-table-column prop="merchant_code" label="商品编码" width="130" />
-              <el-table-column prop="account_name" label="店铺" width="110" />
-              <el-table-column prop="failure_reason" label="失败原因" min-width="180" show-overflow-tooltip />
-              <el-table-column prop="source_pipeline_id" label="原链路 ID" width="150" show-overflow-tooltip />
-              <el-table-column prop="process_status" label="处理状态" width="110" />
-              <el-table-column prop="record_id" label="record_id" width="150" show-overflow-tooltip />
-              <el-table-column label="操作" width="90" fixed="right">
-                <template #default="{ row }: { row: PddFailureCycleRelistPollCandidate }">
-                  <el-button
-                    link
-                    type="primary"
-                    :loading="isTriggering(row.record_id)"
-                    :disabled="isManualTriggerBlocked(row) || (!!triggeringRecordId && !isTriggering(row.record_id))"
-                    :title="manualTriggerDisabledReason(row)"
-                    @click="manualTrigger(row)"
-                  >
-                    {{ isManualTriggerBlocked(row) ? '已跑成功' : '手动跑' }}
-                  </el-button>
-                </template>
-              </el-table-column>
-            </el-table>
-          </div>
-        </template>
-      </div>
-
-      <el-divider content-position="left">当前候选（{{ candidates.length }}）</el-divider>
-      <el-table :data="candidates" stripe border size="small" empty-text="暂无符合条件的记录">
-        <el-table-column prop="date" label="日期" width="110" />
         <el-table-column prop="merchant_code" label="商品编码" width="130" show-overflow-tooltip />
         <el-table-column prop="account_name" label="店铺" width="110" show-overflow-tooltip />
         <el-table-column prop="failure_reason" label="失败原因" min-width="180" show-overflow-tooltip />
-        <el-table-column prop="source_pipeline_id" label="原链路 ID" width="150" show-overflow-tooltip />
-        <el-table-column prop="process_status" label="处理状态" width="110" />
-        <el-table-column label="自动处理" width="110">
+        <el-table-column label="原链路 ID" width="160" show-overflow-tooltip>
+          <template #default="{ row }: { row: PddFailureCycleRelistCandidate }">
+            <span v-if="row.source_pipeline_id">{{ row.source_pipeline_id }}</span>
+            <span v-else class="muted">无（挂回模式下将跳过）</span>
+          </template>
+        </el-table-column>
+        <el-table-column label="状态" width="100">
           <template #default="{ row }">
             <el-tag :type="actionStatusType(row.action_status)" size="small">
               {{ actionStatusLabel(row.action_status) }}
             </el-tag>
           </template>
         </el-table-column>
-        <el-table-column prop="action_message" label="原因说明" min-width="220" show-overflow-tooltip />
-        <el-table-column prop="pipeline_id" label="新链路 ID" width="130" show-overflow-tooltip />
+        <el-table-column prop="action_message" label="说明" min-width="200" show-overflow-tooltip />
         <el-table-column label="操作" width="90" fixed="right">
           <template #default="{ row }: { row: PddFailureCycleRelistCandidate }">
             <el-button
               link
               type="primary"
               :loading="isTriggering(row.record_id)"
-              :disabled="isManualTriggerBlocked(row) || (!!triggeringRecordId && !isTriggering(row.record_id))"
+              :disabled="
+                isManualTriggerBlocked(row) || (!!triggeringRecordId && !isTriggering(row.record_id))
+              "
               :title="manualTriggerDisabledReason(row)"
               @click="manualTrigger(row)"
             >
@@ -1009,60 +908,315 @@ onUnmounted(() => {
       </el-table>
     </el-card>
 
+    <!-- 3. 最近处理结果 -->
     <el-card shadow="never" class="mb-16">
-      <div class="toolbar">
-        <div class="meta" v-if="data?.ok">
-          <span>表：{{ data.table_name || '—' }}</span>
-          <span>共 {{ data.total }} 条</span>
+      <template #header>
+        <div class="card-header">
+          <span>最近处理结果（{{ recentActions.length }}）</span>
+          <el-button
+            type="danger"
+            plain
+            size="small"
+            :loading="clearRecentActionsLoading"
+            :disabled="!recentActions.length"
+            @click="clearRecentActions"
+          >
+            清除记录
+          </el-button>
         </div>
-        <div class="actions">
-          <el-input-number v-model="limit" :min="1" :max="500" :step="50" />
-          <el-button type="primary" :loading="loading" @click="load">刷新</el-button>
-        </div>
-      </div>
+      </template>
+
+      <el-table
+        :data="recentActions"
+        stripe
+        border
+        size="small"
+        empty-text="暂无处理结果。启用并轮询后，成功/跳过/失败会出现在这里。"
+      >
+        <el-table-column prop="at" label="时间" width="170" />
+        <el-table-column prop="merchant_code" label="商品编码" width="130" show-overflow-tooltip />
+        <el-table-column prop="account_name" label="店铺" width="110" show-overflow-tooltip />
+        <el-table-column label="结果" width="100">
+          <template #default="{ row }: { row: PddFailureCycleRelistAction }">
+            <el-tag :type="actionStatusType(row.status)" size="small">
+              {{ actionStatusLabel(row.status) }}
+            </el-tag>
+          </template>
+        </el-table-column>
+        <el-table-column prop="message" label="说明" min-width="220" show-overflow-tooltip />
+        <el-table-column prop="pipeline_id" label="链路 ID" width="150" show-overflow-tooltip />
+      </el-table>
     </el-card>
 
-    <el-table v-loading="loading" :data="items" stripe border style="width: 100%">
-      <el-table-column prop="record_id" label="record_id" width="150" show-overflow-tooltip />
-      <el-table-column prop="date" label="日期" width="110" />
-      <el-table-column prop="merchant_code" label="商品编码" width="140" show-overflow-tooltip />
-      <el-table-column prop="report_platform" label="报错平台" width="90" />
-      <el-table-column prop="account_name" label="店铺" width="120" show-overflow-tooltip />
-      <el-table-column prop="record_type" label="记录类型" width="90">
-        <template #default="{ row }">
-          <el-tag :type="recordTypeTag(row.record_type)" size="small">{{ row.record_type || '—' }}</el-tag>
-        </template>
-      </el-table-column>
-      <el-table-column prop="failure_reason" label="失败原因" min-width="220" show-overflow-tooltip />
-      <el-table-column prop="source_pipeline_id" label="原链路 ID" width="150" show-overflow-tooltip />
-      <el-table-column prop="system_reason" label="系统原因" min-width="160" show-overflow-tooltip />
-      <el-table-column label="处理状态" width="150">
-        <template #default="{ row }">
-          <el-tag :type="processTagType(row.process_completed.label, row.process_completed.source)" size="small">
-            {{ row.process_completed.label || '—' }}
-          </el-tag>
-          <div class="sub">{{ sourceLabel(row.process_completed.source) }}</div>
-        </template>
-      </el-table-column>
-      <el-table-column prop="cycle_relist" label="是否已循环上架" width="130" show-overflow-tooltip />
-      <el-table-column prop="processor" label="人员" width="100" show-overflow-tooltip />
-      <el-table-column prop="processed_at" label="处理时间" width="150" />
-      <el-table-column label="操作" width="150" fixed="right">
-        <template #default="{ row }: { row: PddFailureLogRecord }">
-          <el-button
-            link
-            type="primary"
-            :loading="isTriggering(row.record_id)"
-            :disabled="isManualTriggerBlocked(row) || (!!triggeringRecordId && !isTriggering(row.record_id))"
-            :title="manualTriggerDisabledReason(row)"
-            @click="manualTrigger(row)"
+    <!-- 4. 更多 / 调试（默认收起） -->
+    <el-card shadow="never" class="mb-16">
+      <el-collapse v-model="morePanels">
+        <el-collapse-item
+          v-if="watchForm.sequential_staged_enabled"
+          title="分阶段任务进度"
+          name="sequential"
+        >
+          <div v-loading="stuckJobsLoading" class="stuck-reset-panel mb-12">
+            <el-button
+              type="warning"
+              :loading="resetStuckLoading"
+              :disabled="!stuckJobs.length"
+              @click="resetStuckSequentialJobs"
+            >
+              重置卡死的运行中任务
+            </el-button>
+            <div v-if="stuckJobs.length" class="stuck-reset-hint">
+              <p class="stuck-reset-count">
+                当前 {{ stuckJobs.length }} 条任务卡死（状态为运行中，但无活跃执行）：
+              </p>
+              <ul class="stuck-reset-list">
+                <li v-for="row in stuckJobs" :key="row.job_id">
+                  <strong>{{ row.merchant_code || '—' }}</strong>
+                  · {{ row.account_name || '—' }}
+                  · 卡死阶段：{{ stuckStageSummary(row) || '—' }}
+                  · 更新于 {{ row.updated_at || '—' }}
+                </li>
+              </ul>
+            </div>
+            <p v-else class="stuck-reset-empty">当前无卡死任务</p>
+          </div>
+          <el-table
+            v-loading="sequentialJobsLoading"
+            :data="sequentialJobs"
+            stripe
+            border
+            size="small"
+            empty-text="暂无分阶段任务"
           >
-            {{ isManualTriggerBlocked(row) ? '已跑成功' : '手动跑' }}
-          </el-button>
-          <el-button link type="primary" @click="openDebug(row)">原始数据</el-button>
-        </template>
-      </el-table-column>
-    </el-table>
+            <el-table-column prop="merchant_code" label="商品编码" width="120" show-overflow-tooltip />
+            <el-table-column prop="account_name" label="店铺" width="100" show-overflow-tooltip />
+            <el-table-column label="上架" width="80">
+              <template #default="{ row }: { row: FailureSequentialJob }">
+                <el-tag :type="stageStatusType(row.listing_status)" size="small">
+                  {{ stageStatusLabel(row.listing_status) }}
+                </el-tag>
+              </template>
+            </el-table-column>
+            <el-table-column label="限时" width="90">
+              <template #default="{ row }: { row: FailureSequentialJob }">
+                <el-tag :type="stageStatusType(row.limited_time_status)" size="small">
+                  {{ stageStatusLabel(row.limited_time_status) }}
+                </el-tag>
+              </template>
+            </el-table-column>
+            <el-table-column label="618" width="80">
+              <template #default="{ row }: { row: FailureSequentialJob }">
+                <el-tag :type="stageStatusType(row.activity_618_status)" size="small">
+                  {{ stageStatusLabel(row.activity_618_status) }}
+                </el-tag>
+              </template>
+            </el-table-column>
+            <el-table-column label="七折" width="80">
+              <template #default="{ row }: { row: FailureSequentialJob }">
+                <el-tag :type="stageStatusType(row.activity_discount_status)" size="small">
+                  {{ stageStatusLabel(row.activity_discount_status) }}
+                </el-tag>
+              </template>
+            </el-table-column>
+            <el-table-column label="推广" width="80">
+              <template #default="{ row }: { row: FailureSequentialJob }">
+                <el-tag :type="stageStatusType(row.promotion_status)" size="small">
+                  {{ stageStatusLabel(row.promotion_status) }}
+                </el-tag>
+              </template>
+            </el-table-column>
+            <el-table-column prop="updated_at" label="更新时间" width="160" />
+          </el-table>
+        </el-collapse-item>
+
+        <el-collapse-item title="最近拉取记录（调试）" name="poll-logs">
+          <el-table
+            v-loading="pollLogsLoading"
+            :data="pollLogs"
+            stripe
+            border
+            size="small"
+            empty-text="暂无拉取记录"
+            class="mb-12"
+          >
+            <el-table-column prop="polled_at" label="轮询时间" width="170" />
+            <el-table-column label="候选/新发现" width="110">
+              <template #default="{ row }">
+                {{ row.candidate_total }} / {{ row.new_count }}
+              </template>
+            </el-table-column>
+            <el-table-column label="拉取方式" width="100">
+              <template #default="{ row }">
+                {{ fetchModeLabel(row.fetch_mode) }}
+              </template>
+            </el-table-column>
+            <el-table-column prop="table_name" label="表" min-width="140" show-overflow-tooltip />
+            <el-table-column label="详情" width="90">
+              <template #default="{ row }">
+                <el-button link type="primary" @click="togglePollExpand(row.poll_log_id)">
+                  {{ expandedPollId === row.poll_log_id ? '收起' : '展开' }}
+                </el-button>
+              </template>
+            </el-table-column>
+          </el-table>
+          <div v-if="expandedPollId" class="poll-detail">
+            <template v-for="log in pollLogs" :key="log.poll_log_id">
+              <div v-if="log.poll_log_id === expandedPollId">
+                <h4 v-if="log.new_candidates.length">
+                  本轮新发现（{{ log.new_candidates.length }}）
+                </h4>
+                <el-table
+                  v-if="log.new_candidates.length"
+                  :data="log.new_candidates"
+                  stripe
+                  border
+                  size="small"
+                  class="mb-12"
+                >
+                  <el-table-column prop="merchant_code" label="商品编码" width="130" />
+                  <el-table-column prop="account_name" label="店铺" width="110" />
+                  <el-table-column
+                    prop="failure_reason"
+                    label="失败原因"
+                    min-width="180"
+                    show-overflow-tooltip
+                  />
+                  <el-table-column
+                    prop="source_pipeline_id"
+                    label="原链路 ID"
+                    width="150"
+                    show-overflow-tooltip
+                  />
+                  <el-table-column label="操作" width="90" fixed="right">
+                    <template #default="{ row }: { row: PddFailureCycleRelistPollCandidate }">
+                      <el-button
+                        link
+                        type="primary"
+                        :loading="isTriggering(row.record_id)"
+                        :disabled="
+                          isManualTriggerBlocked(row) ||
+                          (!!triggeringRecordId && !isTriggering(row.record_id))
+                        "
+                        @click="manualTrigger(row)"
+                      >
+                        手动跑
+                      </el-button>
+                    </template>
+                  </el-table-column>
+                </el-table>
+                <h4>全部候选（{{ log.candidates.length }}）</h4>
+                <el-table :data="log.candidates" stripe border size="small">
+                  <el-table-column prop="merchant_code" label="商品编码" width="130" />
+                  <el-table-column prop="account_name" label="店铺" width="110" />
+                  <el-table-column
+                    prop="failure_reason"
+                    label="失败原因"
+                    min-width="180"
+                    show-overflow-tooltip
+                  />
+                  <el-table-column
+                    prop="source_pipeline_id"
+                    label="原链路 ID"
+                    width="150"
+                    show-overflow-tooltip
+                  />
+                </el-table>
+              </div>
+            </template>
+          </div>
+        </el-collapse-item>
+
+        <el-collapse-item title="查飞书全平台失败表" name="feishu-table">
+          <div class="toolbar mb-12">
+            <div class="meta" v-if="data?.ok">
+              <span>表：{{ data.table_name || '—' }}</span>
+              <span>共 {{ data.total }} 条</span>
+            </div>
+            <div class="meta" v-else-if="!readFailureTableEnabled">
+              <span>表：全平台发布日志表（失败）</span>
+              <span class="muted">未读取</span>
+            </div>
+            <div class="actions">
+              <el-switch
+                v-model="readFailureTableEnabled"
+                inline-prompt
+                active-text="读取表"
+                inactive-text="不读取"
+                @change="onReadFailureTableChange"
+              />
+              <el-input-number
+                v-model="limit"
+                :min="1"
+                :max="500"
+                :step="50"
+                :disabled="!readFailureTableEnabled"
+              />
+              <el-button
+                type="primary"
+                :loading="loading"
+                :disabled="!readFailureTableEnabled"
+                @click="load"
+              >
+                刷新
+              </el-button>
+            </div>
+          </div>
+
+          <el-empty
+            v-if="!readFailureTableEnabled"
+            description="默认不读飞书全表以减轻噪音。需要时打开「读取表」再刷新。"
+            :image-size="64"
+          />
+          <el-table
+            v-else
+            v-loading="loading"
+            :data="items"
+            stripe
+            border
+            size="small"
+            style="width: 100%"
+          >
+            <el-table-column prop="merchant_code" label="商品编码" width="140" show-overflow-tooltip />
+            <el-table-column prop="account_name" label="店铺" width="120" show-overflow-tooltip />
+            <el-table-column prop="failure_reason" label="失败原因" min-width="200" show-overflow-tooltip />
+            <el-table-column
+              prop="source_pipeline_id"
+              label="原链路 ID"
+              width="150"
+              show-overflow-tooltip
+            />
+            <el-table-column prop="system_reason" label="系统原因" min-width="160" show-overflow-tooltip />
+            <el-table-column label="处理状态" width="140">
+              <template #default="{ row }">
+                <el-tag
+                  :type="processTagType(row.process_completed.label, row.process_completed.source)"
+                  size="small"
+                >
+                  {{ row.process_completed.label || '—' }}
+                </el-tag>
+              </template>
+            </el-table-column>
+            <el-table-column label="操作" width="150" fixed="right">
+              <template #default="{ row }: { row: PddFailureLogRecord }">
+                <el-button
+                  link
+                  type="primary"
+                  :loading="isTriggering(row.record_id)"
+                  :disabled="
+                    isManualTriggerBlocked(row) ||
+                    (!!triggeringRecordId && !isTriggering(row.record_id))
+                  "
+                  @click="manualTrigger(row)"
+                >
+                  {{ isManualTriggerBlocked(row) ? '已跑成功' : '手动跑' }}
+                </el-button>
+                <el-button link type="primary" @click="openDebug(row)">原始数据</el-button>
+              </template>
+            </el-table-column>
+          </el-table>
+        </el-collapse-item>
+      </el-collapse>
+    </el-card>
 
     <el-drawer v-model="showDebug" title="原始 fields 与处理状态" size="520px">
       <template v-if="selected">
@@ -1160,6 +1314,57 @@ onUnmounted(() => {
   gap: 12px;
   color: var(--el-text-color-secondary);
   font-size: 13px;
+}
+
+.meta .muted {
+  color: var(--el-text-color-placeholder);
+}
+
+.muted {
+  color: var(--el-text-color-placeholder);
+  font-size: 12px;
+}
+
+.warn-text {
+  color: var(--el-color-warning);
+}
+
+.mode-chip {
+  color: var(--el-color-success);
+  font-weight: 500;
+}
+
+.switch-pair {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px;
+  align-items: center;
+}
+
+.rules-compact :deep(.el-form-item) {
+  margin-bottom: 14px;
+}
+
+.more-settings {
+  border: none;
+  margin-top: 4px;
+}
+
+.more-settings :deep(.el-collapse-item__header) {
+  height: 36px;
+  line-height: 36px;
+  font-size: 13px;
+  color: var(--el-text-color-secondary);
+  border-bottom: none;
+}
+
+.primary-work {
+  border: 1px solid var(--el-color-primary-light-5);
+}
+
+:deep(.row-missing-pipeline) {
+  --el-table-tr-bg-color: var(--el-fill-color-light);
+  color: var(--el-text-color-secondary);
 }
 
 .actions {

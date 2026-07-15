@@ -67,10 +67,14 @@ def is_cycle_relist_candidate(
     cycle_relist: str,
     failure_reason: str,
     watch: PddFailureCycleRelistWatchConfig,
+    record_date: str = "",
 ) -> bool:
-    """处理状态已完成 + 循环上架为空 + 失败原因不含排除短语。"""
+    """处理状态已完成 + 循环上架为空 + 失败原因不含排除短语 + 可选日期筛选。"""
     from pdd_agent.integrations.feishu.failure_cycle_relist_exclude import (
         failure_reason_matches_exclude_phrases,
+    )
+    from pdd_agent.integrations.feishu.failure_cycle_relist_date_filter import (
+        record_date_meets_fetch_after,
     )
 
     status = str(process_status or "").strip()
@@ -82,6 +86,11 @@ def is_cycle_relist_candidate(
     if failure_reason_matches_exclude_phrases(
         failure_reason,
         watch.exclude_failure_reason_contains,
+    ):
+        return False
+    if not record_date_meets_fetch_after(
+        record_date=record_date,
+        fetch_after_date=getattr(watch, "fetch_after_date", "") or "",
     ):
         return False
     return True
@@ -138,6 +147,7 @@ def _rows_to_candidates(
             cycle_relist=candidate.cycle_relist,
             failure_reason=candidate.failure_reason,
             watch=watch,
+            record_date=candidate.date,
         ):
             continue
         candidates.append(candidate)
@@ -160,6 +170,7 @@ def _collect_cycle_relist_rows_via_search(
             ctx,
             api,
             completed_status=status,
+            fetch_after_date=str(getattr(watch, "fetch_after_date", "") or ""),
         )
         for batch in iter_search_record_pages(
             api,

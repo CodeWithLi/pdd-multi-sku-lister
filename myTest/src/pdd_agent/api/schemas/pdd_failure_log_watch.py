@@ -43,6 +43,7 @@ class PddFailureCycleRelistWatchOut(BaseModel):
     poll_seconds: int = 60
     completed_statuses: list[str] = Field(default_factory=list)
     exclude_failure_reason_contains: list[str] = Field(default_factory=list)
+    fetch_after_date: str = ""
     scheduler_running: bool = False
     last_poll_at: str = ""
     last_error: str = ""
@@ -70,6 +71,10 @@ class PddFailureCycleRelistWatchUpdateIn(BaseModel):
         default_factory=lambda: ["已结束", "已处理完成"],
     )
     exclude_failure_reason_contains: list[str] = Field(default_factory=list)
+    fetch_after_date: str = Field(
+        default="",
+        description="抓取起始日 YYYY-MM-DD；仅处理飞书「日期」>= 该日的记录，空=不过滤",
+    )
     sequential_staged_enabled: bool = False
     sequential_activity_delay_minutes: int = Field(default=5, ge=0, le=10080)
     attach_source_pipeline_enabled: bool = False
@@ -83,6 +88,15 @@ class PddFailureCycleRelistWatchUpdateIn(BaseModel):
         )
 
         return normalize_exclude_failure_reason_phrases(value)
+
+    @field_validator("fetch_after_date", mode="before")
+    @classmethod
+    def _normalize_fetch_after_date(cls, value: Any) -> str:
+        from pdd_agent.integrations.feishu.failure_cycle_relist_date_filter import (
+            normalize_fetch_after_date,
+        )
+
+        return normalize_fetch_after_date(value)
 
 
 class PddFailureCycleRelistTriggerIn(BaseModel):

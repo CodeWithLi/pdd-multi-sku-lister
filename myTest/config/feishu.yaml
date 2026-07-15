@@ -122,6 +122,7 @@ pdd_upload_log:
     exclude_failure_reason_contains:
     - 该商品不适用于此平台上架，自动跳过，无需处理
     - 该商品产品状态为下架，自动跳过，无需处理
+    fetch_after_date: '2026-07-14'
     fetch_limit: 200
     ignore_existing_on_start: false
     claim_on_discover: true

@@ -394,6 +394,10 @@ class PddFailureCycleRelistWatchConfig(BaseModel):
         default_factory=list,
         description="失败原因包含任一短语则跳过循环上架候选；留空不过滤",
     )
+    fetch_after_date: str = Field(
+        default="",
+        description="抓取起始日（YYYY-MM-DD）：仅保留飞书「日期」>= 该日的候选；留空不过滤",
+    )
     fetch_limit: int = Field(default=200, ge=1, le=500)
     fetch_page_size: int = Field(
         default=50,
@@ -480,6 +484,11 @@ class PddFailureCycleRelistWatchConfig(BaseModel):
         self.exclude_failure_reason_contains = [
             str(x).strip() for x in self.exclude_failure_reason_contains if str(x).strip()
         ]
+        from pdd_agent.integrations.feishu.failure_cycle_relist_date_filter import (
+            normalize_fetch_after_date,
+        )
+
+        self.fetch_after_date = normalize_fetch_after_date(self.fetch_after_date)
         self.claim_placeholder = str(self.claim_placeholder or "循环上架中").strip() or "循环上架中"
         self.claim_completed_value = str(self.claim_completed_value or "是").strip() or "是"
         self.pipeline_report_platforms = [
@@ -1143,6 +1152,7 @@ def save_pdd_failure_cycle_relist_watch_to_config(
     poll_seconds: int | None = None,
     completed_statuses: list[str] | None = None,
     exclude_failure_reason_contains: list[str] | None = None,
+    fetch_after_date: str | None = None,
     fetch_limit: int | None = None,
     ignore_existing_on_start: bool | None = None,
     claim_on_discover: bool | None = None,
@@ -1194,6 +1204,12 @@ def save_pdd_failure_cycle_relist_watch_to_config(
         watch_raw["exclude_failure_reason_contains"] = normalize_exclude_failure_reason_phrases(
             exclude_failure_reason_contains
         )
+    if fetch_after_date is not None:
+        from pdd_agent.integrations.feishu.failure_cycle_relist_date_filter import (
+            normalize_fetch_after_date,
+        )
+
+        watch_raw["fetch_after_date"] = normalize_fetch_after_date(fetch_after_date)
     if fetch_limit is not None:
         watch_raw["fetch_limit"] = int(fetch_limit)
     if ignore_existing_on_start is not None:
