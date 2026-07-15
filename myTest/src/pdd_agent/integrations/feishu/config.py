@@ -448,6 +448,20 @@ class PddFailureCycleRelistWatchConfig(BaseModel):
         le=10080,
         description="分阶段流水线：每条限时限量购完成后延迟多少分钟再跑活动",
     )
+    attach_source_pipeline_enabled: bool = Field(
+        default=False,
+        description=(
+            "挂回原链路重跑：开启后不再新建整合链路，按失败日志 source_pipeline_id "
+            "在原链路补上架→限时→活动改期，并精准回写每批商品状态"
+        ),
+    )
+    capture_pipeline_id_enabled: bool = Field(
+        default=False,
+        description=(
+            "抓取链路 ID：与挂回原链路同时开启时生效；"
+            "仅当系统原因包含 [pipeline:…] 才继续处理，否则跳过本条"
+        ),
+    )
 
     @field_validator("exclude_failure_reason_contains", mode="before")
     @classmethod
@@ -1148,6 +1162,8 @@ def save_pdd_failure_cycle_relist_watch_to_config(
     pipeline_material_source: str | None = None,
     sequential_staged_enabled: bool | None = None,
     sequential_activity_delay_minutes: int | None = None,
+    attach_source_pipeline_enabled: bool | None = None,
+    capture_pipeline_id_enabled: bool | None = None,
     path: Path | None = None,
 ) -> None:
     """更新失败日志循环上架轮询配置并写回 feishu.yaml。"""
@@ -1226,6 +1242,10 @@ def save_pdd_failure_cycle_relist_watch_to_config(
         watch_raw["sequential_activity_delay_minutes"] = max(
             0, min(int(sequential_activity_delay_minutes), 10080)
         )
+    if attach_source_pipeline_enabled is not None:
+        watch_raw["attach_source_pipeline_enabled"] = bool(attach_source_pipeline_enabled)
+    if capture_pipeline_id_enabled is not None:
+        watch_raw["capture_pipeline_id_enabled"] = bool(capture_pipeline_id_enabled)
     pdd_raw["failure_cycle_relist_watch"] = watch_raw
     data["pdd_upload_log"] = pdd_raw
     cfg_path.parent.mkdir(parents=True, exist_ok=True)

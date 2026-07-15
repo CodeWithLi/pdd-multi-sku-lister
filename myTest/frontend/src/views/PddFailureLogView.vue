@@ -59,7 +59,31 @@ const watchForm = reactive({
   exclude_failure_reason_contains: [] as string[],
   sequential_staged_enabled: false,
   sequential_activity_delay_minutes: 5,
+  attach_source_pipeline_enabled: false,
+  capture_pipeline_id_enabled: false,
 })
+
+const excludeReasonDraft = ref('')
+
+function addExcludeFailureReason(raw?: string) {
+  const text = String(raw ?? excludeReasonDraft.value ?? '').trim()
+  if (!text) {
+    ElMessage.warning('请先输入要排除的失败原因短语')
+    return
+  }
+  if (watchForm.exclude_failure_reason_contains.includes(text)) {
+    ElMessage.warning('该排除短语已存在')
+    excludeReasonDraft.value = ''
+    return
+  }
+  watchForm.exclude_failure_reason_contains.push(text)
+  excludeReasonDraft.value = ''
+}
+
+function removeExcludeFailureReason(index: number) {
+  if (index < 0 || index >= watchForm.exclude_failure_reason_contains.length) return
+  watchForm.exclude_failure_reason_contains.splice(index, 1)
+}
 
 const items = computed(() => data.value?.items ?? [])
 const recentActions = computed(() => watchConfig.value?.recent_actions ?? [])
@@ -181,6 +205,8 @@ function applyWatch(data: PddFailureCycleRelistWatch) {
   watchForm.exclude_failure_reason_contains = [...(data.exclude_failure_reason_contains || [])]
   watchForm.sequential_staged_enabled = Boolean(data.sequential_staged_enabled)
   watchForm.sequential_activity_delay_minutes = Number(data.sequential_activity_delay_minutes ?? 5)
+  watchForm.attach_source_pipeline_enabled = Boolean(data.attach_source_pipeline_enabled)
+  watchForm.capture_pipeline_id_enabled = Boolean(data.capture_pipeline_id_enabled)
 }
 
 function stageStatusLabel(status: string) {
@@ -405,11 +431,15 @@ async function saveWatch() {
       exclude_failure_reason_contains: [...watchForm.exclude_failure_reason_contains],
       sequential_staged_enabled: watchForm.sequential_staged_enabled,
       sequential_activity_delay_minutes: watchForm.sequential_activity_delay_minutes,
+      attach_source_pipeline_enabled: watchForm.attach_source_pipeline_enabled,
+      capture_pipeline_id_enabled: watchForm.capture_pipeline_id_enabled,
     })
     applyWatch(cfg)
     const mode = watchForm.sequential_staged_enabled
       ? '分阶段流水线（上架→限时限量购→活动→推广）'
-      : '整合链路'
+      : watchForm.attach_source_pipeline_enabled && watchForm.capture_pipeline_id_enabled
+        ? '挂回原链路（抓取链路 ID）'
+        : '整合链路'
     ElMessage.success(
       watchForm.enabled ? `已启用自动循环上架（${mode}）` : '已关闭自动循环上架',
     )
@@ -423,6 +453,14 @@ async function saveWatch() {
 }
 
 function onEnabledSwitchChange() {
+  if (watchLoading.value || watchSaving.value) return
+  void saveWatch()
+}
+
+function onAttachSourcePipelineChange(value: boolean | string | number) {
+  if (!value) {
+    watchForm.capture_pipeline_id_enabled = false
+  }
   if (watchLoading.value || watchSaving.value) return
   void saveWatch()
 }
@@ -555,6 +593,34 @@ onUnmounted(() => {
             @change="onEnabledSwitchChange"
           />
         </el-form-item>
+        <el-form-item label="挂回原链路">
+          <el-switch
+            v-model="watchForm.attach_source_pipeline_enabled"
+            :disabled="!watchForm.enabled || watchForm.sequential_staged_enabled"
+            active-text="挂回原链路重跑（上架→限时→活动改期）"
+            inactive-text="关闭"
+            @change="onAttachSourcePipelineChange"
+          />
+          <div class="form-hint">
+            开启后须同时开启「抓取链路 ID」才会走新路径；不再新建整条整合链路。
+          </div>
+        </el-form-item>
+        <el-form-item label="抓取链路 ID">
+          <el-switch
+            v-model="watchForm.capture_pipeline_id_enabled"
+            :disabled="
+              !watchForm.enabled ||
+              watchForm.sequential_staged_enabled ||
+              !watchForm.attach_source_pipeline_enabled
+            "
+            active-text="仅处理系统原因含 [pipeline:…] 的记录"
+            inactive-text="关闭"
+            @change="onEnabledSwitchChange"
+          />
+          <div class="form-hint">
+            与「挂回原链路」同时开启后生效：系统原因没有链路 ID 的条目直接跳过、不处理。
+          </div>
+        </el-form-item>
         <el-form-item v-if="watchForm.sequential_staged_enabled" label="活动延迟（分钟）">
           <el-input-number
             v-model="watchForm.sequential_activity_delay_minutes"
@@ -581,16 +647,30 @@ onUnmounted(() => {
           />
         </el-form-item>
         <el-form-item label="排除失败原因">
-          <el-select
-            v-model="watchForm.exclude_failure_reason_contains"
-            multiple
-            filterable
-            allow-create
-            default-first-option
-            placeholder="失败原因包含任一短语则跳过，可添加多条"
-            style="width: 100%"
-          />
-          <div class="form-hint">可添加多条；失败原因包含其中任意一条即不进入循环上架候选</div>
+          <div class="exclude-reason-editor">
+            <div class="exclude-reason-input-row">
+              <el-input
+                v-model="excludeReasonDraft"
+                clearable
+                placeholder="输入失败原因短语后点添加或按回车"
+                @keydown.enter.prevent="addExcludeFailureReason()"
+              />
+              <el-button type="primary" @click="addExcludeFailureReason()">添加</el-button>
+            </div>
+            <div v-if="watchForm.exclude_failure_reason_contains.length" class="exclude-reason-tags">
+              <el-tag
+                v-for="(phrase, index) in watchForm.exclude_failure_reason_contains"
+                :key="`${phrase}-${index}`"
+                closable
+                class="exclude-reason-tag"
+                @close="removeExcludeFailureReason(index)"
+              >
+                {{ phrase }}
+              </el-tag>
+            </div>
+            <div v-else class="form-hint">暂无排除短语</div>
+          </div>
+          <div class="form-hint">可添加多条；失败原因包含其中任意一条即不进入循环上架候选。改完后点右上角「保存」。</div>
         </el-form-item>
       </el-form>
 
@@ -1031,6 +1111,31 @@ onUnmounted(() => {
   margin-top: 6px;
   font-size: 12px;
   color: var(--el-text-color-secondary);
+}
+
+.exclude-reason-editor {
+  width: 100%;
+}
+
+.exclude-reason-input-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.exclude-reason-input-row .el-input {
+  flex: 1;
+}
+
+.exclude-reason-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.exclude-reason-tag {
+  max-width: 100%;
 }
 
 .error-text {

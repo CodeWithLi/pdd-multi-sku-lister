@@ -12,6 +12,8 @@ from pdd_agent.api.schemas.pipelines import (
     IntegratedPipelineBatchResponse,
     IntegratedPipelineBatchStartRequest,
     IntegratedPipelineBatchProductStageListResponse,
+    IntegratedPipelineBatchProductStagePatchRequest,
+    IntegratedPipelineBatchProductStagePatchResponse,
     IntegratedPipelineListResponse,
     IntegratedPipelineResponse,
     IntegratedPipelineStartRequest,
@@ -573,6 +575,49 @@ def list_integrated_batch_product_stages(pipeline_id: str, batch_index: int | No
         items=items,
         total=len(items),
     )
+
+
+@router.patch(
+    "/integrated/{pipeline_id}/batch-product-stages",
+    response_model=IntegratedPipelineBatchProductStagePatchResponse,
+)
+def patch_integrated_batch_product_stage(
+    pipeline_id: str,
+    body: IntegratedPipelineBatchProductStagePatchRequest,
+):
+    """精准更新原链路某一商品的每批阶段状态（不影响同批其它商品）。"""
+    if not is_database_available():
+        raise HTTPException(status_code=503, detail="数据库不可用")
+    data = get_pipeline(pipeline_id)
+    if not data:
+        raise HTTPException(status_code=404, detail="pipeline not found")
+    from pdd_agent.api.services.failure_log_attach_retry.bridge import (
+        patch_batch_product_stage,
+    )
+
+    try:
+        result = patch_batch_product_stage(
+            pipeline_id=pipeline_id,
+            batch_index=body.batch_index,
+            product_selector=body.product_selector,
+            pdd_product_id=body.pdd_product_id,
+            mapping_id=body.mapping_id,
+            listing_status=body.listing_status,
+            listing_error=body.listing_error,
+            limited_time_status=body.limited_time_status,
+            limited_time_error=body.limited_time_error,
+            promotion_status=body.promotion_status,
+            promotion_error=body.promotion_error,
+            activity_1_status=body.activity_1_status,
+            activity_1_error=body.activity_1_error,
+            activity_2_status=body.activity_2_status,
+            activity_2_error=body.activity_2_error,
+            set_pdd_product_id=body.set_pdd_product_id,
+            set_mapping_id=body.set_mapping_id,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return IntegratedPipelineBatchProductStagePatchResponse(**result)
 
 
 @router.get("/integrated/{pipeline_id}", response_model=IntegratedPipelineResponse)

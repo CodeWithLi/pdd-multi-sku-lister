@@ -514,6 +514,8 @@ export interface PddFailureCycleRelistWatch {
   sequential_batch_active: boolean
   sequential_batch_status: string
   sequential_activity_delay_minutes: number
+  attach_source_pipeline_enabled: boolean
+  capture_pipeline_id_enabled: boolean
   cycle_relist_blocker_pipeline_id: string
   cycle_relist_blocker_stale: boolean
   cycle_relist_blocker_age_hours: number
@@ -536,6 +538,8 @@ export interface PddFailureCycleRelistWatchUpdate {
   exclude_failure_reason_contains: string[]
   sequential_staged_enabled: boolean
   sequential_activity_delay_minutes: number
+  attach_source_pipeline_enabled: boolean
+  capture_pipeline_id_enabled: boolean
 }
 
 export interface FailureSequentialJob {

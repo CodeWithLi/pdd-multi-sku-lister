@@ -465,3 +465,33 @@ class IntegratedPipelineBatchProductStageListResponse(BaseModel):
     pipeline_id: str = ""
     items: list[IntegratedPipelineBatchProductStageItem] = Field(default_factory=list)
     total: int = 0
+
+
+class IntegratedPipelineBatchProductStagePatchRequest(BaseModel):
+    batch_index: int | None = None
+    product_selector: str = ""
+    pdd_product_id: str = ""
+    mapping_id: str | None = None
+    listing_status: str | None = None
+    listing_error: str | None = None
+    limited_time_status: str | None = None
+    limited_time_error: str | None = None
+    promotion_status: str | None = None
+    promotion_error: str | None = None
+    activity_1_status: str | None = None
+    activity_1_error: str | None = None
+    activity_2_status: str | None = None
+    activity_2_error: str | None = None
+    set_pdd_product_id: str | None = None
+    set_mapping_id: str | None = None
+
+
+class IntegratedPipelineBatchProductStagePatchResponse(BaseModel):
+    ok: bool = False
+    updated: int = 0
+    reason: str = ""
+    pipeline_id: str = ""
+    batch_index: int | None = None
+    product_selector: str = ""
+    pdd_product_id: str = ""
+    items: list[dict] = Field(default_factory=list)

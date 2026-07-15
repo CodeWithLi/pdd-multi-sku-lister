@@ -139,6 +139,8 @@ pdd_upload_log:
     pipeline_continue_after_activity_failure: false
     pipeline_activity_delay_hours: 24.0
     pipeline_demo_mode: false
+    attach_source_pipeline_enabled: False
+    capture_pipeline_id_enabled: false
     sequential_staged_enabled: true
     sequential_activity_run_at: ''
     sequential_activity_delay_minutes: 3600

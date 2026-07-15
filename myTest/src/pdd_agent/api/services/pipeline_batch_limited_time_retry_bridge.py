@@ -41,15 +41,20 @@ def dispatch_batch_limited_time_retry_queue_task_finished(
 
 
 def maybe_defer_activity_task_execution(row, *, task_id: str, run_id: str) -> bool:
-    """活动任务执行前：分批限时重跑进行中则推迟。"""
+    """活动任务执行前：分批限时重跑 / 挂回原链路 / 迟到补跑进行中则推迟。"""
     from pdd_agent.api.services.pipeline_batch_limited_time_retry_activity_policy import (
         maybe_defer_activity_task_execution as _batch_defer,
+    )
+    from pdd_agent.api.services.failure_log_attach_retry.bridge import (
+        maybe_defer_activity_task_execution as _attach_defer,
     )
     from pdd_agent.api.services.pipeline_late_retry_activity_defer_policy import (
         maybe_defer_activity_task_execution as _late_defer,
     )
 
     if _batch_defer(row, task_id=task_id, run_id=run_id):
+        return True
+    if _attach_defer(row, task_id=task_id, run_id=run_id):
         return True
     return _late_defer(row, task_id=task_id, run_id=run_id)
 

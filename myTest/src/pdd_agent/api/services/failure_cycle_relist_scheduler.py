@@ -352,10 +352,15 @@ class FailureCycleRelistWatchScheduler:
                     if outcome.get("ok") and outcome.get("pipeline_id"):
                         started_in_this_poll = True
                         active_cycle_relist_pipeline_id = str(outcome.get("pipeline_id") or "")
+                        start_msg = (
+                            f"已占用并挂回原链路重跑（店铺：{store_hint}）"
+                            if outcome.get("attach_source_pipeline")
+                            else f"已占用并启动整合链路（店铺：{store_hint}）"
+                        )
                         self.record_action(
                             record_id=rid,
                             status="started",
-                            message=f"已占用并启动整合链路（店铺：{store_hint}）",
+                            message=start_msg,
                             pipeline_id=str(outcome.get("pipeline_id") or ""),
                             account_id=resolved_account,
                             candidate=item,
@@ -366,6 +371,9 @@ class FailureCycleRelistWatchScheduler:
                             "already_claimed": "Redis 已占用，可能正在处理或已处理过",
                             "report_platform_filtered": "报错平台不在自动处理范围内",
                             "already_on_sale": "商品编码在拼多多在售列表已存在，视为已完成，跳过重跑",
+                            "missing_source_pipeline_id": "已开启挂回原链路，但失败日志无原链路 ID，已跳过",
+                            "attach_retry_started": "已占用并挂回原链路重跑",
+                            "attach_retry_started_on_sale": "已在售，挂回原链路直接进限时",
                         }.get(reason, f"已跳过：{reason or '未知原因'}")
                         self.record_action(
                             record_id=rid,

@@ -2184,6 +2184,20 @@ def on_queue_task_finished(
         )
         return
 
+    from pdd_agent.api.services.failure_log_attach_retry.bridge import (
+        dispatch_attach_retry_queue_task_finished,
+    )
+
+    if dispatch_attach_retry_queue_task_finished(
+        row,
+        agent=agent,
+        run_id=run_id,
+        success=success,
+        result=result,
+        error=error,
+    ):
+        return
+
     if row.status in TERMINAL_PIPELINE_STATUSES and not _should_process_queue_task_on_terminal_pipeline(
         row,
         agent=agent,

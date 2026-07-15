@@ -55,6 +55,8 @@ class PddFailureCycleRelistWatchOut(BaseModel):
     sequential_batch_active: bool = False
     sequential_batch_status: str = ""
     sequential_activity_delay_minutes: int = 5
+    attach_source_pipeline_enabled: bool = False
+    capture_pipeline_id_enabled: bool = False
     cycle_relist_blocker_pipeline_id: str = ""
     cycle_relist_blocker_stale: bool = False
     cycle_relist_blocker_age_hours: float = 0
@@ -70,6 +72,8 @@ class PddFailureCycleRelistWatchUpdateIn(BaseModel):
     exclude_failure_reason_contains: list[str] = Field(default_factory=list)
     sequential_staged_enabled: bool = False
     sequential_activity_delay_minutes: int = Field(default=5, ge=0, le=10080)
+    attach_source_pipeline_enabled: bool = False
+    capture_pipeline_id_enabled: bool = False
 
     @field_validator("exclude_failure_reason_contains", mode="before")
     @classmethod

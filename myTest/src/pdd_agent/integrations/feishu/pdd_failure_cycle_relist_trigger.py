@@ -179,6 +179,22 @@ def process_failure_cycle_relist_candidate(
         base["error"] = "record_id 为空"
         return base
 
+    # 开关开启：挂回原链路（上架→限时→活动改期），不再新建整合链路
+    from pdd_agent.api.services.failure_log_attach_retry.bridge import (
+        try_process_attach_source_pipeline,
+    )
+
+    attached = try_process_attach_source_pipeline(
+        candidate,
+        config=cfg,
+        watch=watch_cfg,
+        skip_claim=skip_claim,
+        trigger_source=trigger_source,
+        base=base,
+    )
+    if attached is not None:
+        return attached
+
     allowed_platforms = {
         str(x).strip()
         for x in (watch_cfg.pipeline_report_platforms or [])
