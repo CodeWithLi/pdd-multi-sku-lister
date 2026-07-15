@@ -2,7 +2,8 @@
 # Copy: cp config/minio.example.yaml config/minio.yaml
 
 enabled: true
-endpoint: 192.168.1.129:9000
+#endpoint: 192.168.1.129:9000
+endpoint: 8.134.162.189:8298/
 secure: false
 access_key: ""
 secret_key: ""
@@ -11,6 +12,7 @@ bucket: beilemei-images
 # poll = frontend polls MinIO listing targets every listing_poll_seconds
 refresh_mode: poll
 
+#当前alist不能使用，如果需要使用则需要在自己电脑安装配置，这个用不了
 alist_url: http://192.168.1.129
 alist:
   enabled: true
@@ -19,7 +21,7 @@ alist:
   password: "123456"
   root_path: /公司电商主图库
   verify_ssl: false
-console_url: http://192.168.1.129:9001
+console_url: http://8.134.162.189:8571
 
 categories:
   - 笔袋
