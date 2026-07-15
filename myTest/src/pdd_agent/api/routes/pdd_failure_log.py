@@ -32,6 +32,7 @@ from pdd_agent.api.schemas.pdd_failure_log_watch import (
     FailureSequentialJobListResponse,
     FailureSequentialJobOut,
     FailureSequentialTickResponse,
+    PddFailureCycleRelistClearRecentActionsOut,
     PddFailureCycleRelistDismissBlockerIn,
     PddFailureCycleRelistDismissBlockerOut,
 )
@@ -357,6 +358,30 @@ def dismiss_cycle_relist_blocker(body: PddFailureCycleRelistDismissBlockerIn):
         dismissed_records=int(result.get("dismissed_records") or 0),
         stale=bool(result.get("stale")),
         message=str(result.get("message") or ""),
+    )
+
+
+@router.post(
+    "/cycle-relist/clear-recent-actions",
+    response_model=PddFailureCycleRelistClearRecentActionsOut,
+)
+def clear_cycle_relist_recent_actions():
+    """清空「最近处理记录」（内存 + 库表），不影响候选/轮询本身。"""
+    scheduler = get_failure_cycle_relist_watch_scheduler()
+    try:
+        result = scheduler.clear_recent_actions(clear_db=True)
+    except Exception as exc:
+        return PddFailureCycleRelistClearRecentActionsOut(
+            ok=False,
+            error=str(exc) or "清空失败",
+        )
+    cleared_memory = int(result.get("cleared_memory") or 0)
+    cleared_db = int(result.get("cleared_db") or 0)
+    return PddFailureCycleRelistClearRecentActionsOut(
+        ok=True,
+        cleared_memory=cleared_memory,
+        cleared_db=cleared_db,
+        message=f"已清空最近处理记录（内存 {cleared_memory} 条，库表 {cleared_db} 条）",
     )
 
 

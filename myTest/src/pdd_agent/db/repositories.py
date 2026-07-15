@@ -3020,6 +3020,15 @@ def list_failure_cycle_relist_action_logs(*, limit: int = 100) -> list[FailureCy
         return rows
 
 
+def clear_failure_cycle_relist_action_logs() -> int:
+    """清空失败日志循环上架「最近处理记录」库表，返回删除条数。"""
+    if not is_database_available():
+        return 0
+    with session_scope() as session:
+        deleted = session.query(FailureCycleRelistActionLogORM).delete(synchronize_session=False)
+        return int(deleted or 0)
+
+
 def list_failure_cycle_relist_waiting_for_pipeline(
     *,
     pipeline_id: str,

@@ -106,6 +106,27 @@ class FailureCycleRelistWatchScheduler:
         self._record_actions.clear()
         self._recent_actions.clear()
 
+    def clear_recent_actions(self, *, clear_db: bool = True) -> dict[str, Any]:
+        """清空「最近处理记录」内存缓存；默认同时清空库表。"""
+        memory_count = len(self._recent_actions)
+        self._record_actions.clear()
+        self._recent_actions.clear()
+        deleted = 0
+        if clear_db:
+            from pdd_agent.db.repositories import clear_failure_cycle_relist_action_logs
+
+            deleted = clear_failure_cycle_relist_action_logs()
+        logger.info(
+            "failure cycle relist recent actions cleared memory=%s db=%s",
+            memory_count,
+            deleted,
+        )
+        return {
+            "ok": True,
+            "cleared_memory": memory_count,
+            "cleared_db": int(deleted or 0),
+        }
+
     def record_action(
         self,
         *,

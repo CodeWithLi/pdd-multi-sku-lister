@@ -33,6 +33,7 @@ const expandedPollId = ref('')
 const triggeringRecordId = ref('')
 const manualPolling = ref(false)
 const dismissBlockerLoading = ref(false)
+const clearRecentActionsLoading = ref(false)
 const sequentialJobsLoading = ref(false)
 const sequentialJobs = ref<FailureSequentialJob[]>([])
 const sequentialBatchActive = ref(false)
@@ -78,11 +79,13 @@ function addExcludeFailureReason(raw?: string) {
   }
   watchForm.exclude_failure_reason_contains.push(text)
   excludeReasonDraft.value = ''
+  void saveWatch({ successMessage: '排除失败原因已保存' })
 }
 
 function removeExcludeFailureReason(index: number) {
   if (index < 0 || index >= watchForm.exclude_failure_reason_contains.length) return
   watchForm.exclude_failure_reason_contains.splice(index, 1)
+  void saveWatch({ successMessage: '排除失败原因已保存' })
 }
 
 const items = computed(() => data.value?.items ?? [])
@@ -194,6 +197,46 @@ async function dismissCycleRelistBlocker() {
     ElMessage.error(e instanceof Error ? e.message : '解除阻塞失败')
   } finally {
     dismissBlockerLoading.value = false
+  }
+}
+
+async function clearRecentActions() {
+  if (!recentActions.value.length) {
+    ElMessage.info('当前没有最近处理记录')
+    return
+  }
+  try {
+    await ElMessageBox.confirm(
+      '将清空页面上的「最近处理记录」（含库中历史动作日志），不影响候选列表和轮询本身。确定清除？',
+      '清除最近处理记录',
+      {
+        type: 'warning',
+        confirmButtonText: '清除',
+        cancelButtonText: '取消',
+      },
+    )
+  } catch {
+    return
+  }
+  clearRecentActionsLoading.value = true
+  try {
+    const resp = await api.clearPddFailureCycleRelistRecentActions()
+    if (!resp.ok) {
+      ElMessage.error(resp.error || '清除失败')
+      return
+    }
+    if (watchConfig.value) {
+      watchConfig.value = { ...watchConfig.value, recent_actions: [] }
+    }
+    ElMessage.success(
+      resp.message ||
+        `已清除（内存 ${resp.cleared_memory ?? 0} 条，库表 ${resp.cleared_db ?? 0} 条）`,
+    )
+    await loadWatch()
+  } catch (e) {
+    ElMessage.error(e instanceof Error ? e.message : '清除失败')
+  } finally {
+    clearRecentActionsLoading.value = false
   }
 }
 
@@ -421,7 +464,7 @@ async function manualPoll() {
   }
 }
 
-async function saveWatch() {
+async function saveWatch(options?: { successMessage?: string }) {
   watchSaving.value = true
   try {
     const cfg = await api.updatePddFailureCycleRelistWatch({
@@ -435,14 +478,18 @@ async function saveWatch() {
       capture_pipeline_id_enabled: watchForm.capture_pipeline_id_enabled,
     })
     applyWatch(cfg)
-    const mode = watchForm.sequential_staged_enabled
-      ? '分阶段流水线（上架→限时限量购→活动→推广）'
-      : watchForm.attach_source_pipeline_enabled && watchForm.capture_pipeline_id_enabled
-        ? '挂回原链路（抓取链路 ID）'
-        : '整合链路'
-    ElMessage.success(
-      watchForm.enabled ? `已启用自动循环上架（${mode}）` : '已关闭自动循环上架',
-    )
+    if (options?.successMessage) {
+      ElMessage.success(options.successMessage)
+    } else {
+      const mode = watchForm.sequential_staged_enabled
+        ? '分阶段流水线（上架→限时限量购→活动→推广）'
+        : watchForm.attach_source_pipeline_enabled && watchForm.capture_pipeline_id_enabled
+          ? '挂回原链路（抓取链路 ID）'
+          : '整合链路'
+      ElMessage.success(
+        watchForm.enabled ? `已启用自动循环上架（${mode}）` : '已关闭自动循环上架',
+      )
+    }
     await Promise.all([loadCandidates(), loadPollLogs(), loadSequentialJobs()])
     setupWatchRefresh()
   } catch (e) {
@@ -670,7 +717,9 @@ onUnmounted(() => {
             </div>
             <div v-else class="form-hint">暂无排除短语</div>
           </div>
-          <div class="form-hint">可添加多条；失败原因包含其中任意一条即不进入循环上架候选。改完后点右上角「保存」。</div>
+          <div class="form-hint">
+            可添加多条；失败原因包含其中任意一条即不进入循环上架候选。添加/删除后会自动保存。
+          </div>
         </el-form-item>
       </el-form>
 
@@ -794,7 +843,19 @@ onUnmounted(() => {
         </template>
       </el-alert>
 
-      <el-divider content-position="left">最近处理记录</el-divider>
+      <div class="section-title-row mb-8">
+        <el-divider content-position="left" class="section-title-divider">最近处理记录</el-divider>
+        <el-button
+          type="danger"
+          plain
+          size="small"
+          :loading="clearRecentActionsLoading"
+          :disabled="!recentActions.length"
+          @click="clearRecentActions"
+        >
+          清除记录
+        </el-button>
+      </div>
       <el-table
         :data="recentActions"
         stripe
@@ -1025,6 +1086,21 @@ onUnmounted(() => {
 
 .mb-12 {
   margin-bottom: 12px;
+}
+
+.mb-8 {
+  margin-bottom: 8px;
+}
+
+.section-title-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.section-title-divider {
+  flex: 1;
+  margin: 0;
 }
 
 .stuck-reset-panel {

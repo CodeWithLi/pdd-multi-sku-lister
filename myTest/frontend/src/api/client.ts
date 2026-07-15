@@ -1047,6 +1047,17 @@ export const api = {
       .put<PddFailureCycleRelistWatch>('/pdd-failure-logs/cycle-relist/watch', body)
       .then((r) => r.data),
 
+  clearPddFailureCycleRelistRecentActions: () =>
+    http
+      .post<{
+        ok: boolean
+        cleared_memory?: number
+        cleared_db?: number
+        message?: string
+        error?: string
+      }>('/pdd-failure-logs/cycle-relist/clear-recent-actions')
+      .then((r) => r.data),
+
   dismissPddFailureCycleRelistBlocker: (body: { pipeline_id?: string } = {}) =>
     http
       .post<PddFailureCycleRelistDismissBlockerResult>(

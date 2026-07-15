@@ -262,3 +262,11 @@ class PddFailureCycleRelistDismissBlockerOut(BaseModel):
     stale: bool = False
     message: str = ""
     error: str = ""
+
+
+class PddFailureCycleRelistClearRecentActionsOut(BaseModel):
+    ok: bool = True
+    cleared_memory: int = 0
+    cleared_db: int = 0
+    message: str = ""
+    error: str = ""

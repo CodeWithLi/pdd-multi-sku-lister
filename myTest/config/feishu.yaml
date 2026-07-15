@@ -114,20 +114,21 @@ pdd_upload_log:
     processor: 人员
     processed_at: 处理时间
   failure_cycle_relist_watch:
-    enabled: false
+    enabled: true
     poll_seconds: 60
     completed_statuses:
     - 已结束
     - 已处理完成
     exclude_failure_reason_contains:
     - 该商品不适用于此平台上架，自动跳过，无需处理
+    - 该商品产品状态为下架，自动跳过，无需处理
     fetch_limit: 200
     ignore_existing_on_start: false
-    claim_on_discover: false
+    claim_on_discover: true
     claim_placeholder: 循环上架中
     claim_completed_value: 是
     claim_redis_ttl_seconds: 7200
-    trigger_pipeline_on_discover: false
+    trigger_pipeline_on_discover: true
     pipeline_report_platforms:
     - 拼多多
     pipeline_activity_ids: []
@@ -139,9 +140,9 @@ pdd_upload_log:
     pipeline_continue_after_activity_failure: false
     pipeline_activity_delay_hours: 24.0
     pipeline_demo_mode: false
-    attach_source_pipeline_enabled: False
-    capture_pipeline_id_enabled: false
-    sequential_staged_enabled: true
+    attach_source_pipeline_enabled: true
+    capture_pipeline_id_enabled: true
+    sequential_staged_enabled: false
     sequential_activity_run_at: ''
     sequential_activity_delay_minutes: 3600
 dy_upload_log:
