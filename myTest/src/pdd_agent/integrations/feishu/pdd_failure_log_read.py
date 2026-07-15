@@ -275,7 +275,12 @@ def build_cycle_relist_candidate_search_filter(
     completed_status: str,
     fetch_after_date: str = "",
 ) -> dict[str, Any]:
-    """飞书 search filter：单个处理状态镜像 + 是否已循环上架未选（避免 children 嵌套触发 InvalidFilter）。"""
+    """飞书 search filter：处理状态镜像 + 循环上架未选。
+
+    日期筛选不放进飞书 search（Date 字段算子易触发 InvalidFilter 1254018），
+    统一在本地按「日期」字段过滤。
+    """
+    del fetch_after_date  # 保留参数兼容调用方，故意不写入飞书 filter
     status = str(completed_status or "").strip()
     if not status:
         raise ValueError("completed_status is required")
@@ -286,38 +291,16 @@ def build_cycle_relist_candidate_search_filter(
         ctx.table_id,
         ctx.mirror_field_name,
     )
-    conditions: list[dict[str, Any]] = [
-        {
-            "field_name": mirror_field,
-            "operator": "is",
-            "value": [status],
-        },
-        build_cycle_relist_empty_condition(api, ctx),
-    ]
-
-    from pdd_agent.integrations.feishu.failure_cycle_relist_date_filter import (
-        fetch_after_date_to_feishu_ms,
-    )
-
-    after_ms = fetch_after_date_to_feishu_ms(fetch_after_date)
-    if after_ms is not None:
-        date_field = resolve_table_field_name(
-            api,
-            ctx.app_token,
-            ctx.table_id,
-            str(getattr(ctx.names, "date", "") or "日期").strip() or "日期",
-        )
-        conditions.append(
-            {
-                "field_name": date_field,
-                "operator": "isGreaterEqual",
-                "value": [str(after_ms)],
-            }
-        )
-
     return {
         "conjunction": "and",
-        "conditions": conditions,
+        "conditions": [
+            {
+                "field_name": mirror_field,
+                "operator": "is",
+                "value": [status],
+            },
+            build_cycle_relist_empty_condition(api, ctx),
+        ],
     }
 
 

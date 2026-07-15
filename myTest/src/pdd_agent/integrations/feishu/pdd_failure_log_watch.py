@@ -197,11 +197,42 @@ def _collect_cycle_relist_rows_via_list_all(
     page_size: int,
     max_candidates: int,
 ) -> list[dict[str, Any]]:
-    max_scan = max(max_candidates * 5, page_size * 3, 200)
+    """全表回退：扫完整表，按抓取时间先丢掉旧行，避免只拿表头几百条漏掉表尾新记录。"""
+    from pdd_agent.integrations.feishu.failure_cycle_relist_date_filter import (
+        record_date_meets_fetch_after,
+    )
+
+    fetch_after = str(getattr(watch, "fetch_after_date", "") or "")
+    # 有日期筛选时必须扫全表；无筛选时仍限制扫描量防拖垮
+    max_scan = 0 if fetch_after else max(max_candidates * 20, page_size * 10, 1000)
     raw_records = list_all_records(api, ctx.app_token, ctx.table_id, page_size=page_size)
-    if len(raw_records) > max_scan:
-        raw_records = raw_records[:max_scan]
-    return [parse_failure_log_record(record, ctx) for record in raw_records]
+    if max_scan > 0 and len(raw_records) > max_scan:
+        # 无日期筛选：优先取表尾（通常更新记录在后面），再倒序拼接头尾
+        head = raw_records[: max_scan // 2]
+        tail = raw_records[-(max_scan - len(head)) :]
+        seen: set[str] = set()
+        merged: list[dict[str, Any]] = []
+        for record in list(reversed(tail)) + head:
+            rid = str(record.get("record_id") or record.get("id") or "").strip()
+            if rid and rid in seen:
+                continue
+            if rid:
+                seen.add(rid)
+            merged.append(record)
+        raw_records = merged
+
+    rows: list[dict[str, Any]] = []
+    for record in raw_records:
+        parsed = parse_failure_log_record(record, ctx)
+        if not record_date_meets_fetch_after(
+            record_date=parsed.get("date") or "",
+            fetch_after_date=fetch_after,
+        ):
+            continue
+        rows.append(parsed)
+    # 日期新→旧，优先凑满候选
+    rows.sort(key=lambda r: str(r.get("date") or ""), reverse=True)
+    return rows
 
 
 def list_cycle_relist_candidates(
