@@ -21,11 +21,35 @@ const BATCH_LIMITED_TIME_AUTO_RETRY_ENABLED_KEY =
 const BATCH_LIMITED_TIME_AUTO_RETRY_MAX_ATTEMPTS_KEY =
   'pdd_agent.pipeline.batch_limited_time_auto_retry_max_attempts'
 const MINIO_MATERIAL_REFRESH_PAUSED_KEY = 'pdd_agent.minio_material_refresh_paused'
+const SLOT_ALIGNMENT_TEST_KEY = 'pdd_agent.pipeline.slot_alignment_test'
+const SPEC_FILL_VERIFY_TEST_KEY = 'pdd_agent.pipeline.spec_fill_verify_test'
+const PRIMARY_STYLE_FIRST_TEST_KEY = 'pdd_agent.pipeline.primary_style_first_test'
+const PAREN_SIZE_AS_PRODUCT_TYPE_KEY = 'pdd_agent.pipeline.paren_size_as_product_type'
+const CATEGORY_NEXT_BURST_DEMO_KEY = 'pdd_agent.pipeline.category_next_burst_demo'
 
 const VALID_RELIST_STRATEGIES = new Set<RelistStrategy>([
   'ignore',
   'delist_and_relist',
 ])
+
+function loadBoolPref(key: string, defaultValue: boolean): boolean {
+  try {
+    const raw = localStorage.getItem(key)
+    if (raw === '0') return false
+    if (raw === '1') return true
+  } catch {
+    // ignore
+  }
+  return defaultValue
+}
+
+function saveBoolPref(key: string, enabled: boolean): void {
+  try {
+    localStorage.setItem(key, enabled ? '1' : '0')
+  } catch {
+    // ignore
+  }
+}
 
 export function loadPipelineRelistStrategy(): RelistStrategy {
   try {
@@ -337,4 +361,49 @@ export function saveMinioMaterialRefreshPaused(paused: boolean): void {
   } catch {
     // ignore
   }
+}
+
+/** 高级选项：槽位对齐（试验），默认关。 */
+export function loadSlotAlignmentTest(): boolean {
+  return loadBoolPref(SLOT_ALIGNMENT_TEST_KEY, false)
+}
+
+export function saveSlotAlignmentTest(enabled: boolean): void {
+  saveBoolPref(SLOT_ALIGNMENT_TEST_KEY, enabled)
+}
+
+/** 高级选项：规格校验填表（试验），默认开。 */
+export function loadSpecFillVerifyTest(): boolean {
+  return loadBoolPref(SPEC_FILL_VERIFY_TEST_KEY, true)
+}
+
+export function saveSpecFillVerifyTest(enabled: boolean): void {
+  saveBoolPref(SPEC_FILL_VERIFY_TEST_KEY, enabled)
+}
+
+/** 高级选项：主款款式优先（试验），默认开。 */
+export function loadPrimaryStyleFirstTest(): boolean {
+  return loadBoolPref(PRIMARY_STYLE_FIRST_TEST_KEY, true)
+}
+
+export function savePrimaryStyleFirstTest(enabled: boolean): void {
+  saveBoolPref(PRIMARY_STYLE_FIRST_TEST_KEY, enabled)
+}
+
+/** 高级选项：挂件(公仔)→公仔（试验），默认关。 */
+export function loadParenSizeAsProductType(): boolean {
+  return loadBoolPref(PAREN_SIZE_AS_PRODUCT_TYPE_KEY, false)
+}
+
+export function saveParenSizeAsProductType(enabled: boolean): void {
+  saveBoolPref(PAREN_SIZE_AS_PRODUCT_TYPE_KEY, enabled)
+}
+
+/** 高级选项：分类页下一步连点（演示），默认开。 */
+export function loadCategoryNextBurstDemo(): boolean {
+  return loadBoolPref(CATEGORY_NEXT_BURST_DEMO_KEY, true)
+}
+
+export function saveCategoryNextBurstDemo(enabled: boolean): void {
+  saveBoolPref(CATEGORY_NEXT_BURST_DEMO_KEY, enabled)
 }

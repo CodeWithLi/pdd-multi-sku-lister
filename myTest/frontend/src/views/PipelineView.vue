@@ -29,6 +29,11 @@ import {
   loadBatchLimitedTimeAutoRetryEnabled,
   loadBatchLimitedTimeAutoRetryMaxAttempts,
   loadPipelineRelistStrategy,
+  loadSlotAlignmentTest,
+  loadSpecFillVerifyTest,
+  loadPrimaryStyleFirstTest,
+  loadParenSizeAsProductType,
+  loadCategoryNextBurstDemo,
   saveListingBatchIntervalMinutes,
   saveListingBatchSetCount,
   saveRandomSelectCount,
@@ -45,6 +50,11 @@ import {
   saveBatchLimitedTimeAutoRetryEnabled,
   saveBatchLimitedTimeAutoRetryMaxAttempts,
   savePipelineRelistStrategy,
+  saveSlotAlignmentTest,
+  saveSpecFillVerifyTest,
+  savePrimaryStyleFirstTest,
+  saveParenSizeAsProductType,
+  saveCategoryNextBurstDemo,
 } from '@/utils/pipelinePreferences'
 import {
   failureReasonLabel,
@@ -121,17 +131,28 @@ const continueAfterActivityFailure = ref(true)
 const promoteAfterLimitedTimeFailure = ref(true)
 const demoMode = ref(false)
 const activityDelayHours = ref(24)
-const slotAlignmentTest = ref(false)
-const specFillVerifyTest = ref(true)
-const primaryStyleFirstTest = ref(true)
-const parenSizeAsProductType = ref(false)
-const categoryNextBurstDemo = ref(true)
+const slotAlignmentTest = ref(loadSlotAlignmentTest())
+const specFillVerifyTest = ref(loadSpecFillVerifyTest())
+const primaryStyleFirstTest = ref(loadPrimaryStyleFirstTest())
+const parenSizeAsProductType = ref(loadParenSizeAsProductType())
+const categoryNextBurstDemo = ref(loadCategoryNextBurstDemo())
 
 watch(specFillVerifyTest, (enabled) => {
   if (enabled) slotAlignmentTest.value = false
+  saveSpecFillVerifyTest(enabled)
 })
 watch(slotAlignmentTest, (enabled) => {
   if (enabled) specFillVerifyTest.value = false
+  saveSlotAlignmentTest(enabled)
+})
+watch(primaryStyleFirstTest, (enabled) => {
+  savePrimaryStyleFirstTest(enabled)
+})
+watch(parenSizeAsProductType, (enabled) => {
+  saveParenSizeAsProductType(enabled)
+})
+watch(categoryNextBurstDemo, (enabled) => {
+  saveCategoryNextBurstDemo(enabled)
 })
 const relistStrategy = ref<RelistStrategy>(loadPipelineRelistStrategy())
 const listingThrottleEnabled = ref(loadListingThrottleEnabled())
