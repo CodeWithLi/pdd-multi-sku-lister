@@ -114,3 +114,48 @@ def test_prepare_failure_log_system_reason_kwargs(monkeypatch):
         }
     )
     assert out_empty["system_reason"] == ""
+
+
+def test_extract_pipeline_id_from_failure_log_item():
+    from pdd_agent.integrations.feishu.failure_log_pipeline_system_reason import (
+        enrich_failure_log_item_source_pipeline_id,
+        extract_pipeline_id_from_failure_log_item,
+    )
+
+    assert (
+        extract_pipeline_id_from_failure_log_item(
+            {"system_reason": "[pipeline:20260715_130000_ab12cd34]"}
+        )
+        == "20260715_130000_ab12cd34"
+    )
+    assert (
+        extract_pipeline_id_from_failure_log_item(
+            {"fields_raw": {"系统原因": "[pipeline:from_fields]"}}
+        )
+        == "from_fields"
+    )
+    row = {
+        "system_reason": "",
+        "fields_raw": {"系统原因": "[pipeline:enrich_me]"},
+    }
+    assert enrich_failure_log_item_source_pipeline_id(row) == "enrich_me"
+    assert row["source_pipeline_id"] == "enrich_me"
+    assert row["system_reason"] == "[pipeline:enrich_me]"
+
+
+def test_item_to_candidate_cuts_source_pipeline_id():
+    from pdd_agent.integrations.feishu.pdd_failure_log_watch import _item_to_candidate
+
+    candidate = _item_to_candidate(
+        {
+            "record_id": "rec1",
+            "merchant_code": "BD001A",
+            "account_name": "测试店",
+            "failure_reason": "规格校验失败",
+            "system_reason": "[pipeline:20260715_aaaa_bbbb]",
+            "process_completed": {"label": "已处理完成"},
+            "cycle_relist": "",
+        }
+    )
+    assert candidate.source_pipeline_id == "20260715_aaaa_bbbb"
+    assert candidate.to_dict()["source_pipeline_id"] == "20260715_aaaa_bbbb"

@@ -125,3 +125,65 @@ def prepare_failure_log_system_reason_kwargs(
         system_reason=str(out.get("system_reason") or ""),
     )
     return out
+
+
+def extract_pipeline_id_from_failure_log_item(
+    item: Mapping[str, Any] | None = None,
+    *,
+    system_reason: str = "",
+    system_reason_field: str = "系统原因",
+) -> str:
+    """从失败日志行（或系统原因文本）切出源整合链路 pipeline_id。
+
+    优先读已解析的 source_pipeline_id / system_reason；
+    否则从 fields_raw / fields 的「系统原因」列切取。
+    """
+    row = dict(item or {})
+    pid = str(row.get("source_pipeline_id") or "").strip()
+    if pid:
+        return pid
+
+    text = str(system_reason or row.get("system_reason") or "").strip()
+    pid = parse_pipeline_id_from_system_reason(text)
+    if pid:
+        return pid
+
+    fields = row.get("fields_raw")
+    if not isinstance(fields, dict):
+        fields = row.get("fields")
+    if isinstance(fields, dict):
+        field_name = str(system_reason_field or "系统原因").strip() or "系统原因"
+        raw_val = fields.get(field_name)
+        if raw_val is None and field_name != "系统原因":
+            raw_val = fields.get("系统原因")
+        pid = parse_pipeline_id_from_system_reason(str(raw_val or ""))
+        if pid:
+            return pid
+        # 容错：扫描任意文本列中的 [pipeline:xxx]
+        for value in fields.values():
+            pid = parse_pipeline_id_from_system_reason(str(value or ""))
+            if pid:
+                return pid
+    return ""
+
+
+def enrich_failure_log_item_source_pipeline_id(
+    item: MutableMapping[str, Any],
+    *,
+    system_reason_field: str = "系统原因",
+) -> str:
+    """就地补全 system_reason / source_pipeline_id，返回切出的 pipeline_id。"""
+    names_system = str(system_reason_field or "系统原因").strip() or "系统原因"
+    if "system_reason" not in item or not str(item.get("system_reason") or "").strip():
+        fields = item.get("fields_raw") if isinstance(item.get("fields_raw"), dict) else None
+        if fields is None and isinstance(item.get("fields"), dict):
+            fields = item.get("fields")
+        if isinstance(fields, dict):
+            item["system_reason"] = str(fields.get(names_system) or fields.get("系统原因") or "").strip()
+    pid = extract_pipeline_id_from_failure_log_item(
+        item,
+        system_reason=str(item.get("system_reason") or ""),
+        system_reason_field=names_system,
+    )
+    item["source_pipeline_id"] = pid
+    return pid

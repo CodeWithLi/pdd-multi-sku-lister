@@ -24,6 +24,8 @@ class PddFailureLogRecordOut(BaseModel):
     account_name: str = ""
     record_type: str = ""
     failure_reason: str = ""
+    system_reason: str = ""
+    source_pipeline_id: str = ""
     publish_start: str = ""
     publish_end: str = ""
     duration_seconds: str = ""

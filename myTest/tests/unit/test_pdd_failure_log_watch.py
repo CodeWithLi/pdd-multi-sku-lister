@@ -53,3 +53,19 @@ def test_candidate_rejects_excluded_failure_reason():
         failure_reason="BD043B无有效SKU",
         watch=_watch(exclude_failure_reason_contains="无有效SKU"),
     )
+
+
+def test_candidate_rejects_any_of_multiple_excluded_failure_reasons():
+    watch = _watch(exclude_failure_reason_contains=["平台不适用", "无有效SKU"])
+    assert not is_cycle_relist_candidate(
+        process_status="已处理完成",
+        cycle_relist="",
+        failure_reason="该商品平台不适用，跳过",
+        watch=watch,
+    )
+    assert is_cycle_relist_candidate(
+        process_status="已处理完成",
+        cycle_relist="",
+        failure_reason="BD684A拼多多定价为空",
+        watch=watch,
+    )

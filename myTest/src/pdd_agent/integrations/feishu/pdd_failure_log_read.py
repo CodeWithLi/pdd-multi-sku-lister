@@ -302,6 +302,10 @@ def parse_failure_log_record(
     record: dict[str, Any],
     ctx: FailureLogTableContext,
 ) -> dict[str, Any]:
+    from pdd_agent.integrations.feishu.failure_log_pipeline_system_reason import (
+        extract_pipeline_id_from_failure_log_item,
+    )
+
     names = ctx.names
     fields = record.get("fields") or {}
     mirror_text = format_plain_text(fields.get(ctx.mirror_field_name))
@@ -313,6 +317,17 @@ def parse_failure_log_record(
         account_name_field=ctx.account_name_field,
         account_id_field=ctx.account_id_field,
     )
+    system_reason_field = str(getattr(names, "system_reason", "") or "系统原因").strip() or "系统原因"
+    system_reason = format_plain_text(fields.get(system_reason_field))
+    if not system_reason and system_reason_field != "系统原因":
+        system_reason = format_plain_text(fields.get("系统原因"))
+    source_pipeline_id = extract_pipeline_id_from_failure_log_item(
+        {
+            "system_reason": system_reason,
+            "fields_raw": fields,
+        },
+        system_reason_field=system_reason_field,
+    )
     return {
         "record_id": str(record.get("record_id") or record.get("id") or ""),
         "date": format_datetime_ms(fields.get(names.date)) or str(fields.get(names.date) or ""),
@@ -322,6 +337,8 @@ def parse_failure_log_record(
         "account_id": account_id,
         "record_type": format_single_select(fields.get(names.record_type)),
         "failure_reason": str(fields.get(names.failure_reason) or ""),
+        "system_reason": system_reason,
+        "source_pipeline_id": source_pipeline_id,
         "publish_start": format_datetime_ms(fields.get(names.publish_start)),
         "publish_end": format_datetime_ms(fields.get(names.publish_end)),
         "duration_seconds": str(fields.get(names.duration_seconds) or ""),

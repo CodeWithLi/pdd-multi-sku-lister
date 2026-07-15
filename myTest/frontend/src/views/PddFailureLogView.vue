@@ -56,7 +56,7 @@ const watchForm = reactive({
   enabled: false,
   poll_seconds: 60,
   completed_statuses: ['已结束', '已处理完成'] as string[],
-  exclude_failure_reason_contains: '',
+  exclude_failure_reason_contains: [] as string[],
   sequential_staged_enabled: false,
   sequential_activity_delay_minutes: 5,
 })
@@ -178,7 +178,7 @@ function applyWatch(data: PddFailureCycleRelistWatch) {
   watchForm.enabled = data.enabled
   watchForm.poll_seconds = data.poll_seconds
   watchForm.completed_statuses = [...data.completed_statuses]
-  watchForm.exclude_failure_reason_contains = data.exclude_failure_reason_contains
+  watchForm.exclude_failure_reason_contains = [...(data.exclude_failure_reason_contains || [])]
   watchForm.sequential_staged_enabled = Boolean(data.sequential_staged_enabled)
   watchForm.sequential_activity_delay_minutes = Number(data.sequential_activity_delay_minutes ?? 5)
 }
@@ -402,7 +402,7 @@ async function saveWatch() {
       enabled: watchForm.enabled,
       poll_seconds: watchForm.poll_seconds,
       completed_statuses: [...watchForm.completed_statuses],
-      exclude_failure_reason_contains: watchForm.exclude_failure_reason_contains,
+      exclude_failure_reason_contains: [...watchForm.exclude_failure_reason_contains],
       sequential_staged_enabled: watchForm.sequential_staged_enabled,
       sequential_activity_delay_minutes: watchForm.sequential_activity_delay_minutes,
     })
@@ -581,11 +581,16 @@ onUnmounted(() => {
           />
         </el-form-item>
         <el-form-item label="排除失败原因">
-          <el-input
+          <el-select
             v-model="watchForm.exclude_failure_reason_contains"
-            placeholder="失败原因包含该短语则跳过，留空不过滤"
-            clearable
+            multiple
+            filterable
+            allow-create
+            default-first-option
+            placeholder="失败原因包含任一短语则跳过，可添加多条"
+            style="width: 100%"
           />
+          <div class="form-hint">可添加多条；失败原因包含其中任意一条即不进入循环上架候选</div>
         </el-form-item>
       </el-form>
 
@@ -784,6 +789,7 @@ onUnmounted(() => {
               <el-table-column prop="merchant_code" label="商品编码" width="130" />
               <el-table-column prop="account_name" label="店铺" width="110" />
               <el-table-column prop="failure_reason" label="失败原因" min-width="180" show-overflow-tooltip />
+              <el-table-column prop="source_pipeline_id" label="原链路 ID" width="150" show-overflow-tooltip />
               <el-table-column prop="process_status" label="处理状态" width="110" />
               <el-table-column prop="record_id" label="record_id" width="150" show-overflow-tooltip />
               <el-table-column label="操作" width="90" fixed="right">
@@ -806,6 +812,7 @@ onUnmounted(() => {
               <el-table-column prop="merchant_code" label="商品编码" width="130" />
               <el-table-column prop="account_name" label="店铺" width="110" />
               <el-table-column prop="failure_reason" label="失败原因" min-width="180" show-overflow-tooltip />
+              <el-table-column prop="source_pipeline_id" label="原链路 ID" width="150" show-overflow-tooltip />
               <el-table-column prop="process_status" label="处理状态" width="110" />
               <el-table-column prop="record_id" label="record_id" width="150" show-overflow-tooltip />
               <el-table-column label="操作" width="90" fixed="right">
@@ -833,6 +840,7 @@ onUnmounted(() => {
         <el-table-column prop="merchant_code" label="商品编码" width="130" show-overflow-tooltip />
         <el-table-column prop="account_name" label="店铺" width="110" show-overflow-tooltip />
         <el-table-column prop="failure_reason" label="失败原因" min-width="180" show-overflow-tooltip />
+        <el-table-column prop="source_pipeline_id" label="原链路 ID" width="150" show-overflow-tooltip />
         <el-table-column prop="process_status" label="处理状态" width="110" />
         <el-table-column label="自动处理" width="110">
           <template #default="{ row }">
@@ -842,7 +850,7 @@ onUnmounted(() => {
           </template>
         </el-table-column>
         <el-table-column prop="action_message" label="原因说明" min-width="220" show-overflow-tooltip />
-        <el-table-column prop="pipeline_id" label="链路 ID" width="130" show-overflow-tooltip />
+        <el-table-column prop="pipeline_id" label="新链路 ID" width="130" show-overflow-tooltip />
         <el-table-column label="操作" width="90" fixed="right">
           <template #default="{ row }: { row: PddFailureCycleRelistCandidate }">
             <el-button
@@ -885,6 +893,8 @@ onUnmounted(() => {
         </template>
       </el-table-column>
       <el-table-column prop="failure_reason" label="失败原因" min-width="220" show-overflow-tooltip />
+      <el-table-column prop="source_pipeline_id" label="原链路 ID" width="150" show-overflow-tooltip />
+      <el-table-column prop="system_reason" label="系统原因" min-width="160" show-overflow-tooltip />
       <el-table-column label="处理状态" width="150">
         <template #default="{ row }">
           <el-tag :type="processTagType(row.process_completed.label, row.process_completed.source)" size="small">

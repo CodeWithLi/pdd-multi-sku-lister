@@ -418,6 +418,8 @@ export interface PddFailureLogRecord {
   account_name: string
   record_type: string
   failure_reason: string
+  system_reason?: string
+  source_pipeline_id?: string
   publish_start: string
   publish_end: string
   duration_seconds: string
@@ -469,6 +471,8 @@ export interface PddFailureCycleRelistPollCandidate {
   account_id: string
   report_platform: string
   failure_reason: string
+  system_reason?: string
+  source_pipeline_id?: string
   process_status: string
   cycle_relist: string
   date: string
@@ -497,7 +501,7 @@ export interface PddFailureCycleRelistWatch {
   enabled: boolean
   poll_seconds: number
   completed_statuses: string[]
-  exclude_failure_reason_contains: string
+  exclude_failure_reason_contains: string[]
   scheduler_running: boolean
   last_poll_at: string
   last_error: string
@@ -529,7 +533,7 @@ export interface PddFailureCycleRelistWatchUpdate {
   enabled: boolean
   poll_seconds: number
   completed_statuses: string[]
-  exclude_failure_reason_contains: string
+  exclude_failure_reason_contains: string[]
   sequential_staged_enabled: boolean
   sequential_activity_delay_minutes: number
 }
@@ -648,6 +652,8 @@ export interface PddFailureCycleRelistCandidate {
   report_platform: string
   record_type: string
   failure_reason: string
+  system_reason?: string
+  source_pipeline_id?: string
   process_status: string
   cycle_relist: string
   processor: string

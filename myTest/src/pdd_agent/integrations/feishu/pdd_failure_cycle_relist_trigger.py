@@ -147,6 +147,19 @@ def process_failure_cycle_relist_candidate(
     account_name = str(candidate.get("account_name") or "").strip()
     account_id_hint = str(candidate.get("account_id") or "").strip()
     report_platform = str(candidate.get("report_platform") or "").strip()
+    source_pipeline_id = ""
+    try:
+        from pdd_agent.integrations.feishu.failure_log_pipeline_system_reason import (
+            extract_pipeline_id_from_failure_log_item,
+        )
+
+        source_pipeline_id = extract_pipeline_id_from_failure_log_item(candidate)
+    except Exception:
+        logger.debug(
+            "extract source pipeline_id failed record_id=%s",
+            record_id,
+            exc_info=True,
+        )
 
     base = {
         "ok": False,
@@ -155,6 +168,7 @@ def process_failure_cycle_relist_candidate(
         "account_name": account_name,
         "account_id": "",
         "pipeline_id": "",
+        "source_pipeline_id": source_pipeline_id,
         "claim": {},
         "error": "",
         "skipped": False,
@@ -297,6 +311,7 @@ def process_failure_cycle_relist_candidate(
                     "cycle_relist_account_name": account_name,
                     "cycle_relist_account_id": account_id,
                     "cycle_relist_source": "failure_log_watch",
+                    "cycle_relist_source_pipeline_id": source_pipeline_id,
                 },
             )
         except Exception:
@@ -307,15 +322,17 @@ def process_failure_cycle_relist_candidate(
             )
 
     logger.info(
-        "cycle relist pipeline started record_id=%s pipeline_id=%s account=%s products=%s",
+        "cycle relist pipeline started record_id=%s pipeline_id=%s source_pipeline_id=%s account=%s products=%s",
         record_id,
         pipeline_id,
+        source_pipeline_id or "-",
         account_id,
         product_codes,
     )
     base.update(
         ok=True,
         pipeline_id=pipeline_id,
+        source_pipeline_id=source_pipeline_id,
         product_codes=list(pipeline.get("product_codes") or product_codes),
         account_id=account_id,
         reason="pipeline_started",

@@ -101,7 +101,7 @@ pdd_upload_log:
     completed_statuses:
     - 已结束
     - 已处理完成
-    exclude_failure_reason_contains: ""
+    exclude_failure_reason_contains: []
     fetch_limit: 200
     ignore_existing_on_start: true
     claim_on_discover: false

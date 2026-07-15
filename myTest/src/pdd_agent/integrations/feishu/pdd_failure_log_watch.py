@@ -39,6 +39,8 @@ class CycleRelistCandidate:
     processor: str
     processed_at: str
     date: str
+    system_reason: str = ""
+    source_pipeline_id: str = ""
 
     def to_dict(self) -> dict[str, str]:
         return {
@@ -54,6 +56,8 @@ class CycleRelistCandidate:
             "processor": self.processor,
             "processed_at": self.processed_at,
             "date": self.date,
+            "system_reason": self.system_reason,
+            "source_pipeline_id": self.source_pipeline_id,
         }
 
 
@@ -65,33 +69,47 @@ def is_cycle_relist_candidate(
     watch: PddFailureCycleRelistWatchConfig,
 ) -> bool:
     """处理状态已完成 + 循环上架为空 + 失败原因不含排除短语。"""
+    from pdd_agent.integrations.feishu.failure_cycle_relist_exclude import (
+        failure_reason_matches_exclude_phrases,
+    )
+
     status = str(process_status or "").strip()
     completed = {str(x).strip() for x in watch.completed_statuses if str(x).strip()}
     if status not in completed:
         return False
     if not is_cycle_relist_unselected(cycle_relist):
         return False
-    exclude = str(watch.exclude_failure_reason_contains or "").strip()
-    if exclude and exclude in str(failure_reason or ""):
+    if failure_reason_matches_exclude_phrases(
+        failure_reason,
+        watch.exclude_failure_reason_contains,
+    ):
         return False
     return True
 
 
 def _item_to_candidate(item: dict[str, Any]) -> CycleRelistCandidate:
-    process = item.get("process_completed") or {}
+    from pdd_agent.integrations.feishu.failure_log_pipeline_system_reason import (
+        enrich_failure_log_item_source_pipeline_id,
+    )
+
+    row = dict(item or {})
+    process = row.get("process_completed") or {}
+    enrich_failure_log_item_source_pipeline_id(row)
     return CycleRelistCandidate(
-        record_id=str(item.get("record_id") or ""),
-        merchant_code=str(item.get("merchant_code") or ""),
-        account_name=str(item.get("account_name") or ""),
-        account_id=str(item.get("account_id") or ""),
-        report_platform=str(item.get("report_platform") or ""),
-        record_type=str(item.get("record_type") or ""),
-        failure_reason=str(item.get("failure_reason") or ""),
+        record_id=str(row.get("record_id") or ""),
+        merchant_code=str(row.get("merchant_code") or ""),
+        account_name=str(row.get("account_name") or ""),
+        account_id=str(row.get("account_id") or ""),
+        report_platform=str(row.get("report_platform") or ""),
+        record_type=str(row.get("record_type") or ""),
+        failure_reason=str(row.get("failure_reason") or ""),
         process_status=str(process.get("label") or ""),
-        cycle_relist=str(item.get("cycle_relist") or ""),
-        processor=str(item.get("processor") or ""),
-        processed_at=str(item.get("processed_at") or ""),
-        date=str(item.get("date") or ""),
+        cycle_relist=str(row.get("cycle_relist") or ""),
+        processor=str(row.get("processor") or ""),
+        processed_at=str(row.get("processed_at") or ""),
+        date=str(row.get("date") or ""),
+        system_reason=str(row.get("system_reason") or ""),
+        source_pipeline_id=str(row.get("source_pipeline_id") or ""),
     )
 
 

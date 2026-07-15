@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Any
 
 import yaml
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from pdd_agent.integrations.feishu.traffic_metric_columns import DEFAULT_TRAFFIC_METRIC_COLUMNS
@@ -390,7 +390,10 @@ class PddFailureCycleRelistWatchConfig(BaseModel):
     completed_statuses: list[str] = Field(
         default_factory=lambda: ["已结束", "已处理完成"],
     )
-    exclude_failure_reason_contains: str = ""
+    exclude_failure_reason_contains: list[str] = Field(
+        default_factory=list,
+        description="失败原因包含任一短语则跳过循环上架候选；留空不过滤",
+    )
     fetch_limit: int = Field(default=200, ge=1, le=500)
     fetch_page_size: int = Field(
         default=50,
@@ -446,14 +449,23 @@ class PddFailureCycleRelistWatchConfig(BaseModel):
         description="分阶段流水线：每条限时限量购完成后延迟多少分钟再跑活动",
     )
 
+    @field_validator("exclude_failure_reason_contains", mode="before")
+    @classmethod
+    def _normalize_exclude_failure_reason_contains(cls, value: Any) -> list[str]:
+        from pdd_agent.integrations.feishu.failure_cycle_relist_exclude import (
+            normalize_exclude_failure_reason_phrases,
+        )
+
+        return normalize_exclude_failure_reason_phrases(value)
+
     @model_validator(mode="after")
     def normalize(self) -> "PddFailureCycleRelistWatchConfig":
         self.completed_statuses = [
             str(x).strip() for x in self.completed_statuses if str(x).strip()
         ]
-        self.exclude_failure_reason_contains = str(
-            self.exclude_failure_reason_contains or ""
-        ).strip()
+        self.exclude_failure_reason_contains = [
+            str(x).strip() for x in self.exclude_failure_reason_contains if str(x).strip()
+        ]
         self.claim_placeholder = str(self.claim_placeholder or "循环上架中").strip() or "循环上架中"
         self.claim_completed_value = str(self.claim_completed_value or "是").strip() or "是"
         self.pipeline_report_platforms = [
@@ -1116,7 +1128,7 @@ def save_pdd_failure_cycle_relist_watch_to_config(
     enabled: bool | None = None,
     poll_seconds: int | None = None,
     completed_statuses: list[str] | None = None,
-    exclude_failure_reason_contains: str | None = None,
+    exclude_failure_reason_contains: list[str] | None = None,
     fetch_limit: int | None = None,
     ignore_existing_on_start: bool | None = None,
     claim_on_discover: bool | None = None,
@@ -1159,9 +1171,13 @@ def save_pdd_failure_cycle_relist_watch_to_config(
             str(x).strip() for x in completed_statuses if str(x).strip()
         ]
     if exclude_failure_reason_contains is not None:
-        watch_raw["exclude_failure_reason_contains"] = str(
-            exclude_failure_reason_contains or ""
-        ).strip()
+        from pdd_agent.integrations.feishu.failure_cycle_relist_exclude import (
+            normalize_exclude_failure_reason_phrases,
+        )
+
+        watch_raw["exclude_failure_reason_contains"] = normalize_exclude_failure_reason_phrases(
+            exclude_failure_reason_contains
+        )
     if fetch_limit is not None:
         watch_raw["fetch_limit"] = int(fetch_limit)
     if ignore_existing_on_start is not None:

@@ -262,6 +262,13 @@ class FailureCycleRelistWatchScheduler:
                 self._was_candidate[rid] = False
 
         self._new_items = new_items
+        for item in new_items:
+            logger.info(
+                "cycle relist watch new candidate record_id=%s merchant_code=%s source_pipeline_id=%s",
+                item.get("record_id"),
+                item.get("merchant_code"),
+                item.get("source_pipeline_id") or "-",
+            )
         poll_log_id = record_cycle_relist_poll(
             candidate_total=len(items),
             new_count=len(new_items),

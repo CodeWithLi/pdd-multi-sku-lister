@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 
 class PddFailureCycleRelistActionOut(BaseModel):
@@ -42,7 +42,7 @@ class PddFailureCycleRelistWatchOut(BaseModel):
     enabled: bool = False
     poll_seconds: int = 60
     completed_statuses: list[str] = Field(default_factory=list)
-    exclude_failure_reason_contains: str = ""
+    exclude_failure_reason_contains: list[str] = Field(default_factory=list)
     scheduler_running: bool = False
     last_poll_at: str = ""
     last_error: str = ""
@@ -67,9 +67,18 @@ class PddFailureCycleRelistWatchUpdateIn(BaseModel):
     completed_statuses: list[str] = Field(
         default_factory=lambda: ["已结束", "已处理完成"],
     )
-    exclude_failure_reason_contains: str = ""
+    exclude_failure_reason_contains: list[str] = Field(default_factory=list)
     sequential_staged_enabled: bool = False
     sequential_activity_delay_minutes: int = Field(default=5, ge=0, le=10080)
+
+    @field_validator("exclude_failure_reason_contains", mode="before")
+    @classmethod
+    def _normalize_exclude_failure_reason_contains(cls, value: Any) -> list[str]:
+        from pdd_agent.integrations.feishu.failure_cycle_relist_exclude import (
+            normalize_exclude_failure_reason_phrases,
+        )
+
+        return normalize_exclude_failure_reason_phrases(value)
 
 
 class PddFailureCycleRelistTriggerIn(BaseModel):
@@ -127,6 +136,11 @@ class PddFailureCycleRelistCandidateOut(BaseModel):
     report_platform: str = ""
     record_type: str = ""
     failure_reason: str = ""
+    system_reason: str = ""
+    source_pipeline_id: str = Field(
+        default="",
+        description="从失败日志「系统原因」切割出的原整合链路 id（[pipeline:xxx]）",
+    )
     process_status: str = ""
     cycle_relist: str = ""
     processor: str = ""
@@ -135,7 +149,10 @@ class PddFailureCycleRelistCandidateOut(BaseModel):
     action_status: str = ""
     action_message: str = ""
     action_at: str = ""
-    pipeline_id: str = ""
+    pipeline_id: str = Field(
+        default="",
+        description="本轮循环上架新启动的整合链路 id",
+    )
 
 
 class PddFailureCycleRelistCandidateListResponse(BaseModel):
