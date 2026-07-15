@@ -390,9 +390,9 @@ export function savePrimaryStyleFirstTest(enabled: boolean): void {
   saveBoolPref(PRIMARY_STYLE_FIRST_TEST_KEY, enabled)
 }
 
-/** 高级选项：挂件(公仔)→公仔（试验），默认关。 */
+/** 高级选项：挂件(公仔)→公仔（试验），默认开。 */
 export function loadParenSizeAsProductType(): boolean {
-  return loadBoolPref(PAREN_SIZE_AS_PRODUCT_TYPE_KEY, false)
+  return loadBoolPref(PAREN_SIZE_AS_PRODUCT_TYPE_KEY, true)
 }
 
 export function saveParenSizeAsProductType(enabled: boolean): void {

@@ -265,6 +265,6 @@ pipeline:
   accessory_cost_pricing_enabled: false
   accessory_cost_float_min: 0
   accessory_cost_float_max: 5
-  accessory_cost_tiered_float_enabled: true
-  original_sum_pricing_enabled: false
+  accessory_cost_tiered_float_enabled: false
+  original_sum_pricing_enabled: true
   limited_time_first_spec_price_enabled: true

@@ -259,12 +259,12 @@ class PipelineIntegrationConfig(BaseModel):
     accessory_cost_float_min: float = Field(default=0.0, ge=0, description="配件成本定价模式：拼单价总浮动下限（元）")
     accessory_cost_float_max: float = Field(default=5.0, ge=0, description="配件成本定价模式：拼单价总浮动上限（元）")
     accessory_cost_tiered_float_enabled: bool = Field(
-        default=True,
+        default=False,
         description="配件成本定价模式下，子商品按定价档位浮动（替代统一 0~5）",
     )
     original_sum_pricing_enabled: bool = Field(
-        default=False,
-        description="开启后拼单价=主商品拼多多定价+子商品组合装定价（不加浮动）；与配件成本定价/档位浮动互斥",
+        default=True,
+        description="开启后拼单价=主商品拼多多定价+子商品组合装定价（不加浮动）；与配件成本定价/档位浮动互斥；默认开启",
     )
     limited_time_first_spec_price_enabled: bool = Field(
         default=True,
