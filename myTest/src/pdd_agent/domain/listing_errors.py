@@ -224,7 +224,7 @@ class ListingErrors:
         ListingErrorCode.CATEGORY_RECOMMENDATION_MODAL_BLOCKING: "推荐分类弹窗未确认，无法点下一步",
         ListingErrorCode.CATEGORY_SEARCH_FAILED: "分类搜索失败，未选到类目",
         ListingErrorCode.PUBLISH_SETTINGS_INCOMPLETE: "提交前满件折扣或运费模板未设置成功",
-        ListingErrorCode.NEEDS_MANUAL_LOGIN_OR_CAPTCHA: "需要人工处理验证码或重新登录",
+        ListingErrorCode.NEEDS_MANUAL_LOGIN_OR_CAPTCHA: "登录需输入短信验证码或完成滑块验证",
         ListingErrorCode.PAGE_OR_MATERIAL_CHANGED: "页面或素材异常（分类/规格/上传相关）",
         ListingErrorCode.BROWSER_TRANSIENT_ERROR: "浏览器超时或断连，可重试",
         ListingErrorCode.BROWSER_MANUALLY_CLOSED: "浏览器被手动关闭，任务中断",
@@ -908,6 +908,14 @@ class ListingErrors:
             return cls.feishu_label(rc) if rc else ""
 
         text = re.sub(r"^(失败|跳过)\s*[:：]\s*", "", text)
+
+        from pdd_agent.browser.login_failure import feishu_brief_for_login_error
+
+        login_brief = feishu_brief_for_login_error(text)
+        if login_brief:
+            code = str(merchant_code or "").strip().upper()
+            line = f"{code}{login_brief}" if code else login_brief
+            return cls.sanitize_feishu_failure_reason(line)
 
         catalog_brief = cls._catalog_warning_to_brief(text)
         if catalog_brief:

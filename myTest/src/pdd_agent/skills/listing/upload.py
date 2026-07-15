@@ -317,9 +317,13 @@ def _row_matches_title(row_text: str, title: str) -> bool:
 
 
 def _classify_exception(exc: Exception) -> tuple[str, bool]:
+    from pdd_agent.browser.login_failure import is_manual_login_error_text
+
     err = _safe_exc(exc)
     low = err.lower()
-    if any(k in err for k in ("验证码", "滑块", "登录", "扫码", "短信")):
+    if is_manual_login_error_text(err) or any(
+        k in err for k in ("验证码", "滑块", "登录", "扫码", "短信")
+    ):
         return "needs_manual_login_or_captcha", True
     if any(k in err for k in ("分类", "类目", "SKU", "规格", "预览图", "上传")):
         return "page_or_material_changed", True

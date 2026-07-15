@@ -968,17 +968,31 @@ def _schedule_feishu_listing_result_log(
             or "兄弟款规格图命名错误" in text
             or "槽位对齐" in text
         )
-        reason_code = "slot_alignment_failed" if is_slot else "unexpected_error"
+        if is_slot:
+            reason_code = "slot_alignment_failed"
+            retryable = True
+        else:
+            from pdd_agent.skills.listing.upload import _classify_exception
+
+            reason_code, retryable = _classify_exception(RuntimeError(text))
         _queue_failure(
             message=text,
             reason_code=reason_code,
-            retryable=is_slot,
+            retryable=retryable,
             priority=2,
         )
 
     run_error = str(result.get("error") or "").strip()
     if run_error:
-        _queue_failure(message=run_error, reason_code="unexpected_error", priority=1)
+        from pdd_agent.skills.listing.upload import _classify_exception
+
+        reason_code, retryable = _classify_exception(RuntimeError(run_error))
+        _queue_failure(
+            message=run_error,
+            reason_code=reason_code,
+            retryable=retryable,
+            priority=1,
+        )
 
     has_unit_failures = any(int(row.get("priority") or 0) >= 2 for row in failures.values())
     rows = list(failures.values())

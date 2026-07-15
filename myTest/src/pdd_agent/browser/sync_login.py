@@ -8,12 +8,23 @@ from typing import TYPE_CHECKING
 from playwright.sync_api import Page
 
 from pdd_agent.browser.dp_compat_sync import DpPage
+from pdd_agent.browser.login_failure import (
+    format_captcha_verify_required,
+    format_login_timeout,
+    format_sms_verify_required,
+)
 
 if TYPE_CHECKING:
     from pdd_agent.core.config import AccountConfig
 
 HOME_URL = "https://mms.pinduoduo.com/home/"
-_SMS_HINTS = ("短信验证码", "请输入短信验证码")
+_SMS_HINTS = (
+    "短信验证码",
+    "请输入短信验证码",
+    "验证手机后继续登录",
+    "请验证手机后继续登录",
+    "为保障您账号的安全，请验证手机",
+)
 _CAPTCHA_HINTS = ("请向右滑块", "完成拼图", "滑块")
 
 
@@ -84,45 +95,105 @@ def _perform_password_login_sync(account: AccountConfig, page: Page) -> DpPage:
     if not account.username or not account.password:
         raise RuntimeError(f"[{account_id}] 未配置账号或密码")
 
+    # 已在短信验证页：不要再填 #usernameId（元素不存在会报 Timeout → 飞书记成运行异常）
+    if _is_sms_verify_page(dp):
+        print(f"[{account_id}] 检测到短信验证码页，等待人工输入...")
+        return _wait_until_logged_in(account, dp, wait_sec=180, manual_reason="sms")
+
     print(f"[{account_id}] 未登录，正在使用账号密码登录...")
     tab = dp.ele("text:账号登录", timeout=5)
     if tab:
         tab.click()
         time.sleep(1)
 
-    user_input = dp.ele("#usernameId", timeout=5)
-    if user_input:
-        user_input.input(account.username, clear=True)
-    time.sleep(0.5)
+    if _is_sms_verify_page(dp):
+        print(f"[{account_id}] 切换账号登录后仍在短信验证页，等待人工输入...")
+        return _wait_until_logged_in(account, dp, wait_sec=180, manual_reason="sms")
 
-    pwd_input = dp.ele("#passwordId", timeout=5)
-    if pwd_input:
-        pwd_input.input(account.password, clear=True)
+    _fill_password_login_form(account, dp)
     time.sleep(1)
 
     if not _click_login_button(dp):
+        # 可能已跳到短信页，登录按钮区域变了
+        if _is_sms_verify_page(dp):
+            return _wait_until_logged_in(account, dp, wait_sec=180, manual_reason="sms")
         raise RuntimeError(f"[{account_id}] 未找到登录按钮")
     time.sleep(1)
+
+    if _is_sms_verify_page(dp):
+        print(f"[{account_id}] 登录后进入短信验证码页，请在浏览器输入验证码...")
+        return _wait_until_logged_in(account, dp, wait_sec=180, manual_reason="sms")
+
     if _is_qr_login_page(dp):
         print(f"[{account_id}] 检测到误入扫码登录，切回账号登录后重试...")
         tab = dp.ele("text:账号登录", timeout=3)
         if tab:
             tab.click()
             time.sleep(1)
-        if user_input:
-            user_input.input(account.username, clear=True)
-        if pwd_input:
-            pwd_input.input(account.password, clear=True)
+        if _is_sms_verify_page(dp):
+            return _wait_until_logged_in(account, dp, wait_sec=180, manual_reason="sms")
+        # 重新定位输入框，禁止复用旧 locator（页面已变时会 30s Timeout）
+        _fill_password_login_form(account, dp)
         time.sleep(0.5)
         if not _click_login_button(dp):
+            if _is_sms_verify_page(dp):
+                return _wait_until_logged_in(account, dp, wait_sec=180, manual_reason="sms")
             raise RuntimeError(f"[{account_id}] 重试后仍未找到登录按钮")
         time.sleep(1)
+        if _is_sms_verify_page(dp):
+            return _wait_until_logged_in(account, dp, wait_sec=180, manual_reason="sms")
 
     wait_sec = 180 if _needs_manual_verify(dp) else 30
+    manual_reason = ""
     if wait_sec == 180:
+        manual_reason = "captcha" if _is_captcha_page(dp) else "sms"
         print(f"[{account_id}] 请在浏览器窗口完成滑块或短信验证...")
+    return _wait_until_logged_in(account, dp, wait_sec=wait_sec, manual_reason=manual_reason)
 
-    for remaining in range(wait_sec, 0, -1):
+
+def _fill_password_login_form(account: AccountConfig, dp: DpPage) -> None:
+    """填写账号密码；若页面已是短信验证则立刻抛出可读错误。"""
+    account_id = account.account_id
+    if _is_sms_verify_page(dp):
+        raise RuntimeError(format_sms_verify_required(account_id))
+
+    user_input = dp.ele("#usernameId", timeout=5)
+    if not user_input:
+        if _is_sms_verify_page(dp) or _needs_manual_verify(dp):
+            raise RuntimeError(format_sms_verify_required(account_id))
+        raise RuntimeError(f"[{account_id}] 未找到账号输入框，无法自动登录")
+    _safe_input(user_input, account.username, account_id=account_id, dp=dp)
+    time.sleep(0.5)
+
+    pwd_input = dp.ele("#passwordId", timeout=5)
+    if not pwd_input:
+        if _is_sms_verify_page(dp):
+            raise RuntimeError(format_sms_verify_required(account_id))
+        raise RuntimeError(f"[{account_id}] 未找到密码输入框，无法自动登录")
+    _safe_input(pwd_input, account.password, account_id=account_id, dp=dp)
+
+
+def _safe_input(ele, value: str, *, account_id: str, dp: DpPage) -> None:
+    try:
+        ele.input(value, clear=True)
+    except Exception as exc:
+        if _is_sms_verify_page(dp) or _needs_manual_verify(dp):
+            raise RuntimeError(format_sms_verify_required(account_id)) from exc
+        err = str(exc)
+        if "usernameId" in err or "passwordId" in err or "Timeout" in type(exc).__name__:
+            raise RuntimeError(format_sms_verify_required(account_id)) from exc
+        raise
+
+
+def _wait_until_logged_in(
+    account: AccountConfig,
+    dp: DpPage,
+    *,
+    wait_sec: int,
+    manual_reason: str = "",
+) -> DpPage:
+    account_id = account.account_id
+    for remaining in range(max(1, int(wait_sec)), 0, -1):
         if not is_login_url(dp.url):
             print(f"[{account_id}] 登录成功")
             time.sleep(2)
@@ -130,16 +201,48 @@ def _perform_password_login_sync(account: AccountConfig, page: Page) -> DpPage:
 
             maybe_refresh_shop_display_name(account_id, dp, login_username=account.username)
             return dp
-        if wait_sec == 180 and remaining % 15 == 0:
+        if wait_sec >= 180 and remaining % 15 == 0:
             print(f"[{account_id}] 等待人工验证… 剩余约 {remaining}s")
         time.sleep(1)
 
-    raise RuntimeError(f"[{account_id}] 登录超时")
+    if _is_sms_verify_page(dp) or manual_reason == "sms":
+        raise RuntimeError(format_sms_verify_required(account_id))
+    if _is_captcha_page(dp) or manual_reason == "captcha":
+        raise RuntimeError(format_captcha_verify_required(account_id))
+    raise RuntimeError(format_login_timeout(account_id, detail="请检查账号密码或是否弹出验证码"))
+
+
+def _is_sms_verify_page(dp: DpPage) -> bool:
+    for hint in _SMS_HINTS:
+        if dp.ele(f"text:{hint}", timeout=0.8):
+            return True
+    try:
+        return bool(
+            dp.run_js(
+                """
+                const text = document.body?.innerText || '';
+                return text.includes('短信验证码')
+                    || text.includes('请输入短信验证码')
+                    || (text.includes('验证手机') && text.includes('继续登录'));
+                """
+            )
+        )
+    except Exception:
+        return False
+
+
+def _is_captcha_page(dp: DpPage) -> bool:
+    for hint in _CAPTCHA_HINTS:
+        if dp.ele(f"text:{hint}", timeout=0.5):
+            return True
+    return False
 
 
 def _needs_manual_verify(dp: DpPage) -> bool:
+    if _is_sms_verify_page(dp) or _is_captcha_page(dp):
+        return True
     for hint in _CAPTCHA_HINTS + _SMS_HINTS:
-        if dp.ele(f"text:{hint}", timeout=1):
+        if dp.ele(f"text:{hint}", timeout=0.5):
             return True
     return False
 
