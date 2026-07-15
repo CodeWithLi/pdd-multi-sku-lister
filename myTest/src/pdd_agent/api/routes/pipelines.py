@@ -27,6 +27,8 @@ from pdd_agent.api.schemas.pipelines import (
     PipelineAccessoryCostPricingUpdateIn,
     PipelineAccessoryTieredFloatOut,
     PipelineAccessoryTieredFloatUpdateIn,
+    PipelineOriginalSumPricingOut,
+    PipelineOriginalSumPricingUpdateIn,
     PipelineSubmitAiTitleOut,
     PipelineSubmitAiTitleTestIn,
     PipelineSubmitAiTitleTestOut,
@@ -60,11 +62,13 @@ from pdd_agent.integrations.feishu.config import (
     accessory_cost_pricing_enabled,
     accessory_cost_tiered_float_enabled,
     excel_fallback_enabled,
+    original_sum_pricing_enabled,
     platform_skip_dedupe_enabled,
     load_feishu_config,
     save_pipeline_accessory_cost_pricing_to_config,
     save_pipeline_accessory_tiered_float_to_config,
     save_pipeline_excel_fallback_to_config,
+    save_pipeline_original_sum_pricing_to_config,
     save_pipeline_platform_skip_dedupe_to_config,
     save_pdd_upload_log_spec_rows_to_config,
 )
@@ -146,12 +150,12 @@ def get_integrated_accessory_cost_pricing():
 
 @router.put("/integrated/accessory-cost-pricing", response_model=PipelineAccessoryCostPricingOut)
 def update_integrated_accessory_cost_pricing(body: PipelineAccessoryCostPricingUpdateIn):
-    """保存整合链路「配件成本定价」开关（写入 feishu.yaml）。"""
+    """保存整合链路「配件成本定价」开关（写入 feishu.yaml；开启时关闭原价相加）。"""
     save_pipeline_accessory_cost_pricing_to_config(body.enabled)
     cfg = load_feishu_config()
     pipe = cfg.pipeline
     return PipelineAccessoryCostPricingOut(
-        enabled=bool(body.enabled),
+        enabled=bool(accessory_cost_pricing_enabled(cfg)),
         float_min=float(pipe.accessory_cost_float_min),
         float_max=float(pipe.accessory_cost_float_max),
     )
@@ -166,8 +170,24 @@ def get_integrated_accessory_tiered_float():
 @router.put("/integrated/accessory-tiered-float", response_model=PipelineAccessoryTieredFloatOut)
 def update_integrated_accessory_tiered_float(body: PipelineAccessoryTieredFloatUpdateIn):
     """保存「子商品档位浮动」开关（写入 feishu.yaml）。"""
-    save_pipeline_accessory_tiered_float_to_config(body.enabled)
+    try:
+        save_pipeline_accessory_tiered_float_to_config(body.enabled)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     return PipelineAccessoryTieredFloatOut(enabled=bool(body.enabled))
+
+
+@router.get("/integrated/original-sum-pricing", response_model=PipelineOriginalSumPricingOut)
+def get_integrated_original_sum_pricing():
+    """读取「原价相加」开关。"""
+    return PipelineOriginalSumPricingOut(enabled=original_sum_pricing_enabled())
+
+
+@router.put("/integrated/original-sum-pricing", response_model=PipelineOriginalSumPricingOut)
+def update_integrated_original_sum_pricing(body: PipelineOriginalSumPricingUpdateIn):
+    """保存「原价相加」开关（开启时关闭配件成本定价与子商品档位浮动）。"""
+    save_pipeline_original_sum_pricing_to_config(body.enabled)
+    return PipelineOriginalSumPricingOut(enabled=original_sum_pricing_enabled())
 
 
 @router.get("/integrated/submit-ai-title", response_model=PipelineSubmitAiTitleOut)

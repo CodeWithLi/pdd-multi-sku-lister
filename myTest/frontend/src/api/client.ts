@@ -784,6 +784,14 @@ export const api = {
       .put<{ enabled: boolean }>('/pipelines/integrated/accessory-tiered-float', { enabled })
       .then((r) => r.data),
 
+  getPipelineOriginalSumPricing: () =>
+    http.get<{ enabled: boolean }>('/pipelines/integrated/original-sum-pricing').then((r) => r.data),
+
+  updatePipelineOriginalSumPricing: (enabled: boolean) =>
+    http
+      .put<{ enabled: boolean }>('/pipelines/integrated/original-sum-pricing', { enabled })
+      .then((r) => r.data),
+
   getPipelineSubmitAiTitle: () =>
     http
       .get<PipelineSubmitAiTitleConfig>('/pipelines/integrated/submit-ai-title')

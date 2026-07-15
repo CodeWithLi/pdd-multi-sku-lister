@@ -218,7 +218,7 @@ pdd_product_catalog:
     product_type: 商品类型
     product_status: 产品状态
     available_inventory: 可用库存
-    pricing: 拼多多定价+5元
+    pricing: 拼多多定价
 
 # 上架库存：聚水潭 ERP 可用数（按商品编码匹配）
 jushuitan_erp_inventory:
@@ -230,6 +230,16 @@ jushuitan_erp_inventory:
     product_code: 商品编码
     available_qty: 可用数
     cost: 成本
+
+# 子商品定价：拼多多组合装定价（按商品编码匹配「商品定价」）
+pdd_bundle_pricing:
+  enabled: true
+  table_id: ""
+  table_name: 拼多多组合装定价
+  cache_seconds: 300
+  field_names:
+    product_code: 商品编码
+    pricing: 商品定价
 
 # pdd.xls 控价区间 → 飞书「拼多多比价定价」
 pdd_price_compare:
@@ -256,4 +266,5 @@ pipeline:
   accessory_cost_float_min: 0
   accessory_cost_float_max: 5
   accessory_cost_tiered_float_enabled: true
+  original_sum_pricing_enabled: false
   limited_time_first_spec_price_enabled: true

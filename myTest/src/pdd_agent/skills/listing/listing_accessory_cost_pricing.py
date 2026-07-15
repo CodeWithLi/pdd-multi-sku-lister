@@ -1,13 +1,16 @@
-"""配件成本定价模式（整合链路可选）。
+"""配件/组合定价模式（整合链路可选）。
 
-开启后拼单价 = 主商品「拼多多定价+5元」 + 主商品浮动(0~5) + Σ(配件聚水潭成本 + 配件浮动(0~5))。
-主商品：规格图文件名首段 / 单款时的款式码（来自飞书「拼多多定价+5元」列）。
-子商品：组合里的配件码，或套装文件名 + 段中除首段外的所有段（来自飞书「聚水潭ERP商品列表」成本）。
+两种互斥模式：
+1. 配件成本定价：拼单价 = 主商品「拼多多定价」 + 主商品浮动 + Σ(子商品组合装定价 + 子商品浮动)
+2. 原价相加：拼单价 = 主商品「拼多多定价」 + Σ(子商品组合装定价)，不加浮动
 
-浮动规则（listing_accessory_cost_float_registry）：
+主商品：规格图文件名首段 / 单款时的款式码（来自飞书「拼多多比价定价」的「拼多多定价」列）。
+子商品：组合里的配件码，或套装文件名 + 段中除首段外的所有段（来自飞书「拼多多组合装定价」的「商品定价」）。
+
+浮动规则（listing_accessory_cost_float_registry，仅配件成本定价模式）：
 - 主商品：同族且上架定价相同 → 共享主浮动（如 BD014A/C 同价）；
-- 配件：同配件族且聚水潭成本相同 → 共享配件浮动（如 YKL001A/B 成本都是 1.5）；
-- 成本或定价不同 → 各自独立随机浮动；不再强制跨款式组合同价。
+- 配件：同配件族且组合装定价相同 → 共享配件浮动（如 YKL001A/B 定价都是 1.5）；
+- 定价不同 → 各自独立随机浮动；不再强制跨款式组合同价。
 """
 
 from __future__ import annotations
@@ -20,7 +23,9 @@ from pdd_agent.integrations.feishu.config import (
     FeishuConfig,
     accessory_cost_pricing_enabled,
     accessory_cost_tiered_float_enabled,
+    accessory_style_pricing_enabled,
     load_feishu_config,
+    original_sum_pricing_enabled,
 )
 from pdd_agent.skills.listing.listing_accessory_cost_float_registry import (
     accessory_float_key,
@@ -49,6 +54,7 @@ _cost_map_ctx: ContextVar[dict[str, float]] = ContextVar("accessory_cost_pricing
 _float_min_ctx: ContextVar[float] = ContextVar("accessory_cost_pricing_float_min", default=0.0)
 _float_max_ctx: ContextVar[float] = ContextVar("accessory_cost_pricing_float_max", default=5.0)
 _tiered_float_ctx: ContextVar[bool] = ContextVar("accessory_cost_tiered_float_enabled", default=False)
+_original_sum_ctx: ContextVar[bool] = ContextVar("accessory_original_sum_pricing", default=False)
 _main_float_ctx: ContextVar[dict[tuple[str, str], float]] = ContextVar(
     "accessory_cost_pricing_main_float",
     default={},
@@ -63,21 +69,27 @@ def is_accessory_cost_pricing_active() -> bool:
     return bool(_active_ctx.get())
 
 
+def is_original_sum_pricing_active() -> bool:
+    return bool(_original_sum_ctx.get())
+
+
 def ensure_accessory_cost_pricing_active() -> bool:
-    """配置开启且尚未激活时，懒加载聚水潭成本表（预检/上架均可调用）。"""
+    """配置开启且尚未激活时，懒加载组合装定价表（预检/上架均可调用）。"""
     if is_accessory_cost_pricing_active():
         return True
-    if not accessory_cost_pricing_enabled():
+    if not accessory_style_pricing_enabled():
         return False
     cfg = load_feishu_config()
-    from pdd_agent.integrations.feishu.jushuitan_erp_inventory import load_jushuitan_cost_map
+    from pdd_agent.integrations.feishu.pdd_bundle_pricing import load_pdd_bundle_pricing_map
 
     pipe = cfg.pipeline
+    use_original_sum = original_sum_pricing_enabled(cfg)
     activate_accessory_cost_pricing(
-        cost_map=load_jushuitan_cost_map(config=cfg),
-        float_min=pipe.accessory_cost_float_min,
-        float_max=pipe.accessory_cost_float_max,
-        tiered_float_enabled=accessory_cost_tiered_float_enabled(cfg),
+        cost_map=load_pdd_bundle_pricing_map(config=cfg),
+        float_min=0.0 if use_original_sum else pipe.accessory_cost_float_min,
+        float_max=0.0 if use_original_sum else pipe.accessory_cost_float_max,
+        tiered_float_enabled=False if use_original_sum else accessory_cost_tiered_float_enabled(cfg),
+        original_sum=use_original_sum,
     )
     return True
 
@@ -88,13 +100,21 @@ def activate_accessory_cost_pricing(
     float_min: float = 0.0,
     float_max: float = 5.0,
     tiered_float_enabled: bool = False,
+    original_sum: bool = False,
 ) -> None:
     """上架任务开始前激活（通常由 task_runner 调用）。"""
     _active_ctx.set(True)
     _cost_map_ctx.set(dict(cost_map or {}))
-    _float_min_ctx.set(max(0.0, float(float_min)))
-    _float_max_ctx.set(max(_float_min_ctx.get(), float(float_max)))
-    _tiered_float_ctx.set(bool(tiered_float_enabled))
+    if original_sum:
+        _float_min_ctx.set(0.0)
+        _float_max_ctx.set(0.0)
+        _tiered_float_ctx.set(False)
+        _original_sum_ctx.set(True)
+    else:
+        _float_min_ctx.set(max(0.0, float(float_min)))
+        _float_max_ctx.set(max(_float_min_ctx.get(), float(float_max)))
+        _tiered_float_ctx.set(bool(tiered_float_enabled))
+        _original_sum_ctx.set(False)
     _main_float_ctx.set({})
     _accessory_float_ctx.set({})
 
@@ -103,6 +123,7 @@ def deactivate_accessory_cost_pricing() -> None:
     _active_ctx.set(False)
     _cost_map_ctx.set({})
     _tiered_float_ctx.set(False)
+    _original_sum_ctx.set(False)
     _main_float_ctx.set({})
     _accessory_float_ctx.set({})
 
@@ -115,11 +136,12 @@ def accessory_cost_pricing_config(cfg: FeishuConfig | None = None) -> dict[str, 
         "float_min": float(pipe.accessory_cost_float_min),
         "float_max": float(pipe.accessory_cost_float_max),
         "tiered_float_enabled": accessory_cost_tiered_float_enabled(active),
+        "original_sum_enabled": original_sum_pricing_enabled(active),
     }
 
 
 def _accessory_float_drawer():
-    if not _tiered_float_ctx.get():
+    if is_original_sum_pricing_active() or not _tiered_float_ctx.get():
         return None
     from pdd_agent.skills.listing.listing_accessory_tiered_float import tiered_accessory_float_drawer
 
@@ -163,7 +185,7 @@ def _lookup_accessory_cost(
         canonical = _norm_code(entry.code)
         if canonical in cost_map:
             return round(float(cost_map[canonical]), 2)
-    raise ComboPricingError(missing_codes=[code], reason="jushuitan_cost_missing")
+    raise ComboPricingError(missing_codes=[code], reason="bundle_pricing_missing")
 
 
 def _require_main_entry(code: str, catalog: dict[str, PddProductEntry]) -> PddProductEntry:
@@ -176,6 +198,8 @@ def _require_main_entry(code: str, catalog: dict[str, PddProductEntry]) -> PddPr
 
 
 def _resolve_main_float(*, listing_scope: str, main_key: str) -> float:
+    if is_original_sum_pricing_active():
+        return 0.0
     scope = str(listing_scope or "").strip() or "__default__"
     main_sk = (scope, main_key)
     main_floats = dict(_main_float_ctx.get())
@@ -194,6 +218,8 @@ def _resolve_accessory_floats(
     accessory_codes: list[str],
     accessory_costs: list[float],
 ) -> float:
+    if is_original_sum_pricing_active():
+        return 0.0
     scope = str(listing_scope or "").strip() or "__default__"
     accessory_floats = dict(_accessory_float_ctx.get())
     tiered_drawer = _accessory_float_drawer()
@@ -225,6 +251,8 @@ def _resolve_float_delta(
 ) -> float:
     """增量定价：主浮动 + 配件浮动之和（单元 reconcile 后会再次统一校正）。"""
     _ = accessory_cost_sum
+    if is_original_sum_pricing_active():
+        return 0.0
     main_key = main_float_key(catalog, main_code, main_price)
     main_float = _resolve_main_float(listing_scope=listing_scope, main_key=main_key)
     cost_map = _cost_map_ctx.get()
@@ -278,7 +306,7 @@ def resolve_accessory_cost_pricing(
     listing_scope: str = "",
     bundle_components: list[str] | None = None,
 ) -> tuple[str, str, str]:
-    """配件成本模式拼单价：主商品定价 + 子商品成本 + 继承浮动。"""
+    """主+子组合拼单价：主商品定价 + 子商品组合装定价 +（可选）继承浮动。"""
     _ = defaults
     cost_map = _cost_map_ctx.get()
     main_code, accessory_codes = split_main_and_accessory_codes(
@@ -333,7 +361,7 @@ def reconcile_accessory_cost_prices_for_unit(
     catalog: dict[str, PddProductEntry],
     defaults: dict[str, str],
 ) -> None:
-    """上架单元解析完成后，按主/配件分别浮动重算全部 SKU 拼单价。"""
+    """上架单元解析完成后，按主/配件分别浮动（或原价相加）重算全部 SKU 拼单价。"""
     _ = defaults
     if not ensure_accessory_cost_pricing_active() or not unit.skus:
         return
@@ -375,7 +403,7 @@ def resolve_sku_pricing_with_accessory_cost_if_enabled(
     listing_scope: str = "",
     bundle_components: list[str] | None = None,
 ) -> tuple[str, str, str] | None:
-    """已开启配件成本模式时返回 (库存, 拼单价, 单买价)，否则 None。"""
+    """已开启配件成本/原价相加模式时返回 (库存, 拼单价, 单买价)，否则 None。"""
     if not ensure_accessory_cost_pricing_active():
         return None
     return resolve_accessory_cost_pricing(
@@ -394,6 +422,7 @@ __all__ = [
     "deactivate_accessory_cost_pricing",
     "ensure_accessory_cost_pricing_active",
     "is_accessory_cost_pricing_active",
+    "is_original_sum_pricing_active",
     "reconcile_accessory_cost_floats",
     "reconcile_accessory_cost_prices_for_unit",
     "resolve_accessory_cost_pricing",

@@ -190,7 +190,7 @@ class PddProductCatalogFieldNames(BaseModel):
     product_type: str = "商品类型"
     product_status: str = "产品状态"
     available_inventory: str = "可用库存"
-    pricing: str = "拼多多定价+5元"
+    pricing: str = "拼多多定价"
 
 
 class PddProductCatalogConfig(BaseModel):
@@ -210,6 +210,23 @@ class PddProductCatalogConfig(BaseModel):
     single_price_float_min: float = Field(default=1.01, ge=0, description="单买价在拼单价基础上追加浮动下限（元）")
     single_price_float_max: float = Field(default=2.0, ge=0, description="单买价在拼单价基础上追加浮动上限（元）")
     field_names: PddProductCatalogFieldNames = Field(default_factory=PddProductCatalogFieldNames)
+
+
+class PddBundlePricingFieldNames(BaseModel):
+    """拼多多组合装定价表列名。"""
+
+    product_code: str = "商品编码"
+    pricing: str = "商品定价"
+
+
+class PddBundlePricingConfig(BaseModel):
+    """子商品/配件定价：飞书「拼多多组合装定价」。"""
+
+    enabled: bool = Field(default=True, description="是否从飞书「拼多多组合装定价」读取子商品定价")
+    table_id: str = Field(default="", description="拼多多组合装定价 table_id")
+    table_name: str = Field(default="拼多多组合装定价", description="组合装定价飞书表名")
+    cache_seconds: int = Field(default=300, ge=0, le=3600, description="全表定价缓存秒数")
+    field_names: PddBundlePricingFieldNames = Field(default_factory=PddBundlePricingFieldNames)
 
 
 class PipelineIntegrationConfig(BaseModel):
@@ -237,13 +254,17 @@ class PipelineIntegrationConfig(BaseModel):
     )
     accessory_cost_pricing_enabled: bool = Field(
         default=False,
-        description="开启后拼单价=主商品拼多多定价+5元+主浮动+配件成本+配件浮动",
+        description="开启后拼单价=主商品拼多多定价+主浮动+子商品组合装定价+子商品浮动",
     )
     accessory_cost_float_min: float = Field(default=0.0, ge=0, description="配件成本定价模式：拼单价总浮动下限（元）")
     accessory_cost_float_max: float = Field(default=5.0, ge=0, description="配件成本定价模式：拼单价总浮动上限（元）")
     accessory_cost_tiered_float_enabled: bool = Field(
         default=True,
-        description="配件成本定价模式下，子商品按成本档位浮动（替代统一 0~5）",
+        description="配件成本定价模式下，子商品按定价档位浮动（替代统一 0~5）",
+    )
+    original_sum_pricing_enabled: bool = Field(
+        default=False,
+        description="开启后拼单价=主商品拼多多定价+子商品组合装定价（不加浮动）；与配件成本定价/档位浮动互斥",
     )
     limited_time_first_spec_price_enabled: bool = Field(
         default=True,
@@ -702,6 +723,7 @@ class FeishuYamlConfig(BaseModel):
     pdd_delist_log: PddDelistLogConfig = Field(default_factory=PddDelistLogConfig)
     pdd_price_compare: PddPriceCompareConfig = Field(default_factory=PddPriceCompareConfig)
     pdd_product_catalog: PddProductCatalogConfig = Field(default_factory=PddProductCatalogConfig)
+    pdd_bundle_pricing: PddBundlePricingConfig = Field(default_factory=PddBundlePricingConfig)
     jushuitan_erp_inventory: JushuitanErpInventoryConfig = Field(default_factory=JushuitanErpInventoryConfig)
     pipeline: PipelineIntegrationConfig = Field(default_factory=PipelineIntegrationConfig)
 
@@ -733,6 +755,7 @@ class FeishuConfig(BaseModel):
     pdd_delist_log: PddDelistLogConfig = Field(default_factory=PddDelistLogConfig)
     pdd_price_compare: PddPriceCompareConfig = Field(default_factory=PddPriceCompareConfig)
     pdd_product_catalog: PddProductCatalogConfig = Field(default_factory=PddProductCatalogConfig)
+    pdd_bundle_pricing: PddBundlePricingConfig = Field(default_factory=PddBundlePricingConfig)
     jushuitan_erp_inventory: JushuitanErpInventoryConfig = Field(default_factory=JushuitanErpInventoryConfig)
     pipeline: PipelineIntegrationConfig = Field(default_factory=PipelineIntegrationConfig)
 
@@ -759,6 +782,18 @@ def accessory_cost_tiered_float_enabled(cfg: FeishuConfig | None = None) -> bool
     """配件成本定价模式下「子商品档位浮动」开关。"""
     cfg = cfg or load_feishu_config()
     return bool(cfg.pipeline.accessory_cost_tiered_float_enabled)
+
+
+def original_sum_pricing_enabled(cfg: FeishuConfig | None = None) -> bool:
+    """整合链路「原价相加」开关（主商品+子商品，不加浮动）。"""
+    cfg = cfg or load_feishu_config()
+    return bool(cfg.pipeline.original_sum_pricing_enabled)
+
+
+def accessory_style_pricing_enabled(cfg: FeishuConfig | None = None) -> bool:
+    """配件成本定价或原价相加任一开启时启用主+子组合价路径。"""
+    cfg = cfg or load_feishu_config()
+    return accessory_cost_pricing_enabled(cfg) or original_sum_pricing_enabled(cfg)
 
 
 def load_feishu_config(path: Path | None = None) -> FeishuConfig:
@@ -806,6 +841,10 @@ def load_feishu_config(path: Path | None = None) -> FeishuConfig:
     if "pdd_product_catalog" in raw and isinstance(raw.get("pdd_product_catalog"), dict):
         pdd_product_catalog = PddProductCatalogConfig.model_validate(raw["pdd_product_catalog"])
 
+    pdd_bundle_pricing = yaml_cfg.pdd_bundle_pricing
+    if "pdd_bundle_pricing" in raw and isinstance(raw.get("pdd_bundle_pricing"), dict):
+        pdd_bundle_pricing = PddBundlePricingConfig.model_validate(raw["pdd_bundle_pricing"])
+
     jushuitan_erp_inventory = yaml_cfg.jushuitan_erp_inventory
     if "jushuitan_erp_inventory" in raw and isinstance(raw.get("jushuitan_erp_inventory"), dict):
         jushuitan_erp_inventory = JushuitanErpInventoryConfig.model_validate(raw["jushuitan_erp_inventory"])
@@ -839,6 +878,7 @@ def load_feishu_config(path: Path | None = None) -> FeishuConfig:
         pdd_delist_log=pdd_delist_log,
         pdd_price_compare=pdd_price_compare,
         pdd_product_catalog=pdd_product_catalog,
+        pdd_bundle_pricing=pdd_bundle_pricing,
         jushuitan_erp_inventory=jushuitan_erp_inventory,
         pipeline=pipeline,
     )
@@ -979,6 +1019,23 @@ def save_jushuitan_erp_table_id_to_config(table_id: str, path: Path | None = Non
         yaml.dump(data, f, allow_unicode=True, default_flow_style=False, sort_keys=False)
 
 
+def save_pdd_bundle_pricing_table_id_to_config(table_id: str, path: Path | None = None) -> None:
+    """把「拼多多组合装定价」table_id 写回 feishu.yaml。"""
+    cfg_path = path or Path(os.getenv("FEISHU_CONFIG_PATH", DEFAULT_FEISHU_CONFIG_PATH))
+    data: dict = {}
+    if cfg_path.is_file():
+        with open(cfg_path, encoding="utf-8") as f:
+            data = yaml.safe_load(f) or {}
+    bundle_raw = data.get("pdd_bundle_pricing")
+    if not isinstance(bundle_raw, dict):
+        bundle_raw = {}
+    bundle_raw["table_id"] = table_id
+    data["pdd_bundle_pricing"] = bundle_raw
+    cfg_path.parent.mkdir(parents=True, exist_ok=True)
+    with open(cfg_path, "w", encoding="utf-8") as f:
+        yaml.dump(data, f, allow_unicode=True, default_flow_style=False, sort_keys=False)
+
+
 def save_pipeline_excel_fallback_to_config(enabled: bool, path: Path | None = None) -> None:
     """整合链路：写入 Excel 回退总开关到 feishu.yaml。"""
     cfg_path = path or Path(os.getenv("FEISHU_CONFIG_PATH", DEFAULT_FEISHU_CONFIG_PATH))
@@ -1024,6 +1081,11 @@ def save_pipeline_accessory_cost_pricing_to_config(enabled: bool, path: Path | N
     if not isinstance(pipeline_raw, dict):
         pipeline_raw = {}
     pipeline_raw["accessory_cost_pricing_enabled"] = bool(enabled)
+    if enabled:
+        # 与原价相加互斥
+        pipeline_raw["original_sum_pricing_enabled"] = False
+    else:
+        pipeline_raw["accessory_cost_tiered_float_enabled"] = False
     data["pipeline"] = pipeline_raw
     cfg_path.parent.mkdir(parents=True, exist_ok=True)
     with open(cfg_path, "w", encoding="utf-8") as f:
@@ -1040,7 +1102,31 @@ def save_pipeline_accessory_tiered_float_to_config(enabled: bool, path: Path | N
     pipeline_raw = data.get("pipeline")
     if not isinstance(pipeline_raw, dict):
         pipeline_raw = {}
+    if enabled and not bool(pipeline_raw.get("accessory_cost_pricing_enabled")):
+        raise ValueError("开启子商品档位浮动前请先开启配件成本定价")
+    if enabled and bool(pipeline_raw.get("original_sum_pricing_enabled")):
+        raise ValueError("原价相加已开启，无法同时开启子商品档位浮动")
     pipeline_raw["accessory_cost_tiered_float_enabled"] = bool(enabled)
+    data["pipeline"] = pipeline_raw
+    cfg_path.parent.mkdir(parents=True, exist_ok=True)
+    with open(cfg_path, "w", encoding="utf-8") as f:
+        yaml.dump(data, f, allow_unicode=True, default_flow_style=False, sort_keys=False)
+
+
+def save_pipeline_original_sum_pricing_to_config(enabled: bool, path: Path | None = None) -> None:
+    """整合链路：写入「原价相加」开关到 feishu.yaml（与浮动类开关互斥）。"""
+    cfg_path = path or Path(os.getenv("FEISHU_CONFIG_PATH", DEFAULT_FEISHU_CONFIG_PATH))
+    data: dict = {}
+    if cfg_path.is_file():
+        with open(cfg_path, encoding="utf-8") as f:
+            data = yaml.safe_load(f) or {}
+    pipeline_raw = data.get("pipeline")
+    if not isinstance(pipeline_raw, dict):
+        pipeline_raw = {}
+    pipeline_raw["original_sum_pricing_enabled"] = bool(enabled)
+    if enabled:
+        pipeline_raw["accessory_cost_pricing_enabled"] = False
+        pipeline_raw["accessory_cost_tiered_float_enabled"] = False
     data["pipeline"] = pipeline_raw
     cfg_path.parent.mkdir(parents=True, exist_ok=True)
     with open(cfg_path, "w", encoding="utf-8") as f:

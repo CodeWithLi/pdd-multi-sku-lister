@@ -333,6 +333,14 @@ class PipelineAccessoryTieredFloatUpdateIn(BaseModel):
     enabled: bool
 
 
+class PipelineOriginalSumPricingOut(BaseModel):
+    enabled: bool
+
+
+class PipelineOriginalSumPricingUpdateIn(BaseModel):
+    enabled: bool
+
+
 class PipelineSubmitAiTitleOut(BaseModel):
     enabled: bool
     provider: str = "deepseek"

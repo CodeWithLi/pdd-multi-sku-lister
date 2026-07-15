@@ -222,13 +222,13 @@ def test_resolve_accessory_cost_pricing_missing_cost_raises():
     activate_accessory_cost_pricing(cost_map={}, float_min=0.0, float_max=0.0)
     with pytest.raises(ComboPricingError) as exc:
         resolve_accessory_cost_pricing("BD716A", "YKL001N", catalog, {})
-    assert exc.value.reason == "jushuitan_cost_missing"
+    assert exc.value.reason == "bundle_pricing_missing"
 
 
 def test_resolve_sku_pricing_with_accessory_cost_if_enabled_returns_none_when_inactive(monkeypatch):
     catalog = {"BD716A": PddProductEntry("BD716A", "灰色笔袋", "笔袋", 100, 10.0)}
     monkeypatch.setattr(
-        "pdd_agent.skills.listing.listing_accessory_cost_pricing.accessory_cost_pricing_enabled",
+        "pdd_agent.skills.listing.listing_accessory_cost_pricing.accessory_style_pricing_enabled",
         lambda cfg=None: False,
     )
     deactivate_accessory_cost_pricing()
@@ -241,6 +241,18 @@ def test_resolve_sku_pricing_with_accessory_cost_if_enabled_returns_none_when_in
         )
         is None
     )
+
+
+def test_resolve_accessory_cost_pricing_original_sum_no_float():
+    catalog = {
+        "BD716A": PddProductEntry("BD716A", "灰色笔袋", "笔袋", 100, 10.0),
+    }
+    activate_accessory_cost_pricing(cost_map={"YKL001A": 2.0}, original_sum=True)
+    inv, gp, sp = resolve_accessory_cost_pricing("BD716A", "YKL001A", catalog, {})
+    assert inv == "100"
+    assert gp == "12"
+    assert float(sp) >= float(gp)
+    deactivate_accessory_cost_pricing()
 
 
 def test_solo_sku_not_below_main_price():

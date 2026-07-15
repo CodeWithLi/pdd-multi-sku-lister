@@ -35,6 +35,10 @@ def clear_feishu_data_caches(*, include_listing_snapshot: bool = True) -> dict[s
 
     _run("jushuitan_erp_inventory", clear_jushuitan_inventory_cache)
 
+    from pdd_agent.integrations.feishu.pdd_bundle_pricing import clear_pdd_bundle_pricing_cache
+
+    _run("pdd_bundle_pricing", clear_pdd_bundle_pricing_cache)
+
     try:
         from pdd_agent.skills.listing.pdd_product_catalog import get_pdd_product_catalog
 

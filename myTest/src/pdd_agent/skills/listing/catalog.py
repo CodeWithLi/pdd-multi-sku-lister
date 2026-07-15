@@ -114,11 +114,11 @@ def _resolve_sku_pricing_or_warn(
                 unit.warnings.append(
                     ListingErrors.Msg.CATALOG_PRICING_INVALID.format(prefix=prefix, codes=codes)
                 )
-        elif exc.reason == "jushuitan_cost_missing":
+        elif exc.reason in {"bundle_pricing_missing", "jushuitan_cost_missing"}:
             if combo:
-                unit.warnings.append(f"{prefix} {combo} 子商品[{codes}]聚水潭成本缺失")
+                unit.warnings.append(f"{prefix} {combo} 子商品[{codes}]组合装定价缺失")
             else:
-                unit.warnings.append(f"{prefix} 子商品[{codes}]聚水潭成本缺失")
+                unit.warnings.append(f"{prefix} 子商品[{codes}]组合装定价缺失")
         elif combo:
             unit.warnings.append(
                 ListingErrors.Msg.CATALOG_CODE_PRICING_MISSING_COMBO.format(
