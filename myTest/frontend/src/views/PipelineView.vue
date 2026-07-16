@@ -57,6 +57,12 @@ import {
   saveCategoryNextBurstDemo,
 } from '@/utils/pipelinePreferences'
 import {
+  applyListingOnlyPayload,
+  listingOnlySubmitLabel,
+  loadListingOnlyMode,
+  saveListingOnlyMode,
+} from '@/utils/pipelineListingOnlyMode'
+import {
   failureReasonLabel,
   listingUnitStatusType,
 } from '@/utils/labels'
@@ -136,6 +142,7 @@ const specFillVerifyTest = ref(loadSpecFillVerifyTest())
 const primaryStyleFirstTest = ref(loadPrimaryStyleFirstTest())
 const parenSizeAsProductType = ref(loadParenSizeAsProductType())
 const categoryNextBurstDemo = ref(loadCategoryNextBurstDemo())
+const listingOnlyMode = ref(loadListingOnlyMode())
 
 watch(specFillVerifyTest, (enabled) => {
   if (enabled) slotAlignmentTest.value = false
@@ -2001,7 +2008,7 @@ async function startPipeline() {
   loading.value = true
   try {
     if (pipelineBatchEnabled.value) {
-      const result = await api.startIntegratedPipelineBatch({
+      const result = await api.startIntegratedPipelineBatch(applyListingOnlyPayload({
         account_ids: accountIds,
         product_codes: resolvedListingSelectors.value,
         activity_ids: activityIds.value,
@@ -2039,7 +2046,7 @@ async function startPipeline() {
         per_batch_limited_time_chunk_size: perBatchLimitedTimeChunkSize.value,
         batch_limited_time_auto_retry_enabled: batchLimitedTimeAutoRetryEnabled.value,
         batch_limited_time_auto_retry_max_attempts: batchLimitedTimeAutoRetryMaxAttempts.value,
-      })
+      }, listingOnlyMode.value))
       success.value = `批量整合链路已提交：${result.total} 家店铺${
         result.store_sequential_enabled
           ? `（串行：第 1 家已启动，其余 ${result.pending_stores ?? 0} 家待前店上架+限时限量购完成后自动启动；店间间隔 ${result.store_start_delay_min_seconds}-${result.store_start_delay_max_seconds} 秒；活动次日执行）`
@@ -2057,7 +2064,7 @@ async function startPipeline() {
         activePipeline.value = first
       }
     } else {
-      const result = await api.startIntegratedPipeline({
+      const result = await api.startIntegratedPipeline(applyListingOnlyPayload({
         account_id: accountId.value,
         product_codes: resolvedListingSelectors.value,
         activity_ids: activityIds.value,
@@ -2092,7 +2099,7 @@ async function startPipeline() {
         per_batch_limited_time_chunk_size: perBatchLimitedTimeChunkSize.value,
         batch_limited_time_auto_retry_enabled: batchLimitedTimeAutoRetryEnabled.value,
         batch_limited_time_auto_retry_max_attempts: batchLimitedTimeAutoRetryMaxAttempts.value,
-      })
+      }, listingOnlyMode.value))
       pipelinePage.value = 1
       if (result.commerce_queued) {
         const mergedHint = result.is_merged ? '（已合并到现有排队）' : ''
@@ -2172,6 +2179,22 @@ const activityTrafficBatchDisabled = computed(
 
 watch(relistStrategy, (value) => {
   savePipelineRelistStrategy(value)
+})
+
+watch(listingOnlyMode, (value) => {
+  saveListingOnlyMode(value)
+  if (value) {
+    autoPromotion.value = false
+    continueAfterLimitedTimeFailure.value = false
+    continueAfterActivityFailure.value = false
+    promoteAfterLimitedTimeFailure.value = false
+    activityLimitedTimeSuccessOnly.value = false
+    listingPerBatchLimitedTimeEnabled.value = false
+    listingPerBatchCampaignEnabled.value = false
+    listingPerBatchLtTrafficActivityEnabled.value = false
+    activityTrafficBatchEnabled.value = false
+    batchLimitedTimeAutoRetryEnabled.value = false
+  }
 })
 
 watch(listingThrottleEnabled, (value) => {
@@ -2822,7 +2845,7 @@ onUnmounted(() => {
                 <div v-if="listingThrottleEnabled" class="option-row listing-throttle-row per-batch-lt-row">
                   <div class="switch-row">
                     <span class="switch-label">每批完成后跑限时限量购</span>
-                    <el-switch v-model="listingPerBatchLimitedTimeEnabled" />
+                    <el-switch v-model="listingPerBatchLimitedTimeEnabled" :disabled="listingOnlyMode" />
                   </div>
                   <template
                     v-if="
@@ -2862,7 +2885,7 @@ onUnmounted(() => {
                 >
                   <div class="switch-row">
                     <span class="switch-label">限时失败自动重跑</span>
-                    <el-switch v-model="batchLimitedTimeAutoRetryEnabled" />
+                    <el-switch v-model="batchLimitedTimeAutoRetryEnabled" :disabled="listingOnlyMode" />
                   </div>
                   <template v-if="batchLimitedTimeAutoRetryEnabled">
                     <span class="throttle-inline-label">最多</span>
@@ -2893,7 +2916,7 @@ onUnmounted(() => {
                     <span class="switch-label">每批完成后跑活动{{ autoPromotion ? '/推广' : '' }}</span>
                     <el-switch
                       v-model="listingPerBatchCampaignEnabled"
-                      :disabled="listingPerBatchLtTrafficActivityEnabled"
+                      :disabled="listingOnlyMode || listingPerBatchLtTrafficActivityEnabled"
                     />
                   </div>
                 </div>
@@ -2902,7 +2925,7 @@ onUnmounted(() => {
                     <span class="switch-label">分批：限时→推广→全部批次结束后报活动</span>
                     <el-switch
                       v-model="listingPerBatchLtTrafficActivityEnabled"
-                      :disabled="listingPerBatchCampaignEnabled || !listingPerBatchLimitedTimeEnabled"
+                      :disabled="listingOnlyMode || listingPerBatchCampaignEnabled || !listingPerBatchLimitedTimeEnabled"
                     />
                   </div>
                   <div v-if="listingPerBatchLtTrafficActivityEnabled" class="form-tip option-tip">
@@ -2936,17 +2959,26 @@ onUnmounted(() => {
             <div class="form-section">
               <div class="form-section-head">
                 <div class="form-section-title">活动与推广</div>
+                <div class="switch-row listing-only-switch">
+                  <span class="switch-label">仅上架</span>
+                  <el-switch v-model="listingOnlyMode" />
+                </div>
                 <div class="limited-time-inline">
                   <span class="limited-time-label">限时限量购</span>
-                  <el-tag size="small" type="warning" effect="plain">必选</el-tag>
+                  <el-tag size="small" :type="listingOnlyMode ? 'info' : 'warning'" effect="plain">
+                    {{ listingOnlyMode ? '跳过' : '默认跑' }}
+                  </el-tag>
                   <span class="limited-time-hint muted">先于活动报名</span>
                 </div>
               </div>
+              <p v-if="listingOnlyMode" class="form-tip form-tip-highlight">
+                已开启仅上架：上架配置不变，限时限量购、活动、推广都不跑；分批上架仍按上面的批次设置执行。
+              </p>
               <p class="form-tip limited-time-tip">
                 链路顺序：上架 → 限时限量购 → 活动报名 → 推广。已选活动时，限时限量购会在浏览器中先于活动报名自动执行。
               </p>
 
-              <el-form-item label="营销活动" required>
+              <el-form-item label="营销活动" :required="!listingOnlyMode">
                 <el-select
                   v-model="activityIds"
                   multiple
@@ -2954,6 +2986,7 @@ onUnmounted(() => {
                   collapse-tags
                   collapse-tags-tooltip
                   :max-collapse-tags="2"
+                  :disabled="listingOnlyMode"
                   placeholder="选择一个或多个活动"
                   style="width: 100%"
                 >
@@ -2975,7 +3008,7 @@ onUnmounted(() => {
                     <span class="switch-label">按商品数分批报名活动并推广</span>
                     <el-switch
                       v-model="activityTrafficBatchEnabled"
-                      :disabled="activityTrafficBatchDisabled"
+                      :disabled="listingOnlyMode || activityTrafficBatchDisabled"
                     />
                   </div>
                   <template v-if="activityTrafficBatchEnabled">
@@ -3031,18 +3064,18 @@ onUnmounted(() => {
                   </el-checkbox>
                   <div class="switch-row">
                     <span class="switch-label">自动推广</span>
-                    <el-switch v-model="autoPromotion" />
+                    <el-switch v-model="autoPromotion" :disabled="listingOnlyMode" />
                   </div>
                   <div class="switch-row">
                     <span class="switch-label">限时失败仍继续</span>
                     <el-switch
                       v-model="continueAfterLimitedTimeFailure"
-                      :disabled="activityLimitedTimeSuccessOnly"
+                      :disabled="listingOnlyMode || activityLimitedTimeSuccessOnly"
                     />
                   </div>
                   <div class="switch-row">
                     <span class="switch-label">仅限时成功报活动</span>
-                    <el-switch v-model="activityLimitedTimeSuccessOnly" />
+                    <el-switch v-model="activityLimitedTimeSuccessOnly" :disabled="listingOnlyMode" />
                   </div>
                   <div v-if="activityLimitedTimeSuccessOnly" class="form-tip option-tip">
                     开启后：活动/推广只使用限时限量购提交成功的商品 ID；限时整单失败但无成功商品时不报活动。
@@ -3050,11 +3083,11 @@ onUnmounted(() => {
                   </div>
                   <div class="switch-row">
                     <span class="switch-label">活动失败仍继续</span>
-                    <el-switch v-model="continueAfterActivityFailure" />
+                    <el-switch v-model="continueAfterActivityFailure" :disabled="listingOnlyMode" />
                   </div>
                   <div class="switch-row">
                     <span class="switch-label">限时失败仍推广</span>
-                    <el-switch v-model="promoteAfterLimitedTimeFailure" :disabled="!autoPromotion" />
+                    <el-switch v-model="promoteAfterLimitedTimeFailure" :disabled="listingOnlyMode || !autoPromotion" />
                   </div>
                   <div v-if="promoteAfterLimitedTimeFailure" class="form-tip option-tip">
                     限时限量购失败导致活动不跑时，跳过活动并立即创建推广；推广商品 ID 来源见系统设置。
@@ -3277,7 +3310,7 @@ onUnmounted(() => {
                 检查所选套图
               </el-button>
               <el-button type="primary" size="large" class="submit-btn" :loading="loading" @click="startPipeline">
-                {{ pipelineBatchEnabled ? '批量启动整合链路' : '一键启动整合链路' }}
+                {{ listingOnlyMode ? listingOnlySubmitLabel(pipelineBatchEnabled) : (pipelineBatchEnabled ? '批量启动整合链路' : '一键启动整合链路') }}
               </el-button>
             </div>
 

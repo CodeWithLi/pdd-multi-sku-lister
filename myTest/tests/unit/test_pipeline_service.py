@@ -12,6 +12,7 @@ from pdd_agent.api.services.pipeline_service import (
     _activity_jitter_max_seconds,
     _build_multi_activity_detail,
     _campaign_time_requirement_message,
+    _continue_pipeline_after_listing,
     _extract_listing_products,
     _is_campaign_time_requirement_failure,
     _merge_skipped_listing_products,
@@ -93,6 +94,57 @@ def test_resolve_batch_delay_normalizes_range():
         load_settings.return_value.batch.store_start_delay_min_seconds = 30
         load_settings.return_value.batch.store_start_delay_max_seconds = 180
         assert resolve_batch_delay(60, 30) == (60, 60)
+
+
+def test_continue_pipeline_listing_only_completes_after_listing():
+    row = SimpleNamespace(
+        pipeline_id="pipe_listing_only",
+        account_id="store_A",
+        activity_id="",
+        meta={"listing_only": True, "auto_limited_time_setup": False},
+        demo_mode=False,
+        activity_delay_hours=24,
+        pdd_product_ids=[],
+        mapping_ids=[],
+    )
+
+    with patch("pdd_agent.api.services.pipeline_service.get_integrated_pipeline", return_value=row):
+        with patch(
+            "pdd_agent.api.services.pipeline_per_batch_limited_time.maybe_run_per_batch_limited_time_after_listing",
+            return_value=False,
+        ):
+            with patch(
+                "pdd_agent.api.services.pipeline_per_batch_campaign.maybe_run_per_batch_campaign_after_listing",
+                return_value=False,
+            ):
+                with patch(
+                    "pdd_agent.api.services.pipeline_listing_throttle.schedule_next_listing_batch_after_finish",
+                    return_value=False,
+                ):
+                    with patch(
+                        "pdd_agent.api.services.pipeline_listing_throttle.resolve_listing_products_after_batches",
+                        return_value=(["pdd_1"], ["map_1"]),
+                    ):
+                        with patch("pdd_agent.api.services.pipeline_service.update_integrated_pipeline") as update:
+                            with patch(
+                                "pdd_agent.api.services.pipeline_service._try_advance_store_sequential_after_listing_limited_time"
+                            ):
+                                handled = _continue_pipeline_after_listing(
+                                    row,
+                                    run_id="listing_run",
+                                    result={"results": []},
+                                    pdd_ids=["pdd_1"],
+                                    mapping_ids=["map_1"],
+                                )
+
+    assert handled is True
+    update.assert_called_once()
+    _, kwargs = update.call_args
+    assert kwargs["status"] == "completed"
+    assert kwargs["current_step"] == "completed"
+    assert kwargs["pdd_product_ids"] == ["pdd_1"]
+    assert kwargs["mapping_ids"] == ["map_1"]
+    assert kwargs["meta_patch"]["listing_limited_time_phase_completed"] is True
 
 
 def test_start_integrated_pipeline_batch_staggers_listing_schedule():

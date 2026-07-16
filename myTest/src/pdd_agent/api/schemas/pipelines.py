@@ -33,6 +33,7 @@ class IntegratedPipelineStartRequest(BaseModel):
     category_keyword: str = "玩偶"
     auto_promotion: bool = True
     auto_limited_time_setup: bool = True
+    listing_only: bool = False
     continue_after_limited_time_failure: bool = False
     continue_after_activity_failure: bool = False
     promote_after_limited_time_failure: bool = False
@@ -66,10 +67,10 @@ class IntegratedPipelineStartRequest(BaseModel):
     @model_validator(mode="after")
     def validate_activity_ids(self) -> "IntegratedPipelineStartRequest":
         normalized = _normalize_activity_ids(self.activity_id, self.activity_ids)
-        if not normalized:
+        if not normalized and not self.listing_only:
             raise ValueError("activity_ids is required")
         self.activity_ids = normalized
-        self.activity_id = normalized[0]
+        self.activity_id = normalized[0] if normalized else ""
         _reject_exclusive_spec_modes(
             slot_alignment_test=bool(self.slot_alignment_test),
             spec_fill_verify_test=bool(self.spec_fill_verify_test),
@@ -88,6 +89,7 @@ class IntegratedPipelineBatchStartRequest(BaseModel):
     category_keyword: str = "玩偶"
     auto_promotion: bool = True
     auto_limited_time_setup: bool = True
+    listing_only: bool = False
     continue_after_limited_time_failure: bool = False
     continue_after_activity_failure: bool = False
     promote_after_limited_time_failure: bool = False
@@ -128,10 +130,10 @@ class IntegratedPipelineBatchStartRequest(BaseModel):
     @model_validator(mode="after")
     def validate_batch_items(self) -> "IntegratedPipelineBatchStartRequest":
         normalized = _normalize_activity_ids(self.activity_id, self.activity_ids)
-        if not normalized:
+        if not normalized and not self.listing_only:
             raise ValueError("activity_ids is required")
         self.activity_ids = normalized
-        self.activity_id = normalized[0]
+        self.activity_id = normalized[0] if normalized else ""
         if self.items:
             return self
         account_ids = [a.strip() for a in self.account_ids if a and a.strip()]
@@ -191,6 +193,7 @@ class IntegratedPipelineResponse(BaseModel):
     activity_ids: list[str] = Field(default_factory=list)
     auto_promotion: bool = True
     auto_limited_time_setup: bool = True
+    listing_only: bool = False
     continue_after_limited_time_failure: bool = False
     continue_after_activity_failure: bool = False
     promote_after_limited_time_failure: bool = False

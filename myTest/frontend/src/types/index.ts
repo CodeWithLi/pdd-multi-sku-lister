@@ -1091,6 +1091,7 @@ export interface IntegratedPipeline {
   activity_ids?: string[]
   auto_promotion: boolean
   auto_limited_time_setup?: boolean
+  listing_only?: boolean
   continue_after_limited_time_failure?: boolean
   continue_after_activity_failure?: boolean
   promote_after_limited_time_failure?: boolean
@@ -1380,6 +1381,7 @@ export interface IntegratedPipelineStartPayload {
   category_keyword?: string
   auto_promotion?: boolean
   auto_limited_time_setup?: boolean
+  listing_only?: boolean
   continue_after_limited_time_failure?: boolean
   continue_after_activity_failure?: boolean
   promote_after_limited_time_failure?: boolean
@@ -1419,6 +1421,7 @@ export interface IntegratedPipelineBatchStartPayload {
   category_keyword?: string
   auto_promotion?: boolean
   auto_limited_time_setup?: boolean
+  listing_only?: boolean
   continue_after_limited_time_failure?: boolean
   continue_after_activity_failure?: boolean
   promote_after_limited_time_failure?: boolean

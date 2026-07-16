@@ -1309,6 +1309,7 @@ def pipeline_to_dict(row) -> dict[str, Any]:
         "activity_ids": _pipeline_activity_ids(row),
         "auto_promotion": bool(row.auto_promotion),
         "auto_limited_time_setup": _pipeline_auto_limited_time(row),
+        "listing_only": bool((row.meta or {}).get("listing_only")),
         "continue_after_limited_time_failure": _pipeline_continue_after_limited_time_failure(row),
         "continue_after_activity_failure": _pipeline_continue_after_activity_failure(row),
         "promote_after_limited_time_failure": _pipeline_promote_after_limited_time_failure(row),
@@ -1404,6 +1405,7 @@ def start_integrated_pipeline(
     category_keyword: str = "玩偶",
     auto_promotion: bool = True,
     auto_limited_time_setup: bool = True,
+    listing_only: bool = False,
     continue_after_limited_time_failure: bool = False,
     continue_after_activity_failure: bool = False,
     promote_after_limited_time_failure: bool = False,
@@ -1443,10 +1445,43 @@ def start_integrated_pipeline(
 ) -> dict[str, Any]:
     account_id = str(account_id or "").strip()
     normalized_activity_ids = _normalize_pipeline_activity_ids(activity_id, activity_ids)
-    activity_id = normalized_activity_ids[0]
+    from pdd_agent.api.services.pipeline_listing_only_mode import apply_listing_only_mode
+
+    mode = apply_listing_only_mode(
+        listing_only=bool(listing_only),
+        activity_ids=normalized_activity_ids,
+        auto_promotion=auto_promotion,
+        auto_limited_time_setup=auto_limited_time_setup,
+        continue_after_limited_time_failure=continue_after_limited_time_failure,
+        continue_after_activity_failure=continue_after_activity_failure,
+        promote_after_limited_time_failure=promote_after_limited_time_failure,
+        activity_limited_time_success_only=activity_limited_time_success_only,
+        listing_per_batch_limited_time_enabled=listing_per_batch_limited_time_enabled,
+        listing_per_batch_campaign_enabled=listing_per_batch_campaign_enabled,
+        listing_per_batch_lt_traffic_activity_enabled=listing_per_batch_lt_traffic_activity_enabled,
+        listing_per_batch_promote_lt_success_only_enabled=listing_per_batch_promote_lt_success_only_enabled,
+        activity_traffic_batch_enabled=activity_traffic_batch_enabled,
+        batch_limited_time_auto_retry_enabled=batch_limited_time_auto_retry_enabled,
+    )
+    normalized_activity_ids = list(mode["activity_ids"])
+    auto_promotion = bool(mode["auto_promotion"])
+    auto_limited_time_setup = bool(mode["auto_limited_time_setup"])
+    continue_after_limited_time_failure = bool(mode["continue_after_limited_time_failure"])
+    continue_after_activity_failure = bool(mode["continue_after_activity_failure"])
+    promote_after_limited_time_failure = bool(mode["promote_after_limited_time_failure"])
+    activity_limited_time_success_only = bool(mode["activity_limited_time_success_only"])
+    listing_per_batch_limited_time_enabled = bool(mode["listing_per_batch_limited_time_enabled"])
+    listing_per_batch_campaign_enabled = bool(mode["listing_per_batch_campaign_enabled"])
+    listing_per_batch_lt_traffic_activity_enabled = bool(mode["listing_per_batch_lt_traffic_activity_enabled"])
+    listing_per_batch_promote_lt_success_only_enabled = bool(
+        mode["listing_per_batch_promote_lt_success_only_enabled"]
+    )
+    activity_traffic_batch_enabled = bool(mode["activity_traffic_batch_enabled"])
+    batch_limited_time_auto_retry_enabled = bool(mode["batch_limited_time_auto_retry_enabled"])
+    activity_id = normalized_activity_ids[0] if normalized_activity_ids else ""
     if not account_id:
         raise ValueError("account_id is required")
-    if not normalized_activity_ids:
+    if not normalized_activity_ids and not listing_only:
         raise ValueError("activity_ids is required")
     if slot_alignment_test and spec_fill_verify_test:
         raise ValueError("spec_fill_verify_test 与 slot_alignment_test 不能同时开启")
@@ -1507,6 +1542,7 @@ def start_integrated_pipeline(
                 "category_keyword": category_keyword,
                 "auto_promotion": auto_promotion,
                 "auto_limited_time_setup": auto_limited_time_setup,
+                "listing_only": listing_only,
                 "continue_after_limited_time_failure": continue_after_limited_time_failure,
                 "continue_after_activity_failure": continue_after_activity_failure,
                 "promote_after_limited_time_failure": promote_after_limited_time_failure,
@@ -1563,7 +1599,7 @@ def start_integrated_pipeline(
         "paren_size_as_product_type": bool(paren_size_as_product_type),
         "category_next_burst_demo": bool(category_next_burst_demo),
         "material_source": str(material_source or ""),
-        "auto_limited_time_setup": bool(normalized_activity_ids),
+        "auto_limited_time_setup": bool(auto_limited_time_setup and normalized_activity_ids),
         "continue_after_limited_time_failure": bool(continue_after_limited_time_failure),
         "continue_after_activity_failure": bool(continue_after_activity_failure),
         "promote_after_limited_time_failure": bool(promote_after_limited_time_failure),
@@ -1576,6 +1612,7 @@ def start_integrated_pipeline(
         "commerce_trigger_source": str(trigger_source or "manual"),
         **listing_input_meta,
     }
+    meta.update(dict(mode.get("meta_patch") or {}))
     if str(trigger_source or "") == "rabbitmq_auto":
         meta["mq_auto_deferred_phase2"] = True
     if batch_id:
@@ -1920,6 +1957,7 @@ def start_integrated_pipeline_batch(
     category_keyword: str = "玩偶",
     auto_promotion: bool = True,
     auto_limited_time_setup: bool = True,
+    listing_only: bool = False,
     continue_after_limited_time_failure: bool = False,
     continue_after_activity_failure: bool = False,
     promote_after_limited_time_failure: bool = False,
@@ -1963,7 +2001,7 @@ def start_integrated_pipeline_batch(
 
     normalized_activity_ids = _normalize_pipeline_activity_ids(activity_id, activity_ids)
     activity_id = normalized_activity_ids[0] if normalized_activity_ids else ""
-    if not normalized_activity_ids:
+    if not normalized_activity_ids and not listing_only:
         raise ValueError("activity_ids is required")
     if not items:
         raise ValueError("items is required")
@@ -1980,6 +2018,7 @@ def start_integrated_pipeline_batch(
         category_keyword=category_keyword,
         auto_promotion=auto_promotion,
         auto_limited_time_setup=auto_limited_time_setup,
+        listing_only=listing_only,
         continue_after_limited_time_failure=continue_after_limited_time_failure,
         continue_after_activity_failure=continue_after_activity_failure,
         promote_after_limited_time_failure=promote_after_limited_time_failure,
@@ -2080,6 +2119,7 @@ def start_integrated_pipeline_batch(
             category_keyword=category_keyword,
             auto_promotion=auto_promotion,
             auto_limited_time_setup=auto_limited_time_setup,
+            listing_only=listing_only,
             continue_after_limited_time_failure=continue_after_limited_time_failure,
             continue_after_activity_failure=continue_after_activity_failure,
             promote_after_limited_time_failure=promote_after_limited_time_failure,
@@ -2475,6 +2515,23 @@ def _continue_pipeline_after_listing(
             limited_time_at,
             pdd_ids,
         )
+        return True
+
+    from pdd_agent.api.services.pipeline_listing_only_mode import is_listing_only_pipeline
+
+    if is_listing_only_pipeline(refreshed):
+        listing_meta["listing_limited_time_phase_completed"] = True
+        update_integrated_pipeline(
+            row.pipeline_id,
+            status="completed",
+            current_step="completed",
+            pdd_product_ids=pdd_ids,
+            mapping_ids=mapping_ids,
+            meta_patch=listing_meta,
+        )
+        refreshed = get_integrated_pipeline(row.pipeline_id) or row
+        _try_advance_store_sequential_after_listing_limited_time(refreshed)
+        logger.info("pipeline %s listing-only completed pdd_ids=%s", row.pipeline_id, pdd_ids)
         return True
 
     scheduled_at = resolve_activity_scheduled_at(
