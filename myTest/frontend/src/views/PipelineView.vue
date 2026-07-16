@@ -201,6 +201,7 @@ const accessoryCostPricingFloatMax = ref(5)
 const pipelineBatchEnabled = ref(false)
 const storeSequentialEnabled = ref(false)
 const batchAccountIds = ref<string[]>([])
+const pipelineConcurrentStores = ref(3)
 const startDelayMin = ref(30)
 const startDelayMax = ref(180)
 const preflightChecking = ref(false)
@@ -1420,6 +1421,7 @@ async function loadBaseData() {
   ])
   accounts.value = acc
   activities.value = activityList.items || []
+  pipelineConcurrentStores.value = cfg.batch.max_concurrent_stores || 3
   startDelayMin.value = cfg.batch.store_start_delay_min_seconds ?? 30
   startDelayMax.value = cfg.batch.store_start_delay_max_seconds ?? 180
   if (!accountId.value && enabledAccounts.value.length) {
@@ -2027,6 +2029,7 @@ async function startPipeline() {
         category_next_burst_demo: categoryNextBurstDemo.value,
         store_start_delay_min_seconds: startDelayMin.value,
         store_start_delay_max_seconds: startDelayMax.value,
+        max_concurrent_stores: pipelineConcurrentStores.value,
         skip_listing: skipListing,
         listing_skip_selectors: listingSkipSelectors,
         material_source: materialSource.value,
@@ -2050,7 +2053,7 @@ async function startPipeline() {
       success.value = `批量整合链路已提交：${result.total} 家店铺${
         result.store_sequential_enabled
           ? `（串行：第 1 家已启动，其余 ${result.pending_stores ?? 0} 家待前店上架+限时限量购完成后自动启动；店间间隔 ${result.store_start_delay_min_seconds}-${result.store_start_delay_max_seconds} 秒；活动次日执行）`
-          : `，批次 ${result.batch_id}，启动间隔 ${result.store_start_delay_min_seconds}-${result.store_start_delay_max_seconds} 秒`
+          : `，批次 ${result.batch_id}，并发 ${result.max_concurrent_stores} 家，启动间隔 ${result.store_start_delay_min_seconds}-${result.store_start_delay_max_seconds} 秒`
       }，活动 ${activityIds.value.length} 个${
         listingThrottleEnabled.value
           ? `；分批上架 ${listingBatchSetCount.value} 套/批，间隔 ${listingBatchIntervalMinutes.value} 分钟${
@@ -2415,6 +2418,19 @@ onUnmounted(() => {
                 :title="`当前店铺：${selectedAccountCommerceHint}`"
                 description="若此时启动整合链路，任务会自动进入排队；当前周期结束后系统会尝试自动派发。"
               />
+
+              <el-row v-if="pipelineBatchEnabled && !storeSequentialEnabled" :gutter="16">
+                <el-col :span="12">
+                  <el-form-item label="同时上架店铺数">
+                    <el-input-number
+                      v-model="pipelineConcurrentStores"
+                      :min="1"
+                      :max="5"
+                      style="width: 100%"
+                    />
+                  </el-form-item>
+                </el-col>
+              </el-row>
 
               <el-row v-if="pipelineBatchEnabled" :gutter="16">
                 <el-col :span="12">
