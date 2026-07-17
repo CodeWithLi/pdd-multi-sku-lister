@@ -57,6 +57,7 @@ from pdd_agent.inventory_delist.bootstrap import (
     start_inventory_delist_scheduler,
     stop_inventory_delist_scheduler,
 )
+from pdd_agent.product_operations import router as product_operations_router
 from pdd_agent.integrations.minio.rabbitmq_consumer import get_minio_rabbitmq_consumer
 
 logger = get_logger(__name__)
@@ -358,4 +359,5 @@ def create_app() -> FastAPI:
     app.include_router(agents_router, prefix="/api")
     app.include_router(wecom_router, prefix="/api")
     register_inventory_delist(app)
+    app.include_router(product_operations_router, prefix="/api")
     return app

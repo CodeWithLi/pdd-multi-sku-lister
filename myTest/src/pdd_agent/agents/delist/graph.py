@@ -31,6 +31,7 @@ async def delist_browser_node(state: DelistState) -> dict:
     mode = str(raw.get("mode") or "").strip()
     target_product_id = str(raw.get("target_product_id") or "").strip()
     target_mapping_id = str(raw.get("target_mapping_id") or "").strip()
+    target_merchant_code = str(raw.get("merchant_code") or "").strip()
     ds = DelistSettings(
         min_created_after=raw.get("min_created_after") or settings.delist.min_created_after,
         dry_run=raw.get("dry_run", settings.delist.dry_run),
@@ -40,7 +41,11 @@ async def delist_browser_node(state: DelistState) -> dict:
             raw.get("max_delist_per_run", settings.delist.max_delist_per_run)
         ),
     )
-    if not ds.min_created_after and mode != "pipeline_relist_prep" and not target_product_id:
+    if (
+        not ds.min_created_after
+        and mode not in {"pipeline_relist_prep", "product_operations_code"}
+        and not target_product_id
+    ):
         return {"errors": ["未配置 delist.min_created_after"], "finished": True}
 
     account_dict = account.model_dump()
@@ -67,6 +72,15 @@ async def delist_browser_node(state: DelistState) -> dict:
                 targets,
                 dry_run=bool(raw.get("dry_run", False)),
                 row_strategy=str(raw.get("row_strategy") or "first"),  # type: ignore[arg-type]
+            )
+        if mode == "product_operations_code":
+            from pdd_agent.product_operations.automation import delist_product_by_code
+
+            return delist_product_by_code(
+                dp,
+                account_dict,
+                product_code=target_merchant_code,
+                dry_run=bool(raw.get("dry_run", False)),
             )
         if target_product_id:
             return process_single_product_delist(

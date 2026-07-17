@@ -75,6 +75,10 @@ import type {
   PublishedProductDeleteResponse,
   PublishedProductCreateResponse,
   PublishedProductManualCreatePayload,
+  ProductOperationDelistResponse,
+  ProductOperationPricePayload,
+  ProductOperationPublishedOptionList,
+  ProductOperationRunResponse,
   StyleColor,
   StyleColorCreatePayload,
   StyleColorListResponse,
@@ -619,6 +623,28 @@ export const api = {
 
   lookupPublishedProductGoods: (mappingId: string) =>
     http.post<PublishedProductLookupResponse>(`/published-products/${mappingId}/lookup-pdd-goods`).then((r) => r.data),
+
+  productOperationPublishedProducts: (accountId = '') =>
+    http
+      .get<ProductOperationPublishedOptionList>('/product-operations/published-products', {
+        params: accountId ? { account_id: accountId } : {},
+      })
+      .then((r) => r.data),
+
+  delistProductAllStores: (body: { product_code: string; dry_run?: boolean }) =>
+    http
+      .post<ProductOperationDelistResponse>('/product-operations/delist-all-stores', body)
+      .then((r) => r.data),
+
+  previewProductPrices: (body: { account_id: string; product_code: string }) =>
+    http
+      .post<ProductOperationRunResponse>('/product-operations/price-preview', body)
+      .then((r) => r.data),
+
+  updateProductPrices: (body: ProductOperationPricePayload) =>
+    http
+      .post<ProductOperationRunResponse>('/product-operations/price-update', body)
+      .then((r) => r.data),
 
   deletePublishedProduct: (mappingId: string) =>
     http.delete<PublishedProductDeleteResponse>(`/published-products/${mappingId}`).then((r) => r.data),

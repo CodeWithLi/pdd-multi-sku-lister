@@ -933,6 +933,55 @@ export interface PublishedProductCreateResponse {
   message: string
 }
 
+export interface ProductOperationDelistRun {
+  account_id: string
+  run_id: string
+  status: string
+  message?: string
+}
+
+export interface ProductOperationDelistResponse {
+  ok: boolean
+  product_code: string
+  dry_run: boolean
+  total: number
+  runs: ProductOperationDelistRun[]
+  message: string
+}
+
+export interface ProductOperationPublishedOption {
+  product_code: string
+  listing_label: string
+  account_ids: string[]
+  shop_count: number
+  record_count: number
+}
+
+export interface ProductOperationPublishedOptionList {
+  ok: boolean
+  total: number
+  items: ProductOperationPublishedOption[]
+}
+
+export interface ProductOperationRunResponse {
+  ok: boolean
+  run_id: string
+  status: string
+  message: string
+}
+
+export interface ProductOperationPriceUpdate {
+  spec_code: string
+  group_price: string | number
+}
+
+export interface ProductOperationPricePayload {
+  account_id: string
+  product_code: string
+  pdd_product_id?: string
+  updates: ProductOperationPriceUpdate[]
+}
+
 export interface StyleColor {
   product_code: string
   color_label: string
