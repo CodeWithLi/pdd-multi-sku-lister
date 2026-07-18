@@ -38,6 +38,7 @@ const priceRunId = ref('')
 const priceProductId = ref('')
 const priceTitle = ref('')
 const priceRows = ref<PriceSpecRow[]>([])
+const MIN_SINGLE_PRICE_GAP = 1
 
 const delistForm = reactive({
   product_code: '',
@@ -55,6 +56,28 @@ const changedRows = computed(() =>
     return Math.round(row.next_group_price * 100) !== Math.round(Number(row.group_price) * 100)
   }),
 )
+
+const invalidChangedRows = computed(() =>
+  changedRows.value.filter((row) => Boolean(priceRuleError(row))),
+)
+
+function maxGroupPrice(row: PriceSpecRow): number | null {
+  const singlePrice = Number(row.single_price)
+  if (!Number.isFinite(singlePrice)) return null
+  return Math.round((singlePrice - MIN_SINGLE_PRICE_GAP) * 100) / 100
+}
+
+function priceRuleError(row: PriceSpecRow): string {
+  const nextPrice = row.next_group_price
+  const maxPrice = maxGroupPrice(row)
+  if (nextPrice === null || !Number.isFinite(nextPrice)) return '请输入有效拼单价'
+  if (maxPrice === null) return '单买价无效，无法校验'
+  if (maxPrice < 0.01) return '单买价不足，无法设置合法拼单价'
+  if (Math.round(nextPrice * 100) > Math.round(maxPrice * 100)) {
+    return `不能高于 ¥${maxPrice.toFixed(2)}`
+  }
+  return ''
+}
 
 function shopName(account: Account) {
   return account.shop_display_name || account.display_name || account.account_id
@@ -281,6 +304,11 @@ async function loadPriceSpecs() {
 }
 
 async function submitPriceChanges() {
+  if (invalidChangedRows.value.length) {
+    const row = invalidChangedRows.value[0]
+    ElMessage.error(`${row.spec_code}：${priceRuleError(row)}`)
+    return
+  }
   if (!changedRows.value.length) {
     ElMessage.warning('没有需要提交的价格变化')
     return
@@ -481,17 +509,25 @@ onMounted(async () => {
           <el-table-column label="当前拼单价" width="120" align="right">
             <template #default="{ row }">¥ {{ row.group_price || '-' }}</template>
           </el-table-column>
-          <el-table-column label="新拼单价" width="180">
+          <el-table-column label="新拼单价" width="190">
             <template #default="{ row }">
-              <el-input-number
-                v-model="row.next_group_price"
-                :min="0.01"
-                :max="999999.99"
-                :precision="2"
-                :step="0.1"
-                controls-position="right"
-                aria-label="新拼单价"
-              />
+              <div class="price-input-cell" :class="{ 'is-error': priceRuleError(row) }">
+                <el-input-number
+                  v-model="row.next_group_price"
+                  :min="0.01"
+                  :max="Math.max(0.01, maxGroupPrice(row) ?? 999999.99)"
+                  :precision="2"
+                  :step="0.1"
+                  controls-position="right"
+                  :aria-label="`新拼单价，最高 ${maxGroupPrice(row)?.toFixed(2) ?? '未知'}`"
+                />
+                <span v-if="priceRuleError(row)" class="price-input-hint is-error" role="alert">
+                  {{ priceRuleError(row) }}
+                </span>
+                <span v-else class="price-input-hint">
+                  最高 ¥{{ maxGroupPrice(row)?.toFixed(2) ?? '-' }}
+                </span>
+              </div>
             </template>
           </el-table-column>
           <el-table-column prop="single_price" label="单买价" width="100" align="right" />
@@ -502,11 +538,14 @@ onMounted(async () => {
         </el-table>
 
         <div class="price-actions">
-          <span>已修改 {{ changedRows.length }} 项</span>
+          <span v-if="invalidChangedRows.length" class="price-summary-error">
+            {{ invalidChangedRows.length }} 项超过允许的最高拼单价
+          </span>
+          <span v-else>已修改 {{ changedRows.length }} 项</span>
           <el-button
             type="primary"
             :icon="EditPen"
-            :disabled="!changedRows.length"
+            :disabled="!changedRows.length || Boolean(invalidChangedRows.length)"
             :loading="priceSubmitting"
             @click="submitPriceChanges"
           >
@@ -699,6 +738,28 @@ onMounted(async () => {
 
 .spec-table :deep(.el-input-number) {
   width: 148px;
+}
+
+.price-input-cell {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 3px;
+}
+
+.price-input-cell.is-error :deep(.el-input__wrapper) {
+  box-shadow: 0 0 0 1px var(--el-color-danger) inset;
+}
+
+.price-input-hint {
+  color: #64748b;
+  font-size: 12px;
+  line-height: 1.35;
+}
+
+.price-input-hint.is-error,
+.price-summary-error {
+  color: var(--el-color-danger);
 }
 
 .spec-code {

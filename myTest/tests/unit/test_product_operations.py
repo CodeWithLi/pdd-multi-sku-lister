@@ -7,6 +7,9 @@ from unittest.mock import patch
 import pytest
 
 from pdd_agent.product_operations.automation import (
+    _find_submit_button,
+    _is_product_edit_url,
+    _resolve_edit_destination,
     delist_product_by_code,
     normalize_price,
     validate_price_updates,
@@ -30,8 +33,8 @@ def test_delist_product_code_accepts_merchant_code():
 
 def test_validate_price_updates_matches_exact_spec_codes():
     current = [
-        {"spec_code": "BD070Z", "group_price": "9.47"},
-        {"spec_code": "BD070Z+YKL001AC", "group_price": "10.47"},
+        {"spec_code": "BD070Z", "group_price": "9.47", "single_price": "12.00"},
+        {"spec_code": "BD070Z+YKL001AC", "group_price": "10.47", "single_price": "15.00"},
     ]
     result = validate_price_updates(
         current,
@@ -51,7 +54,7 @@ def test_validate_price_updates_rejects_unknown_spec_code():
 def test_validate_price_updates_rejects_duplicate_spec_code():
     with pytest.raises(ValueError, match="规格编码重复"):
         validate_price_updates(
-            [{"spec_code": "BD070Z"}],
+            [{"spec_code": "BD070Z", "single_price": "12.00"}],
             [
                 {"spec_code": "BD070Z", "group_price": "9.99"},
                 {"spec_code": "bd070z", "group_price": "10.99"},
@@ -59,8 +62,124 @@ def test_validate_price_updates_rejects_duplicate_spec_code():
         )
 
 
+def test_validate_price_updates_allows_one_yuan_gap():
+    result = validate_price_updates(
+        [{"spec_code": "BD070Z", "single_price": "10.72"}],
+        [{"spec_code": "BD070Z", "group_price": "9.72"}],
+    )
+
+    assert result == [{"spec_code": "BD070Z", "group_price": "9.72"}]
+
+
+def test_validate_price_updates_rejects_price_above_one_yuan_gap():
+    with pytest.raises(ValueError, match=r"不能高于 9\.72.*至少低 1\.00 元"):
+        validate_price_updates(
+            [{"spec_code": "BD070Z", "single_price": "10.72"}],
+            [{"spec_code": "BD070Z", "group_price": "9.73"}],
+        )
+
+
+def test_validate_price_updates_uses_lowest_single_price_for_duplicate_code():
+    with pytest.raises(ValueError, match="不能高于 9.72"):
+        validate_price_updates(
+            [
+                {"spec_code": "BD070Z", "single_price": "11.00"},
+                {"spec_code": "BD070Z", "single_price": "10.72"},
+            ],
+            [{"spec_code": "BD070Z", "group_price": "9.80"}],
+        )
+
+
 def test_normalize_price_keeps_two_decimals():
     assert normalize_price("9.9") == "9.90"
+
+
+def test_product_edit_url_recognizes_current_routes():
+    assert _is_product_edit_url("https://mms.pinduoduo.com/goods/goods_add/index?type=edit")
+    assert _is_product_edit_url("https://mms.pinduoduo.com/goods/edit/123")
+    assert not _is_product_edit_url("https://mms.pinduoduo.com/goods/goods_list")
+
+
+def test_find_submit_button_scrolls_to_lazy_footer():
+    class FakeButton:
+        def is_visible(self, timeout):
+            return True
+
+        def is_enabled(self, timeout):
+            return True
+
+    button = FakeButton()
+
+    class FakeLocator:
+        def count(self):
+            return 1
+
+        def nth(self, index):
+            assert index == 0
+            return button
+
+    evaluated = []
+    raw_page = SimpleNamespace(
+        evaluate=lambda script: evaluated.append(script),
+        locator=lambda selector: FakeLocator() if selector == "#submit_button" else None,
+        get_by_role=lambda *args, **kwargs: FakeLocator(),
+    )
+
+    found = _find_submit_button(SimpleNamespace(_page=raw_page))
+
+    assert found is button
+    assert evaluated == ["() => window.scrollTo(0, document.documentElement.scrollHeight)"]
+
+
+def test_resolve_edit_destination_prefers_captured_window_open_url():
+    raw_page = SimpleNamespace(
+        url="https://mms.pinduoduo.com/goods/goods_list",
+        evaluate=lambda _script: "/goods/goods_add/index?goods_id=978262777327&type=edit",
+        context=SimpleNamespace(pages=[]),
+    )
+
+    edit_url, edit_page = _resolve_edit_destination(
+        SimpleNamespace(_page=raw_page),
+        pages_before=[],
+        source_url=raw_page.url,
+    )
+
+    assert edit_url.endswith("goods_id=978262777327&type=edit")
+    assert edit_page is None
+
+
+def test_resolve_edit_destination_accepts_current_page_or_new_tab():
+    source_url = "https://mms.pinduoduo.com/goods/goods_list"
+    current_page = SimpleNamespace(
+        url="https://mms.pinduoduo.com/goods/goods_add/index?type=edit",
+        evaluate=lambda _script: "",
+        context=SimpleNamespace(pages=[]),
+    )
+    edit_url, edit_page = _resolve_edit_destination(
+        SimpleNamespace(_page=current_page),
+        pages_before=[],
+        source_url=source_url,
+    )
+    assert edit_url == ""
+    assert edit_page is current_page
+
+    list_page = SimpleNamespace(
+        url=source_url,
+        evaluate=lambda _script: "",
+        is_closed=lambda: False,
+    )
+    new_page = SimpleNamespace(
+        url="https://mms.pinduoduo.com/goods/goods_add/index?type=edit",
+        is_closed=lambda: False,
+    )
+    list_page.context = SimpleNamespace(pages=[list_page, new_page])
+    edit_url, edit_page = _resolve_edit_destination(
+        SimpleNamespace(_page=list_page),
+        pages_before=[list_page],
+        source_url=source_url,
+    )
+    assert edit_url == ""
+    assert edit_page is new_page
 
 
 @patch("pdd_agent.skills.delist.automation.process_single_product_delist")

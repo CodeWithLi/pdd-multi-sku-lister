@@ -336,7 +336,7 @@ def parse_failure_log_record(
     return {
         "record_id": str(record.get("record_id") or record.get("id") or ""),
         "date": format_datetime_ms(fields.get(names.date)) or str(fields.get(names.date) or ""),
-        "merchant_code": str(fields.get(names.merchant_code) or ""),
+        "merchant_code": format_plain_text(fields.get(names.merchant_code)),
         "report_platform": format_single_select(fields.get(names.report_platform)),
         "account_name": account_name,
         "account_id": account_id,

@@ -697,7 +697,7 @@ class FailureCycleRelistWatchScheduler:
                     )
                     await self.poll_once()
                 else:
-                    logger.info(
+                    logger.debug(
                         "cycle relist watch loop idle (disabled), next check in %ss",
                         interval,
                     )

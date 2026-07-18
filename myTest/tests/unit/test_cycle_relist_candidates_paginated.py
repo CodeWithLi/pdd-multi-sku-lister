@@ -4,9 +4,13 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock, patch
 
+from pdd_agent.integrations.feishu.bitable import iter_search_record_pages
 from pdd_agent.integrations.feishu.config import PddFailureCycleRelistWatchConfig
 from pdd_agent.integrations.feishu.pdd_failure_log_read import FailureLogTableContext
-from pdd_agent.integrations.feishu.pdd_failure_log_watch import list_cycle_relist_candidates
+from pdd_agent.integrations.feishu.pdd_failure_log_watch import (
+    _collect_cycle_relist_rows_via_search,
+    list_cycle_relist_candidates,
+)
 
 
 def _ctx() -> FailureLogTableContext:
@@ -80,3 +84,79 @@ def test_list_candidates_uses_search_pages_not_full_table():
     assert result["ok"] is True
     assert result["total"] == 1
     assert result["items"][0]["merchant_code"] == "BD046A"
+
+
+def test_search_pages_sort_newest_first_and_stop_after_cutoff():
+    watch = PddFailureCycleRelistWatchConfig(
+        completed_statuses=["已结束"],
+        fetch_after_date="2026-07-14",
+        fetch_page_size=50,
+    )
+    requested_second_page = False
+
+    def pages(*_args, **_kwargs):
+        nonlocal requested_second_page
+        yield [
+            {"parsed": {"record_id": "recent", "date": "2026/07/17 00:00"}},
+            {"parsed": {"record_id": "old", "date": "2026/07/03 00:00"}},
+        ]
+        requested_second_page = True
+        yield [{"parsed": {"record_id": "older", "date": "2026/06/30 00:00"}}]
+
+    with patch(
+        "pdd_agent.integrations.feishu.pdd_failure_log_watch.build_cycle_relist_candidate_search_filter",
+        return_value={"conjunction": "and", "conditions": []},
+    ):
+        with patch(
+            "pdd_agent.integrations.feishu.pdd_failure_log_watch.iter_search_record_pages",
+            side_effect=pages,
+        ) as iter_pages:
+            with patch(
+                "pdd_agent.integrations.feishu.pdd_failure_log_watch.parse_failure_log_record",
+                side_effect=lambda record, _ctx: record["parsed"],
+            ):
+                rows = _collect_cycle_relist_rows_via_search(
+                    _ctx(),
+                    MagicMock(),
+                    watch=watch,
+                    page_size=50,
+                )
+
+    assert rows == [{"record_id": "recent", "date": "2026/07/17 00:00"}]
+    assert iter_pages.call_args.kwargs["sort"] == [{"field_name": "日期", "desc": True}]
+    assert requested_second_page is False
+
+
+def test_iter_search_record_pages_sends_sort_to_feishu():
+    client = MagicMock()
+    client.request.side_effect = [
+        {
+            "data": {
+                "items": [{"record_id": "rec1"}],
+                "has_more": True,
+                "page_token": "next-page",
+            },
+        },
+        {"data": {"items": [{"record_id": "rec2"}], "has_more": False}},
+    ]
+    sort = [{"field_name": "日期", "desc": True}]
+
+    pages = list(
+        iter_search_record_pages(
+            client,
+            "app",
+            "tbl",
+            filter_body={"conjunction": "and", "conditions": []},
+            page_size=50,
+            sort=sort,
+        )
+    )
+
+    assert pages == [[{"record_id": "rec1"}], [{"record_id": "rec2"}]]
+    first_call, second_call = client.request.call_args_list
+    assert first_call.kwargs["params"] == {"page_size": 50}
+    assert second_call.kwargs["params"] == {
+        "page_size": 50,
+        "page_token": "next-page",
+    }
+    assert first_call.kwargs["json"]["sort"] == sort

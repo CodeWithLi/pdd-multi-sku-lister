@@ -251,8 +251,11 @@ def delist_product_by_code(
 
 
 def validate_price_updates(current_skus: list[dict[str, Any]], updates: list[dict[str, Any]]) -> list[dict[str, str]]:
-    available = {normalize_code(row.get("spec_code", "")) for row in current_skus}
-    available.discard("")
+    available: dict[str, list[Any]] = {}
+    for current in current_skus:
+        code = normalize_code(current.get("spec_code", ""))
+        if code:
+            available.setdefault(code, []).append(current.get("single_price"))
     normalized: list[dict[str, str]] = []
     seen: set[str] = set()
     for row in updates:
@@ -264,7 +267,20 @@ def validate_price_updates(current_skus: list[dict[str, Any]], updates: list[dic
         if code not in available:
             raise ValueError(f"页面未找到规格编码: {code}")
         seen.add(code)
-        normalized.append({"spec_code": code, "group_price": normalize_price(row.get("group_price"))})
+        group_price = Decimal(normalize_price(row.get("group_price")))
+        try:
+            single_prices = [Decimal(str(value)).quantize(Decimal("0.01")) for value in available[code]]
+        except (InvalidOperation, ValueError) as exc:
+            raise ValueError(f"规格编码 {code} 的单买价无效，无法校验拼单价") from exc
+        if not single_prices or any(not price.is_finite() or price <= 0 for price in single_prices):
+            raise ValueError(f"规格编码 {code} 的单买价无效，无法校验拼单价")
+        max_group_price = min(single_prices) - Decimal("1.00")
+        if group_price > max_group_price:
+            raise ValueError(
+                f"规格编码 {code} 的拼单价不能高于 {max_group_price:.2f}"
+                f"（单买价 {min(single_prices):.2f}，需至少低 1.00 元）"
+            )
+        normalized.append({"spec_code": code, "group_price": f"{group_price:.2f}"})
     if not normalized:
         raise ValueError("至少需要修改一个规格")
     return normalized
@@ -293,6 +309,130 @@ def _wait_exact_goods_row(page: DpPage, product_code: str, timeout: float = 20.0
     return []
 
 
+def _is_product_edit_url(url: str) -> bool:
+    lowered = str(url or "").lower()
+    return "goods_add" in lowered or "type=edit" in lowered or "/goods/edit" in lowered
+
+
+def _live_context_pages(page: DpPage) -> list[Any]:
+    try:
+        return [item for item in page._page.context.pages if not item.is_closed()]
+    except Exception:
+        return []
+
+
+def _find_edit_locator(row):
+    edit = row.locator('a[data-tracking-click-viewid="edit"]')
+    if edit.count() != 1:
+        edit = row.get_by_text("编辑", exact=True)
+    if edit.count() != 1:
+        raise RuntimeError("商品行未找到唯一编辑入口")
+    return edit
+
+
+def _resolve_edit_destination(
+    page: DpPage,
+    *,
+    pages_before: list[Any],
+    source_url: str,
+) -> tuple[str, Any | None]:
+    try:
+        captured_url = str(
+            page._page.evaluate("() => window.__pddProductOperationEditUrl || ''") or ""
+        ).strip()
+    except Exception:
+        captured_url = ""
+    if captured_url:
+        return captured_url, None
+
+    current_url = str(getattr(page._page, "url", "") or "")
+    if current_url != source_url and _is_product_edit_url(current_url):
+        return "", page._page
+
+    for candidate in reversed(_live_context_pages(page)):
+        if candidate in pages_before:
+            continue
+        if _is_product_edit_url(str(getattr(candidate, "url", "") or "")):
+            return "", candidate
+    return "", None
+
+
+def _click_edit_and_resolve(
+    page: DpPage,
+    product_code: str,
+    initial_row,
+) -> tuple[str, Any | None]:
+    """点击 React 编辑入口，并兼容 window.open、当前页跳转与真实新标签。"""
+    source_url = str(page.url or "")
+    pages_before = _live_context_pages(page)
+    page._page.evaluate(
+        """() => {
+            window.__pddProductOperationEditUrl = '';
+            window.__pddProductOperationOriginalOpen = window.open;
+            window.open = (url) => {
+                window.__pddProductOperationEditUrl = String(url || '');
+                return null;
+            };
+        }"""
+    )
+
+    row = initial_row
+    last_click_error = ""
+    try:
+        for attempt in range(2):
+            if attempt:
+                matches = _wait_exact_goods_row(page, product_code, timeout=5.0)
+                if len(matches) == 1:
+                    row = matches[0][0]
+            edit = _find_edit_locator(row)
+            edit.scroll_into_view_if_needed(timeout=3000)
+            try:
+                edit.click(timeout=5000)
+            except Exception as exc:
+                last_click_error = str(exc)
+                try:
+                    edit.click(force=True, timeout=5000)
+                except Exception as force_exc:
+                    last_click_error = str(force_exc)
+
+            deadline = time.time() + 2.0
+            while time.time() < deadline:
+                destination = _resolve_edit_destination(
+                    page,
+                    pages_before=pages_before,
+                    source_url=source_url,
+                )
+                if destination[0] or destination[1] is not None:
+                    return destination
+                time.sleep(0.15)
+
+            logger.info(
+                "product edit click produced no destination; retrying product_code=%s attempt=%s",
+                product_code,
+                attempt + 1,
+            )
+        if last_click_error:
+            logger.warning(
+                "product edit click error product_code=%s error=%s",
+                product_code,
+                last_click_error,
+            )
+        return "", None
+    finally:
+        try:
+            page._page.evaluate(
+                """() => {
+                    if (window.__pddProductOperationOriginalOpen) {
+                        window.open = window.__pddProductOperationOriginalOpen;
+                    }
+                    delete window.__pddProductOperationOriginalOpen;
+                    delete window.__pddProductOperationEditUrl;
+                }"""
+            )
+        except Exception:
+            pass
+
+
 def _open_product_edit(page: DpPage, account_id: str, product_code: str) -> tuple[DpPage, dict[str, str]]:
     if not _open_goods_list(page, account_id, tab_text="在售中"):
         raise RuntimeError("无法打开在售商品列表，可能未登录")
@@ -319,42 +459,15 @@ def _open_product_edit(page: DpPage, account_id: str, product_code: str) -> tupl
     except Exception:
         pass
 
-    edit = row.locator('a[data-tracking-click-viewid="edit"]')
-    if edit.count() != 1:
-        edit = row.get_by_text("编辑", exact=True)
-    if edit.count() != 1:
-        raise RuntimeError("商品行未找到唯一编辑入口")
-    edit.scroll_into_view_if_needed(timeout=3000)
-    page._page.evaluate(
-        """() => {
-            window.__pddProductOperationEditUrl = '';
-            window.__pddProductOperationOriginalOpen = window.open;
-            window.open = (url) => {
-                window.__pddProductOperationEditUrl = String(url || '');
-                return null;
-            };
-        }"""
-    )
-    try:
-        edit.click(force=True, timeout=5000)
-        time.sleep(0.8)
-        edit_url = str(
-            page._page.evaluate("() => window.__pddProductOperationEditUrl || ''") or ""
-        ).strip()
-    finally:
-        page._page.evaluate(
-            """() => {
-                if (window.__pddProductOperationOriginalOpen) {
-                    window.open = window.__pddProductOperationOriginalOpen;
-                }
-                delete window.__pddProductOperationOriginalOpen;
-            }"""
-        )
-    if not edit_url:
-        raise RuntimeError("商品编辑按钮未生成编辑地址")
-
-    active = page
-    active.get(urljoin(str(page.url or ""), edit_url))
+    source_url = str(page.url or "")
+    edit_url, raw_edit_page = _click_edit_and_resolve(page, product_code, row)
+    if raw_edit_page is not None:
+        active = page if raw_edit_page is page._page else DpPage(raw_edit_page)
+    elif edit_url:
+        active = page
+        active.get(urljoin(source_url, edit_url))
+    else:
+        raise RuntimeError("点击商品编辑后未获取到编辑页，已自动重试")
     try:
         active._page.wait_for_load_state("domcontentloaded", timeout=15000)
     except Exception:
@@ -465,17 +578,31 @@ def _fill_group_price(page: DpPage, spec_code: str, price: str) -> str:
     raise ValueError(f"页面未找到规格编码: {spec_code}")
 
 
-def _submit_edit(page: DpPage) -> None:
-    buttons = page._page.get_by_role("button", name="提交", exact=True)
-    submit = None
-    for index in range(buttons.count() - 1, -1, -1):
-        candidate = buttons.nth(index)
+def _find_submit_button(page: DpPage, timeout: float = 8.0):
+    deadline = time.time() + timeout
+    while time.time() < deadline:
         try:
-            if candidate.is_visible(timeout=300):
-                submit = candidate
-                break
+            page._page.evaluate("() => window.scrollTo(0, document.documentElement.scrollHeight)")
         except Exception:
-            continue
+            pass
+        candidates = (
+            page._page.locator("#submit_button"),
+            page._page.get_by_role("button", name="提交", exact=True),
+        )
+        for buttons in candidates:
+            for index in range(buttons.count() - 1, -1, -1):
+                candidate = buttons.nth(index)
+                try:
+                    if candidate.is_visible(timeout=300) and candidate.is_enabled(timeout=300):
+                        return candidate
+                except Exception:
+                    continue
+        time.sleep(0.25)
+    return None
+
+
+def _submit_edit(page: DpPage) -> None:
+    submit = _find_submit_button(page)
     if submit is None:
         raise RuntimeError("未找到商品编辑提交按钮")
     submit.click(timeout=5000)

@@ -514,21 +514,23 @@ def iter_search_record_pages(
     filter_body: dict[str, Any],
     page_size: int = 50,
     max_pages: int = 40,
+    sort: list[dict[str, Any]] | None = None,
 ) -> Any:
     """按 filter 分页迭代记录批次（每批最多 page_size 条）。"""
     page_token = ""
     size = max(1, min(int(page_size), 500))
     pages = 0
     while pages < max(1, int(max_pages)):
-        body: dict[str, Any] = {
-            "filter": filter_body,
-            "page_size": size,
-        }
+        body: dict[str, Any] = {"filter": filter_body}
+        if sort:
+            body["sort"] = sort
+        params: dict[str, Any] = {"page_size": size}
         if page_token:
-            body["page_token"] = page_token
+            params["page_token"] = page_token
         data = client.request(
             "POST",
             f"/bitable/v1/apps/{app_token}/tables/{table_id}/records/search",
+            params=params,
             json=body,
         )
         payload = data.get("data") or {}

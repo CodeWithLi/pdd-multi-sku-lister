@@ -182,10 +182,13 @@ def _collect_cycle_relist_rows_via_search(
     page_size: int,
 ) -> list[dict[str, Any]]:
     from pdd_agent.integrations.feishu.failure_cycle_relist_date_filter import (
+        parse_failure_log_date,
         record_date_meets_fetch_after,
     )
 
     fetch_after = str(getattr(watch, "fetch_after_date", "") or "")
+    fetch_after_day = parse_failure_log_date(fetch_after)
+    date_field = str(getattr(ctx.names, "date", "") or "日期").strip() or "日期"
     rows: list[dict[str, Any]] = []
     seen_ids: set[str] = set()
     for status in _completed_statuses(watch):
@@ -201,7 +204,9 @@ def _collect_cycle_relist_rows_via_search(
             ctx.table_id,
             filter_body=filter_body,
             page_size=page_size,
+            sort=[{"field_name": date_field, "desc": True}],
         ):
+            crossed_fetch_after = False
             for record in batch:
                 rid = str(record.get("record_id") or record.get("id") or "").strip()
                 if rid and rid in seen_ids:
@@ -209,12 +214,18 @@ def _collect_cycle_relist_rows_via_search(
                 if rid:
                     seen_ids.add(rid)
                 parsed = parse_failure_log_record(record, ctx)
+                record_day = parse_failure_log_date(parsed.get("date") or "")
+                if fetch_after_day is not None and record_day is not None and record_day < fetch_after_day:
+                    crossed_fetch_after = True
+                    continue
                 if not record_date_meets_fetch_after(
                     record_date=parsed.get("date") or "",
                     fetch_after_date=fetch_after,
                 ):
                     continue
                 rows.append(parsed)
+            if crossed_fetch_after:
+                break
     rows.sort(key=lambda r: str(r.get("date") or ""), reverse=True)
     return rows
 
