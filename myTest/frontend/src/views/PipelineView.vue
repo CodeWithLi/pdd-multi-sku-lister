@@ -194,6 +194,8 @@ const accessoryCostTieredFloatEnabled = ref(false)
 const accessoryCostTieredFloatSaving = ref(false)
 const originalSumPricingEnabled = ref(true)
 const originalSumPricingSaving = ref(false)
+const pddListingQualityV2Enabled = ref(false)
+const pddListingQualityV2Saving = ref(false)
 const aiGenerateTitleLoading = ref(false)
 const submitAiTitleEnabled = ref(false)
 const accessoryCostPricingSaving = ref(false)
@@ -1688,6 +1690,25 @@ async function onOriginalSumPricingChange(enabled: boolean) {
   }
 }
 
+async function loadPddListingQualityV2Setting() {
+  const data = await api.getPipelinePddListingQualityV2()
+  pddListingQualityV2Enabled.value = !!data.enabled
+}
+
+async function onPddListingQualityV2Change(enabled: boolean) {
+  pddListingQualityV2Saving.value = true
+  try {
+    const data = await api.updatePipelinePddListingQualityV2(enabled)
+    pddListingQualityV2Enabled.value = !!data.enabled
+    ElMessage.success(enabled ? '已开启拼多多上架修复流程' : '已恢复原上架流程')
+  } catch (e) {
+    pddListingQualityV2Enabled.value = !enabled
+    ElMessage.error(e instanceof Error ? e.message : String(e))
+  } finally {
+    pddListingQualityV2Saving.value = false
+  }
+}
+
 function onAiGenerateTitleClick() {
   onSubmitAiTitleToggle()
 }
@@ -2304,6 +2325,7 @@ onMounted(async () => {
     await loadBaseData()
     await loadExcelFallbackSetting()
     await loadAccessoryCostPricingSetting()
+    await loadPddListingQualityV2Setting()
     await loadSubmitAiTitleSetting()
     await loadLogSpecSkuRowsSetting()
     await loadPlatformSkipDedupeSetting()
@@ -3182,6 +3204,15 @@ onUnmounted(() => {
                       v-model="originalSumPricingEnabled"
                       :loading="originalSumPricingSaving"
                       @change="onOriginalSumPricingChange"
+                    />
+                  </div>
+                  <div class="switch-row">
+                    <span class="switch-label">拼多多上架修复流程</span>
+                    <el-switch
+                      v-model="pddListingQualityV2Enabled"
+                      aria-label="拼多多上架修复流程"
+                      :loading="pddListingQualityV2Saving"
+                      @change="onPddListingQualityV2Change"
                     />
                   </div>
                   <div class="switch-row">

@@ -346,6 +346,14 @@ class PipelineOriginalSumPricingUpdateIn(BaseModel):
     enabled: bool
 
 
+class PipelinePddListingQualityV2Out(BaseModel):
+    enabled: bool
+
+
+class PipelinePddListingQualityV2UpdateIn(BaseModel):
+    enabled: bool
+
+
 class PipelineSubmitAiTitleOut(BaseModel):
     enabled: bool
     provider: str = "deepseek"

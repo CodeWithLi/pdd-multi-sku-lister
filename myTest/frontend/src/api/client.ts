@@ -818,6 +818,14 @@ export const api = {
       .put<{ enabled: boolean }>('/pipelines/integrated/original-sum-pricing', { enabled })
       .then((r) => r.data),
 
+  getPipelinePddListingQualityV2: () =>
+    http.get<{ enabled: boolean }>('/pipelines/integrated/pdd-listing-quality-v2').then((r) => r.data),
+
+  updatePipelinePddListingQualityV2: (enabled: boolean) =>
+    http
+      .put<{ enabled: boolean }>('/pipelines/integrated/pdd-listing-quality-v2', { enabled })
+      .then((r) => r.data),
+
   getPipelineSubmitAiTitle: () =>
     http
       .get<PipelineSubmitAiTitleConfig>('/pipelines/integrated/submit-ai-title')

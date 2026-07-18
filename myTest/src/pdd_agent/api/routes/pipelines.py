@@ -29,6 +29,8 @@ from pdd_agent.api.schemas.pipelines import (
     PipelineAccessoryTieredFloatUpdateIn,
     PipelineOriginalSumPricingOut,
     PipelineOriginalSumPricingUpdateIn,
+    PipelinePddListingQualityV2Out,
+    PipelinePddListingQualityV2UpdateIn,
     PipelineSubmitAiTitleOut,
     PipelineSubmitAiTitleTestIn,
     PipelineSubmitAiTitleTestOut,
@@ -93,6 +95,10 @@ from pdd_agent.api.services.catalog_service import MaterialSource
 from pdd_agent.core.config import load_yaml_settings
 from pdd_agent.skills.listing.catalog import resolve_submit_ai_title_test_assets
 from pdd_agent.skills.listing.listing_submit_ai_title import generate_submit_ai_title
+from pdd_agent.skills.listing.pdd_listing_quality_v2 import (
+    quality_v2_enabled,
+    save_quality_v2_enabled,
+)
 
 router = APIRouter(prefix="/pipelines", tags=["pipelines"])
 logger = logging.getLogger(__name__)
@@ -188,6 +194,20 @@ def update_integrated_original_sum_pricing(body: PipelineOriginalSumPricingUpdat
     """保存「原价相加」开关（开启时关闭配件成本定价与子商品档位浮动）。"""
     save_pipeline_original_sum_pricing_to_config(body.enabled)
     return PipelineOriginalSumPricingOut(enabled=original_sum_pricing_enabled())
+
+
+@router.get("/integrated/pdd-listing-quality-v2", response_model=PipelinePddListingQualityV2Out)
+def get_integrated_pdd_listing_quality_v2():
+    """读取独立的拼多多上架修复流程开关。"""
+    return PipelinePddListingQualityV2Out(enabled=quality_v2_enabled())
+
+
+@router.put("/integrated/pdd-listing-quality-v2", response_model=PipelinePddListingQualityV2Out)
+def update_integrated_pdd_listing_quality_v2(body: PipelinePddListingQualityV2UpdateIn):
+    """保存拼多多上架修复流程开关，旧流程配置保持原样。"""
+    save_quality_v2_enabled(body.enabled)
+    _clear_excel_data_caches()
+    return PipelinePddListingQualityV2Out(enabled=quality_v2_enabled())
 
 
 @router.get("/integrated/submit-ai-title", response_model=PipelineSubmitAiTitleOut)

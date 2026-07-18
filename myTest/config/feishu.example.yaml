@@ -258,6 +258,7 @@ pdd_price_compare:
     pdd_pricing: 拼多多定价
     pdd_control_price: PDD控价
 pipeline:
+  pdd_listing_quality_v2_enabled: false
   excel_fallback_enabled: false
   platform_skip_dedupe_enabled: false
   platform_skip_dedupe_sync_seconds: 300

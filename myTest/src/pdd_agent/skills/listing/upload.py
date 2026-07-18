@@ -72,7 +72,14 @@ from pdd_agent.skills.listing.pdd_page_image_errors import (
     read_pdd_image_dimension_error,
     read_pdd_image_file_size_error,
 )
-from pdd_agent.skills.listing.page_ai_title import apply_title_after_cover_upload
+from pdd_agent.skills.listing.page_ai_title import (
+    _read_title_from_input,
+    apply_title_after_cover_upload,
+)
+from pdd_agent.skills.listing.pdd_listing_quality_v2 import (
+    quality_v2_enabled,
+    validate_quality_v2_title,
+)
 from pdd_agent.skills.listing.listing_product_attributes_fill import fill_listing_product_attributes
 from pdd_agent.skills.listing.spec_labels import is_forbidden_spec_code_label, ordered_style_names
 from pdd_agent.skills.listing.title import resolve_listing_title
@@ -4614,6 +4621,32 @@ def upload_one_listing(
     if submit_ai_title.get("applied"):
         listing_info["title"] = str(submit_ai_title.get("title") or listing_info.get("title") or "")
 
+    if quality_v2_enabled():
+        final_title = _read_title_from_input(page) or str(listing_info.get("title") or "").strip()
+        title_policy = validate_quality_v2_title(final_title)
+        if not submit_ai_title.get("ok", True) or not title_policy.valid:
+            policy_error = "；".join(title_policy.reasons) or "AI 标题连续重试后仍不合规"
+            print(
+                f"[{account_id}] [{label}] 拼多多上架修复流程：标题校验未通过，停止提交：{policy_error}",
+                flush=True,
+            )
+            return _finish_listing(
+                run_id,
+                account_id,
+                unit,
+                status="retryable",
+                reason="title_quality_v2_failed",
+                error=policy_error,
+                title=final_title,
+                retryable=True,
+                legacy_status="skipped",
+                extra={"submit_ai_title": dict(submit_ai_title)},
+                phase="submit",
+                step="title_quality_v2",
+                page_url=page_url,
+            )
+        listing_info["title"] = final_title
+
     ok, submitted_at, blocked_reason = _click_submit(page, account_id, label)
     _clear_beforeunload(page)
     if blocked_reason in {"preview_missing", "validation_errors", "validation_incomplete", "validation_required"}:
@@ -4719,6 +4752,34 @@ def upload_one_listing(
                 title=listing_info.get("title", ""),
                 retryable=False,
                 legacy_status="failed",
+                extra={
+                    "platform_listing_code": pcode,
+                    "publish_submitted_at": format_datetime(submitted_at) if submitted_at else "",
+                    "submit_ai_title": dict(submit_ai_title),
+                },
+                phase="post_submit",
+                step="capture_outcome",
+                page_url=page_url,
+            )
+            result = _attach_capture_fields(result, capture)
+            return result
+        if capture["status"] in {"publishing", "draft"}:
+            capture_status = str(capture.get("status") or "")
+            state_error = (
+                "商品仍在发布中，尚未生成可复制链接，请稍后核验"
+                if capture_status == "publishing"
+                else "商品进入草稿箱，未完成发布，当前没有商品链接"
+            )
+            result = _finish_listing(
+                run_id,
+                account_id,
+                unit,
+                status="retryable",
+                reason=f"goods_list_{capture_status}",
+                error=state_error,
+                title=listing_info.get("title", ""),
+                retryable=True,
+                legacy_status="submit_uncertain",
                 extra={
                     "platform_listing_code": pcode,
                     "publish_submitted_at": format_datetime(submitted_at) if submitted_at else "",

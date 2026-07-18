@@ -1441,7 +1441,6 @@ async def execute_listing(
             accessory_cost_tiered_float_enabled,
             accessory_style_pricing_enabled,
             load_feishu_config,
-            original_sum_pricing_enabled,
         )
         from pdd_agent.skills.listing.listing_accessory_cost_pricing import (
             activate_accessory_cost_pricing,
@@ -1453,9 +1452,10 @@ async def execute_listing(
         cat_cfg = feishu_cfg.pdd_product_catalog
         if accessory_style_pricing_enabled(feishu_cfg):
             from pdd_agent.integrations.feishu.pdd_bundle_pricing import load_pdd_bundle_pricing_map
+            from pdd_agent.skills.listing.pdd_listing_quality_v2 import fixed_price_mode_enabled
 
             pipe_cfg = feishu_cfg.pipeline
-            use_original_sum = original_sum_pricing_enabled(feishu_cfg)
+            use_original_sum = fixed_price_mode_enabled(feishu_cfg)
             activate_accessory_cost_pricing(
                 cost_map=load_pdd_bundle_pricing_map(config=feishu_cfg),
                 float_min=0.0 if use_original_sum else pipe_cfg.accessory_cost_float_min,

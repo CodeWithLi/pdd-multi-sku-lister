@@ -10,6 +10,11 @@ from pdd_agent.skills.listing.goods_list_tab_navigation import (
     open_goods_list_with_tab,
     refresh_goods_list_with_tab,
 )
+from pdd_agent.skills.listing.pdd_listing_quality_v2 import (
+    PublishSearchStep,
+    quality_v2_enabled,
+    run_quality_v2_publish_search,
+)
 
 
 def _upload_module():
@@ -33,6 +38,7 @@ def _search_goods_tab(
     title: str,
     max_attempts: int = 1,
     refresh_on_not_found: bool = False,
+    require_title_match: bool | None = None,
 ) -> dict[str, Any]:
     upload = _upload_module()
     if not open_goods_list_with_tab(page, account_id, tab_text):
@@ -40,7 +46,8 @@ def _search_goods_tab(
 
     label = unit.listing_label
     attempts = max(1, int(max_attempts or 1))
-    require_title_match = tab_key != "rejected"
+    if require_title_match is None:
+        require_title_match = tab_key != "rejected"
     for attempt in range(1, attempts + 1):
         matches = upload._execute_goods_tab_query(
             page,
@@ -140,6 +147,37 @@ def capture_publish_outcome(
     upload = _upload_module()
     label = unit.listing_label
     try:
+        if quality_v2_enabled():
+            def _search_step(step: PublishSearchStep) -> dict[str, Any]:
+                return _search_goods_tab(
+                    page,
+                    account_id,
+                    unit,
+                    tab_text=step.tab_text,
+                    tab_key=step.tab_key,
+                    merchant_code=merchant_code,
+                    title=title,
+                    max_attempts=step.attempts,
+                    refresh_on_not_found=step.refresh_on_not_found,
+                    require_title_match=False,
+                )
+
+            result = run_quality_v2_publish_search(
+                search_tab=_search_step,
+                search_all=lambda: _search_goods_all_tab(
+                    page,
+                    account_id,
+                    unit,
+                    merchant_code,
+                ),
+            )
+            print(
+                f"[{account_id}] [{label}] 拼多多上架修复流程核验："
+                f"status={result.get('status')} tabs={'/'.join(result.get('searched_tabs') or [])}",
+                flush=True,
+            )
+            return result
+
         on_sale = _search_goods_tab(
             page,
             account_id,

@@ -83,7 +83,9 @@ def ensure_accessory_cost_pricing_active() -> bool:
     from pdd_agent.integrations.feishu.pdd_bundle_pricing import load_pdd_bundle_pricing_map
 
     pipe = cfg.pipeline
-    use_original_sum = original_sum_pricing_enabled(cfg)
+    from pdd_agent.skills.listing.pdd_listing_quality_v2 import fixed_price_mode_enabled
+
+    use_original_sum = fixed_price_mode_enabled(cfg)
     activate_accessory_cost_pricing(
         cost_map=load_pdd_bundle_pricing_map(config=cfg),
         float_min=0.0 if use_original_sum else pipe.accessory_cost_float_min,

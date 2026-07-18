@@ -24,6 +24,10 @@ from pdd_agent.skills.listing.pdd_product_catalog import (
     resolve_size_label,
     _norm_code,
 )
+from pdd_agent.skills.listing.pdd_listing_quality_v2 import (
+    prefer_product_type_size_label,
+    quality_v2_enabled,
+)
 
 
 def uses_pdd_spec_catalog(style_code: str) -> bool:
@@ -405,6 +409,12 @@ def apply_spec_labels_to_sku(
         catalog,
         sub_category_cache=sub_category_cache,
     )
+    if size_name and quality_v2_enabled():
+        size_name = prefer_product_type_size_label(
+            base_entry=find_catalog_entry(catalog, sku.style_code),
+            sub_entry=find_catalog_entry(catalog, sku.model_code),
+            fallback=size_name,
+        )
     if size_name:
         sku.model_name = size_name
     elif not is_forbidden_spec_code_label(sku.model_name, model_code=sku.model_code):

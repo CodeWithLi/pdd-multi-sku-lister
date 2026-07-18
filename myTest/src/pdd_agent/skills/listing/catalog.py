@@ -40,6 +40,10 @@ from pdd_agent.skills.listing.pdd_product_catalog import (
     resolve_combo_pricing,
     resolve_listing_price_scope,
 )
+from pdd_agent.skills.listing.pdd_listing_quality_v2 import (
+    preview_dedupe_key,
+    quality_v2_enabled,
+)
 from pdd_agent.skills.listing.listing_spec_pipeline import apply_unit_listing_specs
 
 RESERVED_DIRS = frozenset({"主图", "详情页"})
@@ -592,7 +596,12 @@ def _append_skus_from_previews(
             continue
 
         style_code, model_code = parsed
-        combo_key = (style_code, model_code)
+        combo_key = preview_dedupe_key(
+            style_code,
+            model_code,
+            preview.stem,
+            enabled=quality_v2_enabled(),
+        )
         if combo_key in seen_combo_keys:
             continue
         seen_combo_keys.add(combo_key)

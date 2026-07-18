@@ -232,6 +232,10 @@ class PddBundlePricingConfig(BaseModel):
 class PipelineIntegrationConfig(BaseModel):
     """整合链路相关运行时开关（写入 feishu.yaml）。"""
 
+    pdd_listing_quality_v2_enabled: bool = Field(
+        default=False,
+        description="开启后使用独立的拼多多标题、组合素材、规格分类、固定价格和发布核验修复流程",
+    )
     excel_fallback_enabled: bool = Field(
         default=False,
         description="开启后飞书商品/定价表无数据时回退本地 Excel；关闭则一律不回退",
@@ -793,7 +797,13 @@ def original_sum_pricing_enabled(cfg: FeishuConfig | None = None) -> bool:
 def accessory_style_pricing_enabled(cfg: FeishuConfig | None = None) -> bool:
     """配件成本定价或原价相加任一开启时启用主+子组合价路径。"""
     cfg = cfg or load_feishu_config()
-    return accessory_cost_pricing_enabled(cfg) or original_sum_pricing_enabled(cfg)
+    from pdd_agent.skills.listing.pdd_listing_quality_v2 import quality_v2_enabled
+
+    return (
+        accessory_cost_pricing_enabled(cfg)
+        or original_sum_pricing_enabled(cfg)
+        or quality_v2_enabled(cfg)
+    )
 
 
 def load_feishu_config(path: Path | None = None) -> FeishuConfig:

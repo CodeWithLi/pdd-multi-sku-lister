@@ -21,6 +21,10 @@ from pdd_agent.skills.listing.page_ai_title import (
     _has_title_length_error,
     _read_title_from_input,
 )
+from pdd_agent.skills.listing.pdd_listing_quality_v2 import (
+    generate_compliant_title,
+    quality_v2_enabled,
+)
 
 # 单次模型调用硬超时（秒）；超时视为失败并走兜底/跳过，避免上架线程无限阻塞。
 SUBMIT_AI_TITLE_REQUEST_TIMEOUT_SECONDS = 60
@@ -317,6 +321,28 @@ def _invoke_title_with_fallback(
     }
 
 
+def _invoke_title_for_active_policy(
+    *,
+    cfg: SubmitAiTitleConfig,
+    prompt: str,
+    images: list[Path],
+    account_id: str,
+    label: str,
+) -> dict[str, Any]:
+    def _invoke(candidate_prompt: str) -> dict[str, Any]:
+        return _invoke_title_with_fallback(
+            cfg=cfg,
+            prompt=candidate_prompt,
+            images=images,
+            account_id=account_id,
+            label=label,
+        )
+
+    if quality_v2_enabled():
+        return generate_compliant_title(base_prompt=prompt, invoke=_invoke)
+    return _invoke(prompt)
+
+
 def apply_submit_ai_title_before_submit(
     page,
     *,
@@ -356,7 +382,7 @@ def apply_submit_ai_title_before_submit(
         label,
         "提交前 AI 标题：开始生成（失败或超时将沿用页面标题并继续提交）",
     )
-    invoke_result = _invoke_title_with_fallback(
+    invoke_result = _invoke_title_for_active_policy(
         cfg=cfg,
         prompt=final_prompt,
         images=images,
@@ -380,7 +406,7 @@ def apply_submit_ai_title_before_submit(
             f"提交前 AI 标题：未生成可用标题（{reason or source or 'empty_title'}），沿用页面现有标题并继续提交",
         )
         return {
-            "ok": True,
+            "ok": not bool(invoke_result.get("policy_failed")),
             "applied": False,
             "reason": reason or source or "empty_title",
             "preserved_title": preserved,
@@ -427,6 +453,7 @@ def apply_submit_ai_title_before_submit(
         f" placeholder={str(length_diag.get('placeholder') or '-')[:60]}",
     )
     if _has_title_length_error(page):
+        quality_v2 = quality_v2_enabled()
         restored = False
         original_title = (current_title or "").strip()
         if original_title:
@@ -438,9 +465,13 @@ def apply_submit_ai_title_before_submit(
             "提交前 AI 标题：新标题触发页面长度校验，已回退到原标题",
         )
         return {
-            "ok": True,
+            "ok": not quality_v2,
             "applied": False,
-            "reason": "title_length_exceeded_reverted",
+            "reason": (
+                "title_platform_length_rejected"
+                if quality_v2
+                else "title_length_exceeded_reverted"
+            ),
             "preserved_title": preserved,
             "generated_title": generated,
             "previous_title": current_title,
@@ -520,7 +551,7 @@ def generate_submit_ai_title(
         "请基于图片生成新标题，只返回最终标题。",
     ]
     final_prompt = f"{cfg.prompt}\n\n补充上下文：\n" + "\n".join(context_lines)
-    invoke_result = _invoke_title_with_fallback(
+    invoke_result = _invoke_title_for_active_policy(
         cfg=cfg,
         prompt=final_prompt,
         images=images,
@@ -532,7 +563,7 @@ def generate_submit_ai_title(
     reason = str(invoke_result.get("reason") or "")
     if not generated:
         return {
-            "ok": True,
+            "ok": not bool(invoke_result.get("policy_failed")),
             "applied": False,
             "reason": reason or source or "empty_title",
             "source": source,
