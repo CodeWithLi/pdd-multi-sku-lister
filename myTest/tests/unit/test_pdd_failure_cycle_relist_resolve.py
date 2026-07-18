@@ -7,6 +7,7 @@ from pdd_agent.integrations.feishu.pdd_failure_cycle_relist_resolve import (
     resolve_cycle_relist_listing_selector,
 )
 from pdd_agent.integrations.minio.index import MinioSetIndexRecord
+from pdd_agent.integrations.minio.config import MinioConfig
 
 
 def test_extract_cycle_relist_family_code():
@@ -112,3 +113,25 @@ def test_resolve_family_not_found(monkeypatch):
     result = resolve_cycle_relist_listing_selector("BD999B")
     assert result.ok is False
     assert "未找到母款号目录" in result.error
+
+
+def test_resolve_uses_local_cache_records_when_minio_disabled(monkeypatch):
+    records = [
+        MinioSetIndexRecord(
+            selector="BD023/第一套图",
+            family_code="BD023",
+            image_set="第一套图",
+            object_prefix="BD023/第一套图/",
+            product_codes=("BD023B毛绒小猫笔袋",),
+        )
+    ]
+    cfg = MinioConfig(enabled=False)
+    monkeypatch.setattr(
+        "pdd_agent.integrations.feishu.pdd_failure_cycle_relist_resolve._records_for_family",
+        lambda family_code, config=None: records,
+    )
+
+    result = resolve_cycle_relist_listing_selector("BD023B毛绒小猫笔袋", config=cfg)
+
+    assert result.ok is True
+    assert result.selector == "BD023/第一套图/BD023B毛绒小猫笔袋"

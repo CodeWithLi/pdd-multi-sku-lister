@@ -1446,6 +1446,7 @@ export interface IntegratedPipelineStartPayload {
   skip_listing?: boolean
   listing_skip_selectors?: string[]
   material_source?: 'local' | 'minio'
+  use_minio_cache_only?: boolean
   relist_strategy?: RelistStrategy
   listing_throttle_enabled?: boolean
   listing_batch_set_count?: number
@@ -1489,6 +1490,7 @@ export interface IntegratedPipelineBatchStartPayload {
   skip_listing?: boolean
   listing_skip_selectors?: string[]
   material_source?: 'local' | 'minio'
+  use_minio_cache_only?: boolean
   relist_strategy?: RelistStrategy
   listing_throttle_enabled?: boolean
   listing_batch_set_count?: number

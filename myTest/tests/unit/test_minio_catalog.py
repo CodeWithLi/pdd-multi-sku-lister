@@ -102,9 +102,35 @@ def test_build_minio_catalog_set_index():
     item.selector = "BD021/第一套图"
     item.product_codes = ("BD021A", "BD021B")
 
+    cfg = MinioConfig(enabled=True)
     with patch("pdd_agent.integrations.minio.catalog.list_minio_listing_targets", return_value=[item]):
-        index = build_minio_catalog_set_index()
+        index = build_minio_catalog_set_index(cfg)
     assert index["BD021/第一套图"] == frozenset({"BD021A", "BD021B"})
+
+
+def test_build_minio_catalog_set_index_uses_cache_when_disabled():
+    from pathlib import Path
+
+    item = MagicMock()
+    item.selector = "BD021/第一套图"
+    item.product_codes = ("BD021A", "BD021B")
+    cfg = MinioConfig(enabled=False)
+    cache_root = Path("C:/cache/minio")
+
+    with patch(
+        "pdd_agent.integrations.minio.config.minio_cache_root",
+        return_value=cache_root,
+    ):
+        with patch(
+            "pdd_agent.skills.listing.catalog.list_listing_targets_from_root",
+            return_value=[item],
+        ) as list_cache:
+            with patch("pdd_agent.integrations.minio.catalog.list_minio_listing_targets") as list_remote:
+                index = build_minio_catalog_set_index(cfg)
+
+    assert index["BD021/第一套图"] == frozenset({"BD021A", "BD021B"})
+    list_cache.assert_called_once_with(cache_root)
+    list_remote.assert_not_called()
 
 
 def test_product_codes_from_selectors():
@@ -121,6 +147,14 @@ def test_resolve_default_material_source_minio():
         with patch("pdd_agent.integrations.minio.material.load_minio_config") as load_fn:
             load_fn.return_value.default_material_source = "minio"
             assert resolve_default_material_source() == "minio"
+
+
+def test_resolve_default_material_source_uses_minio_cache_when_disabled():
+    from pdd_agent.integrations.minio.material import resolve_default_material_source
+
+    cfg = MinioConfig(enabled=False, default_material_source="minio")
+    with patch("pdd_agent.integrations.minio.material.load_minio_config", return_value=cfg):
+        assert resolve_default_material_source() == "minio"
 
 
 def test_listing_target_options_with_minio_source():
@@ -146,3 +180,39 @@ def test_listing_target_options_with_minio_source():
     assert opt.listed_product_codes == ["BD021A"]
     assert opt.unlisted_product_codes == ["BD021B"]
     assert opt.is_fully_listed is False
+
+
+def test_disabled_minio_lists_targets_from_local_cache():
+    from pathlib import Path
+
+    from pdd_agent.api.services.catalog_service import _listing_targets_for_source
+
+    cfg = MinioConfig(enabled=False)
+    cache_root = Path("C:/cache/minio")
+    target = ListingTargetOption(
+        selector="BD021/第一套图",
+        family_code="BD021",
+        image_set="第一套图",
+        product_codes=("BD021A",),
+    )
+
+    with patch(
+        "pdd_agent.integrations.minio.config.load_minio_config",
+        return_value=cfg,
+    ):
+        with patch(
+            "pdd_agent.integrations.minio.config.minio_cache_root",
+            return_value=cache_root,
+        ):
+            with patch(
+                "pdd_agent.api.services.catalog_service.list_listing_targets_from_root",
+                return_value=[target],
+            ) as list_cache:
+                with patch(
+                    "pdd_agent.integrations.minio.catalog.list_minio_listing_targets"
+                ) as list_remote:
+                    result = _listing_targets_for_source("minio")
+
+    assert result == [target]
+    list_cache.assert_called_once_with(cache_root)
+    list_remote.assert_not_called()

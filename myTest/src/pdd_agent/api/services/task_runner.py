@@ -1275,6 +1275,7 @@ async def execute_listing(
     paren_size_as_product_type: bool = False,
     category_next_burst_demo: bool = True,
     material_source: str | None = None,
+    use_minio_cache_only: bool = False,
     pipeline_id: str = "",
     pipeline_late_retry: bool = False,
 ) -> dict[str, Any]:
@@ -1596,6 +1597,7 @@ async def execute_listing(
             prepare_listing_assets,
             codes,
             material_source=material_source,
+            use_minio_cache_only=use_minio_cache_only,
         )
     except Exception as exc:
         logger.exception("prepare listing assets failed run_id=%s", run_id)

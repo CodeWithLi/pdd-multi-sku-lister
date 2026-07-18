@@ -122,35 +122,37 @@ async def lifespan(app: FastAPI):
 
         bind_event_loop(asyncio.get_running_loop())
         try:
-            from pdd_agent.integrations.minio.config import minio_configured, minio_refresh_mode
+            from pdd_agent.integrations.minio.config import minio_rabbitmq_enabled
             from pdd_agent.integrations.minio.rabbitmq_admin import (
                 check_rabbitmq_amqp,
                 ensure_rabbitmq_binding,
                 ensure_rabbitmq_queue,
             )
 
-            if minio_configured():
+            if minio_rabbitmq_enabled():
                 amqp = await asyncio.to_thread(check_rabbitmq_amqp)
                 if amqp.get("available"):
                     queue_info = await asyncio.to_thread(ensure_rabbitmq_queue)
                     logger.info("PDD RabbitMQ queue ready: %s", queue_info.get("queue"))
-                    if minio_refresh_mode() == "rabbitmq":
-                        binding_info = await asyncio.to_thread(ensure_rabbitmq_binding)
-                        logger.info(
-                            "PDD RabbitMQ binding ready: %s -> %s (%s)",
-                            binding_info.get("exchange"),
-                            binding_info.get("queue"),
-                            binding_info.get("routing_key"),
-                        )
+                    binding_info = await asyncio.to_thread(ensure_rabbitmq_binding)
+                    logger.info(
+                        "PDD RabbitMQ binding ready: %s -> %s (%s)",
+                        binding_info.get("exchange"),
+                        binding_info.get("queue"),
+                        binding_info.get("routing_key"),
+                    )
         except Exception:
             logger.exception("ensure PDD rabbitmq queue failed")
 
-        minio_consumer.start()
+        if minio_rabbitmq_enabled():
+            minio_consumer.start()
+        else:
+            logger.info("MinIO RabbitMQ integration disabled; consumer not started")
         try:
             from pdd_agent.integrations.minio.catalog import list_minio_listing_targets
-            from pdd_agent.integrations.minio.config import minio_configured, minio_refresh_mode
+            from pdd_agent.integrations.minio.config import minio_rabbitmq_enabled
 
-            if minio_configured() and minio_refresh_mode() == "rabbitmq":
+            if minio_rabbitmq_enabled():
                 await asyncio.to_thread(list_minio_listing_targets, force_refresh=True)
         except Exception:
             logger.exception("minio initial index warmup failed")

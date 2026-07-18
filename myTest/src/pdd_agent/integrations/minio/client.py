@@ -34,8 +34,17 @@ def get_minio_client(config: MinioConfig | None = None) -> Minio:
 def check_minio_health(config: MinioConfig | None = None) -> dict:
     """测试 MinIO 连接与 bucket 是否可访问。"""
     cfg = config or load_minio_config()
+    if not cfg.enabled:
+        return {
+            "enabled": False,
+            "configured": False,
+            "available": False,
+            "disabled": True,
+            "error": "MinIO 已禁用，当前使用本地缓存",
+        }
     if not minio_configured(cfg):
         return {
+            "enabled": True,
             "configured": False,
             "available": False,
             "error": "MinIO 未配置",
@@ -44,6 +53,7 @@ def check_minio_health(config: MinioConfig | None = None) -> dict:
         client = get_minio_client(cfg)
         if not client.bucket_exists(cfg.bucket):
             return {
+                "enabled": True,
                 "configured": True,
                 "available": False,
                 "bucket": cfg.bucket,
@@ -54,6 +64,7 @@ def check_minio_health(config: MinioConfig | None = None) -> dict:
             object_sample_found = True
             break
         return {
+            "enabled": True,
             "configured": True,
             "available": True,
             "endpoint": cfg.endpoint,
@@ -66,6 +77,7 @@ def check_minio_health(config: MinioConfig | None = None) -> dict:
         }
     except S3Error as exc:
         return {
+            "enabled": True,
             "configured": True,
             "available": False,
             "bucket": cfg.bucket,
@@ -73,6 +85,7 @@ def check_minio_health(config: MinioConfig | None = None) -> dict:
         }
     except Exception as exc:
         return {
+            "enabled": True,
             "configured": True,
             "available": False,
             "bucket": cfg.bucket,

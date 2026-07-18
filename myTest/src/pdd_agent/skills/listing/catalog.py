@@ -1128,6 +1128,10 @@ def parse_listing_target(
 
 def list_listing_targets(settings: YamlSettings) -> list[ListingTargetOption]:
     assets_root = settings.paths.resolve("assets_root")
+    return list_listing_targets_from_root(assets_root)
+
+
+def list_listing_targets_from_root(assets_root: Path) -> list[ListingTargetOption]:
     return _new_layout_listing_targets(assets_root)
 
 

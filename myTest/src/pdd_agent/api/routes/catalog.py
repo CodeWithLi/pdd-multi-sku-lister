@@ -71,6 +71,14 @@ from pdd_agent.skills.listing.catalog import list_image_sets, parse_all_listings
 
 router = APIRouter(prefix="/catalog", tags=["catalog"])
 
+
+def _require_minio_material_source_available(source: MaterialSource) -> None:
+    if source != "minio":
+        return
+    cfg = load_minio_config()
+    if cfg.enabled and not minio_configured(cfg):
+        raise HTTPException(status_code=503, detail="MinIO 未配置，请填写 config/minio.yaml")
+
 IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".webp"}
 
 
@@ -120,8 +128,7 @@ def _safe_asset_image_path(raw_path: str, *, material_source: MaterialSource = "
 def catalog_products(material_source: MaterialSource = "local"):
     """扫描素材目录或 MinIO 下所有商品编码。"""
     source = material_source if material_source in {"local", "minio"} else "local"
-    if source == "minio" and not minio_configured():
-        raise HTTPException(status_code=503, detail="MinIO 未配置，请填写 config/minio.yaml")
+    _require_minio_material_source_available(source)
     return list_products(material_source=source)
 
 
@@ -132,8 +139,7 @@ def catalog_listing_targets(
 ):
     """列出上架任务可选的素材分组；传 account_id 时附带该店已上架商品标记。"""
     source = material_source if material_source in {"local", "minio"} else "local"
-    if source == "minio" and not minio_configured():
-        raise HTTPException(status_code=503, detail="MinIO 未配置，请填写 config/minio.yaml")
+    _require_minio_material_source_available(source)
     return list_listing_target_options(
         account_id=account_id.strip(),
         material_source=source,
@@ -430,8 +436,7 @@ async def catalog_minio_events():
 def catalog_product_detail(product_code: str, material_source: MaterialSource = "local"):
     """解析单个商品的全部套图与 SKU。"""
     source = material_source if material_source in {"local", "minio"} else "local"
-    if source == "minio" and not minio_configured():
-        raise HTTPException(status_code=503, detail="MinIO 未配置，请填写 config/minio.yaml")
+    _require_minio_material_source_available(source)
     detail = get_product_detail(product_code, material_source=source)
     if not detail:
         raise HTTPException(status_code=404, detail=f"product not found: {product_code}")
@@ -462,8 +467,7 @@ def catalog_asset(
 def catalog_preflight(body: PreflightRequest):
     """上架前校验（不打开浏览器）；MinIO 模式仅读本地缓存，需先调用 /minio/sync。"""
     source = body.material_source if body.material_source in {"local", "minio"} else "local"
-    if source == "minio" and not minio_configured():
-        raise HTTPException(status_code=503, detail="MinIO 未配置，请填写 config/minio.yaml")
+    _require_minio_material_source_available(source)
     return run_preflight_api(body.product_codes, material_source=source)
 
 

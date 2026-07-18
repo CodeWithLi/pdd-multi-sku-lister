@@ -197,6 +197,7 @@ class TaskQueueWorker:
                     paren_size_as_product_type=bool(payload.get("paren_size_as_product_type")),
                     category_next_burst_demo=bool(payload.get("category_next_burst_demo", True)),
                     material_source=str(payload.get("material_source") or ""),
+                    use_minio_cache_only=bool(payload.get("use_minio_cache_only")),
                     pipeline_id=str(payload.get("pipeline_id") or ""),
                     pipeline_late_retry=bool(payload.get("pipeline_late_retry")),
                 )
@@ -378,6 +379,7 @@ def enqueue_listing_task(
     paren_size_as_product_type: bool = False,
     pipeline_id: str = "",
     material_source: str = "",
+    use_minio_cache_only: bool = False,
 ):
     payload = {
         "product_codes": list(product_codes),
@@ -390,6 +392,7 @@ def enqueue_listing_task(
         "primary_style_first_test": bool(primary_style_first_test),
         "paren_size_as_product_type": bool(paren_size_as_product_type),
         "material_source": str(material_source or ""),
+        "use_minio_cache_only": bool(use_minio_cache_only),
     }
     if pipeline_id:
         payload["pipeline_id"] = pipeline_id

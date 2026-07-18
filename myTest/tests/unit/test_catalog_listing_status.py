@@ -5,6 +5,7 @@ from unittest.mock import MagicMock, patch
 from pdd_agent.api.services.catalog_service import list_listing_target_options
 from pdd_agent.api.services.listed_folder_service import listed_product_codes_by_set
 from pdd_agent.db.repositories import get_listed_product_codes_for_set, prune_listed_folders_against_catalog
+from pdd_agent.integrations.minio.config import MinioConfig
 
 
 def test_listing_target_pending_when_catalog_grows():
@@ -70,24 +71,66 @@ def test_listed_product_codes_by_set_minio_uses_on_sale_published():
     minio_catalog = {"AXBD001/第一奔跑": frozenset({"AXBD001A", "AXBD001B"})}
 
     with patch(
-        "pdd_agent.integrations.minio.catalog.build_minio_catalog_set_index",
-        return_value=minio_catalog,
+        "pdd_agent.integrations.minio.config.load_minio_config",
+        return_value=MinioConfig(enabled=True),
     ):
         with patch(
-            "pdd_agent.api.services.listed_folder_service.prune_listed_folders_against_catalog",
-            return_value=0,
+            "pdd_agent.integrations.minio.catalog.build_minio_catalog_set_index",
+            return_value=minio_catalog,
         ):
             with patch(
-                "pdd_agent.api.services.listed_folder_service.get_listed_product_codes_for_set",
-                return_value={},
+                "pdd_agent.api.services.listed_folder_service.prune_listed_folders_against_catalog",
+                return_value=0,
             ):
                 with patch(
-                    "pdd_agent.api.services.listed_folder_service.list_on_sale_published_product_codes",
-                    return_value=frozenset({"AXBD001A", "AXBD001B"}),
+                    "pdd_agent.api.services.listed_folder_service.get_listed_product_codes_for_set",
+                    return_value={},
                 ):
-                    listed = listed_product_codes_by_set("store_A", material_source="minio")
+                    with patch(
+                        "pdd_agent.api.services.listed_folder_service.list_on_sale_published_product_codes",
+                        return_value=frozenset({"AXBD001A", "AXBD001B"}),
+                    ):
+                        listed = listed_product_codes_by_set("store_A", material_source="minio")
 
     assert listed["AXBD001/第一奔跑"] == ["AXBD001A", "AXBD001B"]
+
+
+def test_listed_product_codes_by_set_uses_cache_index_when_minio_disabled():
+    target = MagicMock()
+    target.selector = "AXBD001/第一套图"
+    target.product_codes = ("AXBD001A", "AXBD001B")
+    expected_index = {"AXBD001/第一套图": frozenset({"AXBD001A", "AXBD001B"})}
+
+    with patch(
+        "pdd_agent.integrations.minio.config.load_minio_config",
+        return_value=MinioConfig(enabled=False),
+    ):
+        with patch("pdd_agent.integrations.minio.config.minio_cache_root") as cache_root:
+            with patch(
+                "pdd_agent.skills.listing.catalog.list_listing_targets_from_root",
+                return_value=[target],
+            ) as list_cache:
+                with patch(
+                    "pdd_agent.api.services.listed_folder_service.prune_listed_folders_against_catalog",
+                    return_value=0,
+                ) as prune:
+                    with patch(
+                        "pdd_agent.api.services.listed_folder_service.get_listed_product_codes_for_set",
+                        return_value={"AXBD001/第一套图": ["AXBD001A"]},
+                    ):
+                        with patch(
+                            "pdd_agent.api.services.listed_folder_service.list_on_sale_published_product_codes",
+                            return_value=frozenset(),
+                        ):
+                            listed = listed_product_codes_by_set("store_A", material_source="minio")
+
+    list_cache.assert_called_once_with(cache_root.return_value)
+    prune.assert_called_once_with(
+        account_id="store_A",
+        catalog_index=expected_index,
+        match_by_product_code=True,
+    )
+    assert listed == {"AXBD001/第一套图": ["AXBD001A"]}
 
 
 def test_listing_target_options_minio_shows_listed_from_published():

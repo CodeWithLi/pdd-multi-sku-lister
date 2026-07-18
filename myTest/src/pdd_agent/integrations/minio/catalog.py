@@ -208,9 +208,17 @@ def list_minio_listing_targets(
 
 
 def build_minio_catalog_set_index(config: MinioConfig | None = None) -> dict[str, frozenset[str]]:
+    cfg = config or load_minio_config()
+    if not cfg.enabled:
+        from pdd_agent.integrations.minio.config import minio_cache_root
+        from pdd_agent.skills.listing.catalog import list_listing_targets_from_root
+
+        targets = list_listing_targets_from_root(minio_cache_root(cfg))
+    else:
+        targets = list_minio_listing_targets(cfg)
     return {
         item.selector: frozenset(item.product_codes)
-        for item in list_minio_listing_targets(config)
+        for item in targets
     }
 
 

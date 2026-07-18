@@ -686,6 +686,7 @@ _PIPELINE_PAYLOAD_KEYS = frozenset(
         "skip_listing",
         "listing_skip_selectors",
         "material_source",
+        "use_minio_cache_only",
         "listing_input_mode",
         "relist_strategy",
         "listing_throttle_enabled",

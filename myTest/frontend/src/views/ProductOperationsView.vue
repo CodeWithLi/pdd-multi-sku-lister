@@ -60,6 +60,11 @@ function shopName(account: Account) {
   return account.shop_display_name || account.display_name || account.account_id
 }
 
+function shopNameById(accountId: string) {
+  const account = accounts.value.find((item) => item.account_id === accountId)
+  return account ? shopName(account) : accountId
+}
+
 function runStatusLabel(status: string) {
   const labels: Record<string, string> = {
     pending: '等待中',
@@ -379,7 +384,9 @@ onMounted(async () => {
         border
         class="result-table"
       >
-        <el-table-column prop="account_id" label="店铺" min-width="160" />
+        <el-table-column label="店铺" min-width="160">
+          <template #default="{ row }">{{ shopNameById(row.account_id) }}</template>
+        </el-table-column>
         <el-table-column prop="run_id" label="任务 ID" min-width="240" show-overflow-tooltip />
         <el-table-column label="状态" width="100" align="center">
           <template #default="{ row }">
@@ -711,7 +718,7 @@ onMounted(async () => {
     grid-template-columns: 1fr auto;
   }
 
-  .delist-controls > .el-input {
+  .delist-controls > .el-select {
     grid-column: 1 / -1;
   }
 

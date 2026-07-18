@@ -231,6 +231,7 @@ def enqueue_listing_batch_for_pipeline(
             "paren_size_as_product_type": bool(payload_base.get("paren_size_as_product_type")),
             "category_next_burst_demo": bool(payload_base.get("category_next_burst_demo", True)),
             "material_source": str(payload_base.get("material_source") or ""),
+            "use_minio_cache_only": bool(payload_base.get("use_minio_cache_only")),
         },
         scheduled_at=scheduled_at or datetime.now(),
     )

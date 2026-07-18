@@ -154,12 +154,14 @@ class MinioRabbitMQConsumer:
     def start(self) -> None:
         cfg = load_minio_config()
         if not minio_rabbitmq_enabled(cfg):
+            self._running = False
+            self._last_error = ""
             logger.info("minio rabbitmq consumer skipped (refresh_mode=%s)", cfg.refresh_mode)
             log_rabbitmq_event(
                 EVENT_CONSUMER_SKIP,
                 "消费者未启动",
                 refresh_mode=minio_refresh_mode(cfg),
-                reason="refresh_mode 不是 rabbitmq 或 MinIO 未配置",
+                reason="RabbitMQ 已禁用、refresh_mode 不是 rabbitmq 或 MinIO 未配置",
             )
             return
         if self._running:

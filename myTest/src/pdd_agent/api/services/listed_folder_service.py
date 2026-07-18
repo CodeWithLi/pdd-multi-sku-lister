@@ -96,8 +96,10 @@ def listed_product_codes_by_set(
     """返回 {套图selector: [已上架商品编码]}，与当前素材目录实时对齐。"""
     if material_source == "minio":
         from pdd_agent.integrations.minio.catalog import build_minio_catalog_set_index
+        from pdd_agent.integrations.minio.config import load_minio_config
 
-        catalog_index = build_minio_catalog_set_index()
+        cfg = load_minio_config()
+        catalog_index = build_minio_catalog_set_index(cfg)
     else:
         from pdd_agent.core.config import load_yaml_settings
         from pdd_agent.db.repositories import build_catalog_set_index

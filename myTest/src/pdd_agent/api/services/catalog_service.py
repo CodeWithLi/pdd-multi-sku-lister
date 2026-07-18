@@ -17,6 +17,7 @@ from pdd_agent.domain.models import ListingUnit
 from pdd_agent.skills.listing.catalog import (
     list_image_sets,
     list_listing_targets,
+    list_listing_targets_from_root,
     list_product_codes,
     parse_all_listings,
 )
@@ -36,8 +37,15 @@ def _assets_root_for_source(material_source: MaterialSource) -> Path | None:
 def _listing_targets_for_source(material_source: MaterialSource):
     settings = load_yaml_settings()
     if material_source == "minio":
+        from pdd_agent.integrations.minio.config import (
+            load_minio_config,
+            minio_cache_root,
+        )
         from pdd_agent.integrations.minio.catalog import list_minio_listing_targets
 
+        cfg = load_minio_config()
+        if not cfg.enabled:
+            return list_listing_targets_from_root(minio_cache_root(cfg))
         return list_minio_listing_targets()
     return list_listing_targets(settings)
 
@@ -183,9 +191,11 @@ def get_product_detail(
     settings = load_yaml_settings()
     assets_root = _assets_root_for_source(material_source) or settings.paths.resolve("assets_root")
     if material_source == "minio":
+        from pdd_agent.integrations.minio.config import load_minio_config
         from pdd_agent.integrations.minio.staging import stage_minio_for_product_codes
 
-        stage_minio_for_product_codes([product_code])
+        if load_minio_config().enabled:
+            stage_minio_for_product_codes([product_code])
     units = parse_all_listings(
         product_code,
         settings,

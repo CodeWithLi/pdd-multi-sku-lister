@@ -28,7 +28,7 @@ def resolve_default_material_source() -> MaterialSource:
     default = str(cfg.default_material_source or "minio").strip().lower()
     if default == "local":
         return "local"
-    if minio_configured(cfg):
+    if not cfg.enabled or minio_configured(cfg):
         return "minio"
     return "local"
 
@@ -59,12 +59,18 @@ def prepare_listing_assets(
     product_codes: list[str],
     *,
     material_source: str | None = None,
+    use_minio_cache_only: bool = False,
 ) -> tuple[MaterialSource, Path | None]:
-    """上架前准备素材：MinIO 模式同步到本地缓存并返回 assets_root。"""
+    """上架前准备素材：MinIO 模式下同步或直接复用本地缓存。"""
     source = normalize_material_source(material_source)
     if source != "minio":
         return "local", None
-    if not minio_configured():
+    cfg = load_minio_config()
+    if use_minio_cache_only or not cfg.enabled:
+        cache_root = minio_cache_root(cfg)
+        logger.info("minio listing using existing local cache without sync cache=%s", cache_root)
+        return "minio", cache_root
+    if not minio_configured(cfg):
         raise RuntimeError("MinIO 未配置，请填写 config/minio.yaml")
 
     selectors = [str(code).strip() for code in product_codes if str(code).strip()]

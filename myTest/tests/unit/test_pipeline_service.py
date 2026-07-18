@@ -149,9 +149,11 @@ def test_continue_pipeline_listing_only_completes_after_listing():
 
 def test_start_integrated_pipeline_batch_staggers_listing_schedule():
     captured: list[datetime | None] = []
+    cache_only_flags: list[bool] = []
 
     def _fake_start(**kwargs):
         captured.append(kwargs.get("listing_scheduled_at"))
+        cache_only_flags.append(bool(kwargs.get("use_minio_cache_only")))
         idx = len(captured)
         return {
             "account_id": kwargs["account_id"],
@@ -172,6 +174,7 @@ def test_start_integrated_pipeline_batch_staggers_listing_schedule():
                             {"account_id": "store_B", "product_codes": ["BD720/第一套图/BD720A"]},
                         ],
                         activity_id="20981",
+                        use_minio_cache_only=True,
                     )
 
     assert result["batch_id"] == "batch_test"
@@ -180,6 +183,7 @@ def test_start_integrated_pipeline_batch_staggers_listing_schedule():
     assert captured[0] is not None
     assert captured[1] is not None
     assert captured[1] == captured[0] + timedelta(seconds=10)
+    assert cache_only_flags == [True, True]
 
 
 def test_cancel_integrated_pipeline_marks_canceled_and_stops_queue_tasks():
@@ -402,11 +406,15 @@ def test_start_integrated_pipeline_partial_listing_skip_enqueues_unlisted_only()
                                 product_codes=["BD720/第一套图/BD720A", "BD720/第一套图/BD720B"],
                                 activity_id="20981",
                                 listing_skip_selectors=["BD720/第一套图/BD720A"],
+                                material_source="minio",
+                                use_minio_cache_only=True,
                                 skip_commerce_gate=True,
                             )
     enqueue.assert_called_once()
     payload = enqueue.call_args.kwargs["payload"]
     assert payload["product_codes"] == ["BD720/第一套图/BD720B"]
+    assert payload["material_source"] == "minio"
+    assert payload["use_minio_cache_only"] is True
 
 
 def test_merge_skipped_listing_products():

@@ -27,6 +27,8 @@ def _rabbit_cfg(config: MinioConfig | None = None):
 def _rabbit_connection_params(rabbit, *, socket_timeout: int = 10):
     import pika
 
+    if not rabbit.enabled:
+        raise RuntimeError("RabbitMQ 已通过 RABBITMQ_ENABLED=false 禁用")
     credentials = pika.PlainCredentials(rabbit.username, rabbit.password)
     return pika.ConnectionParameters(
         host=rabbit.host,
@@ -49,6 +51,8 @@ def ensure_rabbitmq_queue(
 
     cfg = config or load_minio_config()
     rabbit = cfg.rabbitmq
+    if not rabbit.enabled:
+        raise RuntimeError("RabbitMQ 已通过 RABBITMQ_ENABLED=false 禁用")
     target = str(queue or rabbit.queue or DEFAULT_PDD_RABBITMQ_QUEUE).strip()
     if not target:
         raise ValueError("未配置 RabbitMQ 队列")
@@ -80,6 +84,8 @@ def ensure_rabbitmq_binding(
 
     cfg = config or load_minio_config()
     rabbit = cfg.rabbitmq
+    if not rabbit.enabled:
+        raise RuntimeError("RabbitMQ 已通过 RABBITMQ_ENABLED=false 禁用")
     target = str(queue or rabbit.queue or DEFAULT_PDD_RABBITMQ_QUEUE).strip()
     target_exchange = str(exchange or rabbit.exchange or DEFAULT_MINIO_EVENTS_EXCHANGE).strip()
     target_routing_key = str(routing_key or rabbit.routing_key or DEFAULT_MINIO_EVENTS_ROUTING_KEY).strip()
@@ -121,6 +127,14 @@ def list_rabbitmq_queue_bindings(
     """列出队列当前 bindings（Management API）。"""
     cfg = config or load_minio_config()
     rabbit = cfg.rabbitmq
+    if not rabbit.enabled:
+        return {
+            "enabled": False,
+            "available": False,
+            "disabled": True,
+            "bindings": [],
+            "error": "RabbitMQ 已禁用",
+        }
     target = str(queue or rabbit.queue or DEFAULT_PDD_RABBITMQ_QUEUE).strip()
     if not target:
         raise ValueError("未配置 RabbitMQ 队列")
@@ -193,6 +207,13 @@ def ensure_rabbitmq_setup(
 def check_rabbitmq_amqp(config: MinioConfig | None = None) -> dict[str, Any]:
     """测试 AMQP 5672 连接。"""
     rabbit = _rabbit_cfg(config)
+    if not rabbit.enabled:
+        return {
+            "enabled": False,
+            "available": False,
+            "disabled": True,
+            "error": "RabbitMQ 已禁用",
+        }
     try:
         connection = __import__("pika").BlockingConnection(_rabbit_connection_params(rabbit))
         connection.close()
@@ -216,6 +237,16 @@ def list_rabbitmq_queues(config: MinioConfig | None = None) -> dict[str, Any]:
     """通过 Management API 列出已有队列；失败时回退到当前配置队列探测。"""
     cfg = config or load_minio_config()
     rabbit = cfg.rabbitmq
+    if not rabbit.enabled:
+        return {
+            "enabled": False,
+            "available": False,
+            "disabled": True,
+            "method": "disabled",
+            "configured_queue": "",
+            "suggested_queue": "",
+            "queues": [],
+        }
     amqp = check_rabbitmq_amqp(cfg)
 
     mgmt_port = int(getattr(rabbit, "management_port", 15672) or 15672)
@@ -291,6 +322,8 @@ def _suggest_queue(queues: list[dict[str, Any]], configured: str) -> str:
 
 def _probe_configured_queue(cfg: MinioConfig) -> dict[str, Any] | None:
     rabbit = cfg.rabbitmq
+    if not rabbit.enabled:
+        raise RuntimeError("RabbitMQ 已通过 RABBITMQ_ENABLED=false 禁用")
     if not rabbit.queue:
         return None
     try:
@@ -322,6 +355,8 @@ def peek_rabbitmq_message(
     """取一条消息预览（默认放回队列，不消费）。"""
     cfg = config or load_minio_config()
     rabbit = cfg.rabbitmq
+    if not rabbit.enabled:
+        raise RuntimeError("RabbitMQ 已通过 RABBITMQ_ENABLED=false 禁用")
     target = str(queue or rabbit.queue or "").strip()
     if not target:
         raise ValueError("请指定队列名")

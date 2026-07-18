@@ -1422,6 +1422,7 @@ def start_integrated_pipeline(
     skip_listing: bool = False,
     listing_skip_selectors: list[str] | None = None,
     material_source: str = "",
+    use_minio_cache_only: bool = False,
     listing_input_mode: ListingInputMode = "selector",
     relist_strategy: str = "ignore",
     listing_throttle_enabled: bool = False,
@@ -1559,6 +1560,7 @@ def start_integrated_pipeline(
                 "skip_listing": skip_listing,
                 "listing_skip_selectors": skip_selectors,
                 "material_source": material_source,
+                "use_minio_cache_only": bool(use_minio_cache_only),
                 "listing_input_mode": listing_input_mode,
                 "relist_strategy": strategy,
                 "listing_throttle_enabled": listing_throttle_enabled,
@@ -1599,6 +1601,7 @@ def start_integrated_pipeline(
         "paren_size_as_product_type": bool(paren_size_as_product_type),
         "category_next_burst_demo": bool(category_next_burst_demo),
         "material_source": str(material_source or ""),
+        "use_minio_cache_only": bool(use_minio_cache_only),
         "auto_limited_time_setup": bool(auto_limited_time_setup and normalized_activity_ids),
         "continue_after_limited_time_failure": bool(continue_after_limited_time_failure),
         "continue_after_activity_failure": bool(continue_after_activity_failure),
@@ -1797,6 +1800,7 @@ def start_integrated_pipeline(
             "paren_size_as_product_type": bool(paren_size_as_product_type),
             "category_next_burst_demo": bool(category_next_burst_demo),
             "material_source": str(material_source or ""),
+            "use_minio_cache_only": bool(use_minio_cache_only),
         },
     )
 
@@ -1810,6 +1814,7 @@ def start_integrated_pipeline(
         "paren_size_as_product_type": bool(paren_size_as_product_type),
         "category_next_burst_demo": bool(category_next_burst_demo),
         "material_source": str(material_source or ""),
+        "use_minio_cache_only": bool(use_minio_cache_only),
     }
     throttle_state = build_listing_throttle_state(
         effective_listing_codes,
@@ -1873,6 +1878,7 @@ def start_integrated_pipeline(
                 "paren_size_as_product_type": bool(paren_size_as_product_type),
                 "category_next_burst_demo": bool(category_next_burst_demo),
                 "material_source": str(material_source or ""),
+                "use_minio_cache_only": bool(use_minio_cache_only),
             },
             scheduled_at=listing_scheduled_at or datetime.now(),
         )
@@ -1975,6 +1981,7 @@ def start_integrated_pipeline_batch(
     skip_listing: bool = False,
     listing_skip_selectors: list[str] | None = None,
     material_source: str = "",
+    use_minio_cache_only: bool = False,
     relist_strategy: str = "ignore",
     listing_throttle_enabled: bool = False,
     listing_batch_set_count: int = 5,
@@ -2033,6 +2040,7 @@ def start_integrated_pipeline_batch(
         skip_listing=skip_listing,
         listing_skip_selectors=listing_skip_selectors,
         material_source=material_source,
+        use_minio_cache_only=use_minio_cache_only,
         relist_strategy=relist_strategy,
         listing_throttle_enabled=listing_throttle_enabled,
         listing_batch_set_count=listing_batch_set_count,
@@ -2136,6 +2144,7 @@ def start_integrated_pipeline_batch(
             skip_listing=skip_listing,
             listing_skip_selectors=listing_skip_selectors,
             material_source=material_source,
+            use_minio_cache_only=use_minio_cache_only,
             relist_strategy=relist_strategy,
             listing_throttle_enabled=listing_throttle_enabled,
             listing_batch_set_count=listing_batch_set_count,

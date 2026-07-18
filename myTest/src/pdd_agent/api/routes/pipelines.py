@@ -261,11 +261,16 @@ def test_integrated_submit_ai_title(body: PipelineSubmitAiTitleTestIn):
     settings = load_yaml_settings()
     assets_root = settings.paths.resolve("assets_root")
     if source == "minio":
-        from pdd_agent.integrations.minio.config import minio_cache_root, minio_configured
+        from pdd_agent.integrations.minio.config import (
+            load_minio_config,
+            minio_cache_root,
+            minio_configured,
+        )
 
-        if not minio_configured():
+        cfg = load_minio_config()
+        if cfg.enabled and not minio_configured(cfg):
             raise HTTPException(status_code=503, detail="MinIO 未配置，请填写 config/minio.yaml")
-        assets_root = minio_cache_root()
+        assets_root = minio_cache_root(cfg)
 
     product_code = str(body.product_code or "").strip()
     logger.info(
@@ -432,6 +437,7 @@ def start_integrated(body: IntegratedPipelineStartRequest):
             skip_listing=body.skip_listing,
             listing_skip_selectors=body.listing_skip_selectors,
             material_source=body.material_source,
+            use_minio_cache_only=body.use_minio_cache_only,
             relist_strategy=body.relist_strategy,
             listing_throttle_enabled=body.listing_throttle_enabled,
             listing_batch_set_count=body.listing_batch_set_count,
@@ -514,6 +520,7 @@ def start_integrated_batch(body: IntegratedPipelineBatchStartRequest):
             store_start_delay_max_seconds=body.store_start_delay_max_seconds,
             max_concurrent_stores=body.max_concurrent_stores,
             material_source=body.material_source,
+            use_minio_cache_only=body.use_minio_cache_only,
             relist_strategy=body.relist_strategy,
             listing_throttle_enabled=body.listing_throttle_enabled,
             listing_batch_set_count=body.listing_batch_set_count,

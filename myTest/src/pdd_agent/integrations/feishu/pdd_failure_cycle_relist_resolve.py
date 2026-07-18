@@ -79,9 +79,16 @@ def _records_for_family(family_code: str, config: MinioConfig | None = None) -> 
     records = list_minio_set_records_for_family(family, cfg)
 
     if not records:
-        from pdd_agent.integrations.minio.catalog import list_minio_listing_targets
+        if cfg.enabled:
+            from pdd_agent.integrations.minio.catalog import list_minio_listing_targets
 
-        for target in list_minio_listing_targets(cfg):
+            targets = list_minio_listing_targets(cfg)
+        else:
+            from pdd_agent.integrations.minio.config import minio_cache_root
+            from pdd_agent.skills.listing.catalog import list_listing_targets_from_root
+
+            targets = list_listing_targets_from_root(minio_cache_root(cfg))
+        for target in targets:
             if str(target.family_code or "").strip().upper() != family:
                 continue
             records.append(
@@ -112,7 +119,8 @@ def resolve_cycle_relist_listing_selector(
     if not raw:
         return CycleRelistListingResolveResult(ok=False, merchant_code=raw, error="飞书商品编码为空")
 
-    if not minio_configured(config):
+    cfg = config or load_minio_config()
+    if cfg.enabled and not minio_configured(cfg):
         return CycleRelistListingResolveResult(
             ok=False,
             merchant_code=raw,
@@ -127,7 +135,7 @@ def resolve_cycle_relist_listing_selector(
             error=f"无法从商品编码截取母款号：{raw}",
         )
 
-    records = _records_for_family(family_code, config)
+    records = _records_for_family(family_code, cfg)
     if not records:
         return CycleRelistListingResolveResult(
             ok=False,

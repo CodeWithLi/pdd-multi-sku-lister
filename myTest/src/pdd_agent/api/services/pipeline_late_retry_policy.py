@@ -324,6 +324,7 @@ def _listing_payload_base(row) -> dict[str, Any]:
         "paren_size_as_product_type": bool(meta.get("paren_size_as_product_type")),
         "category_next_burst_demo": bool(meta.get("category_next_burst_demo", True)),
         "material_source": str(meta.get("material_source") or ""),
+        "use_minio_cache_only": bool(meta.get("use_minio_cache_only")),
     }
 
 
@@ -433,6 +434,7 @@ def start_late_retry_failed(
             "paren_size_as_product_type": bool(payload_base.get("paren_size_as_product_type")),
             "category_next_burst_demo": bool(payload_base.get("category_next_burst_demo", True)),
             "material_source": str(payload_base.get("material_source") or ""),
+            "use_minio_cache_only": bool(payload_base.get("use_minio_cache_only")),
         },
         scheduled_at=datetime.now(),
     )

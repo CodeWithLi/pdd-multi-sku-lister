@@ -7,6 +7,7 @@ from unittest.mock import patch
 
 from pdd_agent.integrations.minio.config import (
     MinioConfig,
+    MinioRabbitMQConfig,
     minio_poll_interval_seconds,
     save_minio_refresh_mode,
 )
@@ -95,6 +96,7 @@ def test_poll_interval_zero_in_rabbitmq_mode():
         secret_key="s",
         bucket="b",
         refresh_mode="rabbitmq",
+        rabbitmq=MinioRabbitMQConfig(enabled=True),
         listing_poll_seconds=30,
     )
     assert minio_poll_interval_seconds(cfg) == 0

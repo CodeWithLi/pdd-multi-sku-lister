@@ -105,10 +105,12 @@ class MinioEnvSettings(BaseSettings):
         extra="ignore",
     )
 
+    minio_enabled: bool | None = None
     minio_endpoint: str = ""
     minio_access_key: str = ""
     minio_secret_key: str = ""
     minio_bucket: str = ""
+    rabbitmq_enabled: bool | None = None
     rabbitmq_username: str = ""
     rabbitmq_password: str = ""
     alist_url: str = ""
@@ -135,6 +137,11 @@ def load_minio_config(path: Path | None = None) -> MinioConfig:
     rabbitmq = yaml_cfg.rabbitmq
     if "rabbitmq" in raw and isinstance(raw.get("rabbitmq"), dict):
         rabbitmq = MinioRabbitMQConfig.model_validate(raw["rabbitmq"])
+    rabbitmq = rabbitmq.model_copy(
+        update={
+            "enabled": rabbitmq.enabled if env.rabbitmq_enabled is None else env.rabbitmq_enabled,
+        }
+    )
 
     alist = yaml_cfg.alist
     if "alist" in raw and isinstance(raw.get("alist"), dict):
@@ -155,7 +162,7 @@ def load_minio_config(path: Path | None = None) -> MinioConfig:
 
     return MinioConfig(
         refresh_mode=refresh_mode,  # type: ignore[arg-type]
-        enabled=bool(yaml_cfg.enabled),
+        enabled=bool(yaml_cfg.enabled) if env.minio_enabled is None else env.minio_enabled,
         endpoint=(env.minio_endpoint or yaml_cfg.endpoint).strip(),
         secure=bool(yaml_cfg.secure),
         access_key=(env.minio_access_key or yaml_cfg.access_key).strip(),
@@ -191,10 +198,15 @@ def minio_configured(config: MinioConfig | None = None) -> bool:
     return bool(cfg.enabled and cfg.endpoint and cfg.access_key and cfg.secret_key and cfg.bucket)
 
 
+def rabbitmq_enabled(config: MinioConfig | None = None) -> bool:
+    cfg = config or load_minio_config()
+    return bool(cfg.rabbitmq.enabled)
+
+
 def minio_refresh_mode(config: MinioConfig | None = None) -> MinioRefreshMode:
     cfg = config or load_minio_config()
     mode = str(cfg.refresh_mode or "poll").strip().lower()
-    return "rabbitmq" if mode == "rabbitmq" else "poll"
+    return "rabbitmq" if mode == "rabbitmq" and rabbitmq_enabled(cfg) else "poll"
 
 
 def minio_poll_interval_seconds(config: MinioConfig | None = None) -> int:
@@ -207,7 +219,7 @@ def minio_poll_interval_seconds(config: MinioConfig | None = None) -> int:
 
 def minio_rabbitmq_enabled(config: MinioConfig | None = None) -> bool:
     cfg = config or load_minio_config()
-    return minio_refresh_mode(cfg) == "rabbitmq" and minio_configured(cfg)
+    return rabbitmq_enabled(cfg) and minio_refresh_mode(cfg) == "rabbitmq" and minio_configured(cfg)
 
 
 def save_minio_refresh_mode(mode: str, path: Path | None = None) -> MinioRefreshMode:

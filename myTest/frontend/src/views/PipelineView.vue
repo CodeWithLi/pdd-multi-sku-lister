@@ -103,6 +103,7 @@ const success = ref('')
 const accounts = ref<Account[]>([])
 const productOptions = ref<ListingTargetOption[]>([])
 const materialSource = ref<'local' | 'minio'>('minio')
+const useMinioCacheOnly = ref(false)
 const minioHealth = ref<{ available?: boolean; error?: string; listing_poll_seconds?: number; refresh_mode?: 'poll' | 'rabbitmq' } | null>(null)
 const showOnlyUnlistedGroups = ref(false)
 const activities = ref<MarketingActivityOption[]>([])
@@ -2033,6 +2034,7 @@ async function startPipeline() {
         skip_listing: skipListing,
         listing_skip_selectors: listingSkipSelectors,
         material_source: materialSource.value,
+        use_minio_cache_only: materialSource.value === 'minio' && useMinioCacheOnly.value,
         relist_strategy: relistStrategy.value,
         listing_throttle_enabled: listingThrottleEnabled.value,
         listing_batch_set_count: listingBatchSetCount.value,
@@ -2087,6 +2089,7 @@ async function startPipeline() {
         skip_listing: skipListing,
         listing_skip_selectors: listingSkipSelectors,
         material_source: materialSource.value,
+        use_minio_cache_only: materialSource.value === 'minio' && useMinioCacheOnly.value,
         relist_strategy: relistStrategy.value,
         listing_throttle_enabled: listingThrottleEnabled.value,
         listing_batch_set_count: listingBatchSetCount.value,
@@ -2500,6 +2503,16 @@ onUnmounted(() => {
                         <el-tag v-if="!materialRefreshPaused && refreshMode === 'rabbitmq' && sseConnected" size="small" type="success">实时监听</el-tag>
                         <el-tag v-else-if="!materialRefreshPaused && refreshMode === 'rabbitmq'" size="small" type="warning">推送未连接</el-tag>
                       </template>
+                    </div>
+                    <div v-if="materialSource === 'minio'" class="minio-cache-only-control">
+                      <span class="minio-cache-only-label">上架时仅用本地缓存</span>
+                      <el-switch
+                        v-model="useMinioCacheOnly"
+                        aria-label="上架时仅使用本地 MinIO 缓存"
+                      />
+                      <el-tag v-if="useMinioCacheOnly" size="small" type="warning">
+                        跳过同步与校验
+                      </el-tag>
                     </div>
                     <el-radio-group v-model="showOnlyUnlistedGroups" size="small" class="filter-segment">
                       <el-radio-button :label="true">
@@ -4469,6 +4482,21 @@ onUnmounted(() => {
   align-items: center;
   gap: 8px;
   flex-wrap: wrap;
+}
+
+.minio-cache-only-control {
+  grid-column: 1 / -1;
+  display: inline-flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  min-height: 32px;
+}
+
+.minio-cache-only-label {
+  font-size: 13px;
+  color: var(--el-text-color-regular);
+  white-space: nowrap;
 }
 
 .filter-segment :deep(.el-radio-button__inner) {

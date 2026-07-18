@@ -49,6 +49,7 @@ class IntegratedPipelineStartRequest(BaseModel):
     skip_listing: bool = False
     listing_skip_selectors: list[str] = Field(default_factory=list)
     material_source: str = ""
+    use_minio_cache_only: bool = False
     relist_strategy: str = "ignore"
     listing_throttle_enabled: bool = False
     listing_batch_set_count: int = Field(default=5, ge=1, le=100)
@@ -105,6 +106,7 @@ class IntegratedPipelineBatchStartRequest(BaseModel):
     skip_listing: bool = False
     listing_skip_selectors: list[str] = Field(default_factory=list)
     material_source: str = ""
+    use_minio_cache_only: bool = False
     relist_strategy: str = "ignore"
     listing_throttle_enabled: bool = False
     listing_batch_set_count: int = Field(default=5, ge=1, le=100)

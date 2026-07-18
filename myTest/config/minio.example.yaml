@@ -1,5 +1,9 @@
 # MinIO 素材存储（与同事项目一致）
 # 复制：cp config/minio.example.yaml config/minio.yaml
+# .env 可覆盖开关：
+#   MINIO_ENABLED=false     不连接 MinIO，MinIO 素材模式直接读取 cache_root
+#   RABBITMQ_ENABLED=false  不连接 RabbitMQ；MinIO 开启时刷新方式自动回退为 poll
+# 两个字段未设置时继续使用本文件的 enabled / rabbitmq.enabled。
 
 enabled: true
 # MinIO API

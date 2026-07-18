@@ -423,12 +423,13 @@ def _ensure_listing_product_attributes_seed(engine: Engine) -> None:
 def _startup_catalog_set_index() -> tuple[dict[str, frozenset[str]], bool]:
     """启动时对齐素材目录：MinIO 已配置时用 MinIO 索引并按商品编码匹配。"""
     from pdd_agent.core.config import load_yaml_settings
-    from pdd_agent.integrations.minio.config import minio_configured
+    from pdd_agent.integrations.minio.config import load_minio_config, minio_configured
 
-    if minio_configured():
+    cfg = load_minio_config()
+    if not cfg.enabled or minio_configured(cfg):
         from pdd_agent.integrations.minio.catalog import build_minio_catalog_set_index
 
-        return build_minio_catalog_set_index(), True
+        return build_minio_catalog_set_index(cfg), True
 
     from pdd_agent.db.repositories import build_catalog_set_index
 

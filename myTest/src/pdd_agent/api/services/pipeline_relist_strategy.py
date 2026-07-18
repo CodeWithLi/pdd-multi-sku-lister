@@ -405,6 +405,7 @@ def enqueue_pending_listing_after_relist_prep(row) -> None:
                     listing_payload_base.get("category_next_burst_demo", True)
                 ),
                 "material_source": str(listing_payload_base.get("material_source") or ""),
+                "use_minio_cache_only": bool(listing_payload_base.get("use_minio_cache_only")),
             },
             scheduled_at=datetime.now(),
         )
