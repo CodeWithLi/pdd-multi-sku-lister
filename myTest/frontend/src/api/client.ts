@@ -636,7 +636,11 @@ export const api = {
       .post<ProductOperationDelistResponse>('/product-operations/delist-all-stores', body)
       .then((r) => r.data),
 
-  previewProductPrices: (body: { account_id: string; product_code: string }) =>
+  previewProductPrices: (body: {
+    account_id: string
+    product_code: string
+    pdd_product_id?: string
+  }) =>
     http
       .post<ProductOperationRunResponse>('/product-operations/price-preview', body)
       .then((r) => r.data),

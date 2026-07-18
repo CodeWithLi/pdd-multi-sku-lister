@@ -14,6 +14,7 @@ from pdd_agent.core.logging import get_logger
 from pdd_agent.skills.delist.time_utils import extract_product_id_from_text
 from pdd_agent.skills.listing.upload import (
     _click_goods_search,
+    _fill_goods_id_filter,
     _fill_goods_merchant_code_filter,
     _open_goods_list,
     _reset_goods_list_filters,
@@ -167,9 +168,10 @@ for (const item of candidates) {
 return { moved: false, at_bottom: true };
 """
 
-_MARK_GROUP_PRICE_INPUT_JS = r"""
+_MARK_PRICE_INPUT_JS = r"""
 const target = String(arguments[0] || '').replace(/\s+/g, '').toUpperCase();
 const token = String(arguments[1] || '');
+const priceLabel = String(arguments[2] || '拼单价');
 function norm(v) { return String(v || '').replace(/\s+/g, ' ').trim(); }
 function findTables() {
     const tables = Array.from(document.querySelectorAll('table'));
@@ -186,9 +188,9 @@ const tables = findTables();
 if (!tables.headerTable || !tables.dataTable) return { found: false };
 const headers = Array.from(tables.headerTable.querySelectorAll('thead tr:last-child th, thead tr:last-child td'))
     .map((el) => ({ text: norm(el.innerText), rect: el.getBoundingClientRect() }));
-const groupRect = headers.find((h) => h.text.includes('拼单价'))?.rect;
+const priceRect = headers.find((h) => h.text.includes(priceLabel))?.rect;
 const codeRect = headers.find((h) => h.text.includes('规格编码') || h.text.includes('商家编码'))?.rect;
-if (!groupRect || !codeRect) return { found: false };
+if (!priceRect || !codeRect) return { found: false };
 function cellAt(cells, range) {
     return cells.find((cell) => {
         const r = cell.getBoundingClientRect();
@@ -202,9 +204,9 @@ for (const row of tables.dataTable.querySelectorAll('tbody tr')) {
     const code = norm(codeCell?.querySelector('input')?.value || codeCell?.innerText)
         .replace(/\s+/g, '').toUpperCase();
     if (code !== target) continue;
-    const input = cellAt(cells, groupRect)?.querySelector('input');
+    const input = cellAt(cells, priceRect)?.querySelector('input');
     if (!input) return { found: false };
-    input.setAttribute('data-pdd-product-operation-token', token);
+    if (token) input.setAttribute('data-pdd-product-operation-token', token);
     input.scrollIntoView({ block: 'center', inline: 'nearest' });
     return { found: true, current: String(input.value || '') };
 }
@@ -216,13 +218,13 @@ def normalize_code(value: str) -> str:
     return re.sub(r"\s+", "", str(value or "")).upper()
 
 
-def normalize_price(value: Any) -> str:
+def normalize_price(value: Any, field_name: str = "拼单价") -> str:
     try:
         price = Decimal(str(value)).quantize(Decimal("0.01"))
     except (InvalidOperation, ValueError) as exc:
-        raise ValueError(f"无效拼单价: {value}") from exc
-    if price <= 0 or price > Decimal("999999.99"):
-        raise ValueError(f"拼单价超出范围: {value}")
+        raise ValueError(f"无效{field_name}: {value}") from exc
+    if not price.is_finite() or price <= 0 or price > Decimal("999999.99"):
+        raise ValueError(f"{field_name}超出范围: {value}")
     return f"{price:.2f}"
 
 
@@ -251,11 +253,11 @@ def delist_product_by_code(
 
 
 def validate_price_updates(current_skus: list[dict[str, Any]], updates: list[dict[str, Any]]) -> list[dict[str, str]]:
-    available: dict[str, list[Any]] = {}
+    available: dict[str, list[dict[str, Any]]] = {}
     for current in current_skus:
         code = normalize_code(current.get("spec_code", ""))
         if code:
-            available.setdefault(code, []).append(current.get("single_price"))
+            available.setdefault(code, []).append(current)
     normalized: list[dict[str, str]] = []
     seen: set[str] = set()
     for row in updates:
@@ -267,20 +269,34 @@ def validate_price_updates(current_skus: list[dict[str, Any]], updates: list[dic
         if code not in available:
             raise ValueError(f"页面未找到规格编码: {code}")
         seen.add(code)
-        group_price = Decimal(normalize_price(row.get("group_price")))
+        group_price = Decimal(normalize_price(row.get("group_price"), "拼单价"))
         try:
-            single_prices = [Decimal(str(value)).quantize(Decimal("0.01")) for value in available[code]]
+            current_single_prices = [
+                Decimal(str(current.get("single_price"))).quantize(Decimal("0.01"))
+                for current in available[code]
+            ]
         except (InvalidOperation, ValueError) as exc:
             raise ValueError(f"规格编码 {code} 的单买价无效，无法校验拼单价") from exc
-        if not single_prices or any(not price.is_finite() or price <= 0 for price in single_prices):
+        if not current_single_prices or any(
+            not price.is_finite() or price <= 0 for price in current_single_prices
+        ):
             raise ValueError(f"规格编码 {code} 的单买价无效，无法校验拼单价")
-        max_group_price = min(single_prices) - Decimal("1.00")
+        single_price_value = row.get("single_price")
+        target_single_price = (
+            Decimal(normalize_price(single_price_value, "单买价"))
+            if single_price_value is not None
+            else min(current_single_prices)
+        )
+        max_group_price = target_single_price - Decimal("1.00")
         if group_price > max_group_price:
             raise ValueError(
                 f"规格编码 {code} 的拼单价不能高于 {max_group_price:.2f}"
-                f"（单买价 {min(single_prices):.2f}，需至少低 1.00 元）"
+                f"（单买价 {target_single_price:.2f}，需至少低 1.00 元）"
             )
-        normalized.append({"spec_code": code, "group_price": f"{group_price:.2f}"})
+        normalized_row = {"spec_code": code, "group_price": f"{group_price:.2f}"}
+        if single_price_value is not None:
+            normalized_row["single_price"] = f"{target_single_price:.2f}"
+        normalized.append(normalized_row)
     if not normalized:
         raise ValueError("至少需要修改一个规格")
     return normalized
@@ -291,8 +307,15 @@ def _row_product_code(row_text: str) -> str:
     return str(match.group(1) if match else "").strip()
 
 
-def _wait_exact_goods_row(page: DpPage, product_code: str, timeout: float = 20.0):
+def _wait_exact_goods_row(
+    page: DpPage,
+    product_code: str,
+    *,
+    expected_product_id: str = "",
+    timeout: float = 20.0,
+):
     expected = normalize_code(product_code)
+    expected_id = str(expected_product_id or "").strip()
     deadline = time.time() + timeout
     while time.time() < deadline:
         matches = []
@@ -301,7 +324,12 @@ def _wait_exact_goods_row(page: DpPage, product_code: str, timeout: float = 20.0
                 text = row.inner_text(timeout=500)
             except Exception:
                 continue
-            if normalize_code(_row_product_code(text)) == expected:
+            product_id = str(extract_product_id_from_text(text) or "").strip()
+            if expected_id:
+                matched = product_id == expected_id
+            else:
+                matched = normalize_code(_row_product_code(text)) == expected
+            if matched:
                 matches.append((row, text))
         if matches:
             return matches
@@ -361,6 +389,8 @@ def _click_edit_and_resolve(
     page: DpPage,
     product_code: str,
     initial_row,
+    *,
+    expected_product_id: str = "",
 ) -> tuple[str, Any | None]:
     """点击 React 编辑入口，并兼容 window.open、当前页跳转与真实新标签。"""
     source_url = str(page.url or "")
@@ -381,7 +411,12 @@ def _click_edit_and_resolve(
     try:
         for attempt in range(2):
             if attempt:
-                matches = _wait_exact_goods_row(page, product_code, timeout=5.0)
+                matches = _wait_exact_goods_row(
+                    page,
+                    product_code,
+                    expected_product_id=expected_product_id,
+                    timeout=5.0,
+                )
                 if len(matches) == 1:
                     row = matches[0][0]
             edit = _find_edit_locator(row)
@@ -433,19 +468,37 @@ def _click_edit_and_resolve(
             pass
 
 
-def _open_product_edit(page: DpPage, account_id: str, product_code: str) -> tuple[DpPage, dict[str, str]]:
+def _open_product_edit(
+    page: DpPage,
+    account_id: str,
+    product_code: str,
+    *,
+    expected_product_id: str = "",
+) -> tuple[DpPage, dict[str, str]]:
     if not _open_goods_list(page, account_id, tab_text="在售中"):
         raise RuntimeError("无法打开在售商品列表，可能未登录")
     _reset_goods_list_filters(page)
-    fill = _fill_goods_merchant_code_filter(page, product_code)
+    expected_id = str(expected_product_id or "").strip()
+    fill = (
+        _fill_goods_id_filter(page, expected_id)
+        if expected_id
+        else _fill_goods_merchant_code_filter(page, product_code)
+    )
     if not fill.get("filled"):
-        raise RuntimeError("无法填写商品编码搜索框")
+        field_name = "商品ID" if expected_id else "商品编码"
+        raise RuntimeError(f"无法填写{field_name}搜索框")
     click = _click_goods_search(page)
     if not click.get("clicked"):
         raise RuntimeError("无法点击商品查询按钮")
 
-    matches = _wait_exact_goods_row(page, product_code)
+    matches = _wait_exact_goods_row(
+        page,
+        product_code,
+        expected_product_id=expected_id,
+    )
     if not matches:
+        if expected_id:
+            raise ValueError(f"在售列表未找到商品ID: {expected_id}")
         raise ValueError(f"在售列表未找到商品编码: {product_code}")
     if len(matches) > 1:
         ids = [extract_product_id_from_text(text) or "未知ID" for _, text in matches]
@@ -460,7 +513,12 @@ def _open_product_edit(page: DpPage, account_id: str, product_code: str) -> tupl
         pass
 
     source_url = str(page.url or "")
-    edit_url, raw_edit_page = _click_edit_and_resolve(page, product_code, row)
+    edit_url, raw_edit_page = _click_edit_and_resolve(
+        page,
+        product_code,
+        row,
+        expected_product_id=expected_id,
+    )
     if raw_edit_page is not None:
         active = page if raw_edit_page is page._page else DpPage(raw_edit_page)
     elif edit_url:
@@ -544,8 +602,19 @@ def _collect_all_skus(page: DpPage) -> list[dict[str, Any]]:
     return list(merged.values())
 
 
-def read_product_price_specs(page: DpPage, account_id: str, product_code: str) -> dict[str, Any]:
-    active, product = _open_product_edit(page, account_id, product_code)
+def read_product_price_specs(
+    page: DpPage,
+    account_id: str,
+    product_code: str,
+    *,
+    expected_product_id: str = "",
+) -> dict[str, Any]:
+    active, product = _open_product_edit(
+        page,
+        account_id,
+        product_code,
+        expected_product_id=expected_product_id,
+    )
     skus = _collect_all_skus(active)
     return {
         "status": "success",
@@ -558,24 +627,40 @@ def read_product_price_specs(page: DpPage, account_id: str, product_code: str) -
     }
 
 
-def _fill_group_price(page: DpPage, spec_code: str, price: str) -> str:
+def _fill_price(page: DpPage, spec_code: str, price: str, price_label: str) -> str:
     page.run_js(_SCROLL_SKU_TABLE_JS, True)
     for _ in range(60):
         token = uuid.uuid4().hex
-        marked = page.run_js(_MARK_GROUP_PRICE_INPUT_JS, spec_code, token)
+        marked = page.run_js(_MARK_PRICE_INPUT_JS, spec_code, token, price_label)
         if isinstance(marked, dict) and marked.get("found"):
             locator = page._page.locator(f'[data-pdd-product-operation-token="{token}"]').first
             locator.fill(price, timeout=5000)
             locator.press("Tab", timeout=3000)
-            current = str(locator.input_value(timeout=2000) or "").strip()
-            if normalize_price(current) != price:
-                raise RuntimeError(f"规格 {spec_code} 拼单价写入校验失败: {current}")
-            return str(marked.get("current") or "")
+            current = ""
+            for _ in range(10):
+                verified = page.run_js(_MARK_PRICE_INPUT_JS, spec_code, "", price_label)
+                if isinstance(verified, dict) and verified.get("found"):
+                    current = str(verified.get("current") or "").strip()
+                    try:
+                        if normalize_price(current, price_label) == price:
+                            return str(marked.get("current") or "")
+                    except ValueError:
+                        pass
+                time.sleep(0.1)
+            raise RuntimeError(f"规格 {spec_code} {price_label}写入校验失败: {current}")
         moved = page.run_js(_SCROLL_SKU_TABLE_JS, False)
         if not isinstance(moved, dict) or not moved.get("moved"):
             break
         time.sleep(0.25)
     raise ValueError(f"页面未找到规格编码: {spec_code}")
+
+
+def _fill_group_price(page: DpPage, spec_code: str, price: str) -> str:
+    return _fill_price(page, spec_code, price, "拼单价")
+
+
+def _fill_single_price(page: DpPage, spec_code: str, price: str) -> str:
+    return _fill_price(page, spec_code, price, "单买价")
 
 
 def _find_submit_button(page: DpPage, timeout: float = 8.0):
@@ -641,18 +726,63 @@ def update_product_group_prices(
     *,
     expected_product_id: str = "",
 ) -> dict[str, Any]:
-    active, product = _open_product_edit(page, account_id, product_code)
+    active, product = _open_product_edit(
+        page,
+        account_id,
+        product_code,
+        expected_product_id=expected_product_id,
+    )
     actual_product_id = str(product.get("pdd_product_id") or "")
     if expected_product_id and actual_product_id != expected_product_id:
         raise ValueError(f"商品ID不一致: 页面={actual_product_id}, 期望={expected_product_id}")
 
     current_skus = _collect_all_skus(active)
     normalized = validate_price_updates(current_skus, updates)
+    page_order: dict[str, int] = {}
+    for index, current in enumerate(current_skus):
+        code = normalize_code(current.get("spec_code", ""))
+        if code:
+            page_order.setdefault(code, index)
+    normalized.sort(key=lambda row: page_order[row["spec_code"]])
+    current_by_code = {
+        normalize_code(row.get("spec_code", "")): row
+        for row in current_skus
+        if normalize_code(row.get("spec_code", ""))
+    }
     applied = []
     for row in normalized:
-        old_price = _fill_group_price(active, row["spec_code"], row["group_price"])
-        applied.append({**row, "old_group_price": old_price})
-    _submit_edit(active)
+        old_group_price = ""
+        old_single_price = ""
+        target_single_price = row.get("single_price")
+        current = current_by_code[row["spec_code"]]
+        current_group_price = normalize_price(current.get("group_price"), "拼单价")
+        current_single_price = normalize_price(current.get("single_price"), "单买价")
+        group_price_changed = row["group_price"] != current_group_price
+        single_price_changed = (
+            target_single_price is not None and target_single_price != current_single_price
+        )
+        if not group_price_changed and not single_price_changed:
+            continue
+        if group_price_changed and single_price_changed:
+            if Decimal(target_single_price) >= Decimal(current_single_price):
+                old_single_price = _fill_single_price(active, row["spec_code"], target_single_price)
+                old_group_price = _fill_group_price(active, row["spec_code"], row["group_price"])
+            else:
+                old_group_price = _fill_group_price(active, row["spec_code"], row["group_price"])
+                old_single_price = _fill_single_price(active, row["spec_code"], target_single_price)
+        elif group_price_changed:
+            old_group_price = _fill_group_price(active, row["spec_code"], row["group_price"])
+        else:
+            old_single_price = _fill_single_price(active, row["spec_code"], target_single_price)
+        applied.append(
+            {
+                **row,
+                "old_group_price": old_group_price,
+                **({"old_single_price": old_single_price} if single_price_changed else {}),
+            }
+        )
+    if applied:
+        _submit_edit(active)
     logger.info(
         "[%s] product price updated product_code=%s product_id=%s specs=%s",
         account_id,
@@ -667,5 +797,5 @@ def update_product_group_prices(
         **product,
         "updated_count": len(applied),
         "updates": applied,
-        "message": f"已修改 {len(applied)} 个规格的拼单价",
+        "message": f"已修改 {len(applied)} 个规格的价格",
     }

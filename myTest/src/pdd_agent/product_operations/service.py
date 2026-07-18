@@ -42,7 +42,9 @@ def list_published_product_options(*, account_id: str = "") -> list[dict[str, An
         if str(getattr(row, "status", "") or "").strip() == "delisted":
             continue
         code = str(getattr(row, "product_code", "") or "").strip()
-        if not code:
+        aid = str(getattr(row, "account_id", "") or "").strip()
+        product_id = str(getattr(row, "pdd_product_id", "") or "").strip()
+        if not code or not aid or not product_id:
             continue
         item = grouped.setdefault(
             code,
@@ -50,12 +52,13 @@ def list_published_product_options(*, account_id: str = "") -> list[dict[str, An
                 "product_code": code,
                 "listing_label": str(getattr(row, "listing_label", "") or "").strip(),
                 "account_ids": [],
+                "product_ids": {},
                 "record_count": 0,
             },
         )
-        aid = str(getattr(row, "account_id", "") or "").strip()
         if aid and aid not in item["account_ids"]:
             item["account_ids"].append(aid)
+        item["product_ids"].setdefault(aid, product_id)
         item["record_count"] += 1
 
     options = []
@@ -98,13 +101,19 @@ def create_price_operation_run(account_id: str, message: str) -> str:
     return run_id
 
 
-async def execute_price_preview(*, run_id: str, account_id: str, product_code: str) -> dict[str, Any]:
+async def execute_price_preview(
+    *,
+    run_id: str,
+    account_id: str,
+    product_code: str,
+    expected_product_id: str = "",
+) -> dict[str, Any]:
     return await _execute_price_operation(
         run_id=run_id,
         account_id=account_id,
         product_code=product_code,
         updates=None,
-        expected_product_id="",
+        expected_product_id=expected_product_id,
     )
 
 
@@ -147,7 +156,12 @@ async def _execute_price_operation(
 
     def _job(dp):
         if updates is None:
-            return read_product_price_specs(dp, account_id, product_code)
+            return read_product_price_specs(
+                dp,
+                account_id,
+                product_code,
+                expected_product_id=expected_product_id,
+            )
         return update_product_group_prices(
             dp,
             account_id,

@@ -57,6 +57,7 @@ async def preview_product_prices(body: PricePreviewIn, background: BackgroundTas
         run_id=run_id,
         account_id=body.account_id,
         product_code=body.product_code,
+        expected_product_id=body.pdd_product_id,
     )
     return ProductOperationRunOut(run_id=run_id, message="规格读取任务已提交")
 
@@ -71,8 +72,12 @@ async def update_product_prices(body: PriceUpdateIn, background: BackgroundTasks
         product_code=body.product_code,
         expected_product_id=body.pdd_product_id,
         updates=[
-            {"spec_code": item.spec_code, "group_price": str(item.group_price)}
+            {
+                "spec_code": item.spec_code,
+                "group_price": str(item.group_price),
+                **({"single_price": str(item.single_price)} if item.single_price is not None else {}),
+            }
             for item in body.updates
         ],
     )
-    return ProductOperationRunOut(run_id=run_id, message="拼单价修改任务已提交")
+    return ProductOperationRunOut(run_id=run_id, message="规格价格修改任务已提交")

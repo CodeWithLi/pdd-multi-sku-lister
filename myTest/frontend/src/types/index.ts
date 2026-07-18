@@ -953,6 +953,7 @@ export interface ProductOperationPublishedOption {
   product_code: string
   listing_label: string
   account_ids: string[]
+  product_ids: Record<string, string>
   shop_count: number
   record_count: number
 }
@@ -973,6 +974,7 @@ export interface ProductOperationRunResponse {
 export interface ProductOperationPriceUpdate {
   spec_code: string
   group_price: string | number
+  single_price?: string | number
 }
 
 export interface ProductOperationPricePayload {
