@@ -833,6 +833,7 @@ def test_schedule_feishu_listing_result_log_dedupes_one_failure(monkeypatch):
 
 def test_map_listing_failure_record_type_skip_vs_fail():
     assert map_listing_failure_record_type(reason_code="slot_alignment_failed", retryable=True) == "跳过"
+    assert map_listing_failure_record_type(reason_code="product_eligibility_skip") == "跳过"
     assert map_listing_failure_record_type(status="failed", reason_code="submit_blocked") == "失败"
     assert map_listing_failure_record_type(
         reason_code="rejected_after_publish",

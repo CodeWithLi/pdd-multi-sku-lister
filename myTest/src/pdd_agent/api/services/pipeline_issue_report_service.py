@@ -55,6 +55,7 @@ ISSUE_TITLE_MAP: dict[str, str] = {
     "preflight_catalog": "商品表/素材目录问题",
     "negative_inventory_skip": "聚水潭可用库存小于0",
     "zero_inventory_skip": "库存为0",
+    "product_eligibility_skip": "产品状态或可用数不符合上架条件",
     "image_file_missing": "图片文件缺失",
     "price_fill_partial": "价格表未填完整",
     "price_fill_row_not_found": "价格表找不到规格行",

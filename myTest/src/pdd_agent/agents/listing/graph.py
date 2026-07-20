@@ -145,6 +145,14 @@ async def preflight_node(state: ListingState) -> dict:
         append_zero_inventory_preflight_issues(report)
     except Exception:
         logger.exception("zero inventory guard failed during preflight")
+    try:
+        from pdd_agent.skills.listing.listing_product_eligibility_guard import (
+            append_product_eligibility_preflight_issues,
+        )
+
+        append_product_eligibility_preflight_issues(report)
+    except Exception:
+        logger.exception("product eligibility guard failed during preflight")
     if run_id:
         from pdd_agent.api.services.listing_failure_log import record_preflight_issue
         from pdd_agent.api.services.listing_preflight_feishu_bridge import (
