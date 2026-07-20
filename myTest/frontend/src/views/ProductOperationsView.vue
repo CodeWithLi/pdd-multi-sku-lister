@@ -2,7 +2,7 @@
 import { computed, onMounted, reactive, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { EditPen, Minus, Remove, Search, Tickets } from '@element-plus/icons-vue'
+import { EditPen, Operation, Remove, Search, Tickets } from '@element-plus/icons-vue'
 import { api } from '@/api/client'
 import PageHeader from '@/components/PageHeader.vue'
 import type {
@@ -63,8 +63,8 @@ const priceForm = reactive({
 })
 
 const bulkPriceForm = reactive({
-  group_decrease: 0,
-  single_decrease: 0,
+  group_adjustment: 0,
+  single_adjustment: 0,
 })
 
 const commonPriceOptions = computed(() =>
@@ -203,8 +203,8 @@ async function loadPublishedOptions() {
 
 function resetPriceResults() {
   priceStores.value = []
-  bulkPriceForm.group_decrease = 0
-  bulkPriceForm.single_decrease = 0
+  bulkPriceForm.group_adjustment = 0
+  bulkPriceForm.single_adjustment = 0
 }
 
 function handlePriceAccountsChange() {
@@ -407,23 +407,19 @@ async function loadPriceSpecs() {
   }
 }
 
-function applyBulkDecrease() {
-  const groupDecrease = Number(bulkPriceForm.group_decrease || 0)
-  const singleDecrease = Number(bulkPriceForm.single_decrease || 0)
-  if (groupDecrease < 0 || singleDecrease < 0) {
-    ElMessage.warning('减少金额不能为负数')
-    return
-  }
-  if (groupDecrease === 0 && singleDecrease === 0) {
-    ElMessage.warning('请填写至少一项减少金额')
+function applyBulkAdjustment() {
+  const groupAdjustment = Number(bulkPriceForm.group_adjustment || 0)
+  const singleAdjustment = Number(bulkPriceForm.single_adjustment || 0)
+  if (groupAdjustment === 0 && singleAdjustment === 0) {
+    ElMessage.warning('请填写至少一项调整金额')
     return
   }
 
   const drafts = successfulPriceStores.value.flatMap((store) =>
     store.rows.map((row) => ({
       row,
-      groupPrice: roundPrice(Number(row.group_price) - groupDecrease),
-      singlePrice: roundPrice(Number(row.single_price) - singleDecrease),
+      groupPrice: roundPrice(Number(row.group_price) + groupAdjustment),
+      singlePrice: roundPrice(Number(row.single_price) + singleAdjustment),
     })),
   )
   const invalid = drafts.find(
@@ -432,11 +428,13 @@ function applyBulkDecrease() {
       !Number.isFinite(singlePrice) ||
       groupPrice <= 0 ||
       singlePrice <= 0 ||
+      groupPrice > 999999.99 ||
+      singlePrice > 999999.99 ||
       Math.round(groupPrice * 100) >
         Math.round((singlePrice - MIN_SINGLE_PRICE_GAP) * 100),
   )
   if (invalid) {
-    ElMessage.error(`${invalid.row.spec_code} 批量减价后不符合价格规则，未应用任何修改`)
+    ElMessage.error(`${invalid.row.spec_code} 批量调整后不符合价格规则，未应用任何修改`)
     return
   }
   for (const draft of drafts) {
@@ -672,33 +670,36 @@ onMounted(async () => {
 
       <div v-if="priceStores.length" class="spec-result">
         <div class="bulk-price-toolbar">
-          <div class="bulk-price-fields">
-            <label>
-              <span>拼单价统一减</span>
-              <el-input-number
-                v-model="bulkPriceForm.group_decrease"
-                :min="0"
-                :max="999999.99"
-                :precision="2"
-                :step="0.1"
-                controls-position="right"
-                aria-label="拼单价统一减少金额"
-              />
-            </label>
-            <label>
-              <span>单买价统一减</span>
-              <el-input-number
-                v-model="bulkPriceForm.single_decrease"
-                :min="0"
-                :max="999999.99"
-                :precision="2"
-                :step="0.1"
-                controls-position="right"
-                aria-label="单买价统一减少金额"
-              />
-            </label>
+          <div class="bulk-price-adjustment">
+            <div class="bulk-price-fields">
+              <label>
+                <span>拼单价统一调整</span>
+                <el-input-number
+                  v-model="bulkPriceForm.group_adjustment"
+                  :min="-999999.99"
+                  :max="999999.99"
+                  :precision="2"
+                  :step="0.1"
+                  controls-position="right"
+                  aria-label="拼单价统一调整金额，正数增加，负数减少"
+                />
+              </label>
+              <label>
+                <span>单买价统一调整</span>
+                <el-input-number
+                  v-model="bulkPriceForm.single_adjustment"
+                  :min="-999999.99"
+                  :max="999999.99"
+                  :precision="2"
+                  :step="0.1"
+                  controls-position="right"
+                  aria-label="单买价统一调整金额，正数增加，负数减少"
+                />
+              </label>
+            </div>
+            <span class="bulk-price-hint">输入正数增加，输入负数减少，例如 2 或 -2。</span>
           </div>
-          <el-button :icon="Minus" :disabled="!successfulPriceStores.length" @click="applyBulkDecrease">
+          <el-button :icon="Operation" :disabled="!successfulPriceStores.length" @click="applyBulkAdjustment">
             应用到全部店铺规格
           </el-button>
         </div>
@@ -1000,6 +1001,17 @@ onMounted(async () => {
   gap: 12px;
 }
 
+.bulk-price-adjustment {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.bulk-price-hint {
+  color: #64748b;
+  font-size: 12px;
+}
+
 .bulk-price-fields label {
   display: flex;
   flex-direction: column;
@@ -1124,6 +1136,7 @@ onMounted(async () => {
 
   .section-heading--row,
   .bulk-price-toolbar,
+  .bulk-price-adjustment,
   .bulk-price-fields,
   .store-price-header,
   .store-price-header > div:first-child,
